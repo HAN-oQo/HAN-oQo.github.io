@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prefix Cache-aware 라우팅 — 문제와 해결 설명서</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --surface:#ffffff; --ink:#1c1e21; --muted:#5f6368; --faint:#8a8f98;
+    --line:#e3e6ea; --blue:#2f6fd0; --blue-bg:#e9f1fc; --teal:#0f8a6b; --teal-bg:#e2f4ee;
+    --amber:#b9740a; --amber-bg:#fbeed7; --red:#c23b3b; --red-bg:#fbe9e9; --purple:#5b4bc4; --purple-bg:#ecebfb;
+    --code-bg:#1e2330; --code-ink:#e6e8ee;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Malgun Gothic",sans-serif;
+    line-height:1.75;font-size:16px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:48px 22px 96px}
+  header.hero{margin-bottom:40px}
+  .kicker{font-size:13px;letter-spacing:.06em;color:var(--blue);font-weight:600;text-transform:uppercase}
+  h1{font-size:30px;line-height:1.3;margin:8px 0 12px;font-weight:700}
+  .lede{font-size:17px;color:var(--muted);margin:0}
+  .toc{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 22px;margin:28px 0 8px}
+  .toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:.04em;text-transform:uppercase}
+  .toc ol{margin:0;padding-left:20px}
+  .toc li{margin:4px 0}
+  .toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  .toc a:hover{color:var(--blue)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px 30px;margin:22px 0}
+  section.plain{background:transparent;border:none;padding:8px 0;margin:34px 0 4px}
+  h2{font-size:22px;margin:0 0 6px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:14px;color:#fff;background:var(--blue);border-radius:8px;padding:2px 9px;font-weight:700;flex:none}
+  h3{font-size:17px;margin:24px 0 6px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  .callout{border-radius:12px;padding:14px 16px;margin:16px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg)} .c-blue .tag{color:var(--blue)}
+  .c-teal{background:var(--teal-bg)} .c-teal .tag{color:var(--teal)}
+  .c-amber{background:var(--amber-bg)} .c-amber .tag{color:var(--amber)}
+  .c-red{background:var(--red-bg)} .c-red .tag{color:var(--red)}
+  .c-purple{background:var(--purple-bg)} .c-purple .tag{color:var(--purple)}
+  .fig{margin:22px 0;text-align:center}
+  .fig svg{max-width:100%;height:auto}
+  .cap{font-size:13px;color:var(--faint);margin-top:8px}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:12px;padding:16px 18px;overflow:auto;
+    font-size:13.5px;line-height:1.6;font-family:"SF Mono",Menlo,Consolas,monospace;margin:16px 0}
+  pre .cm{color:#7f8aa3} pre .kw{color:#c39bf0} pre .st{color:#9ed59a} pre .fn{color:#7fc4ff} pre .nu{color:#f1b07a}
+  code.inl{background:#eceef2;border-radius:5px;padding:1px 6px;font-size:14px;
+    font-family:"SF Mono",Menlo,Consolas,monospace;color:#b03a55}
+  .math{background:#f0f3f8;border-left:3px solid var(--blue);border-radius:0 8px 8px 0;padding:12px 18px;margin:14px 0;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:15px;overflow-x:auto}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:18px 0}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .mini h4{margin:0 0 6px;font-size:14px}
+  table.kv{width:100%;border-collapse:collapse;margin:16px 0;font-size:14.5px}
+  table.kv th,table.kv td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  table.kv th{color:var(--faint);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+  .pill{display:inline-block;font-size:12px;font-weight:600;border-radius:20px;padding:2px 10px}
+  .ok{background:var(--teal-bg);color:var(--teal)}
+  .bad{background:var(--red-bg);color:var(--red)}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:20px}
+  a.src{color:var(--blue)}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;font-size:13px;color:var(--muted);margin-top:6px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kicker">vLLM · GLM-5 · Zhipu POC</div>
+  <h1>Prefix Cache-aware 라우팅<br>— 무엇이 문제였고 어떻게 풀었나</h1>
+  <p class="lede">분산 추론 서빙에서 "캐시를 잘 맞춰 보내는" 라우터를 튜닝하다 마주친 네 가지 문제와 그 해결 과정을, 그림과 코드로 차근차근 정리했습니다.</p>
+</header>
+
+<nav class="toc">
+  <h4>목차</h4>
+  <ol>
+    <li><a href="#bg">먼저, 우리가 만들던 것</a></li>
+    <li><a href="#p1">문제 ①  라우터를 어떻게 똑똑하게 만들까 — 로지스틱 스코어링</a></li>
+    <li><a href="#p2">문제 ②  GPU가 6시간마다 죽는다 — 하드웨어 장애</a></li>
+    <li><a href="#p3">문제 ③  로그가 거짓말을 한다 — prefix_map의 함정</a></li>
+    <li><a href="#p4">문제 ④  오래 돌리면 캐시가 샌다 — KV cache "leak"</a></li>
+    <li><a href="#fix">해결 — 무엇을 바꿨고 결과는</a></li>
+    <li><a href="#results">결과 읽기 — 숫자 해석과 헷갈리는 수치</a></li>
+  </ol>
+</nav>
+
+<!-- ============ BACKGROUND ============ -->
+<section id="bg">
+  <h2><span class="num">0</span> 먼저, 우리가 만들던 것</h2>
+  <p>거대 언어모델(GLM-5)을 여러 GPU 서버에 나눠 띄워 서비스하고 있습니다. 구조는 <b>프리필/디코드 분리(disaggregation)</b>입니다.</p>
+  <ul>
+    <li><b>Prefill pod</b> — 입력 프롬프트를 한 번에 읽어 KV cache를 만드는 단계 (서버 4대 × rank 8 = 32개)</li>
+    <li><b>Decode pod</b> — 그 뒤로 토큰을 한 개씩 생성하는 단계 (서버 2대 × rank 8 = 16개)</li>
+  </ul>
+  <p>핵심 아이디어는 <b>prefix cache</b>입니다. 여러 요청이 같은 프롬프트 앞부분(예: 동일한 system prompt)을 공유하면, 이미 계산해 둔 KV cache를 재사용해 연산을 아낄 수 있습니다. 그래서 게이트웨이(라우터)가 "이 요청의 앞부분이 이미 캐시돼 있는 pod"로 보내주면 빨라집니다. 이게 <b>prefix cache-aware 라우팅</b>입니다.</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 760 250" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif">
+      <!-- request -->
+      <rect x="14" y="100" width="92" height="48" rx="10" fill="#ecebfb" stroke="#5b4bc4"/>
+      <text x="60" y="122" text-anchor="middle" font-size="13" fill="#3b3293" font-weight="700">요청</text>
+      <text x="60" y="139" text-anchor="middle" font-size="11" fill="#5b4bc4">request</text>
+      <!-- router -->
+      <rect x="150" y="92" width="120" height="64" rx="12" fill="#e9f1fc" stroke="#2f6fd0"/>
+      <text x="210" y="118" text-anchor="middle" font-size="13" fill="#1f4f9c" font-weight="700">라우터</text>
+      <text x="210" y="135" text-anchor="middle" font-size="11" fill="#2f6fd0">scorer로 pod 선택</text>
+      <!-- prefill cluster -->
+      <rect x="330" y="24" width="180" height="92" rx="12" fill="#e2f4ee" stroke="#0f8a6b"/>
+      <text x="420" y="48" text-anchor="middle" font-size="13" fill="#0c6b53" font-weight="700">Prefill pods ×32</text>
+      <g fill="#bfe6d6" stroke="#0f8a6b">
+        <rect x="346" y="62" width="26" height="20" rx="4"/><rect x="378" y="62" width="26" height="20" rx="4"/>
+        <rect x="410" y="62" width="26" height="20" rx="4"/><rect x="442" y="62" width="26" height="20" rx="4"/>
+        <rect x="474" y="62" width="22" height="20" rx="4"/>
+      </g>
+      <text x="420" y="104" text-anchor="middle" font-size="11" fill="#0f8a6b">프롬프트 → KV cache 생성</text>
+      <!-- decode cluster -->
+      <rect x="330" y="134" width="180" height="92" rx="12" fill="#fbeed7" stroke="#b9740a"/>
+      <text x="420" y="158" text-anchor="middle" font-size="13" fill="#8a560a" font-weight="700">Decode pods ×16</text>
+      <g fill="#f6dcae" stroke="#b9740a">
+        <rect x="356" y="172" width="26" height="20" rx="4"/><rect x="388" y="172" width="26" height="20" rx="4"/>
+        <rect x="420" y="172" width="26" height="20" rx="4"/><rect x="452" y="172" width="26" height="20" rx="4"/>
+      </g>
+      <text x="420" y="214" text-anchor="middle" font-size="11" fill="#b9740a">토큰 한 개씩 생성</text>
+      <!-- cache hint -->
+      <rect x="556" y="92" width="188" height="64" rx="12" fill="#fff" stroke="#e3e6ea"/>
+      <text x="650" y="116" text-anchor="middle" font-size="12" fill="#5f6368" font-weight="700">prefix cache</text>
+      <text x="650" y="134" text-anchor="middle" font-size="11" fill="#8a8f98">"앞부분 겹치면 재사용"</text>
+      <!-- arrows -->
+      <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa0aa"/></marker></defs>
+      <line x1="106" y1="124" x2="148" y2="124" stroke="#9aa0aa" stroke-width="2" marker-end="url(#ar)"/>
+      <line x1="270" y1="110" x2="328" y2="74" stroke="#9aa0aa" stroke-width="2" marker-end="url(#ar)"/>
+      <line x1="510" y1="70" x2="554" y2="108" stroke="#cdd2da" stroke-width="1.5" stroke-dasharray="4 3"/>
+    </svg>
+    <div class="cap">전체 그림: 라우터가 요청마다 "어느 prefill pod이 이 prefix를 들고 있나"를 점수로 따져 보냅니다.</div>
+  </div>
+
+  <p class="muted">이 위에서 네 가지 문제가 차례로 드러났습니다. 하나씩 보겠습니다.</p>
+</section>
+
+<!-- ============ PROBLEM 1 ============ -->
+<section id="p1">
+  <h2><span class="num">1</span> 라우터를 어떻게 똑똑하게 만들까 — 로지스틱 스코어링</h2>
+  <p>라우터는 후보 pod마다 <b>점수(score)</b>를 매겨 비교합니다. prefix_cache 스코어러가 보는 입력은 각 pod의 <b>hit_rate</b> — 이 요청의 앞부분 중 그 pod에 이미 캐시된 비율(0~1)입니다.</p>
+  <p>문제는 "hit_rate를 어떻게 점수로 바꿀까?"입니다. 그냥 그대로 쓰면(선형) hit_rate 0.4와 0.5의 차이나 0.9와 1.0의 차이가 똑같이 0.1이라, "거의 완벽히 겹친 pod"로 강하게 몰아주는 힘이 약합니다. 반대로 "0.93 넘으면 1, 아니면 0"으로 칼같이 자르면(계단함수) 경계에서 뚝 끊겨 불안정하고, 점수가 정확히 0이 되면 그 pod엔 트래픽이 영영 안 갑니다.</p>
+
+  <div class="callout c-blue">
+    <span class="tag">핵심 아이디어 — 로지스틱(시그모이드) 스코어링</span>
+    hit_rate를 <b>S자 곡선</b>에 한 번 통과시켜 점수로 바꾼다. 임계값 근처에서는 민감하게 갈라주고, 양 끝에서는 부드럽게 0~1로 수렴한다.
+  </div>
+
+  <div class="math">score(h) = 1 / ( 1 + e<sup>−k · (h − x₀)</sup> )</div>
+  <table class="kv">
+    <tr><th>기호</th><th>의미</th><th>실제 값</th></tr>
+    <tr><td><b>h</b></td><td>그 pod의 prefix hit_rate (0~1)</td><td>입력값</td></tr>
+    <tr><td><b>x₀</b></td><td>변곡점 / 임계값. score=0.5가 되는 지점. "몇 % 겹쳐야 의미 있나"</td><td>0.93</td></tr>
+    <tr><td><b>k</b></td><td>기울기. 클수록 계단에 가까워짐</td><td>1000 → 100 (후술)</td></tr>
+  </table>
+
+  <p class="muted">곡선이 직접 보이면 이해가 빠릅니다. 아래는 x₀=0.93 고정, k만 바꾼 모습입니다.</p>
+  <div class="fig">
+    <canvas id="sig" width="760" height="320" role="img" aria-label="로지스틱 스코어 곡선: hit rate가 0.93 근처까지는 거의 0, 그 위로 급격히 1로 상승"></canvas>
+    <div class="legend">
+      <span><i class="sw" style="background:#9bc0ee"></i>k=20 (완만)</span>
+      <span><i class="sw" style="background:#2f6fd0"></i>k=100</span>
+      <span><i class="sw" style="background:#0b3d80"></i>k=500 (계단에 가까움)</span>
+      <span><i class="sw" style="background:#c23b3b"></i>x₀ = 0.93</span>
+    </div>
+    <div class="cap">h가 0.93을 넘는 순간 점수가 솟구칩니다. 그래서 "충분히 겹친 pod"만 골라낼 수 있어요.</div>
+  </div>
+
+  <h3>"점수는 절대 0이 안 된다"의 의미</h3>
+  <p>수식이 <code class="inl">1 / (1 + e^…)</code> 꼴이라 분모가 항상 유한합니다. 즉 점수는 0에 <i>한없이 가까워질 뿐 정확히 0이 되지 않습니다</i>. 이게 중요한 이유 — 점수에 비례해 확률적으로 뿌리는 <b>weighted-random picker</b>를 쓸 때, 0이 아니어야 모든 pod에 아주 작게라도 트래픽이 갈 수 있기 때문입니다.</p>
+
+  <h3>스코어러 + picker가 만드는 자동 동작</h3>
+  <div class="grid2">
+    <div class="mini">
+      <h4>① 누군가 임계값을 넘으면</h4>
+      <p class="muted" style="margin:0">그 pod 점수만 1에 가깝게 압도적 → 항상 거기로 → <b>hit 보장, miss 제거</b> (exploit)</p>
+    </div>
+    <div class="mini">
+      <h4>② 아무도 못 넘으면</h4>
+      <p class="muted" style="margin:0">전부 점수 ≈ 0으로 비슷 → 사실상 균등 랜덤 → <b>부하 분산</b> (explore)</p>
+    </div>
+  </div>
+
+  <p>최종 점수는 여러 스코어러의 가중합입니다. <code class="inl">constant</code>는 모든 pod에 1.0을 주는 baseline(동점 처리·기본 분산용)이고, 거기에 prefix 점수를 큰 가중치로 더합니다.</p>
+<pre><span class="cm"># 한 요청에 대해, 후보 pod마다 점수를 계산</span>
+<span class="kw">def</span> <span class="fn">score_pod</span>(pod, req, k=<span class="nu">100</span>, x0=<span class="nu">0.93</span>):
+    h = prefix_hit_rate(pod, req)          <span class="cm"># 0 ~ 1</span>
+    prefix = <span class="nu">1.0</span> / (<span class="nu">1.0</span> + math.exp(-k * (h - x0)))   <span class="cm"># 로지스틱</span>
+    constant = <span class="nu">1.0</span>                          <span class="cm"># 모든 pod 동일</span>
+    <span class="cm"># prefix에 절대 우위를 주되 0은 아님 → weighted-random에서도 분산 가능</span>
+    <span class="kw">return</span> W_PREFIX * prefix + W_CONST * constant
+
+picked = max(pods, key=score_pod)          <span class="cm"># max-picker</span>
+<span class="cm"># 또는 weighted-random: score에 비례해 확률적으로 선택</span></pre>
+  <p class="muted">강원님이 weighted-random을 선호한 이유: 노드가 죽었다 살아날 때 max-picker는 그 빈 노드를 "영구히 맛이 간 것"처럼 외면할 수 있는 반면, weighted-random은 "잠깐 느려진 것"으로 보고 회복 기회를 주기 때문입니다.</p>
+</section>
+
+<!-- ============ PROBLEM 2 ============ -->
+<section id="p2">
+  <h2><span class="num">2</span> GPU가 6시간마다 죽는다 — 하드웨어 장애</h2>
+  <p>특정 구간(ISL 64K, concurrency 16)부터 갑자기 cache miss가 터지기 시작했습니다. 처음엔 라우팅 알고리즘 문제로 의심했지만, 로그를 위로 올려보니 <b>서버가 재부팅된 흔적</b>이 있었습니다. <code class="inl">dmesg</code>에 AMD GPU 하드웨어 에러가 찍혀 있었어요.</p>
+<pre><span class="cm">[Sat Jun  6 04:27:07 2026] amdgpu 0000:c6:00.0: {7}uncorrectable</span>
+<span class="cm">    hardware error (ERREVENT_ATHUB_INTERRUPT) detected!</span>
+<span class="cm">[Sat Jun  6 04:27:07 2026] amdgpu: Couldn't get PPT limit ...</span></pre>
+  <p>mi300-6 서버의 1번 GPU가 <b>약 6시간에 한 번꼴로 HBM 에러로 죽는</b> 문제였습니다. pod이 죽었다 다시 뜨면 그 안의 KV cache가 통째로 사라지므로, 재부팅 직후엔 거의 전부 cache miss가 납니다.</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 760 150" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif">
+      <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa0aa"/></marker></defs>
+      <line x1="40" y1="80" x2="720" y2="80" stroke="#cdd2da" stroke-width="2" marker-end="url(#ar2)"/>
+      <!-- alive -->
+      <rect x="60" y="50" width="150" height="30" rx="6" fill="#e2f4ee" stroke="#0f8a6b"/>
+      <text x="135" y="70" text-anchor="middle" font-size="12" fill="#0c6b53">정상 · hit 99%</text>
+      <!-- death -->
+      <circle cx="250" cy="65" r="13" fill="#fbe9e9" stroke="#c23b3b"/>
+      <text x="250" y="69" text-anchor="middle" font-size="13" fill="#c23b3b">✕</text>
+      <text x="250" y="34" text-anchor="middle" font-size="11" fill="#c23b3b" font-weight="700">04:27 HBM 에러</text>
+      <!-- restart empty -->
+      <rect x="290" y="50" width="150" height="30" rx="6" fill="#fbeed7" stroke="#b9740a"/>
+      <text x="365" y="70" text-anchor="middle" font-size="12" fill="#8a560a">재부팅 · 캐시 텅 빔</text>
+      <text x="365" y="108" text-anchor="middle" font-size="11" fill="#b9740a">04:42 부팅</text>
+      <!-- miss -->
+      <rect x="470" y="50" width="170" height="30" rx="6" fill="#fbe9e9" stroke="#c23b3b"/>
+      <text x="555" y="70" text-anchor="middle" font-size="12" fill="#c23b3b">거의 전부 cache miss</text>
+      <text x="690" y="70" text-anchor="middle" font-size="11" fill="#8a8f98">시간 →</text>
+    </svg>
+    <div class="cap">"16,64K부터 miss"는 알고리즘 탓이 아니라, 그 시점에 노드가 죽었다 살아난 탓이었습니다.</div>
+  </div>
+
+  <div class="callout c-teal">
+    <span class="tag">대응</span>
+    수동으로 AMD GPU device plugin을 재시작해 살리다가, 현기님이 모니터링(Mimir)에서 10분마다 metric exporter를 보고 에러가 있으면 <b>device plugin을 자동 재시작</b>하도록 걸어 반자동화했습니다. 또 mi300-6을 prefix cache를 안 쓰는 decode 쪽으로 돌려, 죽어도 성능 타격을 줄이는 안도 검토했습니다.
+  </div>
+</section>
+
+<!-- ============ PROBLEM 3 ============ -->
+<section id="p3">
+  <h2><span class="num">3</span> 로그가 거짓말을 한다 — prefix_map의 함정</h2>
+  <p>디버깅을 가장 헷갈리게 만든 함정입니다. 어떤 로그는 <code class="inl">block_count=985 (found 985, 100.0% hit)</code>이라고 자신만만하게 찍히는데, 실제로는 cache miss가 나서 다시 계산하느라 느려지고 있었습니다. "캐시 완벽함"이라는 로그와 "사실은 miss"라는 현실이 어긋난 거예요. 원인은 <b>pod이 들고 있는 기록이 두 종류</b>인데, 로그가 그중 거짓말하는 쪽만 읽었기 때문입니다.</p>
+
+  <h3>먼저 — prefix_map은 원래 뭐 하는 물건인가</h3>
+  <p>오해하면 안 되는 게, prefix_map은 쓸모없는 게 아니라 <b>prefix-aware 라우팅을 가능하게 하는 핵심 색인(카탈로그)</b>입니다. 프롬프트를 통째로 비교하면 무거우니, 64토큰 블록으로 자르고 각 블록을 <b>해시</b>로 바꿔서 "어떤 프롬프트가 어떤 블록들로 쪼개지는지, 그 블록을 어느 pod이 보유했다고 보고했는지"를 기록해 둡니다. 라우터는 새 요청이 오면 이 색인을 뒤져 "캐시 가진 pod"을 찾아 보냅니다 — 즉 <b>라우팅의 지도</b>예요.</p>
+<pre><span class="cm"># prefix_map = 게이트웨이의 "프롬프트 ↔ 블록 해시" 색인</span>
+<span class="st">"안녕 너는…"</span>  →  [h1, h2, h3, …]  →  pod-A, pod-C
+<span class="st">"오늘 날씨…"</span>  →  [h4, h5, …]      →  pod-B
+<span class="cm"># ⚠ 한 번 등록되면 그 pod이 evict 해도 지우지 않음 → 계속 쌓이기만 함</span></pre>
+
+  <h3>장부 ① vs 창고 ② — 핵심 그림</h3>
+  <p>그래서 pod 하나를 들여다보면 사실상 기록이 두 개 있는 셈입니다. <b>장부①(prefix_map)은 "본 적 있는 것"을 절대 안 지우고 쌓기만</b> 하고, <b>창고②(실제 KV 캐시)는 자리가 한정돼 오래된 건 버립니다(evict)</b>.</p>
+  <div class="grid2">
+    <div class="mini" style="border-color:#f0d7ad;background:#fdf6e9">
+      <h4 style="color:#b9740a">📒 장부 ① — prefix_map <span class="pill bad">로그가 읽는 곳</span></h4>
+      <p class="muted" style="margin:0">"내가 본 적 있는 prefix 목록". <b>free(해제)가 안 되고 누적만</b> 됨 → 뭘 물어봐도 "있음" → <b>항상 100%</b>. <span style="color:#b9740a">"본 적 있나"</span>에만 답할 수 있음.</p>
+    </div>
+    <div class="mini" style="border-color:#bcd4ef;background:#eef4fb">
+      <h4 style="color:#2f6fd0">📦 창고 ② — 실제 KV 캐시 <span class="pill" style="background:#e9f1fc;color:#2f6fd0">진실</span></h4>
+      <p class="muted" style="margin:0">진짜 데이터가 든 곳. <b>evict 이벤트로 갱신</b>되어 줄어듦. 최신 것 몇 개만 남음 → <span style="color:#2f6fd0">"지금 실제 있나"</span>에 답함.</p>
+    </div>
+  </div>
+
+  <div class="fig">
+    <svg viewBox="0 0 760 180" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif">
+      <text x="20" y="22" font-size="13" font-weight="700" fill="#b9740a">장부①(prefix_map) 기준 — found 985 / 985</text>
+      <rect x="20" y="32" width="640" height="26" rx="5" fill="#f6dcae" stroke="#b9740a"/>
+      <text x="670" y="50" font-size="15" font-weight="700" fill="#b9740a">100%</text>
+      <text x="24" y="50" font-size="11" fill="#8a560a">＝ "본 적 있는" 블록 (실제 보유와 무관) → 거짓</text>
+
+      <text x="20" y="98" font-size="13" font-weight="700" fill="#2f6fd0">창고②(실제 캐시) 기준 — 보유 165 / 985</text>
+      <rect x="20" y="108" width="640" height="26" rx="5" fill="#eef1f5" stroke="#cdd2da"/>
+      <rect x="20" y="108" width="107" height="26" rx="5" fill="#bcd9f3" stroke="#2f6fd0"/>
+      <text x="670" y="126" font-size="15" font-weight="700" fill="#2f6fd0">16.7%</text>
+      <text x="135" y="126" font-size="11" fill="#8a8f98">나머지는 evict 되어 사라짐 → 다시 계산해야 함(miss)</text>
+
+      <text x="20" y="166" font-size="12" fill="#5f6368">같은 요청·같은 분모(985블록)인데, <tspan font-weight="700">어느 기록에서 세느냐</tspan>에 따라 100% ↔ 16.7%로 갈림</text>
+    </svg>
+    <div class="cap">로그는 위(장부①)를 읽어서 100%라 우기고, 실제 성능은 아래(창고②)를 따라 miss가 납니다.</div>
+  </div>
+
+  <h3>그 100%는 무엇에 대한 100%인가 (분모의 정체)</h3>
+  <p>퍼센트니까 전체(분모)가 있죠. 그 전체는 <b>"그 요청 하나가 필요로 하는 블록 수"</b>입니다. pod 캐시 용량 전체도, 데이터셋 전체도 아니고 <b>요청마다 따로</b> 셉니다.</p>
+<pre><span class="cm"># 로그의 실제 숫자로 맞춰보면</span>
+input_tokens = <span class="nu">63040</span>
+block_count  = 63040 ÷ <span class="nu">64</span>  ≈ <span class="nu">985</span> 블록     <span class="cm">← 이게 "전체"(분모)</span>
+found        = <span class="nu">985</span>                  <span class="cm">← 분자</span>
+
+장부① 기준 hit = 985 / 985 = <span class="nu">100%</span>   <span class="cm"># "본 적 있나" → 다 있음 (거짓)</span>
+창고② 기준 hit = 165 / 985 ≈ <span class="nu">16.7%</span>  <span class="cm"># "지금 실제 있나" → 일부만 (진실)</span></pre>
+
+  <h3>누가 무엇을 어떻게 말했나</h3>
+  <ol style="padding-left:20px">
+    <li><b>지민님(발견·질문)</b> — "로그는 모든 요청에 100% hit인데 성능은 miss 같다. 이 hit율은 prefix_map 기준인데, <b>prefix_map 정보는 free가 안 되는 값일까요?</b>"라고 모순을 짚고 P팀에 질문.</li>
+    <li><b>인범님</b> — "<b>prefix_map은 free가 없다.</b> 실제인지 확인하려면 KvBlockIndex에서 그 블록 해시가 진짜 존재하는지 추가 검사가 필요하다."</li>
+    <li><b>봉우님(핵심 설명)</b> — "prefix_map은 안 비워지지만 라우팅을 망가뜨리진 않는다. <b>pod별 실제 보유 block은 별도 맵으로 추적하고 evict 이벤트로 갱신</b>된다. 그러니 <b>hit/miss를 진단하려면 pod별 prefix_cache 점수 컬럼(=trace hit_rate)을 봐야 한다.</b>"</li>
+    <li><b>지민님(자기 오해 정리)</b> — "prefix_map은 100%인데 실제 pod은 0%대라, 유효한 블록이 여러 pod에 흩어져 있는 줄 알았다. 이 정보가 의미적으로 주는 게 있나 싶어 물었다."</li>
+    <li><b>강원님(개념 요약)</b> — "그 <code class="inl">tokens/kv</code> 로그는 prefix_map을 보는 거고, 이건 보유 prefix의 <b>superset 역할만 하는, 시간이 지날수록 증가만 하는 map</b>이다. 거기서 hit%를 뽑는 건 앞으로도 misleading하겠다."</li>
+    <li><b>봉우님(마무리)</b> — "맞다. prefix_map은 프롬프트↔block 매칭 map이다. <b>로그를 덜 헷갈리게 고칠 필요가 있겠다.</b>"</li>
+  </ol>
+
+  <h3>그래서 진짜 봐야 할 것</h3>
+  <p>실제 hit/miss 진단은 prefix_map이 아니라 <b>trace의 hit_rate</b>(스코어러가 실제 창고를 보고 계산한 값)를 봐야 합니다. 라우팅 표 괄호 안 숫자가 바로 이거예요.</p>
+<pre>{<span class="st">"event"</span>:<span class="st">"scheduler.scored"</span>, <span class="st">"scorer"</span>:<span class="st">"prefix_cache"</span>,
+ <span class="st">"endpoint"</span>:<span class="st">"10.245.8.10:8006"</span>, <span class="st">"hit_rate"</span>:<span class="nu">0.167</span>, <span class="st">"score"</span>:<span class="nu">0.000335</span>}
+<span class="cm">           ↑ 실제 겹친 비율 16.7% (창고② 기준)   ↑ 로지스틱 통과 후 점수(≈0)</span></pre>
+  <table class="kv">
+    <tr><th></th><th>📒 장부① prefix_map</th><th>📦 창고② 실제 캐시 / trace</th></tr>
+    <tr><td>무엇</td><td>프롬프트↔블록 해시 매핑 카탈로그</td><td>pod이 지금 실제로 든 블록</td></tr>
+    <tr><td>갱신</td><td>등록만, <b>안 지움</b></td><td>evict 이벤트로 <b>줄어듦</b></td></tr>
+    <tr><td>답하는 질문</td><td>"본 적 있나"</td><td>"지금 있나"</td></tr>
+    <tr><td>용도</td><td>라우팅의 지도(필수)</td><td>hit/miss 진단(정확)</td></tr>
+    <tr><td>이 요청 예시</td><td><span class="pill bad">100%</span></td><td><span class="pill ok">16.7%</span></td></tr>
+  </table>
+  <p class="muted">(vLLM이 종료 시 "모든 블록 비움" 이벤트를 안 주는 문제도 있어, 게이트웨이가 endpoint가 디스커버리에서 사라지면 자체적으로 <code class="inl">AllBlocksCleared</code>를 모킹해 그 pod의 블록을 지우도록 처리했습니다.)</p>
+</section>
+
+<!-- ============ PROBLEM 4 ============ -->
+<section id="p4">
+  <h2><span class="num">4</span> 오래 돌리면 캐시가 샌다 — KV cache "leak"</h2>
+  <p>가장 핵심적인 문제입니다. 하드웨어가 멀쩡한데도, <b>장시간 돌리면 hit율 99%를 유지하다가 어느 순간 miss가 늘기 시작</b>했습니다. 강원님 표현으로는 "<i>KV cache가 실행 내내 계속 할당·사용되다가, 결국 prefix cache에 저장돼 있던 항목들이 evict되는 — 일종의 leak</i>"입니다.</p>
+  <div class="callout c-amber">
+    <span class="tag">먼저 — 여기서 leak은 메모리 누수가 아님</span>
+    메모리를 free 안 해서 새는 게 아니라, <b>정작 남아 있어야 할 유용한 prefix 캐시가 야금야금 쫓겨나(evict)</b> 시간이 지날수록 miss가 느는 현상입니다. 캐시가 "새어 나간다"는 비유예요.
+  </div>
+
+  <h3>원인 = LRU free block queue 관리 방식</h3>
+  <p>vLLM은 KV cache를 <b>64토큰짜리 block</b> 단위로 끊어 관리하고, 비어 있는 block들을 <b>LRU 큐</b>로 둡니다. LRU에서 <b>tail = 방금 쓴 것(늦게 쫓겨남)</b>, <b>head = 오래된 것(먼저 쫓겨남)</b>이죠.</p>
+  <p>문제의 방아쇠는 단순합니다 — <b>입력 길이(ISL)가 정확히 64의 배수가 아니라는 점</b>. 그래서 모든 요청이 끝에 "꽉 차지 않은 자투리 block 1개"를 새로 씁니다. 이 자투리는 안 꽉 찼으니 곧바로 free되는데, <b>문제는 이게 진짜 캐시 블록과 함께 LRU의 tail로 들어간다</b>는 것입니다.</p>
+
+  <pre><span class="cm"># 한 요청이 들어오면 (앞부분 99.9%는 이미 캐시 hit)</span>
+prefill(req):
+    hit_blocks   = lookup(req.prefix)     <span class="cm"># 재사용 (좋음)</span>
+    last_block   = alloc_one_block()      <span class="cm"># 자투리 1개 (64토큰 안 채움)</span>
+    ...compute...
+    free_blocks([... hit_blocks, last_block])
+    <span class="cm"># ⚠ vLLM v0.21.0: free된 블록을 전부 LRU TAIL에 append</span>
+    <span class="cm">#   → 자투리(곧 버릴 것)가 '최근 사용' 자리를 차지하고,</span>
+    <span class="cm">#     정작 재사용할 캐시 블록이 head 쪽으로 밀려나 evict됨</span></pre>
+
+  <p>매 요청마다 자투리가 tail로 들어가니, <b>유용한 캐시 블록들은 점점 head(먼저 쫓겨나는 자리)로 밀려납니다.</b> 누적 요청이 쌓일수록 진짜 필요한 캐시가 evict되고 → miss가 폭발합니다. 그래서 "문제가 누적 요청 수에 비례"했던 거예요.</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif">
+      <!-- BEFORE -->
+      <text x="20" y="26" font-size="14" font-weight="700" fill="#c23b3b">수정 전 — 자투리를 TAIL로</text>
+      <text x="20" y="48" font-size="12" fill="#8a8f98">HEAD (먼저 evict) ←──────────────────────→ TAIL (방금 사용)</text>
+      <g>
+        <!-- useful blocks pushed to head -->
+        <rect x="20" y="58" width="40" height="34" rx="5" fill="#cfe6dc" stroke="#0f8a6b"/>
+        <rect x="64" y="58" width="40" height="34" rx="5" fill="#cfe6dc" stroke="#0f8a6b"/>
+        <rect x="108" y="58" width="40" height="34" rx="5" fill="#cfe6dc" stroke="#0f8a6b"/>
+        <!-- throwaway partial blocks at tail -->
+        <rect x="560" y="58" width="40" height="34" rx="5" fill="#f6dcae" stroke="#b9740a"/>
+        <rect x="604" y="58" width="40" height="34" rx="5" fill="#f6dcae" stroke="#b9740a"/>
+        <rect x="648" y="58" width="40" height="34" rx="5" fill="#f6dcae" stroke="#b9740a"/>
+        <rect x="692" y="58" width="40" height="34" rx="5" fill="#f6dcae" stroke="#b9740a"/>
+        <text x="300" y="80" font-size="12" fill="#8a8f98">…</text>
+      </g>
+      <text x="84" y="110" font-size="11" fill="#0f8a6b" text-anchor="middle">유용한 캐시가 evict 위험</text>
+      <text x="646" y="110" font-size="11" fill="#b9740a" text-anchor="middle">곧 버릴 자투리가 안전한 자리 차지</text>
+      <!-- arrow showing push -->
+      <defs><marker id="ar3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#c23b3b"/></marker></defs>
+      <line x1="160" y1="75" x2="120" y2="75" stroke="#c23b3b" stroke-width="2" marker-end="url(#ar3)"/>
+      <text x="230" y="79" font-size="11" fill="#c23b3b">자투리가 밀어냄</text>
+
+      <line x1="20" y1="150" x2="740" y2="150" stroke="#e3e6ea" stroke-width="1"/>
+
+      <!-- AFTER -->
+      <text x="20" y="186" font-size="14" font-weight="700" fill="#0f8a6b">수정 후 (PR #43447) — 자투리를 HEAD로</text>
+      <text x="20" y="208" font-size="12" fill="#8a8f98">HEAD (먼저 evict) ←──────────────────────→ TAIL (방금 사용)</text>
+      <g>
+        <!-- throwaway at head -->
+        <rect x="20" y="218" width="40" height="34" rx="5" fill="#f6dcae" stroke="#b9740a"/>
+        <rect x="64" y="218" width="40" height="34" rx="5" fill="#f6dcae" stroke="#b9740a"/>
+        <!-- useful blocks safe at tail -->
+        <rect x="560" y="218" width="40" height="34" rx="5" fill="#cfe6dc" stroke="#0f8a6b"/>
+        <rect x="604" y="218" width="40" height="34" rx="5" fill="#cfe6dc" stroke="#0f8a6b"/>
+        <rect x="648" y="218" width="40" height="34" rx="5" fill="#cfe6dc" stroke="#0f8a6b"/>
+        <rect x="692" y="218" width="40" height="34" rx="5" fill="#cfe6dc" stroke="#0f8a6b"/>
+        <text x="320" y="240" font-size="12" fill="#8a8f98">…</text>
+      </g>
+      <text x="62" y="270" font-size="11" fill="#b9740a" text-anchor="middle">자투리가 먼저 재사용·evict</text>
+      <text x="646" y="270" font-size="11" fill="#0f8a6b" text-anchor="middle">유용한 캐시는 안전하게 보존</text>
+      <text x="20" y="300" font-size="12" fill="#5f6368">→ 진짜 prefix 캐시를 밀어내지 않으니, 오래 돌려도 hit율이 유지됨</text>
+    </svg>
+    <div class="cap">강원님 말 그대로: "hit난 블록만 LRU 줄을 빙글빙글 돌아야 하는데, (실제론 곧 free되는) 자투리 1블록이 같이 줄을 서던" 것. 수정은 그 줄 서는 자리를 tail→head로 바꿉니다.</div>
+  </div>
+
+  <p class="muted">참고로 자투리 block이 우연히 64토큰을 꽉 채우면 정상적으로 tail로 빠지지만, 대부분은 그렇지 않아 계속 남아 캐시를 갉아먹습니다. 지민님 계산상 64k 데이터가 한 번에 천 개 가까운 블록을 쓰니, 평균 대비 20%가량이 이렇게 쫓겨날 수 있었습니다.</p>
+</section>
+
+<!-- ============ FIX ============ -->
+<section id="fix">
+  <h2><span class="num">✓</span> 해결 — 무엇을 바꿨고 결과는</h2>
+
+  <h3>① KV cache leak — vLLM 패치</h3>
+  <p>최근 vLLM PR <a class="src" href="https://github.com/vllm-project/vllm/pull/43447">#43447</a>이 정확히 이 문제를 고칩니다. <b>꽉 차지 않은 block은 tail이 아니라 free queue의 HEAD로 넣도록</b> 변경 — 자투리가 가장 먼저 재사용·evict되어 진짜 캐시를 밀어내지 않습니다. 이 패치를 적용한 뒤 hit율이 99%대로 안정됐습니다.</p>
+<pre><span class="cm"># 개념적 변경</span>
+- free_queue.append(block)      <span class="cm"># 전: 무조건 TAIL</span>
++ <span class="kw">if</span> block.is_full():
++     free_queue.append(block)    <span class="cm"># 꽉 찬 정상 캐시 → TAIL (오래 보존)</span>
++ <span class="kw">else</span>:
++     free_queue.appendleft(block)<span class="cm"># 자투리 → HEAD (먼저 재사용/evict)</span></pre>
+
+  <h3>② 스코어러 가중치 · k 튜닝</h3>
+  <p>prefix를 더 강하게 밀어주려고 가중치를 <code class="inl">1억:1</code> → <code class="inl">100억:1</code>(prefix:constant)로 올렸습니다. 단, k=1000은 너무 가팔라서 지수항이 부동소수점 범위를 넘어(Excel에서도 <code class="inl">#NUM!</code>) 확률분포가 깨질 수 있어, <b>k=100</b>으로 낮췄습니다(0.96~0.97 구간 변별력은 충분).</p>
+
+  <h3>③ 하드웨어 장애 — 자동 복구</h3>
+  <p>모니터링이 10분마다 GPU 상태를 보고, 에러가 감지되면 AMD GPU device plugin을 자동 재시작하도록 했습니다. 죽어도 사람이 안 붙어 살아납니다.</p>
+
+  <h3>④ 로그 — 헷갈리지 않게</h3>
+  <p>prefix_map(누적 superset)과 실제 보유 block을 구분하고, 진단은 trace의 hit_rate 기준으로 보도록 정리했습니다.</p>
+
+  <div class="callout c-teal">
+    <span class="tag">결과</span>
+    재실험에서 hit율 <b>99%대 안정</b> 유지. gsm8k 정확도 <b>0.948</b>로 정상 동작 확인. 본 배치 시작.
+  </div>
+  <table class="kv">
+    <tr><th>지표 (128 concurrency)</th><th>4K</th><th>16K</th><th>32K</th><th>64K</th></tr>
+    <tr><td>mean TTFT (s)</td><td>7.47</td><td>3.08</td><td>3.49</td><td>4.67</td></tr>
+    <tr><td>p90 TTFT (s)</td><td>10.42</td><td>5.00</td><td>5.80</td><td>7.71</td></tr>
+    <tr><td>mean TPOT (ms)</td><td>29.4</td><td>26.5</td><td>27.4</td><td>28.6</td></tr>
+  </table>
+  <p class="muted">cache hit이 99.8% 밑으로 내려가지 않으며, 64K·고 concurrency에서도 안정적으로 동작했습니다.</p>
+</section>
+
+<!-- ============ RESULTS ============ -->
+<section id="results">
+  <h2><span class="num">📊</span> 결과 읽기 — 숫자 해석과 헷갈리는 수치</h2>
+  <p>Zhipu POC 진행 상황을 Ambre팀에 공유한 내용과, 그 안의 성능 수치를 "있는 그대로(naive)" 먼저 본 뒤 해석합니다.</p>
+
+  <h3>현황 한 줄 요약</h3>
+  <div class="callout c-teal">
+    <span class="tag">상태</span>
+    KST 00:40부터 full script 재가동 → <b>지난번 문제(KV cache leak)는 더 이상 발생하지 않음</b>. 원인은 원본 vLLM의 KV cache 메모리 leak이었고, <b>3일 전 vLLM에 머지된 패치</b>를 적용해 해결. 본 POC는 현재 스크립트로 conc=96(오늘 17~18시 KST 완료 예정) 또는 conc=112(내일 05~06시 완료 예정)까지 돌리면 충분히 설득력 있다고 판단 → 이후 Zhipu와 커뮤니케이션. (전체 실험은 ~5일 소요)
+  </div>
+  <div class="callout c-amber">
+    <span class="tag">하드웨어 주의사항 (현재 진행형)</span>
+    최근 클러스터에 실제 하드웨어 이슈 2건. <b>① NIC 카드 1장 고장</b> → 제외하고 운영, 성능 영향 없음. <b>② decode용 MI300X 서버의 GPU 1개가 약 6시간마다 HBM 에러</b> → 6노드가 다 필요하고 예비 서버가 없어 그대로 진행. 장애 시 <b>그 노드의 소프트웨어만 재시작</b>되고 전체 추론은 멈추지 않음(Zhipu 스크립트도 안 멈춤). 단 <b>conc &gt; 64 실험 중 장애가 나면 TTFT가 튈 수 있어</b>, 장애 시간대를 공유하고 이상 데이터가 보이면 해당 케이스만 재실행할지 Zhipu와 협의 예정.
+  </div>
+
+  <h3>conc=128 성능 — 있는 그대로(naive)</h3>
+  <p>SLO 기준은 보통 <b>TTFT</b>(첫 토큰까지 시간, 짧을수록 좋음)와 <b>TPOT</b>(토큰 하나 생성 간격, 짧을수록 좋음)입니다.</p>
+  <table class="kv">
+    <tr><th>ISL</th><th>완료 요청</th><th>mean TTFT</th><th>p90 TTFT</th><th>decode tps</th><th>mean TPOT</th><th>p90 TPOT</th><th>p99 TPOT</th></tr>
+    <tr><td>4K</td><td>6,851</td><td>7.47 s</td><td><b>10.42 s</b></td><td>34.4</td><td>29.4 ms</td><td>32.8 ms</td><td>35.8 ms</td></tr>
+    <tr><td>8K</td><td>6,829</td><td>7.48 s</td><td><b>10.47 s</b></td><td>34.0</td><td>29.7 ms</td><td>33.2 ms</td><td>36.3 ms</td></tr>
+    <tr><td>16K</td><td>17,514</td><td>3.08 s</td><td>5.00 s</td><td>37.3</td><td>26.5 ms</td><td>29.7 ms</td><td>33.5 ms</td></tr>
+    <tr><td>32K</td><td>15,424</td><td>3.49 s</td><td>5.80 s</td><td>36.0</td><td>27.4 ms</td><td>30.9 ms</td><td>34.6 ms</td></tr>
+    <tr><td>64K</td><td>12,309</td><td>4.67 s</td><td><b>7.71 s</b></td><td>34.5</td><td>28.6 ms</td><td>32.2 ms</td><td>36.0 ms</td></tr>
+  </table>
+
+  <h3>해석 ① — 좋은 신호</h3>
+  <ul>
+    <li><b>TPOT가 모든 ISL에서 거의 일정</b>(mean 26~30 ms, p90 30~33 ms). 디코드가 건강하고 안정적이라는 뜻. 헤드라인인 64K의 p90 TPOT 32.2 ms는 SLO에 여유가 있음.</li>
+    <li><b>64K·conc128의 p90 TTFT 7.7초</b>도 SLO 대비 마진이 남음 → 더 높은 concurrency도 가능할 것으로 보임. 다만 우선 현재 스크립트로 POC를 마치고, 필요하면 후속 논의에서 고-concurrency 테스트를 제안하는 게 낫다는 판단.</li>
+    <li>decode tps(스트림당 34~37 tok/s)도 ISL 전반에서 안정적.</li>
+  </ul>
+
+  <h3>해석 ② — "나이브하게 보면 이상한" 수치</h3>
+  <div class="callout c-red">
+    <span class="tag">직관과 반대</span>
+    보통 "<b>입력이 길수록 prefill이 무거워 TTFT가 길다</b>"고 기대합니다. 그런데 표는 반대예요 — <b>4K·8K의 TTFT(≈7.5 s, p90 10.4 s)가 16K~64K(3~4.7 s)보다 오히려 높습니다.</b> 게다가 4K·8K는 <b>완료 요청 수도 더 적습니다</b>(≈6,800 vs 16K의 17,514).
+  </div>
+  <p><b>왜 그럴까 (추정):</b> 같은 시간 동안 도는 벤치마크에서 짧은 입력이 더 적게 처리되고 TTFT까지 높다는 건, 그 구간이 정상 상태가 아니었음을 시사합니다. 가장 유력한 설명은 <b>하드웨어 장애 윈도우와 겹쳤을 가능성</b>입니다 — 위에서 명시했듯 <i>conc &gt; 64 실험 중 decode 노드의 HBM 에러가 나면 TTFT가 튀고</i>, 노드 재시작 동안 처리량이 줄어듭니다. 따라서 <b>4K·8K의 높은 TTFT는 입력 길이 자체의 성질이 아니라, 그때 마침 장애 구간에 걸린 artifact로 보는 것이 합리적</b>입니다.</p>
+  <div class="callout c-blue">
+    <span class="tag">그래서 행동</span>
+    이런 케이스는 "이상 데이터"로 분류해, 장애 시간대 로그와 대조한 뒤 <b>해당 케이스만 재실행</b>할지 Zhipu와 협의합니다. 즉 숫자를 곧이곧대로 "짧은 입력이 더 느리다"로 결론짓지 않고, 원인(장애 윈도우)을 분리해 본 것이 핵심입니다.
+  </div>
+  <p class="muted">※ 이 해석은 스레드에서 단정된 게 아니라 현재까지 정보로 가장 가능성 높은 가설입니다. 장애 시간대 로그와 케이스 시작 시각을 대조하면 확정할 수 있습니다.</p>
+</section>
+
+<footer>
+  <p>출처: Slack 라우터/스케줄러 콜 스레드 및 실험 경과 스레드 · vLLM PR #43447<br>
+  자료 정리용 설명 문서 · 2026-06-08</p>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var c = document.getElementById('sig');
+  if(!c) return;
+  var ctx = c.getContext('2d');
+  var W = c.width, H = c.height, padL = 54, padR = 20, padT = 18, padB = 40;
+  var x0 = 0.93;
+  function X(h){ return padL + h*(W-padL-padR); }
+  function Y(s){ return (H-padB) - s*(H-padT-padB); }
+  // grid + axes
+  ctx.strokeStyle = '#e3e6ea'; ctx.fillStyle = '#8a8f98'; ctx.lineWidth = 1;
+  ctx.font = '12px -apple-system,sans-serif';
+  for(var g=0; g<=10; g++){
+    var hv = g/10;
+    ctx.beginPath(); ctx.moveTo(X(hv), padT); ctx.lineTo(X(hv), H-padB); ctx.stroke();
+    ctx.textAlign='center'; ctx.fillText(hv.toFixed(1), X(hv), H-padB+18);
+  }
+  for(var s=0; s<=1.0001; s+=0.25){
+    ctx.beginPath(); ctx.moveTo(padL, Y(s)); ctx.lineTo(W-padR, Y(s)); ctx.stroke();
+    ctx.textAlign='right'; ctx.fillText(s.toFixed(2), padL-8, Y(s)+4);
+  }
+  ctx.fillStyle='#5f6368'; ctx.textAlign='center';
+  ctx.fillText('prefix hit rate (h)', (padL+W-padR)/2, H-6);
+  ctx.save(); ctx.translate(16,(padT+H-padB)/2); ctx.rotate(-Math.PI/2);
+  ctx.fillText('score', 0, 0); ctx.restore();
+  // x0 line
+  ctx.strokeStyle='#c23b3b'; ctx.setLineDash([5,4]); ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(X(x0), padT); ctx.lineTo(X(x0), H-padB); ctx.stroke();
+  ctx.setLineDash([]);
+  // curves
+  function curve(k, color){
+    ctx.strokeStyle=color; ctx.lineWidth=2.4; ctx.beginPath();
+    for(var i=0;i<=400;i++){
+      var h=i/400, sc=1/(1+Math.exp(-k*(h-x0)));
+      if(i===0) ctx.moveTo(X(h),Y(sc)); else ctx.lineTo(X(h),Y(sc));
+    }
+    ctx.stroke();
+  }
+  curve(20,'#9bc0ee'); curve(100,'#2f6fd0'); curve(500,'#0b3d80');
+})();
+</script>
+</body>
+</html>
