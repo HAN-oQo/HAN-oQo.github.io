@@ -515,6 +515,39 @@ KvCacheStoredBlockData {
   </svg>
 </div>
 
+<h4 style="margin:26px 0 8px;font-size:15.5px"><span class="en">Two hashes per block — token hash vs block hash, by example</span><span class="ko">블록당 해시 두 개 — token hash vs block hash, 예시로</span></h4>
+<p><span class="en">A block carries <i>two</i> hashes and they are <b>not</b> redundant. Take <code class="inl">block_size = 4</code> and a prompt where the <b>same 4 tokens repeat</b>:</span>
+<span class="ko">블록은 해시를 <i>두 개</i> 갖고, 둘은 <b>중복이 아닙니다</b>. <code class="inl">block_size = 4</code>에 <b>같은 4토큰이 반복</b>되는 프롬프트로 보죠:</span></p>
+<div class="flow">tokens = [10,11,12,13,  10,11,12,13]
+          └─ block1 ─┘   └─ block2 ─┘   <span style="color:#6b6a63"># 내용이 동일</span>
+
+token hash (이 블록의 토큰만):   block1 = TH      block2 = TH        <span style="color:#bc4c00"># 똑같음!</span>
+block hash (이 블록 + 앞 prefix):  block1 = seq1=TH  block2 = hash(seq1,TH)=seq2  <span style="color:#1a7f37"># 다름</span></div>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Task</span><span class="ko">작업</span></th>
+    <th><span class="en">Which hash</span><span class="ko">어떤 해시</span></th>
+    <th><span class="en">Why</span><span class="ko">이유</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><span class="en"><b>Query / overlap</b> (a new request comes in)</span><span class="ko"><b>조회 / overlap</b> (새 요청 도착)</span></td><td><code>token hash</code></td><td><span class="en">Frontend hashes the prompt's blocks to <code>[TH, …]</code> and walks <code>children[TH]</code> — matching is by <b>content</b>, so identical prefixes converge on one path.</span><span class="ko">Frontend가 프롬프트 블록을 <code>[TH, …]</code>로 해시해 <code>children[TH]</code>를 탐 — <b>내용</b> 기준이라 같은 prefix가 한 경로로 모임.</span></td></tr>
+    <tr><td><span class="en"><b>Remove</b> (vLLM evicts block2)</span><span class="ko"><b>삭제</b> (vLLM이 block2 축출)</span></td><td><code>block hash</code></td><td><span class="en"><code>BlockRemoved</code> sends only <code>seq2</code> (no tokens). <code>TH</code> alone is ambiguous — it points at <b>both</b> block1 and block2. <code>worker_lookup[seq2]</code> pins the exact node.</span><span class="ko"><code>BlockRemoved</code>는 <code>seq2</code>만 보냄(토큰 없음). <code>TH</code>만으론 block1·block2 <b>둘 다</b>라 모호함. <code>worker_lookup[seq2]</code>가 정확한 노드를 집음.</span></td></tr>
+  </tbody>
+</table>
+
+<p><span class="en">That ambiguity is the whole reason both exist: <b>token hash addresses content</b> (good for tree branching &amp; overlap), <b>block hash addresses identity</b> (good for pinpointing one block to remove). vLLM's remove event ships only the identity hash and no tokens, so token hash can't even be recomputed there. So <code class="inl">apply_stored</code> registers each node under <i>both</i> keys:</span>
+<span class="ko">이 모호함이 둘 다 존재하는 이유 전부입니다: <b>token hash는 내용 주소</b>(트리 분기·overlap에 좋음), <b>block hash는 정체성 주소</b>(제거할 블록 하나를 콕 집기에 좋음). vLLM의 remove 이벤트는 정체성 해시만 보내고 토큰은 안 보내서 token hash를 재계산할 수도 없습니다. 그래서 <code class="inl">apply_stored</code>는 각 노드를 <i>두</i> 키로 등록합니다:</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/indexer/concurrent_radix_tree.rs : apply_stored</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/indexer/concurrent_radix_tree.rs#L315" target="_blank">L315</a></figcaption>
+<pre><code>parent.children.<span class="t-fn">insert</span>(block_data.tokens_hash, node);   <span class="t-com">// query key — content (TH)</span>
+worker_lookup.<span class="t-fn">insert</span>(block_data.block_hash,  node);   <span class="t-com">// remove key — identity (seq)</span></code></pre>
+</figure>
+<div class="callout">
+  <span class="en"><b>Mental model.</b> Like a library shelving one book on a <i>subject shelf</i> (by content = token hash, how you browse) and also in the <i>call-number catalog</i> (by unique id = block hash, how you reclaim a specific copy). Browse by shelf, reclaim by call number.</span>
+  <span class="ko"><b>비유.</b> 도서관이 책 하나를 <i>주제별 서가</i>(내용 = token hash, 탐색용)에도 꽂고 <i>청구기호 목록</i>(고유 id = block hash, 회수용)에도 등록하는 것과 같습니다. 탐색은 서가로, 특정 책 회수는 청구기호로.</span>
+</div>
+
 <p><span class="en">The two destructive events are cheap and surgical. <code class="inl">apply_removed</code> uses the worker's lookup map to find the node in O(1) and drops the worker from its set — it deliberately does <b>not</b> cascade to descendants (the query reconciles stale descendants lazily). <code class="inl">clear_all_blocks</code> walks the worker's entries and removes it everywhere.</span>
 <span class="ko">파괴적인 두 이벤트는 싸고 정밀합니다. <code class="inl">apply_removed</code>는 워커 lookup 맵으로 노드를 O(1)에 찾아 그 노드의 집합에서 워커만 뺍니다 — 의도적으로 자손까지 <b>전파하지 않습니다</b>(자손의 stale 항목은 query가 지연 보정). <code class="inl">clear_all_blocks</code>는 워커의 항목들을 돌며 모든 곳에서 워커를 제거합니다.</span></p>
 <figure class="code">

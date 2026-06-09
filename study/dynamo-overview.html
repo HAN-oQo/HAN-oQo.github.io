@@ -363,6 +363,62 @@ CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.vllm \
 </div>
 <p style="color:var(--muted);font-size:13px;margin-top:-6px"><span class="en">Solid green = the live request path · dashed blue = etcd discovery · dashed purple = NATS KV-event bus.</span><span class="ko">초록 실선 = 실제 요청 경로 · 파란 점선 = etcd 디스커버리 · 보라 점선 = NATS KV 이벤트 버스.</span></p>
 
+<h3 class="step"><span class="en">&ldquo;But I never gave a port — how does the Frontend find the worker?&rdquo;</span><span class="ko">&ldquo;포트도 안 줬는데 Frontend가 워커를 어떻게 찾지?&rdquo;</span></h3>
+<p><span class="en">Right — you pass <code class="inl">--model</code> but never a worker address or port. Nothing is statically wired. Instead the worker <b>advertises its own address in etcd under a lease</b>, and the Frontend <b>watches etcd</b> and learns it. Only the <i>names</i> are hardcoded defaults; the <i>port</i> is OS-assigned and published.</span>
+<span class="ko">맞습니다 — <code class="inl">--model</code>만 주고 워커 주소·포트는 안 줍니다. 정적으로 연결되는 게 하나도 없습니다. 대신 워커가 <b>자기 주소를 lease 걸어 etcd에 광고</b>하고, Frontend는 <b>etcd를 watch</b>해 그걸 배워옵니다. 하드코딩된 건 <i>이름</i> 기본값뿐이고, <i>포트</i>는 OS가 할당해서 광고됩니다.</span></p>
+
+<div class="callout warn">
+  <span class="en"><b>Where the port comes from.</b> Unless you set <code class="inl">DYN_TCP_RPC_PORT</code>, the worker binds its request-plane TCP server to <b>port 0 → the OS hands back a free ephemeral port</b>. The worker then reads that actual port and bakes it into the address it registers. That is why no port appears in the launch script — the worker picks one and tells etcd. (<code class="inl">DYN_SYSTEM_PORT</code> in the script is a <i>different</i>, metrics/system port, set per-worker only to avoid clashes.)</span>
+  <span class="ko"><b>포트의 출처.</b> <code class="inl">DYN_TCP_RPC_PORT</code>를 직접 주지 않으면, 워커는 request-plane TCP 서버를 <b>포트 0으로 bind → OS가 빈 ephemeral 포트를 돌려줍니다</b>. 워커는 그 실제 포트를 읽어 자기가 등록할 주소에 박습니다. 그래서 런치 스크립트에 포트가 안 보이는 겁니다 — 워커가 직접 골라 etcd에 알립니다. (스크립트의 <code class="inl">DYN_SYSTEM_PORT</code>는 <i>별개</i>의 메트릭/시스템 포트로, 충돌 방지용으로만 워커마다 다르게 줍니다.)</span>
+</div>
+
+<p><span class="en"><b>1) Worker startup — one lease, then bind, then advertise.</b> The runtime opens an etcd lease and ties its own lifetime to it (lease expires → worker considered dead; worker dies → lease revoked).</span>
+<span class="ko"><b>1) 워커 기동 — lease 하나 만들고, bind하고, 광고.</b> 런타임이 etcd lease를 열고 자기 수명을 거기 묶습니다(lease 만료 → 워커 사망 간주, 워커 사망 → lease revoke).</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/runtime/src/component/endpoint.rs : build_transport_type</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/runtime/src/component/endpoint.rs#L290" target="_blank">L290</a></figcaption>
+<pre><code><span class="t-com">// no DYN_TCP_RPC_PORT set → use the actual OS-assigned bound port (port 0 bind)</span>
+<span class="t-kw">let</span> tcp_port = std::env::<span class="t-fn">var</span>(<span class="t-str">"DYN_TCP_RPC_PORT"</span>).ok()
+    .and_then(|p| p.<span class="t-fn">parse</span>::&lt;u16&gt;().ok()).<span class="t-fn">filter</span>(|&amp;p| p != <span class="t-num">0</span>)
+    .<span class="t-fn">unwrap_or</span>(<span class="t-fn">get_actual_tcp_rpc_port</span>()?);
+<span class="t-com">// the address the worker will register: host:port/instance_id/endpoint</span>
+<span class="t-kw">let</span> tcp_endpoint = <span class="t-fn">format!</span>(<span class="t-str">"{}:{}/{:x}/{}"</span>, tcp_host, tcp_port, connection_id, endpoint_id.name);
+TransportType::<span class="t-fn">Tcp</span>(tcp_endpoint)   <span class="t-com">// or TransportType::Nats(subject)</span></code></pre>
+</figure>
+
+<p><span class="en"><b>2) Register two keys in etcd, both lease-bound.</b> An <b>instance</b> key holds the transport address; a <b>model</b> key holds the model card. Keys are named by <code class="inl">namespace/component/endpoint/instance_id</code> — defaults <code class="inl">dynamo</code> / <code class="inl">backend</code> / <code class="inl">generate</code>.</span>
+<span class="ko"><b>2) etcd에 키 두 개 등록 — 둘 다 lease에 묶여서.</b> <b>instance</b> 키는 transport 주소를, <b>model</b> 키는 모델 카드를 담습니다. 키 이름은 <code class="inl">namespace/component/endpoint/instance_id</code> — 기본값 <code class="inl">dynamo</code> / <code class="inl">backend</code> / <code class="inl">generate</code>.</span></p>
+<figure class="code">
+  <figcaption><span class="file">discovery/kv_store.rs · component/endpoint.rs · local_model.rs</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/runtime/src/discovery/kv_store.rs#L19" target="_blank">kv_store L19</a></figcaption>
+<pre><code><span class="t-com">// key layout</span>
+<span class="t-com">//   v1/instances/{ns}/{comp}/{ep}/{instance_id}  → transport address</span>
+<span class="t-com">//   v1/models/{ns}/{comp}/{ep}/{instance_id}     → model card (MDC)</span>
+key = <span class="t-fn">format!</span>(<span class="t-str">"{}/{}/{}/{:x}"</span>, namespace, component, endpoint, instance_id);
+
+<span class="t-com">// endpoint.rs:253 — register the address</span>
+discovery.<span class="t-fn">register</span>(DiscoverySpec::Endpoint { namespace, component, endpoint, transport, .. }).<span class="t-kw">await</span>?;
+<span class="t-com">// local_model.rs:554 — register the model card (register_llm path)</span>
+discovery.<span class="t-fn">register</span>(DiscoverySpec::<span class="t-fn">from_model_with_suffix</span>(ns, comp, ep, &amp;card, suffix)?).<span class="t-kw">await</span>?;</code></pre>
+</figure>
+<figure class="code">
+  <figcaption><span class="file">lib/runtime/src/storage/kv/etcd.rs : insert</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/runtime/src/storage/kv/etcd.rs#L227" target="_blank">L227</a></figcaption>
+<pre><code><span class="t-com">// every registered key is attached to the worker's lease →</span>
+<span class="t-com">// worker dies, etcd revokes the lease, the key vanishes automatically</span>
+<span class="t-kw">let</span> put_options = PutOptions::<span class="t-fn">new</span>().<span class="t-fn">with_lease</span>(self.client.<span class="t-fn">lease_id</span>() <span class="t-kw">as</span> i64);
+self.client.<span class="t-fn">kv_put_with_options</span>(k, value, <span class="t-fn">Some</span>(put_options)).<span class="t-kw">await</span>?;</code></pre>
+</figure>
+
+<p><span class="en"><b>3) Frontend watches, learns the address, connects.</b> The model watcher list+watches the <code class="inl">v1/models/…</code> prefix to build each model's engine; the router list+watches <code class="inl">v1/instances/…</code> for the live address set. To send, it resolves the chosen instance's transport and connects over TCP (or a NATS subject) — no configuration needed.</span>
+<span class="ko"><b>3) Frontend가 watch해서 주소를 배우고 연결.</b> 모델 watcher가 <code class="inl">v1/models/…</code> prefix를 list+watch해 모델별 엔진을 구성하고, 라우터가 <code class="inl">v1/instances/…</code>를 list+watch해 살아있는 주소 집합을 유지합니다. 보낼 때는 선택된 인스턴스의 transport를 풀어 TCP(또는 NATS subject)로 연결합니다 — 설정 불필요.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/runtime/src/pipeline/network/egress/push_router.rs : resolve_transport</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/runtime/src/pipeline/network/egress/push_router.rs#L855" target="_blank">L855</a></figcaption>
+<pre><code><span class="t-kw">match</span> &amp;instance.transport {
+    TransportType::<span class="t-fn">Tcp</span>(addr)     => (addr,    <span class="t-str">"transport.tcp.request"</span>),   <span class="t-com">// TCP connect + send</span>
+    TransportType::<span class="t-fn">Nats</span>(subject) => (subject, <span class="t-str">"transport.nats.request"</span>),  <span class="t-com">// NATS publish</span>
+}</code></pre>
+</figure>
+<p><span class="en">So the chain is: <b>worker → (lease + self-assigned address) → etcd → (watch) → Frontend → connect</b>. etcd is the registry that makes the port you never typed discoverable; with <code class="inl">--discovery-backend file</code> a local file plays the same role for laptop runs.</span>
+<span class="ko">즉 사슬은: <b>워커 → (lease + 자기 주소) → etcd → (watch) → Frontend → 연결</b>. etcd가, 당신이 한 번도 안 친 그 포트를 발견 가능하게 만드는 레지스트리입니다. <code class="inl">--discovery-backend file</code>이면 노트북 실행에서 로컬 파일이 같은 역할을 합니다.</span></p>
+
 <h3 class="step"><span class="num">3</span><span class="en">Call it — exactly the OpenAI API</span><span class="ko">호출 — 그냥 OpenAI API</span></h3>
 <figure class="code">
   <figcaption><span class="file">shell</span><a href="https://github.com/ai-dynamo/dynamo/tree/main/examples/backends/vllm" target="_blank">examples/backends/vllm</a></figcaption>
@@ -629,6 +685,67 @@ Ok(sse_stream.<span class="t-fn">into_response</span>())          <span class="t
   <span class="en"><b>The whole loop in one breath:</b> client → <span class="node-f">Frontend</span> tokenizes → router picks the worker with the most KV overlap → <span class="node-d">decode worker</span> generates (optionally pulling KV from a <span class="node-p">prefill worker</span> via NIXL) → tokens stream back → Frontend detokenizes → SSE to client. The GPU engine only ever sees token IDs.</span>
   <span class="ko"><b>한 호흡으로 본 전체 루프:</b> client → <span class="node-f">Frontend</span> 토크나이즈 → 라우터가 KV 오버랩이 가장 큰 워커 선택 → <span class="node-d">decode 워커</span>가 생성(필요 시 <span class="node-p">prefill 워커</span>에서 NIXL로 KV 당겨옴) → 토큰 스트리밍 → Frontend 디토크나이즈 → 클라이언트로 SSE. GPU 엔진은 토큰 ID만 봅니다.</span>
 </div>
+
+<h3 class="step"><span class="en">What the Frontend and worker actually exchange</span><span class="ko">Frontend와 워커가 실제로 주고받는 것</span></h3>
+<p><span class="en">Two internal types travel between them, both <b>JSON-serialized</b> over TCP (default) or NATS. The contract is token-in-token-out: the request carries <code class="inl">token_ids</code>, not text, and the response carries new <code class="inl">token_ids</code>, not detokenized text.</span>
+<span class="ko">둘 사이를 오가는 내부 타입은 두 개이며, 모두 <b>JSON 직렬화</b>로 TCP(기본) 또는 NATS를 탑니다. 계약은 token-in-token-out입니다: 요청은 텍스트가 아니라 <code class="inl">token_ids</code>를, 응답은 디토크된 텍스트가 아니라 새 <code class="inl">token_ids</code>를 담습니다.</span></p>
+
+<p><span class="en"><b>Frontend → Worker — <code class="inl">PreprocessedRequest</code>.</b></span><span class="ko"><b>Frontend → Worker — <code class="inl">PreprocessedRequest</code>.</b></span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/protocols/common/preprocessor.rs</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/protocols/common/preprocessor.rs#L161" target="_blank">L161</a></figcaption>
+<pre><code><span class="t-kw">pub struct</span> <span class="t-fn">PreprocessedRequest</span> {
+    <span class="t-kw">pub</span> model: String,
+    <span class="t-kw">pub</span> token_ids: Vec&lt;TokenIdType&gt;,         <span class="t-com">// 프롬프트 (토크나이즈 완료) — not text</span>
+    <span class="t-kw">pub</span> stop_conditions: StopConditions,    <span class="t-com">// max_tokens, stop strings …</span>
+    <span class="t-kw">pub</span> sampling_options: SamplingOptions,  <span class="t-com">// temperature, top_p …</span>
+    <span class="t-kw">pub</span> output_options: OutputOptions,      <span class="t-com">// logprobs?, skip_special_tokens …</span>
+    <span class="t-kw">pub</span> eos_token_ids: Vec&lt;TokenIdType&gt;,
+    <span class="t-kw">pub</span> mdc_sum: Option&lt;String&gt;,            <span class="t-com">// 모델 카드 체크섬 (버전 정합)</span>
+    <span class="t-kw">pub</span> routing: Option&lt;RoutingHints&gt;,      <span class="t-com">// dp_rank, prefill/decode worker id</span>
+    <span class="t-kw">pub</span> prefill_result: Option&lt;PrefillResult&gt;,  <span class="t-com">// disagg: prefill 핸들</span>
+    <span class="t-kw">pub</span> bootstrap_info: Option&lt;BootstrapInfo&gt;,  <span class="t-com">// disagg: KV 전송 부트스트랩</span>
+    <span class="t-kw">pub</span> multi_modal_data: Option&lt;MultimodalDataMap&gt;, ...
+}</code></pre>
+</figure>
+
+<p><span class="en"><b>Worker → Frontend — a stream of <code class="inl">Annotated&lt;LLMEngineOutput&gt;</code>.</b> Each chunk is one engine output; <code class="inl">Annotated</code> is the SSE-style envelope.</span>
+<span class="ko"><b>Worker → Frontend — <code class="inl">Annotated&lt;LLMEngineOutput&gt;</code> 스트림.</b> 각 청크가 엔진 출력 하나이고, <code class="inl">Annotated</code>는 SSE 스타일 봉투입니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/protocols/common/llm_backend.rs</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/protocols/common/llm_backend.rs#L156" target="_blank">L156</a></figcaption>
+<pre><code><span class="t-kw">pub struct</span> <span class="t-fn">LLMEngineOutput</span> {
+    <span class="t-kw">pub</span> token_ids: Vec&lt;TokenIdType&gt;,        <span class="t-com">// 새로 생성된 토큰 (TITO)</span>
+    <span class="t-kw">pub</span> tokens: Option&lt;Vec&lt;TokenType&gt;&gt;,     <span class="t-com">// 보통 None — 엔진은 디토크 안 함</span>
+    <span class="t-kw">pub</span> text: Option&lt;String&gt;,               <span class="t-com">// 보통 None — Frontend가 디토크</span>
+    <span class="t-kw">pub</span> finish_reason: Option&lt;FinishReason&gt;, <span class="t-com">// Stop / Length …</span>
+    <span class="t-kw">pub</span> log_probs: Option&lt;LogProbs&gt;,
+    <span class="t-kw">pub</span> index: Option&lt;u32&gt;,
+    <span class="t-kw">pub</span> disaggregated_params: Option&lt;Value&gt;,  <span class="t-com">// disagg: decode가 받을 KV 핸들</span>
+    <span class="t-kw">pub</span> completion_usage: Option&lt;CompletionUsage&gt;, ...
+}
+<span class="t-kw">pub struct</span> <span class="t-fn">Annotated</span>&lt;R&gt; {                  <span class="t-com">// 스트리밍 봉투</span>
+    <span class="t-kw">pub</span> data: Option&lt;R&gt;,   <span class="t-kw">pub</span> id: Option&lt;String&gt;,
+    <span class="t-kw">pub</span> event: Option&lt;String&gt;,   <span class="t-kw">pub</span> comment: Option&lt;Vec&lt;String&gt;&gt;,
+}</code></pre>
+</figure>
+
+<div class="callout">
+  <span class="en"><b>tokens / text are usually <code class="inl">None</code>.</b> The GPU engine returns only token ids; detokenization happens back in the Frontend's Backend operator. This is the same TITO contract that lets the Frontend own the tokenizer and do KV-aware routing.</span>
+  <span class="ko"><b>tokens / text는 보통 <code class="inl">None</code>입니다.</b> GPU 엔진은 토큰 id만 돌려주고, 디토크나이즈는 Frontend의 Backend 오퍼레이터에서 일어납니다. 이게 Frontend가 토크나이저를 소유하고 KV 인지 라우팅을 할 수 있게 하는 바로 그 TITO 계약입니다.</span>
+</div>
+
+<table>
+  <thead><tr>
+    <th></th>
+    <th><span class="en">Frontend → Worker</span><span class="ko">Frontend → Worker</span></th>
+    <th><span class="en">Worker → Frontend</span><span class="ko">Worker → Frontend</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><span class="en">Type</span><span class="ko">타입</span></td><td><code>PreprocessedRequest</code></td><td><code>Annotated&lt;LLMEngineOutput&gt;</code> <span class="en">(stream)</span><span class="ko">(스트림)</span></td></tr>
+    <tr><td><span class="en">Carries</span><span class="ko">담는 것</span></td><td><span class="en">model, <b>token_ids</b>, sampling/stop/output opts, routing &amp; disagg hints</span><span class="ko">model, <b>token_ids</b>, sampling/stop/output 옵션, routing·disagg 힌트</span></td><td><span class="en"><b>new token_ids</b>, finish_reason, logprobs, usage, disagg params</span><span class="ko"><b>새 token_ids</b>, finish_reason, logprobs, usage, disagg params</span></td></tr>
+    <tr><td><span class="en">Encoding</span><span class="ko">인코딩</span></td><td>JSON (<code>serde_json</code>)</td><td>JSON (<code>serde_json</code>)</td></tr>
+    <tr><td><span class="en">Framing / channel</span><span class="ko">프레이밍 / 채널</span></td><td colspan="2"><span class="en"><code>TwoPartCodec</code> (control + body) over TCP (default) or NATS subject — <code>egress/addressed_router.rs</code></span><span class="ko"><code>TwoPartCodec</code> (control + body), TCP(기본) 또는 NATS subject — <code>egress/addressed_router.rs</code></span></td></tr>
+  </tbody>
+</table>
 
 <!-- ===================== 5. PROS / CONS ===================== -->
 <h2 class="sec" id="proscons">5 · <span class="en">Dynamo vs plain Docker vLLM</span><span class="ko">그냥 Docker로 띄운 vLLM 대비</span></h2>
