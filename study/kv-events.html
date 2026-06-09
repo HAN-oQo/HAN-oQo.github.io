@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KV cache events — vLLM → Dynamo code walk</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  /* page-local syntax & accent overrides for code walks */
+  :root{
+    --accent:#1668c7; --accent2:#1a7f37;
+    --kw:#cf222e; --str:#0a3069; --com:#6e7781; --fn:#8250df; --num:#0550ae;
+    --p:#bc4c00; --d:#1668c7;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Pretendard,"Apple SD Gothic Neo",Roboto,sans-serif;
+    line-height:1.7; font-size:16px;
+  }
+  .wrap{max-width:980px; margin:0 auto; padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 20px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--text)}
+  header.hero{
+    border:1px solid var(--border); border-radius:16px; padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#faf9f5); margin-bottom:32px;
+  }
+  .hero h1{margin:0 0 8px; font-size:30px; letter-spacing:-.5px}
+  .hero p{margin:6px 0; color:var(--muted)}
+  .tagline{font-size:15px}
+  .meta{display:flex; flex-wrap:wrap; gap:8px; margin-top:18px}
+  .badge{
+    font-size:12.5px; padding:4px 11px; border-radius:999px;
+    background:var(--chip); border:1px solid var(--border); color:var(--muted);
+  }
+  .badge code{color:var(--accent2); font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  nav.toc{
+    border:1px solid var(--border); border-radius:12px; background:var(--panel);
+    padding:18px 22px; margin-bottom:36px;
+  }
+  nav.toc h2{margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:1px; color:var(--muted)}
+  nav.toc ol{margin:0; padding-left:20px; columns:2; column-gap:32px}
+  nav.toc a{color:var(--accent); text-decoration:none}
+  nav.toc a:hover{text-decoration:underline}
+  h2.sec{font-size:22px; margin:46px 0 14px; padding-top:14px; border-top:1px solid var(--border)}
+  h3.step{font-size:18px; margin:34px 0 10px; display:flex; align-items:center; gap:10px}
+  .num{
+    flex:0 0 auto; width:28px; height:28px; border-radius:8px;
+    background:var(--accent); color:#ffffff; font-weight:700; font-size:14px;
+    display:inline-flex; align-items:center; justify-content:center;
+  }
+  .node-v,.node-y{font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px}
+  .node-v{background:rgba(188,76,0,.12); color:var(--p); border:1px solid rgba(188,76,0,.35)}
+  .node-y{background:rgba(22,104,199,.1); color:var(--accent); border:1px solid rgba(22,104,199,.35)}
+  p{margin:10px 0}
+  a.link{color:var(--accent); text-decoration:none; border-bottom:1px dotted rgba(22,104,199,.5)}
+  a.link:hover{border-bottom-style:solid}
+  code.inl{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:14px;
+    background:var(--chip); padding:1.5px 6px; border-radius:5px; color:var(--accent2);
+  }
+  .flow{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:18px 20px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:13.5px; color:var(--muted); overflow-x:auto; white-space:pre; margin:16px 0;
+  }
+  figure.code{margin:16px 0; border:1px solid var(--border); border-radius:12px; overflow:hidden; background:var(--panel)}
+  figure.code figcaption{
+    display:flex; justify-content:space-between; align-items:center; gap:12px;
+    background:var(--panel2); padding:8px 14px; font-size:12.5px; color:var(--muted);
+    border-bottom:1px solid var(--border);
+  }
+  figure.code figcaption .file{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  figure.code figcaption a{
+    color:var(--accent); text-decoration:none; white-space:nowrap;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  figure.code figcaption a:hover{text-decoration:underline}
+  pre{margin:0; padding:14px 16px; overflow-x:auto; font-size:13px; line-height:1.55}
+  pre code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text)}
+  .t-kw{color:var(--kw)} .t-str{color:var(--str)} .t-com{color:var(--com)}
+  .t-fn{color:var(--fn)} .t-num{color:var(--num)}
+  .callout{
+    border-left:3px solid var(--accent); background:rgba(22,104,199,.06);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:16px 0; color:#3c3b35; font-size:14.5px;
+  }
+  .callout.warn{border-left-color:var(--p); background:rgba(188,76,0,.07)}
+  .callout.good{border-left-color:var(--accent2); background:rgba(26,127,55,.07)}
+  .callout b{color:var(--accent2)}
+  table{width:100%; border-collapse:collapse; margin:18px 0; font-size:14px}
+  th,td{border:1px solid var(--border); padding:9px 12px; text-align:left; vertical-align:top}
+  th{background:var(--panel2); color:var(--muted); font-weight:600}
+  td code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; color:var(--accent2)}
+  .lede{color:var(--muted); font-size:14.5px; margin:0 0 8px}
+  .sources{border:1px solid var(--border); border-radius:12px; background:var(--panel); padding:18px 22px}
+  .sources h2{margin-top:0}
+  .sources a{display:inline-block; color:var(--accent); text-decoration:none; margin:3px 14px 3px 0; font-size:14px}
+  .sources a:hover{text-decoration:underline}
+  footer{margin-top:48px; color:var(--muted); font-size:13px; text-align:center}
+  .flowsvg{width:100%; height:auto; display:block}
+  .animbox{border:1px solid var(--border); border-radius:16px; background:linear-gradient(160deg,#ffffff,#faf9f5); padding:24px 26px; margin:8px 0 28px}
+  @keyframes march{to{stroke-dashoffset:-260}}
+  .march{stroke-dasharray:7 6; animation:march 3s linear infinite}
+  @media(prefers-reduced-motion:reduce){.march{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="./index.html">←
+  <span class="en">AI Inference Study</span><span class="ko">AI Inference Study</span>
+</a></p>
+
+<header class="hero">
+  <h1>KV cache events — <span class="en">vLLM → Dynamo</span><span class="ko">vLLM → Dynamo</span></h1>
+  <p class="tagline">
+    <span class="en">The small messages that make KV-aware routing possible. What a <code class="inl">KVCacheEvent</code> is, when and where vLLM fires it, how it travels over ZMQ, and how Dynamo turns a stream of them into the prefix index its router scores against — traced through real source with permalinks.</span>
+    <span class="ko">KV 인지 라우팅을 가능하게 하는 작은 메시지. <code class="inl">KVCacheEvent</code>가 무엇이고, vLLM이 언제·어디서 발생시키며, ZMQ로 어떻게 흘러가고, Dynamo가 그 스트림을 라우터가 점수 매기는 prefix 인덱스로 어떻게 바꾸는지 — 실제 소스와 permalink로 추적합니다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><span class="en">producer </span><span class="ko">생산자 </span><code>vLLM e6fc848</code></span>
+    <span class="badge"><span class="en">consumer </span><span class="ko">소비자 </span><code>Dynamo bae0051</code></span>
+    <span class="badge"><span class="en">transport </span><span class="ko">전송 </span><code>ZMQ PUB/SUB</code></span>
+    <span class="badge"><span class="en">codec </span><span class="ko">인코딩 </span><code>msgpack</code></span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2><span class="en">Contents</span><span class="ko">목차</span></h2>
+  <ol>
+    <li><a href="#why"><span class="en">Why KV events exist</span><span class="ko">KV 이벤트가 존재하는 이유</span></a></li>
+    <li><a href="#model"><span class="en">The data model (3 event types)</span><span class="ko">데이터 모델 (3가지 이벤트)</span></a></li>
+    <li><a href="#fire"><span class="en">vLLM — when &amp; where they fire</span><span class="ko">vLLM — 언제·어디서 발생</span></a></li>
+    <li><a href="#wire"><span class="en">The wire — ZMQ publish</span><span class="ko">전송 — ZMQ 발행</span></a></li>
+    <li><a href="#consume"><span class="en">Dynamo — subscribe &amp; index</span><span class="ko">Dynamo — 구독 &amp; 인덱싱</span></a></li>
+    <li><a href="#loop"><span class="en">Closing the loop — routing</span><span class="ko">루프 닫기 — 라우팅</span></a></li>
+    <li><a href="#scenarios"><span class="en">Worked scenarios + diagrams</span><span class="ko">시나리오별 그림</span></a></li>
+    <li><a href="#sources"><span class="en">Sources</span><span class="ko">출처</span></a></li>
+  </ol>
+</nav>
+
+<!-- ===================== 1. WHY ===================== -->
+<h2 class="sec" id="why">1 · <span class="en">Why KV events exist</span><span class="ko">KV 이벤트가 존재하는 이유</span></h2>
+
+<p>
+  <span class="en">Dynamo's router wants to send each request to the worker that <b>already holds the most of that prompt's KV blocks</b> — that's the whole point of <a class="link" href="dynamo-overview.html">KV-aware routing</a>. But the prefix cache lives <b>inside each GPU worker</b>, and it changes every engine step as blocks are cached and evicted. The router runs in a <i>separate</i> Rust process. So how does it know what's in a cache it can't see?</span>
+  <span class="ko">Dynamo 라우터는 각 요청을 <b>그 프롬프트의 KV 블록을 이미 가장 많이 들고 있는 워커</b>로 보내려 합니다 — 이게 <a class="link" href="dynamo-overview.html">KV 인지 라우팅</a>의 핵심입니다. 그런데 prefix 캐시는 <b>각 GPU 워커 안</b>에 있고, 매 엔진 스텝마다 블록이 캐시되고 쫓겨나며 바뀝니다. 라우터는 <i>별도의</i> Rust 프로세스에서 돕니다. 그럼 볼 수도 없는 캐시 안의 내용을 어떻게 알까요?</span>
+</p>
+
+<div class="callout">
+  <span class="en"><b>KV events are the answer.</b> Every time a vLLM worker caches or evicts a KV block, it emits a tiny event — <code class="inl">BlockStored</code> / <code class="inl">BlockRemoved</code> — carrying only <b>block hashes</b>, not tensors. Dynamo subscribes to that stream and rebuilds a mirror of every worker's cache as a <b>radix tree of block hashes</b>. The router then scores candidates against that mirror. No GPU memory is ever shipped — just hashes.</span>
+  <span class="ko"><b>KV 이벤트가 그 답입니다.</b> vLLM 워커가 KV 블록을 캐시하거나 쫓아낼 때마다 작은 이벤트(<code class="inl">BlockStored</code> / <code class="inl">BlockRemoved</code>)를 내보냅니다 — 텐서가 아니라 <b>블록 해시</b>만 담아서요. Dynamo는 그 스트림을 구독해 모든 워커 캐시의 거울을 <b>블록 해시 radix 트리</b>로 재구성합니다. 라우터는 그 거울을 상대로 후보를 점수 매깁니다. GPU 메모리는 한 바이트도 안 옮기고 해시만 흐릅니다.</span>
+</div>
+
+<div class="animbox">
+  <svg viewBox="0 0 900 240" class="flowsvg" role="img" aria-label="KV event end-to-end">
+    <defs>
+      <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#bc4c00"/></marker>
+      <marker id="b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#1668c7"/></marker>
+    </defs>
+    <!-- vLLM worker -->
+    <rect x="20" y="64" width="250" height="112" rx="12" fill="#ffffff" stroke="#bc4c00" stroke-width="1.5"/>
+    <text x="145" y="88" text-anchor="middle" fill="#bc4c00" font-size="13" font-weight="700">vLLM worker (Python)</text>
+    <text x="145" y="110" text-anchor="middle" fill="#6b6a63" font-size="10.5">block_pool: cache / evict block</text>
+    <text x="145" y="128" text-anchor="middle" fill="#6b6a63" font-size="10.5">→ kv_event_queue</text>
+    <text x="145" y="146" text-anchor="middle" fill="#6b6a63" font-size="10.5">scheduler.step(): take_events()</text>
+    <text x="145" y="164" text-anchor="middle" fill="#6b6a63" font-size="10.5">ZmqEventPublisher.publish()</text>
+    <!-- ZMQ -->
+    <rect x="330" y="92" width="160" height="56" rx="11" fill="#ffffff" stroke="#6b6a63" stroke-width="1.3" stroke-dasharray="5 4"/>
+    <text x="410" y="116" text-anchor="middle" fill="#3c3b35" font-size="12.5" font-weight="700">ZMQ PUB/SUB</text>
+    <text x="410" y="133" text-anchor="middle" fill="#6b6a63" font-size="10">topic · seq · msgpack</text>
+    <!-- dynamo consumer -->
+    <rect x="550" y="40" width="330" height="160" rx="12" fill="#ffffff" stroke="#1668c7" stroke-width="1.5"/>
+    <text x="715" y="64" text-anchor="middle" fill="#1668c7" font-size="13" font-weight="700">Dynamo router (Rust)</text>
+    <text x="715" y="86" text-anchor="middle" fill="#6b6a63" font-size="10.5">zmq_listener → decode_event_batch</text>
+    <text x="715" y="104" text-anchor="middle" fill="#6b6a63" font-size="10.5">event_processor → batching → dedup</text>
+    <text x="715" y="122" text-anchor="middle" fill="#6b6a63" font-size="10.5">sinks → indexer.apply_event()</text>
+    <text x="715" y="144" text-anchor="middle" fill="#1668c7" font-size="10.5" font-weight="700">radix tree (mirror of every cache)</text>
+    <text x="715" y="166" text-anchor="middle" fill="#6b6a63" font-size="10.5">find_matches() → OverlapScores</text>
+    <text x="715" y="184" text-anchor="middle" fill="#6b6a63" font-size="10.5">→ selector.worker_logit()</text>
+    <!-- arrows -->
+    <line x1="270" y1="120" x2="326" y2="120" stroke="#bc4c00" stroke-width="2" marker-end="url(#a)" class="march"/>
+    <line x1="490" y1="120" x2="546" y2="120" stroke="#1668c7" stroke-width="2" marker-end="url(#b)" class="march"/>
+    <text x="298" y="112" fill="#6b6a63" font-size="9">events</text>
+  </svg>
+</div>
+
+<!-- ===================== 2. DATA MODEL ===================== -->
+<h2 class="sec" id="model">2 · <span class="en">The data model — three event types</span><span class="ko">데이터 모델 — 3가지 이벤트</span></h2>
+
+<p class="lede">
+  <span class="en">All KV events are defined in one vLLM file. There are exactly three, plus a batch wrapper. The base class is a <code class="inl">msgspec.Struct</code> with <code class="inl">tag=True</code> (so the wire carries a type tag) and <code class="inl">array_like=True</code> (encoded as a compact tuple, not a map).</span>
+  <span class="ko">모든 KV 이벤트는 vLLM의 한 파일에 정의돼 있습니다. 정확히 3가지 + 배치 래퍼입니다. 베이스 클래스는 <code class="inl">tag=True</code>(전송에 타입 태그를 실음)와 <code class="inl">array_like=True</code>(맵이 아니라 압축 튜플로 인코딩)를 가진 <code class="inl">msgspec.Struct</code>입니다.</span>
+</p>
+
+<figure class="code">
+  <figcaption><span class="file">vllm/distributed/kv_events.py</span><a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/distributed/kv_events.py#L49" target="_blank">L49</a></figcaption>
+<pre><code><span class="t-kw">class</span> <span class="t-fn">BlockStored</span>(KVCacheEvent):     <span class="t-com"># a block was just cached</span>
+    block_hashes: list[ExternalBlockHash]   <span class="t-com"># the hash(es) now resident</span>
+    parent_block_hash: ExternalBlockHash | <span class="t-kw">None</span>  <span class="t-com"># chains blocks into a prefix</span>
+    token_ids: list[int]                     <span class="t-com"># the tokens those blocks cover</span>
+    block_size: int
+    lora_id: int | <span class="t-kw">None</span>
+    medium: str | <span class="t-kw">None</span>                       <span class="t-com"># "GPU" / "CPU" / ... (tier)</span>
+    lora_name: str | <span class="t-kw">None</span>
+    extra_keys: list[...] | <span class="t-kw">None</span> = <span class="t-kw">None</span>     <span class="t-com"># MM ids, cache_salt, ...</span>
+    group_idx: int | <span class="t-kw">None</span> = <span class="t-kw">None</span>
+
+<span class="t-kw">class</span> <span class="t-fn">BlockRemoved</span>(KVCacheEvent):    <span class="t-com"># a block was evicted</span>
+    block_hashes: list[ExternalBlockHash]
+    medium: str | <span class="t-kw">None</span>
+    group_idx: int | <span class="t-kw">None</span> = <span class="t-kw">None</span>
+
+<span class="t-kw">class</span> <span class="t-fn">AllBlocksCleared</span>(KVCacheEvent): <span class="t-kw">pass</span>   <span class="t-com"># cache reset</span>
+
+<span class="t-kw">class</span> <span class="t-fn">KVEventBatch</span>(EventBatch):     <span class="t-com"># ts + list of the above</span>
+    events: list[BlockStored | BlockRemoved | AllBlocksCleared]</code></pre>
+</figure>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Event</span><span class="ko">이벤트</span></th>
+    <th><span class="en">Means</span><span class="ko">의미</span></th>
+    <th><span class="en">Router effect</span><span class="ko">라우터 영향</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><code>BlockStored</code></td><td><span class="en">These block hashes are now in this worker's cache, chained under <code>parent_block_hash</code>.</span><span class="ko">이 블록 해시들이 이제 이 워커 캐시에 있고 <code>parent_block_hash</code> 아래로 연결됨.</span></td><td><span class="en">Insert a path into the worker's radix tree.</span><span class="ko">워커 radix 트리에 경로 삽입.</span></td></tr>
+    <tr><td><code>BlockRemoved</code></td><td><span class="en">These hashes were evicted (LRU) and are gone.</span><span class="ko">이 해시들이 (LRU로) 쫓겨나 사라짐.</span></td><td><span class="en">Remove the path; that worker loses overlap credit.</span><span class="ko">경로 제거; 그 워커의 오버랩 점수 감소.</span></td></tr>
+    <tr><td><code>AllBlocksCleared</code></td><td><span class="en">The whole cache was reset.</span><span class="ko">캐시 전체가 리셋됨.</span></td><td><span class="en">Drop the worker's subtree entirely.</span><span class="ko">그 워커의 서브트리 전체 삭제.</span></td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="en"><b>The only payload that matters is <code class="inl">block_hashes</code> + <code class="inl">parent_block_hash</code>.</b> A block hash is computed from that block's token ids and its parent's hash — so identical prompt prefixes hash to identical chains across every worker. That is what makes cross-worker overlap measurable from hashes alone.</span>
+  <span class="ko"><b>중요한 페이로드는 <code class="inl">block_hashes</code> + <code class="inl">parent_block_hash</code>뿐입니다.</b> 블록 해시는 그 블록의 토큰 id와 부모 해시로 계산됩니다 — 그래서 동일한 프롬프트 prefix는 모든 워커에서 동일한 체인으로 해시됩니다. 이 덕분에 해시만으로 워커 간 오버랩을 측정할 수 있습니다.</span>
+</div>
+
+<!-- ===================== 3. WHEN/WHERE FIRE ===================== -->
+<h2 class="sec" id="fire">3 · <span class="en">vLLM — when &amp; where events fire</span><span class="ko">vLLM — 언제·어디서 발생하나</span> <span class="node-v">vLLM</span></h2>
+
+<p class="lede">
+  <span class="en">Events are produced in the <b>block pool</b> (the prefix-cache allocator) and flushed once per <b>engine step</b> by the scheduler. Two layers: emit → drain+publish. All three event types are emitted from the <i>same</i> block pool, just on different triggers:</span>
+  <span class="ko">이벤트는 <b>block pool</b>(prefix 캐시 할당자)에서 생산되고, 스케줄러가 <b>엔진 스텝마다 한 번</b> 비웁니다(flush). 두 계층: 발생 → 모아서 발행. 세 가지 이벤트 모두 <i>같은</i> block pool에서, 서로 다른 트리거로 발생합니다:</span>
+</p>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Event</span><span class="ko">이벤트</span></th>
+    <th><span class="en">Trigger in vLLM</span><span class="ko">vLLM에서의 트리거</span></th>
+    <th><span class="en">Frequency</span><span class="ko">빈도</span></th>
+    <th><span class="en">Source</span><span class="ko">출처</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><code>BlockStored</code></td><td><span class="en">A block becomes <b>full</b> and is added to the prefix cache (during prefill or as decode tops a block off).</span><span class="ko">블록이 <b>full</b>이 되어 prefix 캐시에 추가될 때(prefill 중이거나 decode가 블록을 채울 때).</span></td><td><span class="en">very frequent</span><span class="ko">매우 잦음</span></td><td><a class="link" href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L315" target="_blank">block_pool.py L315</a></td></tr>
+    <tr><td><code>BlockRemoved</code></td><td><span class="en">The <b>LRU evicts</b> a previously-cached block to reclaim space under memory pressure (a new allocation needs a free block).</span><span class="ko">메모리 압박 시 새 할당을 위해 <b>LRU가</b> 이전에 캐시된 블록을 <b>축출</b>할 때.</span></td><td><span class="en">when cache is full</span><span class="ko">캐시가 찼을 때</span></td><td><a class="link" href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L393" target="_blank">block_pool.py L393</a></td></tr>
+    <tr><td><code>AllBlocksCleared</code></td><td><span class="en">The prefix cache is <b>reset wholesale</b> (e.g. an explicit <code>reset_prefix_cache</code>, only succeeds when all blocks are free).</span><span class="ko">prefix 캐시가 <b>통째로 리셋</b>될 때(예: 명시적 <code>reset_prefix_cache</code>, 모든 블록이 free일 때만 성공).</span></td><td><span class="en">rare</span><span class="ko">드묾</span></td><td><a class="link" href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L492" target="_blank">block_pool.py L492</a></td></tr>
+  </tbody>
+</table>
+
+<h3 class="step"><span class="num">1</span><span class="en">Emit: a block gets cached → BlockStored</span><span class="ko">발생: 블록이 캐시될 때 → BlockStored</span></h3>
+<p><span class="en">When the scheduler finishes prefilling enough tokens to fill whole blocks, <code class="inl">cache_full_blocks</code> turns them into prefix-cache entries. If KV events are enabled, it appends a <code class="inl">BlockStored</code> to an in-memory queue (no I/O here — just a list push).</span>
+<span class="ko">스케줄러가 블록을 꽉 채울 만큼 토큰을 prefill하면 <code class="inl">cache_full_blocks</code>가 이를 prefix 캐시 항목으로 만듭니다. KV 이벤트가 켜져 있으면 메모리 큐에 <code class="inl">BlockStored</code>를 추가합니다(여기선 I/O 없음 — 리스트 push만).</span></p>
+<figure class="code">
+  <figcaption><span class="file">vllm/v1/core/block_pool.py : cache_full_blocks</span><a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L315" target="_blank">L315</a></figcaption>
+<pre><code><span class="t-kw">if</span> self.enable_kv_cache_events:
+    self.kv_event_queue.append(
+        <span class="t-fn">BlockStored</span>(
+            block_hashes=new_hashes,
+            parent_block_hash=parent_block_hash,
+            token_ids=request.all_token_ids[start_token_idx:end_token_idx],
+            block_size=block_size,
+            medium=MEDIUM_GPU,                <span class="t-com"># "GPU"</span>
+            group_idx=kv_cache_group_id,
+            ...
+        )
+    )</code></pre>
+</figure>
+<p><span class="en">Eviction is symmetric — when the LRU frees blocks, <code class="inl">BlockRemoved</code> is queued (<a class="link" href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L393" target="_blank">block_pool.py L393</a>); a full reset queues <code class="inl">AllBlocksCleared</code> (<a class="link" href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L492" target="_blank">L492</a>).</span>
+<span class="ko">eviction도 대칭입니다 — LRU가 블록을 해제하면 <code class="inl">BlockRemoved</code>가 큐에 들어가고(<a class="link" href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L393" target="_blank">block_pool.py L393</a>), 전체 리셋이면 <code class="inl">AllBlocksCleared</code>가 들어갑니다(<a class="link" href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L492" target="_blank">L492</a>).</span></p>
+
+<div class="callout warn">
+  <span class="en"><b>Only <i>full</i> blocks fire events — the remainder is dropped.</b> The block count is a floor division, so a partial block never gets hashed, cached, or announced. With <code class="inl">block_size=32</code> and a 31-token prompt, <code class="inl">31 // 32 = 0</code> → <code class="inl">cache_full_blocks</code> early-returns and <b>no <code class="inl">BlockStored</code> is emitted at all</b>. The 32nd token completes the block and only then does one event fire. So a 100-token prompt at block_size 32 caches <code class="inl">100 // 32 = 3</code> blocks (96 tokens); the trailing 4 tokens are invisible to routing.</span>
+  <span class="ko"><b><i>꽉 찬</i> 블록만 이벤트가 나고, 자투리는 버려집니다.</b> 블록 수는 floor 나눗셈이라, partial 블록은 해시·캐시·발행 어디에도 안 들어갑니다. <code class="inl">block_size=32</code>에 prompt 31토큰이면 <code class="inl">31 // 32 = 0</code> → <code class="inl">cache_full_blocks</code>가 곧바로 early-return하고 <b><code class="inl">BlockStored</code>가 아예 발생하지 않습니다</b>. 32번째 토큰이 블록을 완성해야 비로소 이벤트 하나가 납니다. 즉 block_size 32에서 100토큰 prompt는 <code class="inl">100 // 32 = 3</code>블록(96토큰)만 캐시되고, 남는 4토큰은 라우팅에서 안 보입니다.</span>
+</div>
+<figure class="code">
+  <figcaption><span class="file">vllm/v1/core/single_type_kv_cache_manager.py</span><a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/single_type_kv_cache_manager.py#L317" target="_blank">L317</a></figcaption>
+<pre><code>num_full_blocks = num_tokens // self.block_size   <span class="t-com"># floor: 31 // 32 == 0</span>
+<span class="t-kw">if</span> num_cached_blocks &gt;= num_full_blocks:            <span class="t-com"># 0 >= 0</span>
+    <span class="t-kw">return</span>                                        <span class="t-com"># → no event for a partial block</span></code></pre>
+</figure>
+<p><span class="en">This is why routing precision is <b>quantized to the block</b>: a larger <code class="inl">block_size</code> (e.g. the launch script's 64) discards more trailing tokens and coarsens the KV-overlap signal on short prompts; a smaller one sharpens it but produces more events and tree nodes.</span>
+<span class="ko">그래서 라우팅 정밀도는 <b>블록 단위로 양자화</b>됩니다: <code class="inl">block_size</code>가 크면(예: 런치 스크립트의 64) 자투리 토큰을 더 많이 버려 짧은 프롬프트의 KV 오버랩 신호가 거칠어지고, 작으면 정밀해지지만 이벤트·트리 노드가 늘어납니다.</span></p>
+
+<h3 class="step"><span class="num">1b</span><span class="en">Emit: eviction → BlockRemoved · reset → AllBlocksCleared</span><span class="ko">발생: 축출 → BlockRemoved · 리셋 → AllBlocksCleared</span></h3>
+<p><span class="en">The other two events come from the same queue. When the pool is under pressure and the LRU reclaims a cached block, it queues a <code class="inl">BlockRemoved</code> carrying just that block's hash. When the whole prefix cache is reset, a single <code class="inl">AllBlocksCleared</code> is queued.</span>
+<span class="ko">나머지 두 이벤트도 같은 큐에서 나옵니다. 풀이 압박을 받아 LRU가 캐시 블록을 회수하면 그 블록 해시만 담은 <code class="inl">BlockRemoved</code>를 큐잉하고, prefix 캐시 전체가 리셋되면 <code class="inl">AllBlocksCleared</code> 하나를 큐잉합니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">vllm/v1/core/block_pool.py</span><a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py#L391" target="_blank">L391 · evict / reset</a></figcaption>
+<pre><code><span class="t-com"># --- eviction path (LRU reclaims a cached block) ---</span>
+<span class="t-kw">if</span> self.enable_kv_cache_events:
+    self.kv_event_queue.<span class="t-fn">append</span>(
+        <span class="t-fn">BlockRemoved</span>(block_hashes=[get_block_hash(block_hash)], medium=MEDIUM_GPU, ...))
+
+<span class="t-com"># --- reset_prefix_cache() (only when all blocks already free) ---</span>
+<span class="t-kw">if</span> self.enable_kv_cache_events:
+    self.kv_event_queue.<span class="t-fn">append</span>(<span class="t-fn">AllBlocksCleared</span>())</code></pre>
+</figure>
+<div class="callout">
+  <span class="en"><b>Why eviction matters to routing.</b> A worker that cached a long prefix but then evicted it under load must <i>stop</i> attracting requests for that prefix — otherwise the router sends a request expecting a hit and the worker re-prefills anyway. <code class="inl">BlockRemoved</code> is what keeps the router's mirror honest as caches churn.</span>
+  <span class="ko"><b>축출이 라우팅에 중요한 이유.</b> 긴 prefix를 캐시했다가 부하로 축출한 워커는 그 prefix 요청을 더 이상 <i>끌어오면 안 됩니다</i> — 안 그러면 라우터가 히트를 기대하고 보냈는데 워커가 다시 prefill하게 됩니다. <code class="inl">BlockRemoved</code>는 캐시가 요동칠 때 라우터의 거울을 정직하게 유지하는 장치입니다.</span>
+</div>
+
+<h3 class="step"><span class="num">2</span><span class="en">Drain + publish: once per engine step</span><span class="ko">모아서 발행: 엔진 스텝마다 한 번</span></h3>
+<p><span class="en">At the end of every <code class="inl">scheduler.step()</code> the queued events are drained via <code class="inl">take_events()</code>, wrapped in a timestamped <code class="inl">KVEventBatch</code>, and handed to the publisher. <b>This is the "when": one batch per engine iteration</b>, so the cadence matches the decode loop, not individual tokens.</span>
+<span class="ko">매 <code class="inl">scheduler.step()</code> 끝에서 큐에 쌓인 이벤트를 <code class="inl">take_events()</code>로 비우고, 타임스탬프가 찍힌 <code class="inl">KVEventBatch</code>로 감싸 publisher에 넘깁니다. <b>이게 "언제"의 답입니다: 엔진 반복마다 배치 하나</b> — 즉 개별 토큰이 아니라 decode 루프 주기와 같습니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">vllm/v1/core/sched/scheduler.py</span><a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/sched/scheduler.py#L1600" target="_blank">L1600</a></figcaption>
+<pre><code><span class="t-com"># collect KV cache events from KV cache manager</span>
+events = self.kv_cache_manager.<span class="t-fn">take_events</span>()
+...
+<span class="t-com"># publish collected KV cache events</span>
+<span class="t-kw">if</span> events:
+    batch = <span class="t-fn">KVEventBatch</span>(ts=time.<span class="t-fn">time</span>(), events=events)
+    self.kv_event_publisher.<span class="t-fn">publish</span>(batch)</code></pre>
+</figure>
+
+<!-- ===================== 4. THE WIRE ===================== -->
+<h2 class="sec" id="wire">4 · <span class="en">The wire — ZMQ publish</span><span class="ko">전송 — ZMQ 발행</span> <span class="node-v">vLLM</span></h2>
+
+<p class="lede">
+  <span class="en"><code class="inl">publish()</code> just drops the batch on a queue; a dedicated daemon thread does the network send so the engine step never blocks on I/O. The publisher is a <b>reliable PUB socket</b> with a sequence number and a replay buffer (a late subscriber can request missed events).</span>
+  <span class="ko"><code class="inl">publish()</code>는 배치를 큐에 넣을 뿐이고, 전용 데몬 스레드가 네트워크 전송을 합니다 — 엔진 스텝이 I/O로 막히지 않게요. publisher는 시퀀스 번호와 리플레이 버퍼를 가진 <b>신뢰성 PUB 소켓</b>입니다(늦게 붙은 구독자가 놓친 이벤트를 재요청 가능).</span></p>
+
+<figure class="code">
+  <figcaption><span class="file">vllm/distributed/kv_events.py : ZmqEventPublisher</span><a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/distributed/kv_events.py#L347" target="_blank">L347 · publish / thread</a></figcaption>
+<pre><code><span class="t-kw">def</span> <span class="t-fn">publish</span>(self, events: EventBatch) -> <span class="t-kw">None</span>:
+    self._event_queue.<span class="t-fn">put</span>(events)        <span class="t-com"># hand off to the daemon thread</span>
+
+<span class="t-com"># --- inside the publisher thread ---</span>
+seq = <span class="t-fn">next</span>(self._seq_gen)
+payload = self._pack.<span class="t-fn">encode</span>(event)      <span class="t-com"># msgspec → msgpack bytes</span>
+seq_bytes = seq.<span class="t-fn">to_bytes</span>(<span class="t-num">8</span>, <span class="t-str">"big"</span>)
+self._pub.<span class="t-fn">send_multipart</span>((self._topic_bytes, seq_bytes, payload))
+self._buffer.<span class="t-fn">append</span>((seq, payload))     <span class="t-com"># keep for replay</span></code></pre>
+</figure>
+
+<p><span class="en">Each message is three frames: <b>topic</b> (for SUB filtering), <b>8-byte sequence</b> (gap detection + replay), and the <b>msgpack payload</b>. The endpoint comes from <code class="inl">--kv-events-config</code> — recall the launch script bound each worker to its own port:</span>
+<span class="ko">각 메시지는 3프레임입니다: <b>topic</b>(SUB 필터링용), <b>8바이트 시퀀스</b>(누락 감지 + 리플레이), 그리고 <b>msgpack 페이로드</b>. 엔드포인트는 <code class="inl">--kv-events-config</code>에서 옵니다 — 런치 스크립트가 워커마다 다른 포트에 바인딩했던 그것입니다:</span></p>
+
+<figure class="code">
+  <figcaption><span class="file">agg_router.sh</span><a href="https://github.com/ai-dynamo/dynamo/blob/main/examples/backends/vllm/launch/agg_router.sh" target="_blank">examples/backends/vllm/launch/agg_router.sh</a></figcaption>
+<pre><code>python3 -m dynamo.vllm --model $MODEL ... \
+  --kv-events-config <span class="t-str">'{"publisher":"zmq", "topic":"kv-events",
+      "endpoint":"tcp://*:20080", "enable_kv_cache_events":true}'</span></code></pre>
+</figure>
+<p><span class="en"><code class="inl">tcp://*:20080</code> = the worker <b>binds</b> a PUB socket on 20080. Worker B uses 20081. Dynamo will <b>connect</b> a SUB socket to each.</span>
+<span class="ko"><code class="inl">tcp://*:20080</code> = 워커가 20080에 PUB 소켓을 <b>bind</b>. 워커 B는 20081. Dynamo가 각각에 SUB 소켓을 <b>connect</b>합니다.</span></p>
+
+<!-- ===================== 5. DYNAMO CONSUME ===================== -->
+<h2 class="sec" id="consume">5 · <span class="en">Dynamo — subscribe &amp; index</span><span class="ko">Dynamo — 구독 &amp; 인덱싱</span> <span class="node-y">Dynamo</span></h2>
+
+<h3 class="step"><span class="num">1</span><span class="en">Wire it up: who subscribes to whom</span><span class="ko">연결: 누가 누구를 구독하나</span></h3>
+<p><span class="en">The <b>same</b> <code class="inl">dynamo.vllm</code> process that runs vLLM also starts a Dynamo-side subscriber. <code class="inl">setup_kv_event_publisher</code> reads vLLM's own <code class="inl">--kv-events-config</code> endpoint, rewrites the bind form <code class="inl">tcp://*:PORT</code> into a connect form <code class="inl">tcp://127.0.0.1:PORT</code>, and hands it to a Rust <code class="inl">KvEventPublisher</code>.</span>
+<span class="ko">vLLM을 돌리는 <b>바로 그</b> <code class="inl">dynamo.vllm</code> 프로세스가 Dynamo 측 구독자도 함께 시작합니다. <code class="inl">setup_kv_event_publisher</code>가 vLLM의 <code class="inl">--kv-events-config</code> 엔드포인트를 읽어, bind 형태 <code class="inl">tcp://*:PORT</code>를 connect 형태 <code class="inl">tcp://127.0.0.1:PORT</code>로 바꾼 뒤 Rust <code class="inl">KvEventPublisher</code>에 넘깁니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">components/src/dynamo/vllm/main.py : setup_kv_event_publisher</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/components/src/dynamo/vllm/main.py#L375" target="_blank">L375</a></figcaption>
+<pre><code><span class="t-com"># turn vLLM's bind endpoint into a subscribe endpoint</span>
+zmq_endpoint = ZmqEventPublisher.<span class="t-fn">offset_endpoint_port</span>(
+    config.engine_args.kv_events_config.endpoint,
+    data_parallel_rank=dp_rank,
+).<span class="t-fn">replace</span>(<span class="t-str">"*"</span>, <span class="t-str">"127.0.0.1"</span>)
+
+kv_publisher = <span class="t-fn">KvEventPublisher</span>(          <span class="t-com"># Rust binding</span>
+    endpoint=generate_endpoint,
+    kv_block_size=kv_event_block_size,
+    zmq_endpoint=zmq_endpoint,             <span class="t-com"># ← subscribe here</span>
+    zmq_topic=<span class="t-str">""</span>,
+    enable_local_indexer=config.enable_local_indexer,
+    dp_rank=dp_rank,
+)</code></pre>
+</figure>
+<div class="callout warn">
+  <span class="en"><b>Decode workers skip this.</b> <code class="inl">setup_kv_event_publisher</code> returns early for <code class="inl">DisaggregationMode.DECODE</code> and when <code class="inl">enable_prefix_caching</code> is off — only caches worth routing on publish events.</span>
+  <span class="ko"><b>decode 워커는 건너뜁니다.</b> <code class="inl">setup_kv_event_publisher</code>는 <code class="inl">DisaggregationMode.DECODE</code>이거나 <code class="inl">enable_prefix_caching</code>이 꺼져 있으면 일찍 반환합니다 — 라우팅 가치가 있는 캐시만 이벤트를 발행합니다.</span>
+</div>
+
+<h3 class="step"><span class="num">2</span><span class="en">Receive + decode the msgpack batch</span><span class="ko">msgpack 배치 수신 + 디코드</span></h3>
+<p><span class="en">The Rust <code class="inl">zmq_listener</code> connects a SUB socket and decodes each batch with <code class="inl">decode_event_batch</code> — a msgpack deserializer that understands vLLM's <code class="inl">tag=True, array_like=True</code> encoding and maps the variant tag to a <code class="inl">RawKvEvent</code>.</span>
+<span class="ko">Rust <code class="inl">zmq_listener</code>가 SUB 소켓을 연결하고 각 배치를 <code class="inl">decode_event_batch</code>로 디코드합니다 — vLLM의 <code class="inl">tag=True, array_like=True</code> 인코딩을 이해하고 variant 태그를 <code class="inl">RawKvEvent</code>로 매핑하는 msgpack 디시리얼라이저입니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/kv_router/publisher/zmq_listener.rs</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/kv_router/publisher/zmq_listener.rs#L18" target="_blank">L18</a></figcaption>
+<pre><code><span class="t-kw">let</span> socket = <span class="t-fn">connect_sub_socket</span>(&amp;zmq_endpoint, <span class="t-fn">Some</span>(&amp;zmq_topic)).<span class="t-kw">await</span>?;
+...
+<span class="t-kw">let</span> batch_result = <span class="t-fn">decode_event_batch</span>(&amp;payload);   <span class="t-com"># msgpack → KvEventBatch</span>
+<span class="t-kw">if let</span> <span class="t-fn">Err</span>(e) = batch_result {
+    tracing::<span class="t-fn">warn!</span>(<span class="t-str">"Failed to decode KVEventBatch msgpack: {e}"</span>);
+}</code></pre>
+</figure>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/zmq_wire/types.rs : RawKvEvent</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/zmq_wire/types.rs#L59" target="_blank">L59</a></figcaption>
+<pre><code><span class="t-com">// msgspec encodes the variant tag as a string when tag=True</span>
+<span class="t-com">#[serde(tag = "type")]</span>
+<span class="t-kw">pub enum</span> <span class="t-fn">RawKvEvent</span> {
+    BlockStored { block_hashes: Vec&lt;BlockHashValue&gt;,
+                  parent_block_hash: Option&lt;BlockHashValue&gt;,
+                  token_ids: Vec&lt;u32&gt;, ... },
+    BlockRemoved { block_hashes: Vec&lt;BlockHashValue&gt;, ... },
+    AllBlocksCleared,
+}</code></pre>
+</figure>
+
+<h3 class="step"><span class="num">3</span><span class="en">Process → batch → dedup → apply to the radix tree</span><span class="ko">처리 → 배치 → 디덥 → radix 트리 반영</span></h3>
+<p><span class="en">The decoded events run a short pipeline (<code class="inl">event_processor → batching → dedup → sinks</code>; see the module's own <a class="link" href="https://github.com/ai-dynamo/dynamo/tree/bae0051/lib/llm/src/kv_router/publisher" target="_blank">README diagram</a>) and land in <code class="inl">sinks::emit</code>, which applies each <code class="inl">RouterEvent</code> to the <b>local indexer</b>.</span>
+<span class="ko">디코드된 이벤트는 짧은 파이프라인(<code class="inl">event_processor → batching → dedup → sinks</code>; 모듈 자체 <a class="link" href="https://github.com/ai-dynamo/dynamo/tree/bae0051/lib/llm/src/kv_router/publisher" target="_blank">README 다이어그램</a> 참고)을 거쳐 <code class="inl">sinks::emit</code>에 도착하고, 각 <code class="inl">RouterEvent</code>를 <b>로컬 인덱서</b>에 반영합니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/kv_router/publisher/sinks.rs</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/kv_router/publisher/sinks.rs#L33" target="_blank">L33</a></figcaption>
+<pre><code><span class="t-kw">let</span> router_event = RouterEvent::<span class="t-fn">with_storage_tier</span>(worker_id, event, storage_tier);
+<span class="t-kw">if let</span> <span class="t-fn">Some</span>(indexer) = local_indexer {
+    indexer.<span class="t-fn">apply_event_with_buffer</span>(router_event.<span class="t-fn">clone</span>()).<span class="t-kw">await</span>?;  <span class="t-com"># update tree</span>
+}
+<span class="t-com">// ... also published externally (NATS event plane) for other routers</span></code></pre>
+</figure>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/indexer/concurrent_radix_tree.rs : apply_event</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/indexer/concurrent_radix_tree.rs#L289" target="_blank">L289</a></figcaption>
+<pre><code><span class="t-kw">match</span> op {
+    KvCacheEventData::<span class="t-fn">Stored</span>(op)  => self.<span class="t-fn">apply_stored</span>(lookup, worker, op, id, counters),
+    KvCacheEventData::<span class="t-fn">Removed</span>(op) => self.<span class="t-fn">apply_removed</span>(lookup, worker, op, id),
+    KvCacheEventData::<span class="t-fn">Cleared</span>     => { self.<span class="t-fn">clear_all_blocks</span>(lookup, worker.worker_id); ... }
+}</code></pre>
+</figure>
+<p><span class="en"><code class="inl">apply_stored</code> walks from <code class="inl">parent_block_hash</code> down and inserts the new hashes as child nodes, tagged with the worker id. The tree is now a live, per-worker mirror of every GPU's prefix cache — built entirely from hashes.</span>
+<span class="ko"><code class="inl">apply_stored</code>는 <code class="inl">parent_block_hash</code>에서 아래로 내려가며 새 해시들을 워커 id 태그와 함께 자식 노드로 삽입합니다. 이제 트리는 모든 GPU prefix 캐시의 워커별 실시간 거울이며, 전부 해시로만 구성됩니다.</span></p>
+
+<h3 class="step"><span class="num">4</span><span class="en">The shape of the data — one shared radix tree</span><span class="ko">자료구조의 모양 — 공유 radix 트리 하나</span></h3>
+<p><span class="en">All workers feed <b>one</b> tree. A node represents a single cached block (keyed by its token-hash), and it holds the <b>set of workers</b> that currently have that block. A second per-worker map gives O(1) access to any node by hash for fast removes.</span>
+<span class="ko">모든 워커가 <b>하나의</b> 트리에 들어갑니다. 노드 하나 = 캐시된 블록 하나(토큰 해시로 키잉)이고, 그 블록을 <b>현재 가진 워커들의 집합</b>을 들고 있습니다. 워커별 보조 맵이 해시로 어떤 노드든 O(1) 접근을 줘서 remove가 빠릅니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/indexer/concurrent_radix_tree.rs : node</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/indexer/concurrent_radix_tree.rs#L44" target="_blank">L44</a></figcaption>
+<pre><code><span class="t-com">// per-worker secondary index: block hash → node (O(1) remove)</span>
+<span class="t-kw">type</span> WorkerLookup = FxHashMap&lt;ExternalSequenceBlockHash, SharedBlock&gt;;
+
+<span class="t-kw">struct</span> <span class="t-fn">Block</span> {                                  <span class="t-com">// = one cached block / tree node</span>
+    children: FxHashMap&lt;LocalBlockHash, SharedBlock&gt;,  <span class="t-com">// next blocks in the prefix</span>
+    workers:  FxHashSet&lt;WorkerWithDpRank&gt;,            <span class="t-com">// who has THIS block cached</span>
+    block_hash: Option&lt;ExternalSequenceBlockHash&gt;,
+}</code></pre>
+</figure>
+
+<p><span class="en"><b>What arrives vs what is kept.</b> A <code class="inl">BlockStored</code> event carries a fair amount — including the raw <code class="inl">token_ids</code> — but almost all of it is consumed at ingestion to <i>compute a hash</i> and then dropped. Only hashes and the worker set survive into the tree.</span>
+<span class="ko"><b>들어오는 것 vs 보관하는 것.</b> <code class="inl">BlockStored</code> 이벤트는 꽤 많은 걸 싣고 옵니다 — 원본 <code class="inl">token_ids</code>까지 — 하지만 대부분은 들어오는 순간 <i>해시 계산</i>에 쓰이고 버려집니다. 트리에는 해시와 워커 집합만 남습니다.</span></p>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Field in the event (wire)</span><span class="ko">이벤트 필드 (전선)</span></th>
+    <th><span class="en">What Dynamo does with it</span><span class="ko">Dynamo의 처리</span></th>
+    <th><span class="en">In the tree?</span><span class="ko">트리에 저장?</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><code>token_ids</code></td><td><span class="en">Hashed into <code>tokens_hash</code> (a <code>LocalBlockHash</code>); MM image-token runs normalized first. Then discarded.</span><span class="ko"><code>tokens_hash</code>(<code>LocalBlockHash</code>) 계산에 사용; MM image-token 구간은 먼저 정규화. 이후 폐기.</span></td><td><span class="en"><b>No</b> — only its hash</span><span class="ko"><b>아니오</b> — 해시만</span></td></tr>
+    <tr><td><code>block_hashes</code></td><td><span class="en">Kept as <code>block_hash</code> (<code>ExternalSequenceBlockHash</code>) — the per-worker O(1) lookup key.</span><span class="ko"><code>block_hash</code>(<code>ExternalSequenceBlockHash</code>)로 보관 — 워커별 O(1) lookup 키.</span></td><td><span class="en"><b>Yes</b></span><span class="ko"><b>예</b></span></td></tr>
+    <tr><td><code>parent_block_hash</code></td><td><span class="en">Locates the parent node so the new block is chained as its child.</span><span class="ko">부모 노드를 찾아 새 블록을 자식으로 연결.</span></td><td><span class="en">as tree edge</span><span class="ko">트리 간선으로</span></td></tr>
+    <tr><td><code>extra_keys</code> / mm info</td><td><span class="en">Folded into the hash (and kept as small <code>mm_extra_info</code>) so multimodal blocks hash correctly.</span><span class="ko">해시에 반영(작은 <code>mm_extra_info</code>로 보관) — MM 블록이 올바로 해시되도록.</span></td><td><span class="en">metadata only</span><span class="ko">메타데이터만</span></td></tr>
+    <tr><td><code>block_size</code>, <code>lora</code>, <code>medium</code></td><td><span class="en">Used as hashing inputs / tier tag.</span><span class="ko">해시 입력 / 계층 태그로 사용.</span></td><td><span class="en">no (medium = tier label)</span><span class="ko">아니오 (medium은 계층 라벨)</span></td></tr>
+    <tr><td><span class="en">(worker id, from the event source)</span><span class="ko">(워커 id, 이벤트 출처)</span></td><td><span class="en">Inserted into each node's <code>workers</code> set along the path.</span><span class="ko">경로상 각 노드의 <code>workers</code> 집합에 삽입.</span></td><td><span class="en"><b>Yes</b></span><span class="ko"><b>예</b></span></td></tr>
+  </tbody>
+</table>
+
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/zmq_wire/convert.rs : create_stored_block_from_parts</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/zmq_wire/convert.rs#L178" target="_blank">L178</a></figcaption>
+<pre><code><span class="t-com">// token_ids come in only to be hashed — the result is what the tree keeps</span>
+<span class="t-kw">let</span> tokens_hash = <span class="t-fn">compute_block_hash_for_seq</span>(token_ids, kv_block_size, ...);
+KvCacheStoredBlockData {
+    block_hash,        <span class="t-com">// ExternalSequenceBlockHash (lookup key)</span>
+    tokens_hash,       <span class="t-com">// LocalBlockHash (tree child key)</span>
+    mm_extra_info,     <span class="t-com">// small MM metadata, if any</span>
+}                      <span class="t-com">// ← note: no token_ids field survives</span></code></pre>
+</figure>
+<div class="callout">
+  <span class="en"><b>Where token_ids actually live.</b> Only the <b>Frontend</b> (the preprocessor / tokenizer) handles raw <code class="inl">token_ids</code>, and only <i>per request, transiently</i> — it tokenizes the prompt and hashes its blocks to query the tree. Neither the event tree nor the router keeps token_ids as state. Everything persistent is a hash.</span>
+  <span class="ko"><b>token_ids가 실제로 사는 곳.</b> 원본 <code class="inl">token_ids</code>를 다루는 건 <b>Frontend</b>(preprocessor/토크나이저)뿐이고, 그것도 <i>요청마다 일시적으로</i>입니다 — 프롬프트를 토크나이즈하고 그 블록을 해시해 트리에 질의합니다. 이벤트 트리도 라우터도 token_ids를 상태로 보관하지 않습니다. 영구적인 건 전부 해시입니다.</span>
+</div>
+
+<div class="animbox">
+  <svg viewBox="0 0 860 250" class="flowsvg" role="img" aria-label="radix tree of block hashes">
+    <defs>
+      <marker id="t" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L6,3 L0,6 Z" fill="#6b6a63"/></marker>
+    </defs>
+    <text x="40" y="24" fill="#3c3b35" font-size="12" font-weight="700">One tree, shared by all workers · each node lists who holds that block</text>
+    <rect x="40" y="44" width="70" height="34" rx="8" fill="#f3f1ea" stroke="#6b6a63"/>
+    <text x="75" y="65" text-anchor="middle" fill="#6b6a63" font-size="11" font-weight="700">root</text>
+    <rect x="170" y="44" width="150" height="40" rx="8" fill="#1a7f37" fill-opacity="0.14" stroke="#1a7f37"/>
+    <text x="245" y="62" text-anchor="middle" fill="#1a7f37" font-size="11.5" font-weight="700">block #1 (hash A)</text>
+    <text x="245" y="77" text-anchor="middle" fill="#6b6a63" font-size="10">workers: {W1, W2}</text>
+    <rect x="380" y="44" width="150" height="40" rx="8" fill="#1a7f37" fill-opacity="0.14" stroke="#1a7f37"/>
+    <text x="455" y="62" text-anchor="middle" fill="#1a7f37" font-size="11.5" font-weight="700">block #2 (hash B)</text>
+    <text x="455" y="77" text-anchor="middle" fill="#6b6a63" font-size="10">workers: {W1, W2}</text>
+    <rect x="590" y="14" width="170" height="40" rx="8" fill="#1668c7" fill-opacity="0.13" stroke="#1668c7"/>
+    <text x="675" y="32" text-anchor="middle" fill="#1668c7" font-size="11.5" font-weight="700">block #3a (hash C)</text>
+    <text x="675" y="47" text-anchor="middle" fill="#6b6a63" font-size="10">workers: {W1}</text>
+    <rect x="590" y="74" width="170" height="40" rx="8" fill="#bc4c00" fill-opacity="0.12" stroke="#bc4c00"/>
+    <text x="675" y="92" text-anchor="middle" fill="#bc4c00" font-size="11.5" font-weight="700">block #3b (hash D)</text>
+    <text x="675" y="107" text-anchor="middle" fill="#6b6a63" font-size="10">workers: {W2}</text>
+    <line x1="110" y1="62" x2="166" y2="64" stroke="#6b6a63" stroke-width="1.4" marker-end="url(#t)"/>
+    <line x1="320" y1="64" x2="376" y2="64" stroke="#6b6a63" stroke-width="1.4" marker-end="url(#t)"/>
+    <line x1="530" y1="58" x2="586" y2="38" stroke="#6b6a63" stroke-width="1.4" marker-end="url(#t)"/>
+    <line x1="530" y1="70" x2="586" y2="92" stroke="#6b6a63" stroke-width="1.4" marker-end="url(#t)"/>
+    <text x="40" y="150" fill="#3c3b35" font-size="11.5" font-weight="700">Shared prefix A→B lives once; both workers are members. They diverge at block #3.</text>
+    <text x="40" y="172" fill="#6b6a63" font-size="11"><tspan font-weight="700" fill="#1a7f37">BlockStored</tspan> → insert worker into nodes along the path (creating nodes for new hashes).</text>
+    <text x="40" y="192" fill="#6b6a63" font-size="11"><tspan font-weight="700" fill="#bc4c00">BlockRemoved</tspan> → find the block in that worker's map, drop the worker from that node's set — O(1), no cascade.</text>
+    <text x="40" y="212" fill="#6b6a63" font-size="11"><tspan font-weight="700">AllBlocksCleared</tspan> → drop the worker from every node it appears in.</text>
+    <text x="40" y="234" fill="#6b6a63" font-size="11">A query walks A→B→… ; the worker set can only shrink as it descends → depth reached = overlap blocks.</text>
+  </svg>
+</div>
+
+<p><span class="en">The two destructive events are cheap and surgical. <code class="inl">apply_removed</code> uses the worker's lookup map to find the node in O(1) and drops the worker from its set — it deliberately does <b>not</b> cascade to descendants (the query reconciles stale descendants lazily). <code class="inl">clear_all_blocks</code> walks the worker's entries and removes it everywhere.</span>
+<span class="ko">파괴적인 두 이벤트는 싸고 정밀합니다. <code class="inl">apply_removed</code>는 워커 lookup 맵으로 노드를 O(1)에 찾아 그 노드의 집합에서 워커만 뺍니다 — 의도적으로 자손까지 <b>전파하지 않습니다</b>(자손의 stale 항목은 query가 지연 보정). <code class="inl">clear_all_blocks</code>는 워커의 항목들을 돌며 모든 곳에서 워커를 제거합니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/indexer/concurrent_radix_tree.rs : apply_removed</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/indexer/concurrent_radix_tree.rs#L440" target="_blank">L440</a></figcaption>
+<pre><code><span class="t-kw">for</span> block_hash <span class="t-kw">in</span> op.block_hashes {
+    <span class="t-kw">let</span> <span class="t-fn">Some</span>(block) = worker_lookup.<span class="t-fn">remove</span>(&amp;block_hash) <span class="t-kw">else</span> { <span class="t-kw">continue</span> };  <span class="t-com">// O(1)</span>
+    block.<span class="t-fn">write</span>().<span class="t-fn">drop_worker</span>(worker);     <span class="t-com">// remove from this node's set only</span>
+}</code></pre>
+</figure>
+
+<p><span class="en"><b>So what does the router actually do with this tree?</b> On each incoming request it hashes the prompt's blocks and calls <code class="inl">find_matches</code>, which walks the tree top-down. The active worker set can only <i>shrink</i> as it descends (a worker missing the next block drops out), so the depth each worker survives to <b>is</b> its overlap — how many leading blocks of this prompt that worker already holds. The result is an <code class="inl">OverlapScores</code> map: <code class="inl">worker → overlap_blocks</code>.</span>
+<span class="ko"><b>그럼 라우터는 이 트리로 실제로 뭘 하나?</b> 요청이 올 때마다 프롬프트 블록을 해시해 <code class="inl">find_matches</code>를 부르고, 트리를 위에서 아래로 탑니다. 내려갈수록 활성 워커 집합은 <i>줄기만</i> 합니다(다음 블록이 없는 워커는 탈락). 그래서 각 워커가 살아남은 깊이가 곧 그 워커의 overlap — 이 프롬프트의 앞쪽 블록을 몇 개나 이미 갖고 있는지입니다. 결과는 <code class="inl">OverlapScores</code> 맵: <code class="inl">worker → overlap_blocks</code>.</span></p>
+
+<div class="callout warn">
+  <span class="en"><b>Important: it does NOT just pick the longest-cache worker.</b> The overlap is one input to a cost function. For each candidate the router computes a <code class="inl">logit</code>, and the <b>lowest logit wins</b> (argmin):</span>
+  <span class="ko"><b>중요: 단순히 "캐시가 가장 긴 워커"를 고르는 게 아닙니다.</b> overlap은 비용 함수의 한 입력일 뿐입니다. 후보마다 <code class="inl">logit</code>을 계산하고 <b>가장 낮은 logit이 당첨</b>입니다(argmin):</span>
+</div>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/scheduling/selector.rs : worker_logit</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/scheduling/selector.rs#L109" target="_blank">L109</a></figcaption>
+<pre><code><span class="t-com">// overlap (from the KV-event tree) is a CREDIT against prefill work</span>
+<span class="t-kw">let</span> adjusted_prefill_blocks = (raw_prefill_blocks - overlap_credit_blocks).<span class="t-fn">max</span>(<span class="t-num">0.0</span>);
+<span class="t-kw">let</span> prefill_cost = weights.prefill_load_scale * adjusted_prefill_blocks;
+<span class="t-kw">let</span> decode_cost  = request.decode_blocks.<span class="t-fn">get</span>(&amp;worker)...;   <span class="t-com">// how busy the worker is</span>
+<span class="t-kw">let</span> logit = prefill_cost + decode_cost;            <span class="t-com">// lower = route here</span></code></pre>
+</figure>
+<p><span class="en">In words: <code class="inl">logit = (prefill blocks left after subtracting cache overlap) + current decode load</code>. A big KV overlap shrinks the first term — that's the whole payoff of the event tree — but a worker that's already saturated with decode work carries a high second term and can still lose to a less-loaded peer with slightly smaller overlap. So the router selects the <b>cheapest</b> worker (best reuse <i>and</i> capacity), not merely the one holding the most cache. The full cost function and the argmin/softmax pick are in <a class="link" href="#loop">section 6</a>.</span>
+<span class="ko">말로 풀면: <code class="inl">logit = (캐시 overlap을 뺀 남은 prefill 블록) + 현재 decode 부하</code>. KV overlap이 크면 첫 항이 줄어듭니다 — 이게 이벤트 트리의 보상 전부입니다 — 하지만 decode 작업으로 이미 포화된 워커는 둘째 항이 커서, overlap이 조금 작아도 덜 바쁜 워커에게 질 수 있습니다. 즉 라우터는 캐시를 가장 많이 든 워커가 아니라 <b>가장 비용이 낮은</b> 워커(재사용 이득 <i>과</i> 여력 둘 다)를 고릅니다. 전체 비용 함수와 argmin/softmax 선택은 <a class="link" href="#loop">섹션 6</a>에 있습니다.</span></p>
+
+<!-- ===================== 6. CLOSE THE LOOP ===================== -->
+<h2 class="sec" id="loop">6 · <span class="en">Closing the loop — from events to a routing decision</span><span class="ko">루프 닫기 — 이벤트에서 라우팅 결정까지</span> <span class="node-y">Dynamo</span></h2>
+
+<p class="lede">
+  <span class="en">When a request arrives, the router hashes the prompt's blocks the same way and queries the tree. <code class="inl">find_matches</code> returns <code class="inl">OverlapScores</code> — how many blocks each worker already has — and that number flows straight into the cost function from the <a class="link" href="dynamo-overview.html#flow">overview</a>.</span>
+  <span class="ko">요청이 들어오면 라우터는 프롬프트 블록을 같은 방식으로 해시해 트리를 조회합니다. <code class="inl">find_matches</code>가 <code class="inl">OverlapScores</code>(각 워커가 이미 가진 블록 수)를 반환하고, 그 숫자가 <a class="link" href="dynamo-overview.html#flow">개요 문서</a>의 비용 함수로 바로 들어갑니다.</span></p>
+
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/indexer/concurrent_radix_tree.rs : find_matches</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/indexer/concurrent_radix_tree.rs#L648" target="_blank">L648</a></figcaption>
+<pre><code><span class="t-kw">fn</span> <span class="t-fn">find_matches</span>(&amp;self, sequence: &amp;[LocalBlockHash], early_exit: bool) -> OverlapScores {
+    self.<span class="t-fn">find_matches_impl</span>(sequence, early_exit)   <span class="t-com"># walk tree, count per-worker overlap</span>
+}</code></pre>
+</figure>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/scheduling/selector.rs : worker_logit</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/scheduling/selector.rs#L109" target="_blank">L109</a></figcaption>
+<pre><code><span class="t-com">// overlap (from the KV-event-built tree) is subtracted from prefill cost</span>
+<span class="t-kw">let</span> adjusted_prefill_blocks = (raw_prefill_blocks - overlap_credit_blocks).<span class="t-fn">max</span>(<span class="t-num">0.0</span>);
+<span class="t-kw">let</span> logit = prefill_cost_blocks + decode_cost_blocks;   <span class="t-com">// lower = route here</span></code></pre>
+</figure>
+
+<div class="callout good">
+  <span class="en"><b>The full life of one event:</b> vLLM caches a block → <code class="inl">block_pool</code> queues <code class="inl">BlockStored</code> → <code class="inl">scheduler.step()</code> publishes a <code class="inl">KVEventBatch</code> over ZMQ → Dynamo's <code class="inl">zmq_listener</code> decodes it → pipeline applies it to the radix tree → a later request's <code class="inl">find_matches</code> sees that block as overlap → <code class="inl">worker_logit</code> subtracts it from prefill cost → the request routes to that worker → which produces a cache hit instead of re-prefilling. The event is the feedback signal that makes the cache <i>visible</i> to a process that can't touch the GPU.</span>
+  <span class="ko"><b>이벤트 한 개의 일생:</b> vLLM이 블록 캐시 → <code class="inl">block_pool</code>이 <code class="inl">BlockStored</code> 큐잉 → <code class="inl">scheduler.step()</code>이 ZMQ로 <code class="inl">KVEventBatch</code> 발행 → Dynamo <code class="inl">zmq_listener</code>가 디코드 → 파이프라인이 radix 트리에 반영 → 이후 요청의 <code class="inl">find_matches</code>가 그 블록을 오버랩으로 인식 → <code class="inl">worker_logit</code>이 prefill 비용에서 차감 → 요청이 그 워커로 라우팅 → 재-prefill 대신 캐시 히트. 이벤트는 GPU를 만질 수 없는 프로세스에게 캐시를 <i>보이게</i> 만드는 피드백 신호입니다.</span>
+</div>
+
+<div class="callout">
+  <span class="en"><b>What if you turn events off?</b> Setting <code class="inl">enable_kv_cache_events:false</code> means the tree is never populated. Dynamo then falls back to <b>prediction-based</b> routing (the router estimates overlap from the prompts it has itself dispatched) or to plain load-based modes. Events make the signal <i>exact</i> rather than predicted — but cost a small ZMQ stream per worker.</span>
+  <span class="ko"><b>이벤트를 끄면?</b> <code class="inl">enable_kv_cache_events:false</code>면 트리가 채워지지 않습니다. 그러면 Dynamo는 <b>예측 기반</b> 라우팅(자기가 보낸 프롬프트로 오버랩을 추정)이나 단순 부하 기반 모드로 폴백합니다. 이벤트는 신호를 예측이 아니라 <i>정확</i>하게 만들지만, 워커당 작은 ZMQ 스트림 비용이 듭니다.</span>
+</div>
+
+<!-- ===================== 7. SCENARIOS ===================== -->
+<h2 class="sec" id="scenarios">7 · <span class="en">Worked scenarios</span><span class="ko">시나리오별 그림</span></h2>
+
+<p class="lede">
+  <span class="en">Three concrete cases, all at <b><code class="inl">block_size = 32</code></b>. The rule to keep in mind: an event fires only when a block becomes <b>full</b>, and prompt-prefill events are published in the engine step right after prefill, while decode events fire as later blocks top off. <code class="inl">1024 = 32×32</code> is block-aligned; <code class="inl">1055 = 1024 + 31</code> leaves a 31-token tail.</span>
+  <span class="ko">세 가지 구체 사례, 모두 <b><code class="inl">block_size = 32</code></b> 기준입니다. 기억할 규칙: 블록이 <b>full</b>이 될 때만 이벤트가 나고, prompt prefill 이벤트는 prefill 직후 스텝에 발행되며 decode 이벤트는 뒤 블록이 채워질 때 발생합니다. <code class="inl">1024 = 32×32</code>는 블록 정렬이고, <code class="inl">1055 = 1024 + 31</code>은 31토큰 자투리가 남습니다.</span>
+</p>
+
+<div class="callout">
+  <span class="en"><b>Legend.</b> <span style="color:#1a7f37;font-weight:700">green</span> = block cached at prefill · <span style="color:#1668c7;font-weight:700">blue</span> = block filled (cached) during decode · <span style="color:#6b6a63;font-weight:700">dashed gray</span> = partial block, not full → no event · ● marks a <code class="inl">BlockStored</code> publish.</span>
+  <span class="ko"><b>범례.</b> <span style="color:#1a7f37;font-weight:700">초록</span> = prefill에 캐시된 블록 · <span style="color:#1668c7;font-weight:700">파랑</span> = decode 중 채워져 캐시된 블록 · <span style="color:#6b6a63;font-weight:700">회색 점선</span> = partial 블록(미완성) → 이벤트 없음 · ● 는 <code class="inl">BlockStored</code> 발행 시점.</span>
+</div>
+
+<!-- Scenario A -->
+<h3 class="step"><span class="en">A · Single turn — prompt 1024, output 32</span><span class="ko">A · 싱글턴 — prompt 1024, output 32</span></h3>
+<div class="animbox">
+  <svg viewBox="0 0 860 180" class="flowsvg" role="img" aria-label="scenario A">
+    <text x="60" y="26" fill="#6b6a63" font-size="11.5" font-weight="700">PREFILL</text>
+    <line x1="60" y1="34" x2="797" y2="34" stroke="#1a7f37" stroke-width="1.5"/>
+    <text x="808" y="26" fill="#6b6a63" font-size="11.5" font-weight="700" text-anchor="end">DECODE →</text>
+    <line x1="797" y1="34" x2="820" y2="34" stroke="#1668c7" stroke-width="1.5"/>
+    <!-- bars -->
+    <rect x="60" y="48" width="737" height="40" rx="5" fill="#1a7f37" fill-opacity="0.16" stroke="#1a7f37"/>
+    <text x="428" y="66" text-anchor="middle" fill="#1a7f37" font-size="12.5" font-weight="700">B1–B32 · prompt 1024 tok</text>
+    <text x="428" y="82" text-anchor="middle" fill="#6b6a63" font-size="10.5">32 full blocks</text>
+    <rect x="797" y="48" width="23" height="40" rx="5" fill="#1668c7" fill-opacity="0.18" stroke="#1668c7"/>
+    <text x="808" y="104" text-anchor="middle" fill="#1668c7" font-size="10">B33</text>
+    <!-- event pins -->
+    <circle cx="428" cy="118" r="5" fill="#1a7f37"/>
+    <line x1="428" y1="88" x2="428" y2="118" stroke="#1a7f37" stroke-width="1.2"/>
+    <text x="428" y="138" text-anchor="middle" fill="#3c3b35" font-size="11"><tspan font-weight="700">BlockStored ×32</tspan> — 1 batch, step after prefill</text>
+    <circle cx="808" cy="118" r="5" fill="#1668c7"/>
+    <line x1="808" y1="88" x2="808" y2="118" stroke="#1668c7" stroke-width="1.2"/>
+    <text x="820" y="160" text-anchor="end" fill="#3c3b35" font-size="11"><tspan font-weight="700">BlockStored ×1</tspan> — B33 fills at output token #32 (last)</text>
+  </svg>
+</div>
+<p><span class="en">1024 is exactly 32 blocks, so prefill caches all of them and emits one batch of 32 hashes. The 32 output tokens form one more block (positions 1024–1055) that becomes full precisely on the <b>last</b> generated token → one final <code class="inl">BlockStored</code>. Total: <b>33 blocks, 2 publishes</b> (32 + 1).</span>
+<span class="ko">1024는 정확히 32블록이라 prefill이 전부 캐시하고 해시 32개를 한 배치로 발행합니다. output 32토큰이 블록 하나(위치 1024–1055)를 이루는데, <b>마지막</b> 생성 토큰에서 딱 full이 됩니다 → 마지막 <code class="inl">BlockStored</code> 1개. 합계: <b>33블록, 발행 2회</b>(32 + 1).</span></p>
+
+<!-- Scenario B -->
+<h3 class="step"><span class="en">B · Single turn — prompt 1055, output 32</span><span class="ko">B · 싱글턴 — prompt 1055, output 32</span></h3>
+<div class="animbox">
+  <svg viewBox="0 0 860 190" class="flowsvg" role="img" aria-label="scenario B">
+    <text x="60" y="26" fill="#6b6a63" font-size="11.5" font-weight="700">PREFILL</text>
+    <line x1="60" y1="34" x2="776" y2="34" stroke="#1a7f37" stroke-width="1.5"/>
+    <text x="808" y="26" fill="#6b6a63" font-size="11.5" font-weight="700" text-anchor="end">DECODE →</text>
+    <line x1="776" y1="34" x2="820" y2="34" stroke="#1668c7" stroke-width="1.5"/>
+    <!-- prompt 1024 -->
+    <rect x="60" y="48" width="678" height="40" rx="5" fill="#1a7f37" fill-opacity="0.16" stroke="#1a7f37"/>
+    <text x="399" y="66" text-anchor="middle" fill="#1a7f37" font-size="12.5" font-weight="700">B1–B32 · first 1024 tok of prompt</text>
+    <text x="399" y="82" text-anchor="middle" fill="#6b6a63" font-size="10.5">32 full blocks</text>
+    <!-- B33 straddles: 31 prompt tok + 1 decode tok -->
+    <rect x="738" y="48" width="44" height="40" rx="5" fill="#1668c7" fill-opacity="0.18" stroke="#1668c7"/>
+    <text x="760" y="64" text-anchor="middle" fill="#1668c7" font-size="10" font-weight="700">B33</text>
+    <text x="760" y="78" text-anchor="middle" fill="#6b6a63" font-size="8.5">31 prompt</text>
+    <text x="760" y="100" text-anchor="middle" fill="#bc4c00" font-size="8.5">+1 decode</text>
+    <!-- B34 partial -->
+    <rect x="782" y="48" width="38" height="40" rx="5" fill="#f3f1ea" stroke="#6b6a63" stroke-dasharray="4 3"/>
+    <text x="801" y="64" text-anchor="middle" fill="#6b6a63" font-size="10" font-weight="700">B34</text>
+    <text x="801" y="100" text-anchor="middle" fill="#6b6a63" font-size="8.5">31/32</text>
+    <!-- pins -->
+    <circle cx="399" cy="120" r="5" fill="#1a7f37"/>
+    <line x1="399" y1="88" x2="399" y2="120" stroke="#1a7f37" stroke-width="1.2"/>
+    <text x="399" y="140" text-anchor="middle" fill="#3c3b35" font-size="11"><tspan font-weight="700">BlockStored ×32</tspan> — the 31 leftover prompt tok emit NOTHING</text>
+    <circle cx="760" cy="120" r="5" fill="#1668c7"/>
+    <line x1="760" y1="88" x2="760" y2="120" stroke="#1668c7" stroke-width="1.2"/>
+    <text x="820" y="160" text-anchor="end" fill="#3c3b35" font-size="11"><tspan font-weight="700">BlockStored ×1</tspan> — B33 fills at output token #1</text>
+    <text x="820" y="178" text-anchor="end" fill="#6b6a63" font-size="10.5">B34 ends 31/32 → no event · tail of 31 tok invisible to routing</text>
+  </svg>
+</div>
+<p><span class="en">The extra 31 prompt tokens do <b>not</b> add a prefill event — they sit in a partial block (B33, 31/32). That block fills only when the <b>first</b> output token arrives, so B33's event is deferred into decode. Then 31 of the 32 outputs land in B34, which ends 31/32 and never fires. Total full blocks = 33, same as A, but the timing differs and a 31-token tail stays uncached. <b>Lesson: a longer prompt does not mean more (or earlier) events — only crossed block boundaries do.</b></span>
+<span class="ko">추가된 31개의 prompt 토큰은 prefill 이벤트를 <b>늘리지 않습니다</b> — partial 블록(B33, 31/32)에 들어가 있을 뿐입니다. 이 블록은 <b>첫</b> output 토큰이 와야 full이 되므로, B33의 이벤트는 decode로 미뤄집니다. 이후 output 32개 중 31개가 B34에 들어가 31/32로 끝나 이벤트가 안 납니다. full 블록 수는 33으로 A와 같지만 타이밍이 다르고 31토큰 꼬리는 캐시되지 않은 채 남습니다. <b>교훈: prompt가 길다고 이벤트가 더(또는 더 일찍) 나는 게 아니라, 블록 경계를 넘을 때만 납니다.</b></span></p>
+
+<!-- Scenario C -->
+<h3 class="step"><span class="en">C · Multi-turn — turn 2 reuses turn 1's cache</span><span class="ko">C · 멀티턴 — 턴2가 턴1 캐시를 재사용</span></h3>
+<div class="animbox">
+  <svg viewBox="0 0 860 270" class="flowsvg" role="img" aria-label="scenario C">
+    <defs>
+      <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="7" height="7" fill="#1a7f37" fill-opacity="0.08"/>
+        <line x1="0" y1="0" x2="0" y2="7" stroke="#1a7f37" stroke-width="1.4" stroke-opacity="0.5"/>
+      </pattern>
+    </defs>
+    <!-- TURN 1 -->
+    <text x="60" y="22" fill="#3c3b35" font-size="12" font-weight="700">TURN 1 · prompt 1024 + output 32</text>
+    <rect x="60" y="32" width="700" height="32" rx="5" fill="#1a7f37" fill-opacity="0.16" stroke="#1a7f37"/>
+    <text x="410" y="52" text-anchor="middle" fill="#1a7f37" font-size="11.5" font-weight="700">B1–B32 · prompt (event ×32)</text>
+    <rect x="760" y="32" width="60" height="32" rx="5" fill="#1668c7" fill-opacity="0.18" stroke="#1668c7"/>
+    <text x="790" y="52" text-anchor="middle" fill="#1668c7" font-size="10.5" font-weight="700">B33 (×1)</text>
+    <text x="60" y="84" fill="#6b6a63" font-size="10.5">→ cache now holds B1–B33; router's tree learns them. 33 blocks, 2 publishes.</text>
+
+    <!-- TURN 2 -->
+    <text x="60" y="124" fill="#3c3b35" font-size="12" font-weight="700">TURN 2 · prompt = turn1 (1056) + new 40 tok</text>
+    <rect x="60" y="134" width="700" height="32" rx="5" fill="url(#hatch)" stroke="#1a7f37" stroke-dasharray="5 3"/>
+    <text x="410" y="150" text-anchor="middle" fill="#1a7f37" font-size="11.5" font-weight="700">B1–B33 · CACHE HIT — prefix already cached</text>
+    <text x="410" y="163" text-anchor="middle" fill="#6b6a63" font-size="9.5">recomputed? no · re-emitted? no</text>
+    <rect x="760" y="134" width="42" height="32" rx="5" fill="#1668c7" fill-opacity="0.18" stroke="#1668c7"/>
+    <text x="781" y="154" text-anchor="middle" fill="#1668c7" font-size="9.5" font-weight="700">B34</text>
+    <rect x="802" y="134" width="18" height="32" rx="5" fill="#f3f1ea" stroke="#6b6a63" stroke-dasharray="4 3"/>
+    <text x="811" y="154" text-anchor="middle" fill="#6b6a63" font-size="8.5">B35</text>
+    <!-- pins turn2 -->
+    <circle cx="781" cy="196" r="5" fill="#1668c7"/>
+    <line x1="781" y1="166" x2="781" y2="196" stroke="#1668c7" stroke-width="1.2"/>
+    <text x="60" y="200" fill="#3c3b35" font-size="11"><tspan font-weight="700">BlockStored ×1</tspan> — only the new full block B34. B35 (8/32) → no event.</text>
+    <text x="60" y="224" fill="#6b6a63" font-size="10.5">Shared 33-block prefix produces ZERO new events → router sees overlap=33</text>
+    <text x="60" y="240" fill="#6b6a63" font-size="10.5">→ routes turn 2 back to the same worker (the point of KV-aware routing).</text>
+  </svg>
+</div>
+<p><span class="en">Turn 2's prompt is the entire turn-1 conversation plus new text. The first 33 blocks are a <b>prefix-cache hit</b>: <code class="inl">num_cached_blocks</code> already covers them, so <code class="inl">cache_full_blocks</code> skips them — <b>no recompute and no new events</b>. Only the appended content emits — here one new full block (B34); the 8-token tail (B35) stays partial. Because the shared prefix produced no events but is already in the router's radix tree from turn 1, <code class="inl">find_matches</code> reports a large overlap and the request routes back to the same worker.</span>
+<span class="ko">턴2의 prompt는 턴1 대화 전체 + 새 텍스트입니다. 앞 33블록은 <b>prefix 캐시 히트</b>입니다: <code class="inl">num_cached_blocks</code>가 이미 포함하므로 <code class="inl">cache_full_blocks</code>가 건너뜁니다 — <b>재계산도, 새 이벤트도 없음</b>. 새로 붙은 내용만 발행되어, 여기선 새 full 블록 B34 1개; 8토큰 꼬리(B35)는 partial로 남습니다. 공유 prefix는 이벤트를 안 냈지만 턴1에서 이미 라우터 radix 트리에 들어가 있으므로 <code class="inl">find_matches</code>가 큰 오버랩을 보고 요청을 같은 워커로 되돌립니다.</span></p>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Scenario</span><span class="ko">시나리오</span></th>
+    <th><span class="en">Prefill events</span><span class="ko">prefill 이벤트</span></th>
+    <th><span class="en">Decode events</span><span class="ko">decode 이벤트</span></th>
+    <th><span class="en">Uncached tail</span><span class="ko">미캐시 꼬리</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>A · 1024 / 32</td><td><span class="en">×32 (1 batch)</span><span class="ko">×32 (1배치)</span></td><td><span class="en">×1 (at last token)</span><span class="ko">×1 (마지막 토큰)</span></td><td>0</td></tr>
+    <tr><td>B · 1055 / 32</td><td><span class="en">×32 — the 31 extra emit nothing</span><span class="ko">×32 — 추가 31은 무발행</span></td><td><span class="en">×1 (at first token)</span><span class="ko">×1 (첫 토큰)</span></td><td><span class="en">31 tok (B34)</span><span class="ko">31토큰 (B34)</span></td></tr>
+    <tr><td><span class="en">C · turn 2</span><span class="ko">C · 턴2</span></td><td><span class="en">×1 — prefix is a cache hit</span><span class="ko">×1 — prefix는 캐시 히트</span></td><td><span class="en">depends on output length</span><span class="ko">output 길이에 따라</span></td><td><span class="en">8 tok (B35)</span><span class="ko">8토큰 (B35)</span></td></tr>
+  </tbody>
+</table>
+
+<!-- Scenario D -->
+<h3 class="step"><span class="en">D · Eviction &amp; reset — BlockRemoved / AllBlocksCleared</span><span class="ko">D · 축출 &amp; 리셋 — BlockRemoved / AllBlocksCleared</span></h3>
+<p><span class="en">The first three scenarios only produced <code class="inl">BlockStored</code> because the cache was growing. The destructive events appear once a worker is under memory pressure or is reset.</span>
+<span class="ko">앞의 세 시나리오는 캐시가 커지기만 해서 <code class="inl">BlockStored</code>만 났습니다. 파괴적 이벤트는 워커가 메모리 압박을 받거나 리셋될 때 등장합니다.</span></p>
+<div class="animbox">
+  <svg viewBox="0 0 860 230" class="flowsvg" role="img" aria-label="scenario D eviction">
+    <defs>
+      <marker id="d1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L6,3 L0,6 Z" fill="#bc4c00"/></marker>
+    </defs>
+    <text x="40" y="22" fill="#3c3b35" font-size="12" font-weight="700">W1 cached prefix P; a new long request needs blocks → LRU evicts P's tail</text>
+    <!-- timeline -->
+    <text x="40" y="58" fill="#6b6a63" font-size="11" font-weight="700">vLLM (W1)</text>
+    <rect x="150" y="44" width="200" height="30" rx="6" fill="#1a7f37" fill-opacity="0.14" stroke="#1a7f37"/>
+    <text x="250" y="63" text-anchor="middle" fill="#1a7f37" font-size="10.5">prefix P cached (BlockStored earlier)</text>
+    <rect x="370" y="44" width="230" height="30" rx="6" fill="#f3f1ea" stroke="#6b6a63"/>
+    <text x="485" y="63" text-anchor="middle" fill="#6b6a63" font-size="10.5">new request fills pool → no free blocks</text>
+    <rect x="620" y="44" width="200" height="30" rx="6" fill="#bc4c00" fill-opacity="0.13" stroke="#bc4c00"/>
+    <text x="720" y="63" text-anchor="middle" fill="#bc4c00" font-size="10.5">LRU evicts P's blocks</text>
+    <!-- event -->
+    <circle cx="720" cy="98" r="5" fill="#bc4c00"/>
+    <line x1="720" y1="74" x2="720" y2="98" stroke="#bc4c00" stroke-width="1.2"/>
+    <text x="820" y="102" text-anchor="end" fill="#3c3b35" font-size="11"><tspan font-weight="700">BlockRemoved</tspan> (one per evicted block) published next step</text>
+    <!-- dynamo effect -->
+    <line x1="430" y1="120" x2="430" y2="146" stroke="#bc4c00" stroke-width="1.4" marker-end="url(#d1)"/>
+    <text x="40" y="150" fill="#6b6a63" font-size="11"><tspan font-weight="700" fill="#1668c7">Dynamo</tspan>: apply_removed drops W1 from those nodes (O(1)).</text>
+    <text x="40" y="172" fill="#6b6a63" font-size="11">Next request for prefix P → find_matches now reports <tspan font-weight="700">lower overlap for W1</tspan>,</text>
+    <text x="40" y="192" fill="#6b6a63" font-size="11">so worker_logit no longer discounts W1 — the router may pick a different worker.</text>
+    <text x="40" y="216" fill="#6b6a63" font-size="11"><tspan font-weight="700">AllBlocksCleared</tspan>: same idea, but W1 is dropped from the entire tree at once (e.g. cache reset / restart).</text>
+  </svg>
+</div>
+<p><span class="en">So the full event vocabulary keeps the router's mirror in sync in <i>both</i> directions: <code class="inl">BlockStored</code> grows a worker's footprint and attracts matching requests; <code class="inl">BlockRemoved</code> / <code class="inl">AllBlocksCleared</code> shrink it so the router stops sending requests to a cache that no longer exists. Without the destructive events the router would keep routing to phantom hits and waste prefill.</span>
+<span class="ko">즉 전체 이벤트 어휘가 라우터의 거울을 <i>양방향</i>으로 동기화합니다: <code class="inl">BlockStored</code>는 워커의 캐시 영역을 키워 매칭 요청을 끌어오고, <code class="inl">BlockRemoved</code> / <code class="inl">AllBlocksCleared</code>는 그것을 줄여 더 이상 존재하지 않는 캐시로 요청을 보내지 않게 합니다. 파괴적 이벤트가 없으면 라우터는 유령 히트로 계속 라우팅하며 prefill을 낭비하게 됩니다.</span></p>
+
+<!-- ===================== SOURCES ===================== -->
+<h2 class="sec" id="sources">8 · <span class="en">Sources</span><span class="ko">출처</span></h2>
+<div class="sources">
+  <p style="margin-top:0;color:var(--muted);font-size:13.5px"><span class="en">vLLM links pinned to <code class="inl">e6fc848</code>; Dynamo links to <code class="inl">bae0051</code>.</span><span class="ko">vLLM 링크는 <code class="inl">e6fc848</code>, Dynamo 링크는 <code class="inl">bae0051</code>에 고정.</span></p>
+  <a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/distributed/kv_events.py" target="_blank">vLLM · kv_events.py (types + ZmqEventPublisher)</a>
+  <a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/block_pool.py" target="_blank">vLLM · block_pool.py (emit)</a>
+  <a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/v1/core/sched/scheduler.py" target="_blank">vLLM · scheduler.py (drain + publish)</a>
+  <a href="https://github.com/vllm-project/vllm/blob/e6fc848d4ff2d00759516b0c7a47ba640d44e4b2/vllm/config/kv_events.py" target="_blank">vLLM · config/kv_events.py</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/components/src/dynamo/vllm/main.py" target="_blank">Dynamo · vllm/main.py (setup_kv_event_publisher)</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/kv_router/publisher/zmq_listener.rs" target="_blank">Dynamo · zmq_listener.rs</a>
+  <a href="https://github.com/ai-dynamo/dynamo/tree/bae0051/lib/llm/src/kv_router/publisher" target="_blank">Dynamo · publisher/ (pipeline + README)</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/zmq_wire/types.rs" target="_blank">Dynamo · zmq_wire/types.rs (RawKvEvent)</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/indexer/concurrent_radix_tree.rs" target="_blank">Dynamo · concurrent_radix_tree.rs (apply_event / find_matches)</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/scheduling/selector.rs" target="_blank">Dynamo · selector.rs (worker_logit)</a>
+  <a href="dynamo-overview.html">↳ Related: NVIDIA Dynamo — overview &amp; code walk</a>
+</div>
+
+<footer>
+  <span class="en">Traced from vLLM @ <code>e6fc848</code> and Dynamo @ <code>bae0051</code> · part of the AI Inference Study notes.</span>
+  <span class="ko">vLLM @ <code>e6fc848</code> · Dynamo @ <code>bae0051</code> 기준으로 추적 · AI Inference Study 노트의 일부.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>

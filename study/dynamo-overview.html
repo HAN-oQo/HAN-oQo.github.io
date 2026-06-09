@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NVIDIA Dynamo — overview & code walk</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  /* page-local syntax & accent overrides for code walks */
+  :root{
+    --accent:#1668c7; --accent2:#1a7f37;
+    --kw:#cf222e; --str:#0a3069; --com:#6e7781; --fn:#8250df; --num:#0550ae;
+    --p:#bc4c00; --d:#1668c7;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Pretendard,"Apple SD Gothic Neo",Roboto,sans-serif;
+    line-height:1.7; font-size:16px;
+  }
+  .wrap{max-width:980px; margin:0 auto; padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 20px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--text)}
+  header.hero{
+    border:1px solid var(--border); border-radius:16px; padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#faf9f5); margin-bottom:32px;
+  }
+  .hero h1{margin:0 0 8px; font-size:30px; letter-spacing:-.5px}
+  .hero p{margin:6px 0; color:var(--muted)}
+  .tagline{font-size:15px}
+  .meta{display:flex; flex-wrap:wrap; gap:8px; margin-top:18px}
+  .badge{
+    font-size:12.5px; padding:4px 11px; border-radius:999px;
+    background:var(--chip); border:1px solid var(--border); color:var(--muted);
+  }
+  .badge code{color:var(--accent2); font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  nav.toc{
+    border:1px solid var(--border); border-radius:12px; background:var(--panel);
+    padding:18px 22px; margin-bottom:36px;
+  }
+  nav.toc h2{margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:1px; color:var(--muted)}
+  nav.toc ol{margin:0; padding-left:20px; columns:2; column-gap:32px}
+  nav.toc a{color:var(--accent); text-decoration:none}
+  nav.toc a:hover{text-decoration:underline}
+  h2.sec{font-size:22px; margin:46px 0 14px; padding-top:14px; border-top:1px solid var(--border)}
+  h3.step{font-size:18px; margin:34px 0 10px; display:flex; align-items:center; gap:10px}
+  .num{
+    flex:0 0 auto; width:28px; height:28px; border-radius:8px;
+    background:var(--accent); color:#ffffff; font-weight:700; font-size:14px;
+    display:inline-flex; align-items:center; justify-content:center;
+  }
+  .node-p,.node-d,.node-f{font-size:12px; font-weight:700; padding:2px 8px; border-radius:6px}
+  .node-p{background:rgba(255,166,87,.15); color:var(--p); border:1px solid rgba(255,166,87,.4)}
+  .node-d{background:rgba(121,192,255,.15); color:var(--d); border:1px solid rgba(121,192,255,.4)}
+  .node-f{background:rgba(126,231,135,.14); color:var(--accent2); border:1px solid rgba(126,231,135,.4)}
+  p{margin:10px 0}
+  a.link{color:var(--accent); text-decoration:none; border-bottom:1px dotted rgba(88,166,255,.5)}
+  a.link:hover{border-bottom-style:solid}
+  code.inl{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:14px;
+    background:var(--chip); padding:1.5px 6px; border-radius:5px; color:var(--accent2);
+  }
+  .flow{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:18px 20px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:13.5px; color:var(--muted); overflow-x:auto; white-space:pre; margin:16px 0;
+  }
+  figure.code{margin:16px 0; border:1px solid var(--border); border-radius:12px; overflow:hidden; background:var(--panel)}
+  figure.code figcaption{
+    display:flex; justify-content:space-between; align-items:center; gap:12px;
+    background:var(--panel2); padding:8px 14px; font-size:12.5px; color:var(--muted);
+    border-bottom:1px solid var(--border);
+  }
+  figure.code figcaption .file{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  figure.code figcaption a{
+    color:var(--accent); text-decoration:none; white-space:nowrap;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  figure.code figcaption a:hover{text-decoration:underline}
+  pre{margin:0; padding:14px 16px; overflow-x:auto; font-size:13px; line-height:1.55}
+  pre code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text)}
+  .t-kw{color:var(--kw)} .t-str{color:var(--str)} .t-com{color:var(--com)}
+  .t-fn{color:var(--fn)} .t-num{color:var(--num)}
+  .callout{
+    border-left:3px solid var(--accent); background:rgba(88,166,255,.07);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:16px 0; color:#3c3b35; font-size:14.5px;
+  }
+  .callout.warn{border-left-color:var(--p); background:rgba(255,166,87,.08)}
+  .callout.good{border-left-color:var(--accent2); background:rgba(126,231,135,.07)}
+  .callout b{color:var(--accent2)}
+  table{width:100%; border-collapse:collapse; margin:18px 0; font-size:14px}
+  th,td{border:1px solid var(--border); padding:9px 12px; text-align:left; vertical-align:top}
+  th{background:var(--panel2); color:var(--muted); font-weight:600}
+  td code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; color:var(--accent2)}
+  ul.diff{list-style:none; padding:0; margin:14px 0}
+  ul.diff li{padding:8px 0 8px 26px; position:relative; border-bottom:1px solid var(--border)}
+  ul.diff li:before{content:"▲"; position:absolute; left:4px; color:var(--accent2); font-size:11px; top:11px}
+  ul.diff li:last-child{border-bottom:none}
+  ul.diff.con li:before{content:"▼"; color:var(--kw)}
+  .lede{color:var(--muted); font-size:14.5px; margin:0 0 8px}
+  .sources{border:1px solid var(--border); border-radius:12px; background:var(--panel); padding:18px 22px}
+  .sources h2{margin-top:0}
+  .sources a{display:inline-block; color:var(--accent); text-decoration:none; margin:3px 14px 3px 0; font-size:14px}
+  .sources a:hover{text-decoration:underline}
+  footer{margin-top:48px; color:var(--muted); font-size:13px; text-align:center}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:16px 0}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .ccard{border:1px solid var(--border); border-radius:12px; background:var(--panel); padding:16px 18px}
+  .ccard h4{margin:0 0 6px; font-size:15px; color:var(--accent2)}
+  .ccard p{margin:0; font-size:13.5px; color:var(--muted)}
+  .flowsvg{width:100%; height:auto; display:block}
+  .animbox{border:1px solid var(--border); border-radius:16px; background:linear-gradient(160deg,#ffffff,#faf9f5); padding:24px 26px; margin:8px 0 28px}
+  @keyframes march{to{stroke-dashoffset:-260}}
+  .march{stroke-dasharray:7 6; animation:march 3s linear infinite}
+  @media(prefers-reduced-motion:reduce){.march{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="./index.html">←
+  <span class="en">AI Inference Study</span><span class="ko">AI Inference Study</span>
+</a></p>
+
+<header class="hero">
+  <h1>NVIDIA Dynamo — <span class="en">overview &amp; code walk</span><span class="ko">전반 개요 &amp; 코드 흐름</span></h1>
+  <p class="tagline">
+    <span class="en">What the <code class="inl">ai-dynamo/dynamo</code> repo is, how to run two vLLM workers behind it, how the code is laid out, and the full token-in → token-out path traced through real source — plus where it actually beats a plain Docker vLLM.</span>
+    <span class="ko"><code class="inl">ai-dynamo/dynamo</code> 레포가 무엇인지, 그 뒤에 vLLM 워커 2대를 띄우는 법, 코드가 어떻게 구성돼 있는지, 그리고 실제 소스로 따라가는 token-in → token-out 전체 경로 — 마지막으로 그냥 Docker로 띄운 vLLM 대비 어디서 실제로 이득인지까지.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><span class="en">repo: </span><span class="ko">레포: </span><code>ai-dynamo/dynamo</code></span>
+    <span class="badge">commit <code>bae0051</code></span>
+    <span class="badge"><span class="en">core: </span><span class="ko">코어: </span><code>Rust</code> + <code>Python</code></span>
+    <span class="badge"><span class="en">license </span><span class="ko">라이선스 </span><code>Apache-2.0</code></span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2><span class="en">Contents</span><span class="ko">목차</span></h2>
+  <ol>
+    <li><a href="#what"><span class="en">What it is &amp; why use it</span><span class="ko">무엇이고 왜 쓰나</span></a></li>
+    <li><a href="#usage"><span class="en">Usage — two vLLM workers</span><span class="ko">사용법 — vLLM 워커 2대</span></a></li>
+    <li><a href="#structure"><span class="en">Code structure</span><span class="ko">코드 구조</span></a></li>
+    <li><a href="#flow"><span class="en">Request flow (code walk)</span><span class="ko">요청 흐름 (코드 추적)</span></a></li>
+    <li><a href="#proscons"><span class="en">Pros &amp; cons vs plain Docker vLLM</span><span class="ko">그냥 Docker vLLM 대비 장단점</span></a></li>
+    <li><a href="#sources"><span class="en">Sources</span><span class="ko">출처</span></a></li>
+  </ol>
+</nav>
+
+<!-- ===================== 1. WHAT IS IT ===================== -->
+<h2 class="sec" id="what">1 · <span class="en">What it is &amp; why use it</span><span class="ko">무엇이고 왜 쓰나</span></h2>
+
+<p>
+  <span class="en"><b>Dynamo is the orchestration layer <i>above</i> inference engines.</b> It does not replace vLLM, SGLang, or TensorRT-LLM — it turns a fleet of them into a single coordinated, datacenter-scale inference system. It is an open-source project by <b>NVIDIA</b> (<code class="inl">ai-dynamo</code> org, Apache-2.0), built in <b>Rust</b> for the hot path and <b>Python</b> for engine integration. The successor in spirit to Triton Inference Server for the LLM era.</span>
+  <span class="ko"><b>Dynamo는 추론 엔진 <i>위에</i> 얹히는 오케스트레이션 레이어</b>입니다. vLLM·SGLang·TensorRT-LLM을 대체하는 게 아니라, 여러 대를 묶어 하나의 조율된 데이터센터 규모 추론 시스템으로 만듭니다. <b>NVIDIA</b>가 만든 오픈소스(<code class="inl">ai-dynamo</code> org, Apache-2.0)이며, 핫패스는 <b>Rust</b>, 엔진 연동은 <b>Python</b>으로 작성됩니다. LLM 시대의 Triton Inference Server 후속 격입니다.</span>
+</p>
+
+<div class="callout">
+  <span class="en"><b>One-line mental model.</b> A single vLLM server already maxes out one GPU/node. Dynamo is what you put in front of <i>many</i> of them so requests land on the right worker, prefill and decode scale independently, and the KV cache is shared instead of recomputed.</span>
+  <span class="ko"><b>한 줄 요약.</b> vLLM 서버 한 대는 이미 GPU/노드 하나를 꽉 채웁니다. Dynamo는 그런 워커가 <i>여러 대</i>일 때 앞단에 두어, 요청이 올바른 워커로 가고, prefill·decode가 독립적으로 스케일되며, KV 캐시를 재계산 대신 공유하게 만드는 물건입니다.</span>
+</div>
+
+<h3 class="step"><span class="en">The four reasons to reach for it</span><span class="ko">쓰게 되는 네 가지 이유</span></h3>
+
+<div class="grid2">
+  <div class="ccard"><h4><span class="en">KV-aware routing</span><span class="ko">KV 인지 라우팅</span></h4>
+    <p><span class="en">Routes by <b>KV (key–value attention cache)</b> overlap + load, not round-robin. Avoids redundant prefill → up to 2× faster <b>TTFT (time to first token)</b>.</span><span class="ko"><b>KV(key–value, 어텐션 캐시)</b> 오버랩+부하로 라우팅(라운드로빈 아님). 중복 prefill 제거 → <b>TTFT(time to first token, 첫 토큰까지 지연)</b> 최대 2배.</span></p></div>
+  <div class="ccard"><h4><span class="en">Disaggregated P/D</span><span class="ko">P/D 분리 서빙</span></h4>
+    <p><span class="en"><b>P/D (prefill/decode)</b> run on separate GPU pools, scaled independently, KV moved by <b>NIXL (NVIDIA Inference Xfer Library)</b>.</span><span class="ko"><b>P/D(prefill/decode)</b>를 별도 GPU 풀에서 독립 스케일, KV는 <b>NIXL(NVIDIA Inference Xfer Library)</b>로 전송.</span></p></div>
+  <div class="ccard"><h4><span class="en">Multi-tier KV (KVBM)</span><span class="ko">다계층 KV (KVBM)</span></h4>
+    <p><span class="en"><b>KVBM (KV Block Manager)</b> offloads the cache GPU → CPU → SSD → remote, extending effective context beyond <b>VRAM (GPU video memory)</b>.</span><span class="ko"><b>KVBM(KV Block Manager)</b>이 캐시를 GPU→CPU→SSD→원격으로 오프로드, <b>VRAM(GPU 비디오 메모리)</b> 너머로 유효 컨텍스트 확장.</span></p></div>
+  <div class="ccard"><h4><span class="en">SLA planner + fast cold-start</span><span class="ko">SLA 플래너 + 빠른 콜드스타트</span></h4>
+    <p><span class="en">Autoscales pools to hit TTFT / <b>ITL (inter-token latency)</b> targets at minimum <b>TCO (total cost of ownership)</b>; ModelExpress streams weights for 7× faster startup.</span><span class="ko">TTFT / <b>ITL(inter-token latency, 토큰 간 지연)</b> 목표를 최소 <b>TCO(total cost of ownership, 총소유비용)</b>로 맞춰 자동 스케일; ModelExpress 가중치 스트리밍으로 기동 7배.</span></p></div>
+</div>
+
+<p class="lede">
+  <span class="en">NVIDIA's own positioning is blunt: <i>"If you're running a single model on a single GPU, your inference engine alone is probably sufficient."</i> Dynamo earns its keep at <b>multi-GPU / multi-node</b> scale.</span>
+  <span class="ko">NVIDIA 스스로의 표현도 단호합니다: <i>"단일 GPU에서 단일 모델만 돌린다면 추론 엔진 하나로 충분할 것"</i>. Dynamo는 <b>멀티 GPU·멀티 노드</b> 규모에서 값을 합니다.</span>
+</p>
+
+<!-- ===================== 2. USAGE ===================== -->
+<h2 class="sec" id="usage">2 · <span class="en">Usage — two vLLM workers behind Dynamo</span><span class="ko">사용법 — Dynamo 뒤에 vLLM 워커 2대</span></h2>
+
+<p class="lede">
+  <span class="en">The smallest interesting deployment: one <b>Frontend</b> (HTTP + Router) and <b>two vLLM workers</b>. Each piece is just a Python module you launch with <code class="inl">python -m</code>. This is the canonical <code class="inl">examples/backends/vllm/launch/agg_router.sh</code>.</span>
+  <span class="ko">의미 있는 가장 작은 배포: <b>Frontend</b>(HTTP+Router) 1개 + <b>vLLM 워커 2개</b>. 각 조각은 <code class="inl">python -m</code>으로 띄우는 파이썬 모듈일 뿐입니다. 아래는 레포 표준 스크립트 <code class="inl">examples/backends/vllm/launch/agg_router.sh</code>입니다.</span>
+</p>
+
+<h3 class="step"><span class="num">0</span><span class="en">Install Dynamo</span><span class="ko">Dynamo 설치</span></h3>
+<figure class="code">
+  <figcaption><span class="file">shell</span><a href="https://github.com/ai-dynamo/dynamo/blob/main/docs/backends/vllm/README.md" target="_blank">docs/backends/vllm/README.md</a></figcaption>
+<pre><code><span class="t-com"># installs Dynamo + the matching vLLM build into one venv</span>
+uv venv --python 3.12 --seed
+uv pip install <span class="t-str">"ai-dynamo[vllm]"</span></code></pre>
+</figure>
+
+<h3 class="step"><span class="num">0b</span><span class="en">Service-level infra — etcd + NATS</span><span class="ko">서비스 레벨 인프라 — etcd + NATS</span></h3>
+<p><span class="en">Dynamo has <b>no central config listing worker addresses</b>. Instead it leans on two small infra services so components find each other dynamically. <code class="inl">dev/docker-compose.yml</code> brings up the bare minimum:</span>
+<span class="ko">Dynamo에는 <b>워커 주소를 적어두는 중앙 설정이 없습니다</b>. 대신 컴포넌트들이 서로를 동적으로 찾도록 작은 인프라 서비스 2개에 의존합니다. <code class="inl">dev/docker-compose.yml</code>이 그 최소 구성을 띄웁니다:</span></p>
+
+<figure class="code">
+  <figcaption><span class="file">dev/docker-compose.yml</span><a href="https://github.com/ai-dynamo/dynamo/blob/main/dev/docker-compose.yml" target="_blank">dev/docker-compose.yml</a></figcaption>
+<pre><code><span class="t-fn">networks</span>:
+  <span class="t-fn">server</span>: { <span class="t-fn">driver</span>: bridge }
+
+<span class="t-fn">services</span>:
+  <span class="t-fn">nats-server</span>:                       <span class="t-com"># messaging + KV-event / prefill-queue bus</span>
+    <span class="t-fn">image</span>: nats:2.11.4
+    <span class="t-fn">command</span>: [ <span class="t-str">"-c"</span>, <span class="t-str">"/etc/nats/nats-server.conf"</span> ]
+    <span class="t-fn">volumes</span>: [ <span class="t-str">"./nats-server.conf:/etc/nats/nats-server.conf:ro"</span> ]
+    <span class="t-fn">ports</span>:
+      - 4222:4222   <span class="t-com"># client connections  ← workers &amp; frontend</span>
+      - 6222:6222   <span class="t-com"># cluster routing</span>
+      - 8222:8222   <span class="t-com"># monitoring (/varz, /healthz)</span>
+    <span class="t-fn">networks</span>: [ server ]
+
+  <span class="t-fn">etcd-server</span>:                       <span class="t-com"># service-discovery registry (key-value + leases)</span>
+    <span class="t-fn">image</span>: bitnamilegacy/etcd:3.6.1
+    <span class="t-fn">environment</span>: [ <span class="t-str">"ALLOW_NONE_AUTHENTICATION=yes"</span> ]
+    <span class="t-fn">ports</span>:
+      - 2379:2379   <span class="t-com"># client API (+ /metrics)  ← register / watch</span>
+      - 2380:2380   <span class="t-com"># peer</span>
+    <span class="t-fn">networks</span>: [ server ]</code></pre>
+</figure>
+
+<p><span class="en">NATS needs <b>JetStream</b> on (durable streams for KV events / the prefill queue) and a raised payload limit — that is the entire mounted config:</span>
+<span class="ko">NATS는 <b>JetStream</b>이 켜져 있어야 하고(KV 이벤트·prefill 큐용 지속 스트림) payload 한도도 키워야 합니다 — 마운트되는 설정은 이게 전부입니다:</span></p>
+<figure class="code">
+  <figcaption><span class="file">dev/nats-server.conf</span><a href="https://github.com/ai-dynamo/dynamo/blob/main/dev/nats-server.conf" target="_blank">dev/nats-server.conf</a></figcaption>
+<pre><code>max_payload: <span class="t-num">15728640</span>   <span class="t-com"># 15 MB — fits ~10 MB decoded embeddings</span>
+jetstream: {}          <span class="t-com"># durable streams (KV events, prefill queue)</span>
+http_port: <span class="t-num">8222</span>       <span class="t-com"># monitoring</span>
+trace: <span class="t-kw">true</span></code></pre>
+</figure>
+
+<p><span class="en">Bring it up — or, without Docker, run the two binaries directly (the README's exact commands):</span>
+<span class="ko">한 번에 띄우거나 — Docker 없이 두 바이너리를 직접 실행해도 됩니다(README의 그 명령 그대로):</span></p>
+<figure class="code">
+  <figcaption><span class="file">shell</span><a href="https://github.com/ai-dynamo/dynamo/blob/main/README.md" target="_blank">README.md</a></figcaption>
+<pre><code><span class="t-com"># option A — compose</span>
+docker compose -f dev/docker-compose.yml up -d
+
+<span class="t-com"># option B — standalone binaries</span>
+./etcd                       <span class="t-com"># listens on :2379</span>
+nats-server -js              <span class="t-com"># -js = enable JetStream, :4222</span>
+
+<span class="t-com"># components discover them via env (these are the defaults)</span>
+<span class="t-kw">export</span> ETCD_ENDPOINTS=<span class="t-str">"http://localhost:2379"</span>
+<span class="t-kw">export</span> NATS_SERVER=<span class="t-str">"nats://localhost:4222"</span></code></pre>
+</figure>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Service</span><span class="ko">서비스</span></th>
+    <th><span class="en">Role in Dynamo</span><span class="ko">Dynamo에서의 역할</span></th>
+    <th><span class="en">Port / env</span><span class="ko">포트 / 환경변수</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>etcd</b></td><td><span class="en"><b>Service discovery.</b> Each worker writes its <code>namespace/component/endpoint/instance_id</code> + model card into etcd under a <b>lease (TTL)</b>. The Frontend <b>watches</b> those keys to learn which workers exist; when a worker dies its lease expires and the key disappears.</span><span class="ko"><b>서비스 디스커버리.</b> 각 워커가 <code>namespace/component/endpoint/instance_id</code> + 모델 카드를 <b>lease(TTL)</b>를 걸어 etcd에 기록합니다. Frontend는 그 키를 <b>watch</b>해 어떤 워커가 있는지 알고, 워커가 죽으면 lease가 만료돼 키가 사라집니다.</span></td><td><code>2379</code><br><code>ETCD_ENDPOINTS</code></td></tr>
+    <tr><td><b>NATS</b><br>(JetStream)</td><td><span class="en"><b>Messaging bus.</b> Carries <b>KV cache events</b> from workers to the router (so it knows which blocks each worker holds) and the <b>prefill queue</b> for disaggregation. Can also serve as the request plane (TCP is the other option).</span><span class="ko"><b>메시징 버스.</b> 워커→라우터로 <b>KV 캐시 이벤트</b>를 실어 나르고(라우터가 각 워커의 블록 보유 현황을 앎), 분리 서빙용 <b>prefill 큐</b>도 담당합니다. 요청 전송 평면으로도 쓸 수 있습니다(다른 선택지는 TCP).</span></td><td><code>4222</code><br><code>NATS_SERVER</code></td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="en"><b>You can skip both for a laptop run.</b> Pass <code class="inl">--discovery-backend file</code> (file-based discovery instead of etcd) and disable KV events with <code class="inl">--kv-events-config '{"enable_kv_cache_events": false}'</code>. etcd/NATS earn their place at multi-node / event-backed scale; on Kubernetes, native CRDs + EndpointSlices replace them entirely.</span>
+  <span class="ko"><b>노트북 실행이면 둘 다 생략 가능.</b> <code class="inl">--discovery-backend file</code>(etcd 대신 파일 기반 디스커버리)를 주고, <code class="inl">--kv-events-config '{"enable_kv_cache_events": false}'</code>로 KV 이벤트를 끄면 됩니다. etcd/NATS는 멀티노드·이벤트 기반 규모에서 값을 하고, 쿠버네티스에서는 네이티브 CRD + EndpointSlices가 이들을 완전히 대체합니다.</span>
+</div>
+
+<h3 class="step"><span class="num">1</span><span class="en">Start the Frontend (HTTP :8000 + KV Router)</span><span class="ko">Frontend 기동 (HTTP :8000 + KV Router)</span></h3>
+<figure class="code">
+  <figcaption><span class="file">agg_router.sh</span><a href="https://github.com/ai-dynamo/dynamo/blob/main/examples/backends/vllm/launch/agg_router.sh" target="_blank">examples/backends/vllm/launch/agg_router.sh</a></figcaption>
+<pre><code><span class="t-com"># OpenAI-compatible HTTP server + the KV-aware router live here.</span>
+python -m dynamo.frontend \
+    --router-mode kv \
+    --router-reset-states &</code></pre>
+</figure>
+<p><span class="en">The <span class="node-f">Frontend</span> owns the <code class="inl">/v1/chat/completions</code> endpoint, the tokenizer, and (in <code class="inl">--router-mode kv</code>) the router that picks a worker per request. Workers <b>self-register</b> with it on startup — you do not list worker addresses anywhere.</span>
+<span class="ko"><span class="node-f">Frontend</span>가 <code class="inl">/v1/chat/completions</code> 엔드포인트, 토크나이저, 그리고(<code class="inl">--router-mode kv</code>일 때) 요청마다 워커를 고르는 라우터를 소유합니다. 워커는 기동 시 <b>스스로 등록</b>하므로 워커 주소를 어디에도 적지 않습니다.</span></p>
+
+<h3 class="step"><span class="num">2</span><span class="en">Start two vLLM workers (one per GPU)</span><span class="ko">vLLM 워커 2대 기동 (GPU 당 1대)</span></h3>
+<figure class="code">
+  <figcaption><span class="file">agg_router.sh</span><a href="https://github.com/ai-dynamo/dynamo/blob/main/examples/backends/vllm/launch/agg_router.sh" target="_blank">examples/backends/vllm/launch/agg_router.sh</a></figcaption>
+<pre><code>MODEL=<span class="t-str">"Qwen/Qwen3-0.6B"</span>
+BLOCK_SIZE=<span class="t-num">64</span>
+
+<span class="t-com"># worker A — GPU 0</span>
+DYN_SYSTEM_PORT=8081 \
+CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.vllm \
+    --model $MODEL --block-size $BLOCK_SIZE --enforce-eager \
+    --kv-events-config <span class="t-str">'{"publisher":"zmq","topic":"kv-events",
+        "endpoint":"tcp://*:20080","enable_kv_cache_events":true}'</span> &
+
+<span class="t-com"># worker B — GPU 1</span>
+DYN_SYSTEM_PORT=8082 \
+VLLM_NIXL_SIDE_CHANNEL_PORT=20097 \
+CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.vllm \
+    --model $MODEL --block-size $BLOCK_SIZE --enforce-eager \
+    --kv-events-config <span class="t-str">'{"publisher":"zmq","topic":"kv-events",
+        "endpoint":"tcp://*:20081","enable_kv_cache_events":true}'</span> &</code></pre>
+</figure>
+<p><span class="en">Two identical workers, pinned to GPU 0 and GPU 1, each emitting <b>KV cache events</b> over its own ZMQ port. Those events are what let the router know which blocks each worker already holds. <code class="inl">--model</code> takes any vLLM-supported model; vLLM's native engine args pass straight through.</span>
+<span class="ko">동일한 워커 2대를 GPU 0·1에 핀하고, 각자 자기 ZMQ 포트로 <b>KV 캐시 이벤트</b>를 발행합니다. 이 이벤트 덕분에 라우터가 각 워커가 이미 들고 있는 블록을 압니다. <code class="inl">--model</code>엔 vLLM 지원 모델 아무거나 넣을 수 있고, vLLM 네이티브 엔진 인자는 그대로 통과합니다.</span></p>
+
+<h3 class="step"><span class="en">How the three commands wire together</span><span class="ko">세 명령이 어떻게 연결되나</span></h3>
+<p><span class="en">Nobody is told anyone's address. The two workers <b>register in etcd</b> on startup; the Frontend <b>watches etcd</b> and discovers them; the workers <b>publish KV events to NATS</b>; the router <b>subscribes</b> to those events and then dispatches each request straight to the chosen worker over the request plane.</span>
+<span class="ko">아무도 상대의 주소를 듣지 않습니다. 워커 2대가 기동 시 <b>etcd에 등록</b>하고, Frontend는 <b>etcd를 watch</b>해 그들을 발견하며, 워커는 <b>KV 이벤트를 NATS에 발행</b>하고, 라우터는 그 이벤트를 <b>구독</b>한 뒤 각 요청을 선택된 워커로 요청 평면을 통해 직접 보냅니다.</span></p>
+
+<div class="animbox">
+  <svg viewBox="0 0 900 290" class="flowsvg" role="img" aria-label="Dynamo standalone wiring">
+    <defs>
+      <marker id="wa" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#1668c7"/></marker>
+      <marker id="wg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#1a7f37"/></marker>
+      <marker id="wp" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#8250df"/></marker>
+    </defs>
+    <!-- client -->
+    <rect x="18" y="120" width="92" height="48" rx="9" fill="#ffffff" stroke="#e3e1d8"/>
+    <text x="64" y="142" text-anchor="middle" fill="#1f1e1b" font-size="12" font-weight="700">Client</text>
+    <text x="64" y="158" text-anchor="middle" fill="#6b6a63" font-size="9.5">curl :8000</text>
+    <!-- frontend -->
+    <rect x="170" y="108" width="180" height="74" rx="11" fill="#ffffff" stroke="#1a7f37" stroke-width="1.5"/>
+    <text x="260" y="132" text-anchor="middle" fill="#1a7f37" font-size="12.5" font-weight="700">Frontend + Router</text>
+    <text x="260" y="150" text-anchor="middle" fill="#6b6a63" font-size="10">python -m dynamo.frontend</text>
+    <text x="260" y="166" text-anchor="middle" fill="#6b6a63" font-size="10">HTTP :8000 · KV router</text>
+    <!-- etcd -->
+    <rect x="410" y="18" width="170" height="56" rx="11" fill="#ffffff" stroke="#1668c7" stroke-width="1.5"/>
+    <text x="495" y="40" text-anchor="middle" fill="#1668c7" font-size="12.5" font-weight="700">etcd  :2379</text>
+    <text x="495" y="57" text-anchor="middle" fill="#6b6a63" font-size="9.5">discovery registry (leases)</text>
+    <!-- nats -->
+    <rect x="410" y="216" width="170" height="56" rx="11" fill="#ffffff" stroke="#8250df" stroke-width="1.5"/>
+    <text x="495" y="238" text-anchor="middle" fill="#8250df" font-size="12.5" font-weight="700">NATS  :4222</text>
+    <text x="495" y="255" text-anchor="middle" fill="#6b6a63" font-size="9.5">KV events · prefill queue</text>
+    <!-- workers -->
+    <rect x="690" y="96" width="190" height="44" rx="10" fill="#ffffff" stroke="#bc4c00" stroke-width="1.5"/>
+    <text x="785" y="114" text-anchor="middle" fill="#bc4c00" font-size="11.5" font-weight="700">vLLM worker A · GPU 0</text>
+    <text x="785" y="130" text-anchor="middle" fill="#6b6a63" font-size="9.5">python -m dynamo.vllm</text>
+    <rect x="690" y="150" width="190" height="44" rx="10" fill="#ffffff" stroke="#bc4c00" stroke-width="1.5"/>
+    <text x="785" y="168" text-anchor="middle" fill="#bc4c00" font-size="11.5" font-weight="700">vLLM worker B · GPU 1</text>
+    <text x="785" y="184" text-anchor="middle" fill="#6b6a63" font-size="9.5">python -m dynamo.vllm</text>
+
+    <!-- client <-> frontend -->
+    <line x1="110" y1="144" x2="166" y2="144" stroke="#1668c7" stroke-width="2" marker-end="url(#wa)"/>
+    <!-- frontend -> etcd (watch) -->
+    <line x1="320" y1="108" x2="430" y2="74" stroke="#1668c7" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#wa)"/>
+    <text x="352" y="86" fill="#1668c7" font-size="9.5">watch</text>
+    <!-- workers -> etcd (register) -->
+    <line x1="700" y1="100" x2="560" y2="62" stroke="#1668c7" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#wa)"/>
+    <text x="600" y="74" fill="#1668c7" font-size="9.5">register</text>
+    <!-- workers -> nats (publish kv events) -->
+    <line x1="700" y1="180" x2="560" y2="236" stroke="#8250df" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#wp)"/>
+    <text x="592" y="226" fill="#8250df" font-size="9.5">KV events</text>
+    <!-- frontend <- nats (subscribe) -->
+    <line x1="430" y1="244" x2="320" y2="182" stroke="#8250df" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#wp)"/>
+    <text x="338" y="222" fill="#8250df" font-size="9.5">subscribe</text>
+    <!-- frontend -> workers (request plane) -->
+    <line x1="350" y1="150" x2="686" y2="124" stroke="#1a7f37" stroke-width="2.2" marker-end="url(#wg)" class="march"/>
+    <line x1="350" y1="158" x2="686" y2="170" stroke="#1a7f37" stroke-width="2.2" marker-end="url(#wg)" class="march"/>
+    <text x="500" y="150" fill="#1a7f37" font-size="9.5">request (TCP/NATS)</text>
+  </svg>
+</div>
+<p style="color:var(--muted);font-size:13px;margin-top:-6px"><span class="en">Solid green = the live request path · dashed blue = etcd discovery · dashed purple = NATS KV-event bus.</span><span class="ko">초록 실선 = 실제 요청 경로 · 파란 점선 = etcd 디스커버리 · 보라 점선 = NATS KV 이벤트 버스.</span></p>
+
+<h3 class="step"><span class="num">3</span><span class="en">Call it — exactly the OpenAI API</span><span class="ko">호출 — 그냥 OpenAI API</span></h3>
+<figure class="code">
+  <figcaption><span class="file">shell</span><a href="https://github.com/ai-dynamo/dynamo/tree/main/examples/backends/vllm" target="_blank">examples/backends/vllm</a></figcaption>
+<pre><code>curl localhost:8000/v1/chat/completions \
+  -H <span class="t-str">"Content-Type: application/json"</span> \
+  -d <span class="t-str">'{
+    "model": "Qwen/Qwen3-0.6B",
+    "messages": [{"role":"user","content":"Hello"}],
+    "stream": true
+  }'</span></code></pre>
+</figure>
+<p><span class="en">Client points at the Frontend (<code class="inl">:8000</code>) and never at a worker. The router transparently fans requests across the two GPUs by cache affinity.</span>
+<span class="ko">클라이언트는 Frontend(<code class="inl">:8000</code>)만 바라보고 워커는 절대 직접 호출하지 않습니다. 라우터가 캐시 친화도로 두 GPU에 요청을 알아서 분배합니다.</span></p>
+
+<div class="callout warn">
+  <span class="en"><b>Want disaggregation instead?</b> Swap to <code class="inl">launch/disagg.sh</code>: same Frontend, but worker A starts with <code class="inl">--disaggregation-mode decode</code> and worker B with <code class="inl">--disaggregation-mode prefill</code>, both using <code class="inl">--kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'</code>. Now the two GPUs play different roles instead of being replicas.</span>
+  <span class="ko"><b>분리 서빙을 원하면?</b> <code class="inl">launch/disagg.sh</code>로 바꾸면 됩니다: Frontend는 동일, 워커 A는 <code class="inl">--disaggregation-mode decode</code>, 워커 B는 <code class="inl">--disaggregation-mode prefill</code>로 띄우고 둘 다 <code class="inl">--kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'</code>를 씁니다. 이제 두 GPU는 복제본이 아니라 서로 다른 역할을 맡습니다.</span>
+</div>
+
+<!-- ===================== 3. CODE STRUCTURE ===================== -->
+<h2 class="sec" id="structure">3 · <span class="en">Code structure</span><span class="ko">코드 구조</span></h2>
+
+<p class="lede">
+  <span class="en">Two worlds: <code class="inl">lib/</code> is the <b>Rust core</b> (the hot path — HTTP, tokenize, route, transport, KV); <code class="inl">components/</code> is the <b>Python layer</b> that wraps each inference engine. The Rust talks to Python over the runtime's transport.</span>
+  <span class="ko">두 세계로 나뉩니다: <code class="inl">lib/</code>는 <b>Rust 코어</b>(핫패스 — HTTP·토크나이즈·라우팅·전송·KV), <code class="inl">components/</code>는 각 추론 엔진을 감싸는 <b>Python 레이어</b>. Rust가 런타임 전송을 통해 Python과 대화합니다.</span>
+</p>
+
+<div class="flow"><span class="t-com"># top-level layout (commit bae0051)</span>
+dynamo/
+├─ <span style="color:var(--accent2)">lib/</span>                    <span class="t-com"># Rust core — compiled into the dynamo runtime + python bindings</span>
+│  ├─ runtime/            <span class="t-com"># distributed runtime: components, endpoints, transport, discovery</span>
+│  ├─ llm/                <span class="t-com"># the LLM serving pipeline (see below) ★ most of the request path</span>
+│  ├─ kv-router/          <span class="t-com"># KV-aware scheduling primitives (cost fn, selector)</span>
+│  ├─ tokens/ tokenizers/ <span class="t-com"># tokenization + token-block hashing</span>
+│  ├─ parsers/ renderer/  <span class="t-com"># tool/reasoning parsing · chat-template rendering</span>
+│  ├─ kvbm-*/ memory/     <span class="t-com"># KV Block Manager: multi-tier GPU→CPU→SSD→remote offload</span>
+│  └─ bindings/python/    <span class="t-com"># PyO3 — exposes the Rust runtime to the Python components</span>
+│
+├─ <span style="color:var(--accent2)">components/src/dynamo/</span>  <span class="t-com"># Python — one package per role</span>
+│  ├─ frontend/           <span class="t-com"># `python -m dynamo.frontend` — HTTP ingress + router glue</span>
+│  ├─ vllm/  sglang/  trtllm/  <span class="t-com"># engine backends; `python -m dynamo.vllm` is the worker</span>
+│  ├─ router/  planner/  global_planner/  <span class="t-com"># standalone router · SLA autoscaler</span>
+│  └─ common/             <span class="t-com"># shared backend plumbing (engine, health, metrics, disagg)</span>
+│
+├─ examples/backends/vllm/launch/   <span class="t-com"># agg.sh · agg_router.sh · disagg.sh · …</span>
+├─ recipes/               <span class="t-com"># tuned per-model K8s deployments (Llama-70B, DSR1, …)</span>
+└─ deploy/                <span class="t-com"># Kubernetes operator + CRDs (DynamoGraphDeployment)</span>
+</div>
+
+<p><span class="en">The part that matters for a request lives in <code class="inl">lib/llm/src/</code>:</span>
+<span class="ko">요청 처리에 중요한 부분은 <code class="inl">lib/llm/src/</code> 안에 있습니다:</span></p>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Path</span><span class="ko">경로</span></th>
+    <th><span class="en">Role</span><span class="ko">역할</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><code>http/service/openai.rs</code></td><td><span class="en">OpenAI-compatible Axum handlers — <code>/v1/chat/completions</code> entry, SSE (server-sent events) out</span><span class="ko">OpenAI 호환 Axum 핸들러 — <code>/v1/chat/completions</code> 진입, SSE(server-sent events) 응답</span></td></tr>
+    <tr><td><code>preprocessor.rs</code></td><td><span class="en">Chat template + tokenize (text→token_ids); detokenize on the way back</span><span class="ko">챗 템플릿 + 토크나이즈(text→token_ids); 응답 시 디토크나이즈</span></td></tr>
+    <tr><td><code>backend.rs</code></td><td><span class="en">Streaming decoder — turns returned token_ids back into text</span><span class="ko">스트리밍 디코더 — 돌아온 token_ids를 다시 텍스트로</span></td></tr>
+    <tr><td><code>kv_router/</code></td><td><span class="en">PushRouter + KvPushRouter + prefill_router (disagg orchestration)</span><span class="ko">PushRouter + KvPushRouter + prefill_router(분리 서빙 조율)</span></td></tr>
+    <tr><td><code>entrypoint/input/common.rs</code></td><td><span class="en">Assembles the pipeline: frontend → preprocessor → backend → engine</span><span class="ko">파이프라인 조립: frontend → preprocessor → backend → engine</span></td></tr>
+    <tr><td><code>block_manager/</code></td><td><span class="en">KVBM — block tables, multi-tier offload</span><span class="ko">KVBM — 블록 테이블, 다계층 오프로드</span></td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="en"><b>The key architectural choice:</b> the <b>tokenizer lives in the Rust Frontend, not in the GPU engine.</b> Workers exchange only <code class="inl">token_ids</code> / <code class="inl">input_ids</code> — pure token-in-token-out (TITO). That is precisely what lets the front compute prefix hashes over prompt tokens and do KV-aware routing before any GPU is touched.</span>
+  <span class="ko"><b>핵심 설계 결정:</b> <b>토크나이저가 GPU 엔진이 아니라 Rust Frontend에 있습니다.</b> 워커는 <code class="inl">token_ids</code> / <code class="inl">input_ids</code>만 주고받는 순수 TITO입니다. 이 덕분에 앞단이 prompt 토큰의 prefix 해시를 계산해, GPU를 건드리기 전에 KV 인지 라우팅을 할 수 있습니다.</span>
+</div>
+
+<!-- ===================== 4. REQUEST FLOW ===================== -->
+<h2 class="sec" id="flow">4 · <span class="en">Request flow — a code walk</span><span class="ko">요청 흐름 — 코드 추적</span></h2>
+
+<p class="lede">
+  <span class="en">Following one <code class="inl">/v1/chat/completions</code> request from arrival to the last streamed token. Every snippet is trimmed real source at commit <code class="inl">bae0051</code>; the caption links jump to GitHub.</span>
+  <span class="ko"><code class="inl">/v1/chat/completions</code> 요청 하나가 도착해서 마지막 토큰이 스트리밍될 때까지 따라갑니다. 모든 스니펫은 커밋 <code class="inl">bae0051</code>의 실제 소스를 발췌한 것이고, 캡션 링크를 누르면 GitHub로 이동합니다.</span>
+</p>
+
+<div class="animbox">
+  <svg viewBox="0 0 920 250" class="flowsvg" role="img" aria-label="Dynamo request flow">
+    <defs>
+      <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#1668c7"/></marker>
+      <marker id="ahg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#1a7f37"/></marker>
+    </defs>
+    <!-- client -->
+    <rect x="20" y="95" width="110" height="56" rx="10" fill="#ffffff" stroke="#e3e1d8"/>
+    <text x="75" y="120" text-anchor="middle" fill="#1f1e1b" font-size="13" font-weight="700">Client</text>
+    <text x="75" y="138" text-anchor="middle" fill="#6b6a63" font-size="10">OpenAI API</text>
+    <!-- frontend -->
+    <rect x="190" y="60" width="210" height="128" rx="12" fill="#ffffff" stroke="#1a7f37"/>
+    <text x="295" y="82" text-anchor="middle" fill="#1a7f37" font-size="13" font-weight="700">Frontend (Rust)</text>
+    <text x="295" y="104" text-anchor="middle" fill="#6b6a63" font-size="10.5">① HTTP handler · openai.rs</text>
+    <text x="295" y="122" text-anchor="middle" fill="#6b6a63" font-size="10.5">② template + tokenize</text>
+    <text x="295" y="140" text-anchor="middle" fill="#6b6a63" font-size="10.5">③ KV-aware route (pick worker)</text>
+    <text x="295" y="158" text-anchor="middle" fill="#6b6a63" font-size="10.5">④ dispatch over TCP/NATS</text>
+    <text x="295" y="176" text-anchor="middle" fill="#1668c7" font-size="10.5">⑥ detokenize → SSE</text>
+    <!-- worker D -->
+    <rect x="470" y="42" width="190" height="70" rx="12" fill="#ffffff" stroke="#1668c7"/>
+    <text x="565" y="66" text-anchor="middle" fill="#1668c7" font-size="12.5" font-weight="700">vLLM worker · DECODE</text>
+    <text x="565" y="86" text-anchor="middle" fill="#6b6a63" font-size="10.5">handlers.py → AsyncLLM</text>
+    <text x="565" y="102" text-anchor="middle" fill="#6b6a63" font-size="10.5">⑤ generate tokens</text>
+    <!-- worker P -->
+    <rect x="470" y="138" width="190" height="70" rx="12" fill="#ffffff" stroke="#bc4c00"/>
+    <text x="565" y="162" text-anchor="middle" fill="#bc4c00" font-size="12.5" font-weight="700">vLLM worker · PREFILL</text>
+    <text x="565" y="182" text-anchor="middle" fill="#6b6a63" font-size="10.5">prefill_router (disagg)</text>
+    <text x="565" y="198" text-anchor="middle" fill="#6b6a63" font-size="10.5">build KV → NIXL transfer</text>
+    <!-- arrows -->
+    <line x1="130" y1="123" x2="186" y2="123" stroke="#1668c7" stroke-width="2" marker-end="url(#ah)" class="march"/>
+    <line x1="400" y1="100" x2="466" y2="80" stroke="#1668c7" stroke-width="2" marker-end="url(#ah)" class="march"/>
+    <line x1="466" y1="173" x2="400" y2="150" stroke="#1a7f37" stroke-width="2" marker-end="url(#ahg)" class="march"/>
+    <!-- KV transfer P->D -->
+    <line x1="565" y1="138" x2="565" y2="112" stroke="#bc4c00" stroke-width="2.5" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+    <text x="600" y="128" fill="#bc4c00" font-size="9.5">KV (NIXL)</text>
+    <!-- response back -->
+    <line x1="186" y1="150" x2="130" y2="150" stroke="#1a7f37" stroke-width="2" marker-end="url(#ahg)" class="march"/>
+    <text x="158" y="115" fill="#6b6a63" font-size="9">req</text>
+    <text x="150" y="165" fill="#6b6a63" font-size="9">tokens</text>
+  </svg>
+</div>
+
+<h3 class="step"><span class="num">1</span><span class="en">HTTP handler receives the request</span><span class="ko">HTTP 핸들러가 요청 수신</span> <span class="node-f">Frontend</span></h3>
+<p><span class="en">The Axum route <code class="inl">/v1/chat/completions</code> lands in <code class="inl">handler_chat_completions</code>, which spawns <code class="inl">chat_completions</code>. After validation it fetches the per-model <b>engine</b> and calls <code class="inl">engine.generate(request)</code> — that single call <i>is</i> the whole pipeline.</span>
+<span class="ko">Axum 라우트 <code class="inl">/v1/chat/completions</code>가 <code class="inl">handler_chat_completions</code>로 들어오고 <code class="inl">chat_completions</code>를 spawn합니다. 검증 후 모델별 <b>engine</b>을 가져와 <code class="inl">engine.generate(request)</code>를 호출 — 이 한 번의 호출이 곧 파이프라인 전체입니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/http/service/openai.rs : chat_completions</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/http/service/openai.rs#L1528" target="_blank">L1528</a></figcaption>
+<pre><code><span class="t-kw">let</span> (engine, parsing_options) = state
+    .<span class="t-fn">manager</span>()
+    .<span class="t-fn">get_chat_completions_engine_with_parsing</span>(&amp;model)?;
+<span class="t-com">// ...</span>
+<span class="t-com">// issue the generate call on the engine — runs the full pipeline</span>
+<span class="t-kw">let</span> stream = engine.<span class="t-fn">generate</span>(request).<span class="t-kw">await</span>?;</code></pre>
+</figure>
+
+<h3 class="step"><span class="num">2</span><span class="en">Pipeline assembly + tokenize</span><span class="ko">파이프라인 조립 + 토크나이즈</span> <span class="node-f">Frontend</span></h3>
+<p><span class="en">That <code class="inl">engine</code> is a chain of operators built once at startup: <b>frontend → preprocessor → backend → routed engine</b>, with the response edges linked in reverse. The preprocessor is where text becomes tokens (and tokens become text on the way back).</span>
+<span class="ko">그 <code class="inl">engine</code>은 기동 시 한 번 조립되는 오퍼레이터 체인입니다: <b>frontend → preprocessor → backend → routed engine</b>, 응답 엣지는 역순으로 연결됩니다. 텍스트가 토큰이 되는(그리고 돌아올 때 토큰이 텍스트가 되는) 지점이 preprocessor입니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/entrypoint/input/common.rs</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/entrypoint/input/common.rs#L312" target="_blank">L312</a></figcaption>
+<pre><code>Ok(frontend
+    .<span class="t-fn">link</span>(preprocessor.<span class="t-fn">forward_edge</span>())?   <span class="t-com">// chat template + tokenize</span>
+    .<span class="t-fn">link</span>(backend.<span class="t-fn">forward_edge</span>())?        <span class="t-com">// (detokenize on the way back)</span>
+    .<span class="t-fn">link</span>(engine)?                        <span class="t-com">// router → worker</span>
+    .<span class="t-fn">link</span>(backend.<span class="t-fn">backward_edge</span>())?
+    .<span class="t-fn">link</span>(preprocessor.<span class="t-fn">backward_edge</span>())?
+    .<span class="t-fn">link</span>(frontend)?)</code></pre>
+</figure>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/preprocessor.rs : preprocess_request</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/preprocessor.rs#L636" target="_blank">L636</a></figcaption>
+<pre><code><span class="t-kw">let</span> formatted_prompt = {
+    <span class="t-kw">let</span> _nvtx = <span class="t-fn">dynamo_nvtx_range!</span>(<span class="t-str">"preprocess.template"</span>);
+    self.<span class="t-fn">apply_template</span>(request)?          <span class="t-com">// Jinja chat template render</span>
+};
+<span class="t-kw">let</span> (token_ids, annotations) = {
+    <span class="t-kw">let</span> _nvtx = <span class="t-fn">dynamo_nvtx_range!</span>(<span class="t-str">"preprocess.tokenize"</span>);
+    self.<span class="t-fn">gather_tokens</span>(request, formatted_prompt.as_deref(), tracker)?  <span class="t-com">// text → token_ids</span>
+};
+builder.<span class="t-fn">token_ids</span>(token_ids);               <span class="t-com">// install on PreprocessedRequest</span></code></pre>
+</figure>
+<p><span class="en">Inside <code class="inl">gather_tokens</code> the literal encode call is <code class="inl">self.encode_with_timing(prompt, tracker)</code> → <code class="inl">tokenizer.encode(s)</code>. From here the request carries <code class="inl">token_ids</code> only.</span>
+<span class="ko"><code class="inl">gather_tokens</code> 내부의 실제 encode 호출은 <code class="inl">self.encode_with_timing(prompt, tracker)</code> → <code class="inl">tokenizer.encode(s)</code>입니다. 이후 요청은 <code class="inl">token_ids</code>만 들고 다닙니다.</span></p>
+
+<h3 class="step"><span class="num">3</span><span class="en">KV-aware routing — pick the best worker</span><span class="ko">KV 인지 라우팅 — 최적 워커 선택</span> <span class="node-f">Frontend</span></h3>
+<p><span class="en">In <code class="inl">--router-mode kv</code> the engine is a <code class="inl">KvPushRouter</code>. For each candidate worker it computes a <b>logit = prefill_cost + decode_cost</b>, where prefill cost is the remaining prefill blocks <i>after subtracting KV-cache overlap</i> (device/host/disk). Lower is better → fewer redundant tokens to prefill.</span>
+<span class="ko"><code class="inl">--router-mode kv</code>에서 engine은 <code class="inl">KvPushRouter</code>입니다. 후보 워커마다 <b>logit = prefill_cost + decode_cost</b>를 계산하는데, prefill 비용은 <i>KV 캐시 오버랩(device/host/disk)을 뺀 뒤</i> 남은 prefill 블록 수입니다. 낮을수록 좋음 → 다시 prefill할 토큰이 적다는 뜻.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/scheduling/selector.rs : worker_logit</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/scheduling/selector.rs#L109" target="_blank">L109</a></figcaption>
+<pre><code><span class="t-kw">let</span> overlap_credit_blocks = weights.overlap_score_credit * device_overlap_blocks
+    + self.kv_router_config.host_cache_hit_weight * host_overlap_blocks
+    + self.kv_router_config.disk_cache_hit_weight * disk_overlap_blocks
+    + shared_overlap_blocks;
+<span class="t-kw">let</span> adjusted_prefill_blocks = (raw_prefill_blocks - overlap_credit_blocks).<span class="t-fn">max</span>(<span class="t-num">0.0</span>);
+<span class="t-kw">let</span> prefill_cost_blocks = weights.prefill_load_scale * adjusted_prefill_blocks;
+<span class="t-kw">let</span> decode_cost_blocks = request.decode_blocks.<span class="t-fn">get</span>(&amp;worker).<span class="t-fn">copied</span>().<span class="t-fn">unwrap_or</span>(<span class="t-num">0</span>) <span class="t-kw">as</span> f64;
+<span class="t-kw">let</span> logit = prefill_cost_blocks + decode_cost_blocks;   <span class="t-com">// ← lower = better</span></code></pre>
+</figure>
+<figure class="code">
+  <figcaption><span class="file">lib/kv-router/src/scheduling/selector.rs : select_worker</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/scheduling/selector.rs#L301" target="_blank">L301</a></figcaption>
+<pre><code><span class="t-kw">let</span> (best_worker, best_logit) = <span class="t-kw">if</span> temperature == <span class="t-num">0.0</span> {
+    <span class="t-com">// argmin over eligible workers (reservoir sampling for ties)</span>
+    eligibility.<span class="t-fn">for_each_eligible_worker_rank</span>(workers, |worker, _| {
+        <span class="t-kw">let</span> score = <span class="t-fn">get_score</span>(worker);
+        <span class="t-kw">if</span> score &lt; best_logit { best_worker = <span class="t-fn">Some</span>(worker); best_logit = score; }
+    });
+    (best_worker.<span class="t-fn">expect</span>(<span class="t-str">"eligible worker"</span>), best_logit)
+} <span class="t-kw">else</span> { <span class="t-fn">softmax_sample</span>(/* … negated logits … */) };</code></pre>
+</figure>
+
+<h3 class="step"><span class="num">4</span><span class="en">Dispatch to the chosen worker</span><span class="ko">선택된 워커로 발송</span> <span class="node-f">Frontend</span> → <span class="node-d">Worker</span></h3>
+<p><span class="en">The router stamps the <code class="inl">dp_rank</code> and calls <code class="inl">self.inner.direct(request, instance_id)</code> to send to that specific worker. The runtime resolves whether that worker is reached over <b>TCP</b> or a <b>NATS</b> subject and performs the send.</span>
+<span class="ko">라우터가 <code class="inl">dp_rank</code>를 찍고 <code class="inl">self.inner.direct(request, instance_id)</code>로 해당 워커에 보냅니다. 런타임이 그 워커가 <b>TCP</b>인지 <b>NATS</b> subject인지 해석해 실제 전송을 수행합니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/kv_router/push_router.rs</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/kv_router/push_router.rs#L300" target="_blank">L300</a></figcaption>
+<pre><code>backend_input.<span class="t-fn">routing_mut</span>().dp_rank = <span class="t-fn">Some</span>(dp_rank);
+<span class="t-kw">let</span> updated_request = context.<span class="t-fn">map</span>(|_| backend_input);
+guard.<span class="t-fn">record_prefill_start</span>();
+<span class="t-kw">let</span> <span class="t-kw">mut</span> response_stream = self.inner
+    .<span class="t-fn">direct</span>(updated_request, instance_id)   <span class="t-com">// send to the chosen worker</span>
+    .<span class="t-kw">await</span>??;</code></pre>
+</figure>
+
+<h3 class="step"><span class="num">5</span><span class="en">Python vLLM worker generates</span><span class="ko">Python vLLM 워커가 생성</span> <span class="node-d">Worker</span></h3>
+<p><span class="en">The worker bound its <code class="inl">handler.generate</code> to a Dynamo endpoint at startup and registered the model with the Frontend. On each request it forwards <code class="inl">token_ids</code> straight into vLLM's <code class="inl">AsyncLLM.generate</code> and streams the output tokens back.</span>
+<span class="ko">워커는 기동 시 <code class="inl">handler.generate</code>를 Dynamo 엔드포인트에 바인딩하고 모델을 Frontend에 등록해 둡니다. 요청마다 <code class="inl">token_ids</code>를 그대로 vLLM <code class="inl">AsyncLLM.generate</code>에 넘기고 출력 토큰을 스트리밍으로 돌려줍니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">components/src/dynamo/vllm/main.py : register</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/components/src/dynamo/vllm/main.py#L750" target="_blank">L750</a></figcaption>
+<pre><code><span class="t-kw">await</span> <span class="t-fn">register_model</span>(
+    model_input, model_type,
+    generate_endpoint,            <span class="t-com"># handler.generate is served here</span>
+    config.model, config.served_model_name,
+    context_length=vllm_config.model_config.max_model_len,
+    kv_cache_block_size=runtime_values[<span class="t-str">"kv_event_block_size"</span>],
+)</code></pre>
+</figure>
+<figure class="code">
+  <figcaption><span class="file">components/src/dynamo/vllm/handlers.py : generate_tokens</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/components/src/dynamo/vllm/handlers.py#L2419" target="_blank">L2419</a></figcaption>
+<pre><code>gen = self.engine_client.<span class="t-fn">generate</span>(      <span class="t-com"># vLLM AsyncLLM</span>
+    prompt, sampling_params, request_id,
+    lora_request=lora_request,
+    data_parallel_rank=data_parallel_rank,
+    trace_headers=trace_headers, priority=priority,
+)
+<span class="t-kw">async for</span> res <span class="t-kw">in</span> gen:                    <span class="t-com"># res = vLLM RequestOutput</span>
+    ...                                  <span class="t-com"># token_ids extracted &amp; yielded back to Dynamo</span></code></pre>
+</figure>
+
+<div class="callout warn">
+  <span class="en"><b>If disaggregated (disagg.sh):</b> the Rust <code class="inl">PrefillRouter</code> operator sits in the pipeline before decode. If prefill workers are active, it clones the request, caps it at <code class="inl">max_tokens=1</code>, routes it to a prefill worker, and pulls out <code class="inl">disaggregated_params</code> — the handle the decode worker uses to receive the KV blocks via NIXL. The Python decode worker just consumes those params.</span>
+  <span class="ko"><b>분리 서빙(disagg.sh)이면:</b> Rust <code class="inl">PrefillRouter</code> 오퍼레이터가 decode 앞에 들어갑니다. prefill 워커가 활성이면 요청을 복제해 <code class="inl">max_tokens=1</code>로 자르고 prefill 워커로 보낸 뒤 <code class="inl">disaggregated_params</code>(decode가 NIXL로 KV 블록을 받을 때 쓰는 핸들)를 꺼냅니다. Python decode 워커는 그 params를 받아 쓰기만 합니다.</span>
+</div>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/kv_router/prefill_router/mod.rs</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/kv_router/prefill_router/mod.rs#L82" target="_blank">L82</a></figcaption>
+<pre><code><span class="t-com">// aggregated fallback if no prefill workers</span>
+<span class="t-kw">if</span> self.prefill_router.<span class="t-fn">get</span>().<span class="t-fn">is_none</span>() || self.deactivated.<span class="t-fn">load</span>(Ordering::Relaxed) {
+    <span class="t-kw">return</span> next.<span class="t-fn">generate</span>(context.<span class="t-fn">map</span>(|_| req)).<span class="t-kw">await</span>;
+}
+<span class="t-kw">let</span> prefill_phase_barrier = tracker.<span class="t-fn">set_phase</span>(RequestPhase::Prefill).<span class="t-kw">await</span>;
+<span class="t-kw">let</span> <span class="t-kw">mut</span> prefill_req = req.<span class="t-fn">clone</span>();
+prefill_req.stop_conditions.max_tokens = <span class="t-fn">Some</span>(<span class="t-num">1</span>);   <span class="t-com">// prefill-only</span></code></pre>
+</figure>
+
+<h3 class="step"><span class="num">6</span><span class="en">Detokenize + stream back as SSE</span><span class="ko">디토크나이즈 + SSE로 스트리밍</span> <span class="node-d">Worker</span> → <span class="node-f">Frontend</span> → Client</h3>
+<p><span class="en">Returned <code class="inl">token_ids</code> flow back through the <code class="inl">backend.backward_edge</code>, where a streaming <code class="inl">Decoder</code> turns them into text; the preprocessor's backward edge wraps them as OpenAI chat deltas; <code class="inl">openai.rs</code> serializes each delta as an SSE event.</span>
+<span class="ko">돌아온 <code class="inl">token_ids</code>는 <code class="inl">backend.backward_edge</code>를 거치며 스트리밍 <code class="inl">Decoder</code>가 텍스트로 바꾸고, preprocessor 역방향 엣지가 OpenAI 챗 델타로 감싸며, <code class="inl">openai.rs</code>가 각 델타를 SSE 이벤트로 직렬화합니다.</span></p>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/backend.rs : Backend::generate</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/backend.rs#L234" target="_blank">L234</a></figcaption>
+<pre><code><span class="t-com">// per-choice streaming detokenize</span>
+<span class="t-kw">let</span> result = <span class="t-kw">match</span> decoder.<span class="t-fn">process_token_ids</span>(&amp;data.token_ids) {
+    <span class="t-fn">Ok</span>(result) =&gt; result,
+    <span class="t-fn">Err</span>(e) =&gt; { ... }
+};</code></pre>
+</figure>
+<figure class="code">
+  <figcaption><span class="file">lib/llm/src/http/service/openai.rs : SSE out</span><a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/http/service/openai.rs#L685" target="_blank">L685</a></figcaption>
+<pre><code><span class="t-kw">let</span> <span class="t-kw">mut</span> sse_stream = Sse::<span class="t-fn">new</span>(stream);
+<span class="t-kw">if let</span> <span class="t-fn">Some</span>(keep_alive) = state.<span class="t-fn">sse_keep_alive</span>() {
+    sse_stream = sse_stream.<span class="t-fn">keep_alive</span>(KeepAlive::<span class="t-fn">default</span>().<span class="t-fn">interval</span>(keep_alive));
+}
+Ok(sse_stream.<span class="t-fn">into_response</span>())          <span class="t-com">// → client</span></code></pre>
+</figure>
+
+<div class="callout good">
+  <span class="en"><b>The whole loop in one breath:</b> client → <span class="node-f">Frontend</span> tokenizes → router picks the worker with the most KV overlap → <span class="node-d">decode worker</span> generates (optionally pulling KV from a <span class="node-p">prefill worker</span> via NIXL) → tokens stream back → Frontend detokenizes → SSE to client. The GPU engine only ever sees token IDs.</span>
+  <span class="ko"><b>한 호흡으로 본 전체 루프:</b> client → <span class="node-f">Frontend</span> 토크나이즈 → 라우터가 KV 오버랩이 가장 큰 워커 선택 → <span class="node-d">decode 워커</span>가 생성(필요 시 <span class="node-p">prefill 워커</span>에서 NIXL로 KV 당겨옴) → 토큰 스트리밍 → Frontend 디토크나이즈 → 클라이언트로 SSE. GPU 엔진은 토큰 ID만 봅니다.</span>
+</div>
+
+<!-- ===================== 5. PROS / CONS ===================== -->
+<h2 class="sec" id="proscons">5 · <span class="en">Dynamo vs plain Docker vLLM</span><span class="ko">그냥 Docker로 띄운 vLLM 대비</span></h2>
+
+<p class="lede">
+  <span class="en">The honest comparison. Baseline = <code class="inl">docker run vllm/vllm-openai --model …</code> (one container, OpenAI server) ×N behind some load balancer.</span>
+  <span class="ko">솔직한 비교. 기준점 = <code class="inl">docker run vllm/vllm-openai --model …</code> (컨테이너 1개, OpenAI 서버)를 로드밸런서 뒤에 N개 둔 구성.</span>
+</p>
+
+<div class="grid2">
+  <div>
+    <h3 class="step" style="margin-top:8px"><span class="en">Where Dynamo wins</span><span class="ko">Dynamo가 이기는 곳</span></h3>
+    <ul class="diff">
+      <li><span class="en"><b>KV-aware routing.</b> A plain <b>LB (load balancer)</b> is cache-blind — round-robin re-prefills the same prompt on whichever GPU it lands. Dynamo routes to the GPU that already holds the prefix. Big win for multi-turn chat, shared system prompts, <b>RAG (retrieval-augmented generation)</b>. (~2× TTFT.)</span><span class="ko"><b>KV 인지 라우팅.</b> 일반 <b>LB(load balancer, 로드밸런서)</b>는 캐시를 못 봐서, 라운드로빈으로 같은 프롬프트를 닿는 GPU마다 다시 prefill합니다. Dynamo는 prefix를 이미 가진 GPU로 보냅니다. 멀티턴·공유 시스템 프롬프트·<b>RAG(retrieval-augmented generation, 검색 증강 생성)</b>에서 큰 이득. (TTFT 약 2배.)</span></li>
+      <li><span class="en"><b>Disaggregated prefill/decode.</b> Plain vLLM couples both phases on one GPU; a long prefill stalls others' decoding. Dynamo splits them into independently-scaled pools with NIXL KV transfer.</span><span class="ko"><b>prefill/decode 분리.</b> 일반 vLLM은 두 단계가 한 GPU에 묶여, 긴 prefill이 남의 decode를 막습니다. Dynamo는 NIXL KV 전송으로 둘을 독립 스케일 풀로 분리합니다.</span></li>
+      <li><span class="en"><b>Multi-tier KV (KVBM).</b> Offload KV to CPU/SSD/remote, so effective context isn't capped by VRAM — impossible with a lone container.</span><span class="ko"><b>다계층 KV (KVBM).</b> KV를 CPU/SSD/원격으로 오프로드해 유효 컨텍스트가 VRAM에 갇히지 않습니다 — 단일 컨테이너로는 불가능.</span></li>
+      <li><span class="en"><b><b>SLA (service-level agreement)</b> planner + fast cold-start.</b> Autoscales pools to hit TTFT/ITL at min TCO; ModelExpress streams weights (~7× faster replica startup).</span><span class="ko"><b><b>SLA(service-level agreement, 서비스 수준 협약)</b> 플래너 + 빠른 콜드스타트.</b> TTFT/ITL을 최소 TCO로 맞춰 자동 스케일; ModelExpress 가중치 스트리밍(복제본 기동 약 7배).</span></li>
+      <li><span class="en"><b>One OpenAI endpoint, many heterogeneous workers</b> — and in-flight request migration when a worker dies.</span><span class="ko"><b>OpenAI 엔드포인트 1개로 이종 워커 다수</b> — 워커 사망 시 진행 중 요청 마이그레이션까지.</span></li>
+    </ul>
+  </div>
+  <div>
+    <h3 class="step" style="margin-top:8px"><span class="en">Where plain vLLM wins</span><span class="ko">그냥 vLLM이 나은 곳</span></h3>
+    <ul class="diff con">
+      <li><span class="en"><b>Simplicity.</b> One <code class="inl">docker run</code> vs Frontend + Router + N workers (+ optional etcd/NATS, +K8s for production). More moving parts, more to debug.</span><span class="ko"><b>단순함.</b> <code class="inl">docker run</code> 하나 vs Frontend+Router+워커 N개(+선택적 etcd/NATS, +프로덕션이면 K8s). 조각이 많고 디버깅 거리도 늘어납니다.</span></li>
+      <li><span class="en"><b>Single GPU / single node.</b> With no second worker there's nothing to route or disaggregate — Dynamo adds a hop and overhead for zero benefit. NVIDIA says so themselves.</span><span class="ko"><b>단일 GPU·단일 노드.</b> 두 번째 워커가 없으면 라우팅·분리할 게 없어, Dynamo는 홉과 오버헤드만 더합니다. NVIDIA도 같은 말을 합니다.</span></li>
+      <li><span class="en"><b>Operational maturity.</b> Plain vLLM containers are battle-tested and trivially portable; Dynamo is younger and its richest features assume NVIDIA GPUs + NIXL.</span><span class="ko"><b>운영 성숙도.</b> 일반 vLLM 컨테이너는 검증됐고 이식이 쉽습니다; Dynamo는 더 젊고, 풍부한 기능 상당수가 NVIDIA GPU + NIXL을 전제합니다.</span></li>
+      <li><span class="en"><b>Latency floor for tiny loads.</b> At low <b>QPS (queries per second)</b> the extra front/route hop is pure added latency you don't recoup.</span><span class="ko"><b>저부하 지연 하한.</b> <b>QPS(queries per second, 초당 요청)</b>가 낮으면 앞단·라우팅 홉이 회수되지 않는 순수 추가 지연이 됩니다.</span></li>
+    </ul>
+  </div>
+</div>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Scenario</span><span class="ko">상황</span></th>
+    <th><span class="en">Use…</span><span class="ko">선택…</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><span class="en">1 model, 1 GPU, low traffic</span><span class="ko">모델 1·GPU 1·저트래픽</span></td><td><span class="en"><b>Plain Docker vLLM.</b> Dynamo is overhead.</span><span class="ko"><b>그냥 Docker vLLM.</b> Dynamo는 오버헤드.</span></td></tr>
+    <tr><td><span class="en">Many GPUs/nodes, shared prompts, RAG/chat</span><span class="ko">다수 GPU·노드, 공유 프롬프트, RAG·챗</span></td><td><span class="en"><b>Dynamo.</b> KV-aware routing pays off fast.</span><span class="ko"><b>Dynamo.</b> KV 인지 라우팅이 금방 본전.</span></td></tr>
+    <tr><td><span class="en">Long context beyond VRAM</span><span class="ko">VRAM 초과 롱컨텍스트</span></td><td><span class="en"><b>Dynamo</b> (KVBM offload).</span><span class="ko"><b>Dynamo</b> (KVBM 오프로드).</span></td></tr>
+    <tr><td><span class="en">Strict TTFT/ITL SLA at min cost</span><span class="ko">엄격한 TTFT/ITL SLA·최소 비용</span></td><td><span class="en"><b>Dynamo</b> (Planner autoscaling).</span><span class="ko"><b>Dynamo</b> (Planner 오토스케일).</span></td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="en"><b>Bottom line.</b> Dynamo isn't a faster vLLM — it's the <i>coordination layer</i> that makes a fleet of vLLMs behave like one efficient system. Below ~2 GPUs it's the wrong tool. Above that, the cache-aware routing and P/D disaggregation are hard to replicate with a dumb load balancer.</span>
+  <span class="ko"><b>결론.</b> Dynamo는 더 빠른 vLLM이 아니라, vLLM 여러 대를 하나의 효율적 시스템처럼 동작시키는 <i>조율 레이어</i>입니다. GPU 2개 미만이면 잘못된 도구입니다. 그 이상에서는 캐시 인지 라우팅과 P/D 분리를 멍청한 로드밸런서로 재현하기 어렵습니다.</span>
+</div>
+
+<!-- ===================== SOURCES ===================== -->
+<h2 class="sec" id="sources">6 · <span class="en">Sources</span><span class="ko">출처</span></h2>
+<div class="sources">
+  <p style="margin-top:0;color:var(--muted);font-size:13.5px"><span class="en">All code links pinned to commit <code class="inl">bae0051</code>.</span><span class="ko">모든 코드 링크는 커밋 <code class="inl">bae0051</code>에 고정.</span></p>
+  <a href="https://github.com/ai-dynamo/dynamo" target="_blank">ai-dynamo/dynamo (repo)</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/main/README.md" target="_blank">README.md</a>
+  <a href="https://docs.nvidia.com/dynamo/" target="_blank">docs.nvidia.com/dynamo</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/http/service/openai.rs" target="_blank">openai.rs</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/preprocessor.rs" target="_blank">preprocessor.rs</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/entrypoint/input/common.rs" target="_blank">entrypoint/input/common.rs</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/kv-router/src/scheduling/selector.rs" target="_blank">kv-router/selector.rs</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/kv_router/push_router.rs" target="_blank">push_router.rs</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/kv_router/prefill_router/mod.rs" target="_blank">prefill_router/mod.rs</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/lib/llm/src/backend.rs" target="_blank">backend.rs</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/components/src/dynamo/vllm/handlers.py" target="_blank">vllm/handlers.py</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/bae0051/components/src/dynamo/vllm/main.py" target="_blank">vllm/main.py</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/main/examples/backends/vllm/launch/agg_router.sh" target="_blank">launch/agg_router.sh</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/main/examples/backends/vllm/launch/disagg.sh" target="_blank">launch/disagg.sh</a>
+  <a href="https://github.com/ai-dynamo/dynamo/blob/main/docs/backends/vllm/README.md" target="_blank">docs/backends/vllm</a>
+</div>
+
+<footer>
+  <span class="en">Traced from <code>ai-dynamo/dynamo</code> @ <code>bae0051</code> · part of the AI Inference Study notes.</span>
+  <span class="ko"><code>ai-dynamo/dynamo</code> @ <code>bae0051</code> 기준으로 추적 · AI Inference Study 노트의 일부.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
