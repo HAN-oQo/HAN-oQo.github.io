@@ -1,6 +1,6 @@
 # han-oqo.github.io
 
-Personal site of Hankyu Jang. Source for [https://han-oqo.github.io/](https://han-oqo.github.io/).
+AI Inference Study — notes on LLM inference internals. Source for [https://han-oqo.github.io/](https://han-oqo.github.io/).
 
 ## Structure
 
