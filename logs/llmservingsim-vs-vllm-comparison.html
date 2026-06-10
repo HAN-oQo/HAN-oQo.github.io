@@ -52,7 +52,7 @@
 <h1>LLMServingSim 예측 vs 실 vLLM — 정확도 비교</h1>
 <p class="sub">작성 시작: 2026-06-10 · 상태: <span class="status-wip">진행 중 (vLLM 측 측정 대기)</span> · 목표: 같은 워크로드(JSONL)를 (1) LLMServingSim으로 예측, (2) 실 GPU에 띄운 vLLM으로 측정 후 메트릭별 발산 정량화</p>
 
-<div class="wip-banner">⚙ 진행중 문서 — vLLM 측정은 GPU 확보 시 추가. 현재 LLMServingSim baseline + replay client + 비교 스크립트까지 작성됨.</div>
+<div class="wip-banner">⚙ 진행중 — Sim 측 baseline (300 req Llama-3.1-8B / RTXPRO6000 / TP=1) <strong>완료</strong>. Replay client + diff script도 준비 완료. 다음: 실 vLLM 측정 (GPU 확보 시).</div>
 
 <div class="card toc">
 <strong>목차</strong>
@@ -153,18 +153,28 @@
 "</code></pre>
 
 <h3>3-3. 결과 (실측, GPU 0대)</h3>
-<p>완료되면 <code>outputs/llama8b_baseline_300.csv</code> 가 떨어짐 (12 컬럼: instance_id, request_id, model, input, output, arrival, end_time, latency, queuing_delay, TTFT, TPOT, ITL). 본 문서 작성 시점 실측값:</p>
+<p>2026-06-10 21:00 KST 실행 완료. 호스트 walltime <strong>11분 28초</strong>. 시뮬레이션 내부 시간 (sim time) <strong>65.7초</strong>. 산출물: <code>data/llmservingsim-vs-vllm/sim_llama8b_300.csv</code> (이 레포에 커밋됨, 300 rows).</p>
 
 <table>
-<tr><th>메트릭</th><th>예측값 (LLMServingSim)</th></tr>
-<tr><td>전체 처리 시간</td><td><em>(sim 종료 후 채움)</em></td></tr>
-<tr><td>평균 TTFT</td><td><em>(채움)</em></td></tr>
-<tr><td>평균 TPOT</td><td><em>(채움)</em></td></tr>
-<tr><td>p50 latency</td><td><em>(채움)</em></td></tr>
-<tr><td>p95 latency</td><td><em>(채움)</em></td></tr>
-<tr><td>p99 latency</td><td><em>(채움)</em></td></tr>
-<tr><td>전체 throughput (req/s)</td><td><em>(채움)</em></td></tr>
+<tr><th>메트릭</th><th>예측값 (LLMServingSim)</th><th>비고</th></tr>
+<tr><td>전체 sim 시간 (arrival[0] → end[last])</td><td><strong>65.68 s</strong></td><td>300 req 다 처리하는 데 걸리는 시뮬 시간</td></tr>
+<tr><td>호스트 walltime</td><td>11m 28s</td><td>실제 sim 실행 시간 (M1 Mac, Rosetta)</td></tr>
+<tr><td>Request throughput</td><td><strong>4.57 req/s</strong></td><td>도착률(10 sps) &gt; 처리율 → 큐 빌딩업</td></tr>
+<tr><td>Gen-token throughput</td><td>2,980 tok/s</td><td>—</td></tr>
+<tr><td>Mean TTFT</td><td><strong>7,072 ms</strong></td><td>queue 압박으로 평균이 큼</td></tr>
+<tr><td>Median TTFT</td><td>9,105 ms</td><td>분포가 우측으로 치우침</td></tr>
+<tr><td>p95 TTFT</td><td>18,749 ms</td><td>—</td></tr>
+<tr><td>p99 TTFT</td><td>20,234 ms</td><td>—</td></tr>
+<tr><td>Mean TPOT</td><td><strong>32.7 ms</strong></td><td>decode iteration 평균 시간</td></tr>
+<tr><td>p95 / p99 TPOT</td><td>37.6 / 38.2 ms</td><td>분산 작음 (decode 안정적)</td></tr>
+<tr><td>Mean latency (per-req)</td><td>28,307 ms</td><td>= queuing + TTFT + N·TPOT</td></tr>
+<tr><td>p50 / p95 / p99 latency</td><td>29,981 / 37,149 / 37,960 ms</td><td>—</td></tr>
+<tr><td>Mean queuing delay</td><td>6,998 ms</td><td>도착 → 첫 batch 진입까지 — TTFT의 ~99%</td></tr>
 </table>
+
+<div class="note"><strong>워크로드 특성 (참고):</strong> 입력 토큰 mean 857 / median 733 / p95 1785 / max 3998. 생성 토큰 mean 653 / median 633 / max 1021. 도착률 10 sps 가정으로 30s 동안 300 req 도착, 그 후 65s 마지막 처리까지 진행.</div>
+
+<div class="note"><strong>해석:</strong> TTFT 평균 7초 / median 9초 / p99 20초는 <strong>10 sps 도착률이 처리율(4.57 req/s) 보다 2배 큼</strong> 때문에 큐가 쌓여서 그런 것. 실 vLLM도 같은 도착률로 던지면 <strong>큐가 같은 양만큼 쌓일 것</strong>이므로 비교 의미 유지. 만약 sim과 실제의 처리율 자체가 다르면 TTFT가 크게 발산할 것 — 이게 비교의 핵심 포인트.</div>
 
 </div>
 
@@ -278,9 +288,9 @@ python tools/compare_csv.py \
 <tr><th>#</th><th>단계</th><th>상태</th><th>아티팩트</th></tr>
 <tr><td>1</td><td>HTML 스켈레톤 작성</td><td class="status-done">완료</td><td>이 페이지</td></tr>
 <tr><td>2</td><td>워크로드 / cluster config 인벤토리</td><td class="status-done">완료</td><td>Llama-3.1-8B + sharegpt 300req JSONL 채택</td></tr>
-<tr><td>3</td><td>LLMServingSim baseline 시뮬 실행</td><td class="status-wip">실행중</td><td>outputs/llama8b_baseline_300.csv 생성중</td></tr>
-<tr><td>4</td><td>JSONL replay 클라이언트 작성</td><td class="status-wip">진행중</td><td>tools/replay_jsonl.py</td></tr>
-<tr><td>5</td><td>CSV 비교 스크립트 작성</td><td class="status-todo">예정</td><td>tools/compare_csv.py</td></tr>
+<tr><td>3</td><td>LLMServingSim baseline 시뮬 실행</td><td class="status-done">완료</td><td>data/llmservingsim-vs-vllm/sim_llama8b_300.csv (이 레포에 커밋)</td></tr>
+<tr><td>4</td><td>JSONL replay 클라이언트 작성</td><td class="status-done">완료</td><td>tools/replay_jsonl.py</td></tr>
+<tr><td>5</td><td>CSV 비교 스크립트 작성</td><td class="status-done">완료</td><td>tools/compare_csv.py</td></tr>
 <tr><td>6</td><td>GPU 확보 (RTXPRO6000 또는 동등 HW)</td><td class="status-blocked">사용자 입력 필요</td><td>—</td></tr>
 <tr><td>7</td><td>vLLM 서빙 + replay 실행</td><td class="status-todo">GPU 후</td><td>outputs/llama8b_real_300.csv</td></tr>
 <tr><td>8</td><td>비교 결과 + 분석</td><td class="status-todo">vLLM 후</td><td>이 페이지 §결과 섹션</td></tr>
