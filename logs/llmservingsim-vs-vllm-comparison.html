@@ -60,10 +60,11 @@
   <li><a href="#why">왜 이 비교가 의미 있나</a></li>
   <li><a href="#setup">설정 — 모델, 워크로드, HW 가정</a></li>
   <li><a href="#sim">LLMServingSim 측 (baseline, GPU 불필요)</a></li>
+  <li><a href="#optb">Option B — RTXPRO6000이 아닌 GPU로 가는 길 (H100 워크드 예시)</a></li>
   <li><a href="#vllm">실 vLLM 측 (GPU 필요, 진행 중)</a></li>
   <li><a href="#cmp">비교 메트릭 정의</a></li>
   <li><a href="#repro">재현 명령어 모음</a></li>
-  <li><a href="#status">진행 상태표</a></li>
+  <li><a href="#status">진행 상태표 (전체)</a></li>
   <li><a href="#results">결과 (TBD)</a></li>
 </ol>
 </div>
@@ -178,7 +179,134 @@
 
 </div>
 
-<h2 id="vllm">4. 실 vLLM 측 (진행 중)</h2>
+<h2 id="optb">4. Option B — RTXPRO6000이 아닌 GPU로 가는 길</h2>
+<div class="card">
+
+<p>shipped 프로파일이 RTXPRO6000 1종밖에 없는데, 실제로 잡히는 GPU는 보통 H100 또는 A100. 이 경우 <strong>그 GPU용 프로파일을 한 번 새로 만들고</strong>, cluster config의 <code>hardware</code> 라벨을 그 새 라벨로 바꾸면 됨. 한 번만 하면 그 (HW, model) 조합으로는 영원히 무료 sim.</p>
+
+<p>아래는 <strong>H100을 예시</strong>로 한 완전 워크플로. 다른 GPU도 동일한 흐름이며 <code>HARDWARE</code> 라벨과 cluster config의 <code>mem_size</code>/<code>mem_bw</code>만 그 GPU 사양으로 바꾸면 됨.</p>
+
+<h3>4-1. 시간 + 비용 추정</h3>
+<table>
+<tr><th>케이스</th><th>대략 시간</th><th>클라우드 spot 비용</th></tr>
+<tr><td>Llama-3.1-8B × H100 × TP=1 (skew 포함)</td><td><strong>~25–45 분</strong></td><td>~$1.5 (H100 spot ~$2/h)</td></tr>
+<tr><td>Llama-3.1-8B × H100 × TP=1 (<code>SKIP_SKEW=1</code>)</td><td>~10–20 분</td><td>~$0.7</td></tr>
+<tr><td>Llama-3.1-8B × H100 × TP=1,2,4 (full)</td><td>~1.5–2 h (TP=4면 4장 필요)</td><td>~$3-12</td></tr>
+</table>
+<p>본 비교는 TP=1만 필요 (single-GPU vLLM 서빙) → <strong>25-45분 + 약 $1.5</strong>면 충분.</p>
+
+<h3>4-2. 준비된 아티팩트 (이 레포 안에)</h3>
+<p>유저가 GPU 확보하면 바로 쓸 수 있게 아래 두 파일을 미리 만들어둠:</p>
+
+<table>
+<tr><th>파일</th><th>역할</th></tr>
+<tr><td><a href="https://github.com/HAN-oQo/HAN-oQo.github.io/blob/main/tools/run_profile_h100.sh"><code>tools/run_profile_h100.sh</code></a></td><td>vLLM 컨테이너 안에서 실행할 wrapper. <code>profile.sh</code>의 MODEL/HARDWARE/TP_DEGREES 만 H100/Llama-3.1-8B/TP=1로 오버라이드한 후 실행, 결과 smoke-test까지 자동.</td></tr>
+<tr><td><a href="https://github.com/HAN-oQo/HAN-oQo.github.io/blob/main/data/llmservingsim-vs-vllm/cluster_llama8b_h100.json"><code>data/llmservingsim-vs-vllm/cluster_llama8b_h100.json</code></a></td><td>프로파일 끝난 직후 LLMServingSim의 <code>configs/cluster/</code>에 복사할 cluster config. H100 SXM5 80GB 사양 (mem_size=80, mem_bw=3350) 반영.</td></tr>
+</table>
+
+<h3>4-3. Step-by-step (GPU 머신 위에서)</h3>
+
+<h4><span class="step-num">1</span>LLMServingSim 클론 + vLLM 컨테이너 띄우기</h4>
+<pre><code># GPU 머신에서
+cd ~
+git clone --recurse-submodules https://github.com/casys-kaist/LLMServingSim.git
+cd LLMServingSim
+
+export HF_TOKEN=hf_xxxxxxxxxx        # Llama gated, 미리 발급 받아둘 것
+bash scripts/docker-vllm.sh          # → vllm_docker 컨테이너 띄움 (--gpus all 자동)</code></pre>
+
+<h4><span class="step-num">2</span>이 레포의 wrapper 받기</h4>
+<pre><code># 인터넷 되는 GPU 머신이면 한 줄
+curl -sLO https://raw.githubusercontent.com/HAN-oQo/HAN-oQo.github.io/main/tools/run_profile_h100.sh
+chmod +x run_profile_h100.sh
+
+# 컨테이너 안에서 LLMServingSim 루트에 갖다 놓기
+docker cp run_profile_h100.sh vllm_docker:/workspace/
+docker exec vllm_docker chmod +x /workspace/run_profile_h100.sh</code></pre>
+
+<h4><span class="step-num">3</span>프로파일링 실행 (~25-45분, GPU 필요)</h4>
+<pre><code>docker exec -e HF_TOKEN="$HF_TOKEN" vllm_docker bash -c "
+  cd /workspace &&
+  ./run_profile_h100.sh
+"
+# 옵션: skew sweep 건너뛰어 ~10-20분으로 단축 (정확도 약간 저하)
+#   ./run_profile_h100.sh SKIP_SKEW=1
+</code></pre>
+
+<p>스크립트 내부 동작:</p>
+<ol>
+  <li><code>profile.sh</code>를 sed로 한 줄씩 오버라이드 (MODEL/HARDWARE/TP_DEGREES)</li>
+  <li>vLLM 엔진 띄워서 4종 grid sweep (dense / per_sequence / attention / moe), 그리고 skew sweep</li>
+  <li>완료 후 <code>profiler/perf/H100/meta-llama/Llama-3.1-8B/bf16/tp1/</code>에 5개 CSV + 상위 폴더에 <code>meta.yaml</code></li>
+  <li>스모크 테스트: 각 CSV 존재 + 행 수 출력, meta.yaml 의 GPU/vLLM/CUDA 버전 출력</li>
+</ol>
+
+<h4><span class="step-num">4</span>Cluster config 갖다 놓기</h4>
+<pre><code># GPU 머신에서 (sim 머신과 같으면 생략)
+curl -sLO https://raw.githubusercontent.com/HAN-oQo/HAN-oQo.github.io/main/data/llmservingsim-vs-vllm/cluster_llama8b_h100.json
+docker cp cluster_llama8b_h100.json servingsim_docker:/app/LLMServingSim/configs/cluster/</code></pre>
+
+<h4><span class="step-num">5</span>프로파일 sim 컨테이너로 옮기기</h4>
+<pre><code># GPU 머신 = sim 머신이면 (둘 다 vllm_docker + servingsim_docker가 같은 호스트)
+# sim 컨테이너에 perf 폴더 마운트:
+docker cp vllm_docker:/workspace/profiler/perf/H100 \
+          servingsim_docker:/app/LLMServingSim/profiler/perf/
+
+# GPU 머신 ≠ sim 머신이면:
+docker cp vllm_docker:/workspace/profiler/perf/H100 ./perf-h100/
+tar czf perf-h100.tar.gz perf-h100/
+scp perf-h100.tar.gz user@sim-host:~/
+# sim host:
+tar xzf perf-h100.tar.gz
+docker cp perf-h100/H100 servingsim_docker:/app/LLMServingSim/profiler/perf/</code></pre>
+
+<h4><span class="step-num">6</span>새 HW로 baseline 재실행 (이제부턴 GPU 없이)</h4>
+<pre><code>docker exec servingsim_docker bash -c "
+  cd /app/LLMServingSim &&
+  python -m serving \
+    --cluster-config configs/cluster/cluster_llama8b_h100.json \
+    --dtype bfloat16 --block-size 16 \
+    --dataset workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl \
+    --output outputs/sim_llama8b_h100.csv \
+    --log-interval 1.0
+"
+# ~11분 walltime 후 outputs/sim_llama8b_h100.csv 떨어짐</code></pre>
+
+<h3>4-4. 결과 비교 (RTXPRO6000 → H100 예측 변화)</h3>
+<p>같은 워크로드를 두 HW에 대해 sim 비교 가능 — H100이 빠를 거라 예상:</p>
+<ul>
+  <li>H100 SXM5는 3350 GB/s, RTX PRO 6000은 1597 GB/s — 메모리 대역폭 약 2.1× → decode TPOT이 약 절반 (~16-17ms 예상)</li>
+  <li>FLOPS도 더 큼 → prefill 처리율 향상 → TTFT 분포 좌측 이동</li>
+  <li>Throughput 4.57 req/s → 약 8-9 req/s 예상 (10 sps 도착률을 거의 따라잡음)</li>
+</ul>
+<p>실제로 그렇게 나오는지가 부차 검증 포인트. 그 후에 실 vLLM 측 (§5) 비교가 본진.</p>
+
+<h3>4-5. 다른 GPU로 가려면 (A100, RTX 4090 등)</h3>
+<table>
+<tr><th>GPU</th><th><code>HARDWARE</code> 라벨</th><th>cluster config 조정</th></tr>
+<tr><td>H100 SXM5 80GB</td><td><code>"H100"</code></td><td><code>mem_size: 80, mem_bw: 3350</code> (위 그대로)</td></tr>
+<tr><td>H100 PCIe 80GB</td><td><code>"H100_PCIE"</code></td><td><code>mem_size: 80, mem_bw: 2039</code></td></tr>
+<tr><td>A100 SXM4 80GB</td><td><code>"A100"</code></td><td><code>mem_size: 80, mem_bw: 2039</code></td></tr>
+<tr><td>A100 PCIe 40GB</td><td><code>"A100_40G"</code></td><td><code>mem_size: 40, mem_bw: 1555</code></td></tr>
+<tr><td>RTX 4090 24GB</td><td><code>"RTX4090"</code></td><td><code>mem_size: 24, mem_bw: 1008</code> · max-model-len ↓</td></tr>
+<tr><td>L40S 48GB</td><td><code>"L40S"</code></td><td><code>mem_size: 48, mem_bw: 864</code></td></tr>
+</table>
+<p>wrapper의 <code>HARDWARE="H100"</code> 한 줄, cluster config의 <code>hardware</code>+<code>npu_mem</code> 두 곳만 그 GPU에 맞게 바꾸면 그대로 작동.</p>
+
+<div class="note"><strong>주의:</strong> <code>HARDWARE</code> 라벨이 그 후 cluster config의 <code>hardware</code> 필드와 <strong>정확히 일치</strong>해야 함. 시뮬레이터가 <code>profiler/perf/&lt;라벨&gt;/...</code> 폴더를 그 문자열로 찾기 때문.</div>
+
+<h3>4-6. 진행 상황</h3>
+<table>
+<tr><th>아티팩트</th><th>위치</th><th>상태</th></tr>
+<tr><td>Wrapper script</td><td><code>tools/run_profile_h100.sh</code></td><td class="status-done">준비 완료</td></tr>
+<tr><td>Cluster config</td><td><code>data/llmservingsim-vs-vllm/cluster_llama8b_h100.json</code></td><td class="status-done">준비 완료</td></tr>
+<tr><td>Step-by-step 명령어</td><td>이 페이지 §4-3</td><td class="status-done">준비 완료</td></tr>
+<tr><td>Profile 실제 실행 (GPU 위에서)</td><td>—</td><td class="status-blocked">GPU 확보 필요</td></tr>
+<tr><td>H100 baseline sim 결과</td><td><code>data/.../sim_llama8b_h100.csv</code> (예정)</td><td class="status-todo">프로파일 후</td></tr>
+</table>
+</div>
+
+<h2 id="vllm">5. 실 vLLM 측 (진행 중)</h2>
 <div class="card">
 
 <h3>4-1. JSONL replay 클라이언트</h3>
@@ -221,7 +349,7 @@ docker run --gpus all --rm -p 8000:8000 \
 </table>
 </div>
 
-<h2 id="cmp">5. 비교 메트릭 정의</h2>
+<h2 id="cmp">6. 비교 메트릭 정의</h2>
 <div class="card">
 <p>두 CSV가 같은 스키마이므로 request_id로 1:1 매칭 후 메트릭별 비교:</p>
 
@@ -238,7 +366,7 @@ docker run --gpus all --rm -p 8000:8000 \
 <p>비교 스크립트 (<code>tools/compare_csv.py</code>) 가 위 표 자동 출력 + matplotlib으로 scatter plot 2개 (TTFT sim vs real, TPOT sim vs real) 생성. <em>다음 푸시에 포함 예정.</em></p>
 </div>
 
-<h2 id="repro">6. 재현 명령어 모음</h2>
+<h2 id="repro">7. 재현 명령어 모음</h2>
 <div class="card">
 <pre><code># --- LLMServingSim 측 (GPU 없음) ---
 git clone --recurse-submodules https://github.com/casys-kaist/LLMServingSim.git
@@ -282,7 +410,7 @@ python tools/compare_csv.py \
   --out comparison-report.html</code></pre>
 </div>
 
-<h2 id="status">7. 진행 상태표</h2>
+<h2 id="status">8. 진행 상태표</h2>
 <div class="card">
 <table>
 <tr><th>#</th><th>단계</th><th>상태</th><th>아티팩트</th></tr>
@@ -297,7 +425,7 @@ python tools/compare_csv.py \
 </table>
 </div>
 
-<h2 id="results">8. 결과</h2>
+<h2 id="results">9. 결과</h2>
 <div class="card">
 <p><em>vLLM 측정 완료 후 작성.</em></p>
 </div>
