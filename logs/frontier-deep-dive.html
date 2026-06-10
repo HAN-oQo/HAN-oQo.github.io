@@ -59,6 +59,9 @@
   <li><a href="#run">실행 시도 — install + smoke run</a></li>
   <li><a href="#cmp">vs LLMServingSim — 직접 비교표</a></li>
   <li><a href="#open">읽어보면 좋은 docs + 결론</a></li>
+  <li><a href="#usage">어떻게 쓸 것인가 — Use case 매핑 + 운영 가이드 (보충)</a></li>
+  <li><a href="#newmodel">최신 모델 어떻게 적용할 것인가 (보충)</a></li>
+  <li><a href="#limits">한계 + 우회 (보충)</a></li>
 </ol>
 </div>
 
@@ -743,8 +746,225 @@ utils.py</code></pre>
 <p>Frontier 는 LLMServingSim 보다 <strong>훨씬 큰 코드베이스이고 (3x), modern runtime 모델링이 풍부하고 (CUDA graph / spec dec / MoE imbalance / 8 quant level), scheduler variant 가 많고 (9+ vs 1), 그 대가로 학습 곡선이 가파름</strong>. 현재 release 가 co-location only 라는 한계만 빼면 SLA-aware design space exploration 에 더 적합. Disaggregation release 나오면 그쪽도 강력해질 듯.</p>
 </div>
 
+<h2 id="usage">7. 어떻게 쓸 것인가 — Use case 매핑 + 운영 가이드</h2>
+<div class="card">
+<p>논문 (arXiv:2605.21312) 의 4 use case 가 추상적이라 우리 환경 (Moreh 클러스터 또는 비슷한 환경) 에서 구체적으로 어떻게 쓸지 풀어씀.</p>
+
+<h3>7-1. Use case #1 — SLA-Aware Pareto Frontier Search</h3>
+<p><strong>문제</strong>: TTFT &lt; 500ms 와 generation speed &gt; 50 tok/s 를 동시에 만족시키면서 비용 최저인 (architecture, parallelism) config 찾기.</p>
+<p><strong>전통적 방법</strong>: H100 4 vs 8장, TP=2 vs 4 vs 8, batch_size 32 vs 64 ... 모든 조합 실 GPU 클러스터 띄워서 측정. 한 조합당 셋업 30분 + 측정 30분 = 1h. 50 조합 × $20 (H100 spot 1h × 8장) = $1000.</p>
+<p><strong>Frontier 활용</strong>: 같은 50 조합을 sim 으로 돌리면 CPU 만 → 한 조합당 5-10분, 비용 $0. 후보 5개로 좁힌 다음 실 GPU 검증 → 90% 비용 절감.</p>
+<pre><code>for tp in 2 4 8; do
+  for batch_size in 16 32 64; do
+    for replicas in 2 4 8; do
+      run_id="tp${tp}_bs${batch_size}_rep${replicas}"
+      bash examples/architecture/co-location/offline/dense_model_basic.sh \
+        ATTN_TP=$tp NUM_REPLICAS=$replicas MAX_BATCH=$batch_size \
+        -- --metrics_config_run_id $run_id
+    done
+  done
+done
+# 그 다음 outputs/ 폴더의 모든 e2e_latency, throughput CSV 통합해서 Pareto plot</code></pre>
+
+<h3>7-2. Use case #2 — Heterogeneous GPU Allocation (PDD/AFD)</h3>
+<p><strong>현재 release 상태</strong>: 코드에 있지만 release guard 로 차단. Co-location 만 release.</p>
+<p><strong>관심 있는 경우 우회</strong>:</p>
+<ol>
+  <li><code>frontier/main.py:13</code> 의 <code>_DISAGGREGATED_ARCHITECTURES</code> set 에서 <code>"pd-disaggregation"</code> 제거 (코드 fork)</li>
+  <li><code>frontier/simulator.py:42-238</code> 의 <code>DISAGGREGATED_ARCHITECTURE_RELEASE_ERROR</code> raise 부분 주석</li>
+  <li>해당 cluster type (<code>PREFILL</code>, <code>DECODE</code>, <code>DECODE_ATTN</code>, <code>DECODE_FFN</code>) profile data 필요 — 없으면 dummy mode 가능하지만 정확도 약함</li>
+</ol>
+<p><strong>주의</strong>: NetX-lab 가 코드는 두지만 disable 한 건 검증 안 된 채 release 하지 않으려는 의도. 실험적 사용만 권장.</p>
+
+<h3>7-3. Use case #3 — Stateful Reasoning Scheduler Validation</h3>
+<p><strong>현재 release 가능</strong>. Multi-round thinking workloads (o1-style reasoning, agentic loops) 의 scheduler 정책 검증.</p>
+<pre><code>bash examples/architecture/co-location/offline/thinking_mode_basic.sh \
+  -- --simulation_mode online \
+     --request_generator_provider thinking_chain \
+     --hidden_round_count_distribution_type fixed \
+     --hidden_round_count 5 \
+     --thinking_round_requeue_event_enabled true</code></pre>
+<p>설정 후 SJ2Q (FastServe-lite) vs vLLM scheduler 비교:</p>
+<pre><code>SCHEDULER_TYPE=sj2q_fastserve_lite_replica_scheduler bash thinking_mode_basic.sh
+SCHEDULER_TYPE=vllm_v1_engine_replica_scheduler bash thinking_mode_basic.sh
+# outputs/ 의 tail latency p99 비교 → SJ2Q 가 짧은 prompt 우선 → tail ↓ 확인</code></pre>
+
+<h3>7-4. Use case #4 — Dynamic Reconfiguration for RL Rollouts</h3>
+<p><strong>현재 release 부족</strong>. Disaggregated reconfiguration 필요해서 use case #2 와 동일 한계.</p>
+<p>대안: Co-location 안에서 parallelism layout 만 바꿔서 시뮬 — TP=2→4 같은 reconfiguration 시뮬. 다만 RL rollout 의 본질인 "rollout 중간에 layout 바꾸기" 는 미지원.</p>
+</div>
+
+<h2 id="newmodel">8. 최신 모델 어떻게 적용할 것인가</h2>
+<div class="card">
+<p>2025-2026 출시 모델 (Llama 4, Qwen3.5, DeepSeek V3.2, GPT-5, Kimi K2 등) 을 Frontier 로 시뮬레이트 하려면.</p>
+
+<h3>8-1. 적용 가능 여부 결정 트리</h3>
+<div class="diagram">  새 모델 X 를 Frontier 로 시뮬레이트하려면?
+   │
+   ├─ 1. 모델 architecture 가 vLLM 지원하나?
+   │     ├─ Yes → 다음 단계
+   │     └─ No → Frontier 사용 불가 (Frontier 가 vLLM 의존)
+   │
+   ├─ 2. 모델 type 이 dense / MoE 둘 중 하나인가?
+   │     ├─ dense: linear_op + attention profile 필요
+   │     ├─ MoE: + moe profile 필요
+   │     └─ Multimodal (vision/audio): 추가로 encoder 측 — 현재 release 미지원
+   │
+   ├─ 3. profile DB 가 있나? (data/profiling/compute/&lt;HW&gt;/&lt;model&gt;/)
+   │     ├─ Yes → 바로 sim 가능
+   │     └─ No → 다음 단계
+   │
+   └─ 4. profile 새로 만들 수 있나? (GPU 1대 1-3시간)
+         ├─ Yes → 4-1 으로 진행
+         └─ No → dummy mode (정확도 ↓) 또는 사용 불가</div>
+
+<h3>8-2. 모델별 적용 가이드</h3>
+
+<h4>Llama 3.x / Llama 4 — dense (Llama 4 Maverick 은 MoE)</h4>
+<pre><code># 가장 표준적 케이스
+# 1. profile 생성 (Llama-3-8B 기준)
+python -m frontier.profiling.linear_op.main \
+  --model_name meta-llama/Meta-Llama-3-8B \
+  --output_dir data/profiling \
+  --num_gpus 1 --num_tensor_parallel_workers 1,2,4 \
+  --profile_method cuda_event
+
+python -m frontier.profiling.attention.main \
+  --model_name meta-llama/Meta-Llama-3-8B \
+  --output_dir data/profiling \
+  --num_gpus 1 --num_tensor_parallel_workers 1,2,4 \
+  --max_seq_len 8192 \
+  --profile_method cuda_event
+
+# 2. smoke run
+MODEL_NAME=meta-llama/Meta-Llama-3-8B \
+  bash examples/architecture/co-location/offline/dense_model_basic.sh</code></pre>
+
+<h4>Qwen3 / Qwen3.5 — dense 또는 MoE (Qwen3-MoE)</h4>
+<pre><code># Qwen3-MoE 의 경우 (모델 type 이 qwen3_moe)
+# 추가로 MoE profile 필요
+python -m frontier.profiling.moe.main \
+  --model_name Qwen/Qwen3-MoE-A22B \
+  --output_dir data/profiling \
+  --num_gpus 1 --num_tensor_parallel_workers 1,2,4 \
+  --routing_runtime_path standard_fused_topk \
+  --profile_method cuda_event
+
+# Qwen3 의 prefill-hot gating 지원 자동 활성 (모델명에 qwen3_moe 매칭)
+# frontier/moe_gating_runtime.py:34 의 should_enable_prefill_hot_moe_gating_contract() 가
+# model_arch 기준으로 자동 결정 — Qwen3 면 prefill_hot 모드
+
+# smoke run
+MODEL_NAME=Qwen/Qwen3-MoE-A22B \
+  bash examples/architecture/co-location/offline/moe_model_basic.sh</code></pre>
+
+<h4>DeepSeek V3 / V3.2 — large MoE</h4>
+<pre><code># 256 expert (top-8) 대형 MoE — profile sweep 비싸짐
+python -m frontier.profiling.moe.main \
+  --model_name deepseek-ai/DeepSeek-V3.2 \
+  --output_dir data/profiling \
+  --num_gpus 1 --num_tensor_parallel_workers 2,4,8 \
+  --enable_load_imbalance_profiling true \
+  --profile_method cuda_event
+# 8 GPU-hour 정도 (256 expert × topk=8 grid)
+
+# DeepSeek V3 specific: MLA (Multi-head Latent Attention)
+# Frontier 가 표준 attention profile 만 — MLA 별도 측정 필요
+# 회피: standard attention 으로 approx (정확도 5-15% 감소)</code></pre>
+
+<h4>GPT-OSS (Harmony format)</h4>
+<pre><code># Harmony format: reasoning blocks + tool calls 다 함께
+# Frontier 는 codec 책임 X (token 만 다룸) → 시뮬 OK
+# Profile 은 표준 dense path
+
+bash examples/architecture/co-location/offline/gpt_oss_smoke.sh
+# (Frontier 의 thinking_mode_basic 과 비슷한 구조)</code></pre>
+
+<h4>Kimi K2 / Kimi-Linear (long context)</h4>
+<pre><code># Long context (1M+ tokens) 시뮬 — attention profile 의 max_seq_len 늘려야
+python -m frontier.profiling.attention.main \
+  --model_name moonshot/Kimi-K2 \
+  --output_dir data/profiling \
+  --max_seq_len 1048576 \  # 1M tokens
+  --num_gpus 1 --num_tensor_parallel_workers 4,8 \
+  --profile_method cuda_event
+
+# 주의: max_seq_len=1M 이면 attention chunk grid 폭증 → sweep 시간 24h+ 가능
+# 대신 chunk grid factor 늘려서 coarser grid:
+  --attention_chunk_factor 4.0 --attention_kv_factor 4.0
+# 약 6-10h 로 단축</code></pre>
+
+<h3>8-3. Profile DB 없을 때 — dummy mode</h3>
+<pre><code># 모든 op latency 를 고정값 (e.g. 1ms) 으로
+bash examples/architecture/co-location/offline/dense_model_basic.sh \
+  -- --execution_time_predictor_provider dummy \
+     --dummy_execution_time 1.0
+# 절대값 의미 없음. 다만 scheduler 의 batching 정책, queueing 행동
+# 같은 "구조적" 비교는 가능 (vLLM scheduler vs SJ2Q 등)</code></pre>
+
+<h3>8-4. 실측 vs sim 비교 워크플로 (calibration)</h3>
+<ol>
+  <li>Profile sweep 으로 새 모델 + 새 HW profile 생성</li>
+  <li>같은 워크로드 (300-req ShareGPT JSONL 등) 를 실 GPU 클러스터에서 측정 — TTFT/TPOT/throughput CSV</li>
+  <li>Frontier sim 으로 같은 워크로드 — CSV</li>
+  <li>두 CSV 의 request 별 metric 비교, mean error %</li>
+  <li>10% 초과면 calibration scale 조정:
+    <pre><code>--execution_time_predictor_config_attn_prefill_calibration_scale 1.05
+--execution_time_predictor_config_mlp_up_proj_calibration_scale 0.95
+...</code></pre>
+  </li>
+  <li>재실행 → error 줄어들 때까지 반복. 일반적으로 3-4 iteration 이면 5% 이내</li>
+</ol>
+<p>이 워크플로 자동화: <a href="llmservingsim-vs-vllm-comparison.html">LLMServingSim vs vLLM 비교 런북</a>의 <code>tools/replay_jsonl.py</code> + <code>tools/compare_csv.py</code> 가 직접 활용 가능. JSONL replay + CSV diff 같은 framework 사용.</p>
+
+<h3>8-5. 추천 적용 순서 (실용)</h3>
+<ol>
+  <li>먼저 install (Python 3.10+, conda 권장) — 만약 §4 처럼 release partial 이면 NetX-lab 이슈 트래커 확인</li>
+  <li>가장 단순한 dense 모델 (Llama-3-8B) + analytical cc_backend + dummy predictor 로 smoke run 통과</li>
+  <li>해당 모델 profile sweep (1-2 GPU-hour)</li>
+  <li>sklearn predictor 로 전환 → 실 sim 결과 확인</li>
+  <li>실 GPU 측정값과 비교 → calibration</li>
+  <li>모델 추가 (MoE, multimodal 단계적)</li>
+  <li>Scheduler variants 비교 (SJ2Q vs vLLM_v1_engine vs Orca)</li>
+</ol>
+</div>
+
+<h2 id="limits">9. 한계 + 우회</h2>
+<div class="card">
+
+<h3>9-1. 현재 release (pre-release-v0.1) 의 본질적 한계</h3>
+<table>
+<tr><th>한계</th><th>영향</th><th>우회</th></tr>
+<tr><td>Disaggregated (PDD/AFD) release guard</td><td>현재 paper의 use case 4 중 2 개 (Heterogeneous GPU, RL rollout) 실행 불가</td><td>main.py 의 release guard 제거 후 fork — 검증 안 된 path 라 자기 책임</td></tr>
+<tr><td>Config 모듈 일부 누락 (config.py, precision_type.py, etc.)</td><td>smoke run 자체 실패 — 본 문서 §4 finding</td><td>NetX-lab 이슈 또는 다음 release 대기</td></tr>
+<tr><td>vLLM tight coupling (~0.10.x API)</td><td>vLLM 0.5 같은 구버전 사용 클러스터에선 profile 호환 안 됨</td><td>벤더-side 작업 — vLLM 버전 통일</td></tr>
+<tr><td>NVIDIA only</td><td>AMD MI300 / Apple Silicon 시뮬 불가</td><td>현재 우회 X — 패치 필요</td></tr>
+<tr><td>Multimodal encoder (E in E/P/D) profile sweep 부족</td><td>VLM (Llama-4 Maverick 등) 정확도 ↓</td><td>vision encoder 따로 측정 + analytical 추가</td></tr>
+<tr><td>Profile sweep cost (4-5 GPU-hour per model)</td><td>새 모델 등장 빈도 (월 1-2개) 와 비례 비용</td><td>adaptive sampling / incremental profile 추가 — 현재 미구현</td></tr>
+</table>
+
+<h3>9-2. 기능적 약점 (코드 분석 기반)</h3>
+<ol>
+  <li><strong>Acceptance rate 가 trace-based</strong> — speculative decoding 의 실제 quality (draft model accuracy) 변화 모델링 불가</li>
+  <li><strong>Prefix cache eviction</strong> 이 단순 LRU — 의미 분류 / cross-request affinity 미반영</li>
+  <li><strong>MoE expert load imbalance</strong> 가 metadata feature 만 — actual per-expert 측정 안 함</li>
+  <li><strong>Quantization 자체 overhead</strong> (dequant/requant) 미모델 → quantization 처리율 이득 overestimate</li>
+  <li><strong>CUDA Graph capture cost</strong> (100-500μs per shape) 미모델 → 다양한 batch shape 시 latency 변동 underestimate</li>
+  <li><strong>Calibration validation</strong> 자동화 X — operator 가 수동 scale 조정</li>
+</ol>
+
+<h3>9-3. LLMServingSim 과 cross-check 활용</h3>
+<p>두 simulator 가 모두 cost-table 방식이지만 다른 알고리즘:</p>
+<ul>
+  <li>Profile 의 같은 raw measurement 를 양쪽에 입력 → 결과 비교</li>
+  <li>일치 → 결과 신뢰 ↑</li>
+  <li>불일치 → 어느 쪽 모델이 어떤 가정에서 다른지 검증 기회</li>
+</ul>
+<p>아쉽게도 두 시뮬레이터의 profile schema 가 달라서 자동 변환 안 됨. 손으로 raw GPU 측정값을 양쪽 format 으로 변환해야. 1회성 검증 cost ~1-2 일.</p>
+</div>
+
 <footer>
-Frontier (NetX-lab, arXiv:2605.21312) · 코드베이스 딥다이브 · 2026-06-11 작성. 본 문서의 모든 file:line 인용은 commit <a href="https://github.com/NetX-lab/Frontier/tree/88f8afdc0665"><code>88f8afdc0665</code></a> 기준. <br>
+Frontier (NetX-lab, arXiv:2605.21312) · 코드베이스 딥다이브 · 2026-06-11 작성, 6-11 보충 (사용 가이드 / 최신 모델 적용 / 한계 우회). 본 문서의 모든 file:line 인용은 commit <a href="https://github.com/NetX-lab/Frontier/tree/88f8afdc0665"><code>88f8afdc0665</code></a> 기준. <br>
 공개 OSS 콘텐츠 — 비공개 게이팅 없음.
 </footer>
 
