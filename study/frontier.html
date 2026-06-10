@@ -102,6 +102,8 @@
       <span class="en">Architecture analysis — modules &amp; runtime loop in detail</span><span class="ko">아키텍처 분석 — 모듈과 런타임 루프</span></a></li>
     <li><a href="#s6">
       <span class="en">Takeaways</span><span class="ko">정리</span></a></li>
+    <li><a href="#s7">
+      <span class="en">Frontier vs LLMServingSim 2.0 — detailed comparison</span><span class="ko">Frontier vs LLMServingSim 2.0 — 자세한 비교</span></a></li>
   </ol>
 </nav>
 
@@ -752,36 +754,6 @@
   </div>
 
   <h3>
-    <span class="en">Frontier vs LLMServingSim 2.0 — short comparison</span>
-    <span class="ko">Frontier vs LLMServingSim 2.0 — 짧은 비교</span>
-  </h3>
-
-  <table>
-    <tr><th></th><th>Frontier</th><th>LLMServingSim 2.0</th></tr>
-    <tr><td><span class="en">primary niche</span><span class="ko">주된 영역</span></td>
-        <td><span class="en">disaggregation × runtime opts × stateful</span><span class="ko">분리형 × 런타임 최적화 × 상태 보존</span></td>
-        <td><span class="en">heterogeneous HW × disaggregated</span><span class="ko">이종 HW × 분리형</span></td></tr>
-    <tr><td><span class="en">execution model</span><span class="ko">실행 모델</span></td>
-        <td><span class="en">discrete-event, table-lookup costs</span><span class="ko">이산 사건, 테이블 룩업 비용</span></td>
-        <td><span class="en">Python frontend ↔ ASTRA-Sim subprocess (C++)</span><span class="ko">Python 프런트엔드 ↔ ASTRA-Sim (C++)</span></td></tr>
-    <tr><td><span class="en">profile source</span><span class="ko">프로파일 출처</span></td>
-        <td><span class="en">per-op latency tables (interpolated)</span><span class="ko">op별 지연 테이블 (보간)</span></td>
-        <td><span class="en">vLLM-based layerwise profiler (~2.1h/pair)</span><span class="ko">vLLM 기반 레이어 프로파일러 (~2.1h/pair)</span></td></tr>
-    <tr><td><span class="en">PIM / CXL / hetero HW</span><span class="ko">PIM / CXL / 이종 HW</span></td>
-        <td><span class="en">not the focus</span><span class="ko">중점 아님</span></td>
-        <td><span class="en">first-class (with PIM/CXL/TPU case studies)</span><span class="ko">1급 (PIM/CXL/TPU 케이스 스터디)</span></td></tr>
-    <tr><td><span class="en">CUDA Graphs / spec decode</span><span class="ko">CUDA Graphs / spec decode</span></td>
-        <td><span class="en">first-class (Runtime Adapters)</span><span class="ko">1급 (Runtime Adapters)</span></td>
-        <td><span class="en">supported (chunked prefill, prefix cache); spec decode less central</span><span class="ko">지원 (chunked prefill, prefix cache); spec decode 비중 작음</span></td></tr>
-    <tr><td><span class="en">code release</span><span class="ko">코드 공개</span></td>
-        <td><span class="en">not yet</span><span class="ko">미공개</span></td>
-        <td><span class="en">github.com/casys-kaist/LLMServingSim</span><span class="ko">github.com/casys-kaist/LLMServingSim</span></td></tr>
-  </table>
-
-  <p class="en"><b>One-line picker:</b> if your bottleneck is "do I split prefill–decode and turn on speculative for this LLM stack?" → Frontier. If your bottleneck is "what does a CXL-pooled, PIM-augmented cluster look like with this LLM?" → LLMServingSim 2.0. Both can answer the other's question but each is sharper on its home turf.</p>
-  <p class="ko"><b>한 줄 선택 기준:</b> 병목이 "이 LLM 스택에 prefill–decode 분리하고 speculative을 켤까?" 면 → Frontier. 병목이 "CXL 풀 + PIM 보강된 클러스터에서 이 LLM이 어떻게 도나?" 면 → LLMServingSim 2.0. 둘 다 상대 영역도 다루지만 자기 영역에서 더 날카로움.</p>
-
-  <h3>
     <span class="en">If I were to extend Frontier</span>
     <span class="ko">Frontier를 확장한다면</span>
   </h3>
@@ -795,6 +767,352 @@
     <li><b>retrieval(RAG)</b>용 Cluster Worker 역할 — "embedding + vectordb" replica를 자체 SLO로 분리. 롱컨텍스트 흐름이 점점 RAG와 결합되는 추세 반영.</li>
     <li><b>실제 vLLM 이벤트 스트림</b>(BlockStored/Removed, completed-request)을 Frontier 이벤트 큐에 꽂아 hybrid sim+real shadow 테스트.</li>
   </ul>
+</section>
+
+<!-- ============ 7. DETAILED COMPARISON ============ -->
+<section id="s7">
+  <h2><span class="num">7</span>
+    <span class="en">Frontier vs <a href="llmservingsim2.html" style="color:inherit;border-bottom:1px dashed currentColor">LLMServingSim 2.0</a> — detailed comparison</span>
+    <span class="ko">Frontier vs <a href="llmservingsim2.html" style="color:inherit;border-bottom:1px dashed currentColor">LLMServingSim 2.0</a> — 자세한 비교</span>
+  </h2>
+
+  <p class="en">Both papers are 2026 LLM-serving simulators that target the same overarching goal — "predict serving performance without renting a cluster" — but they zoom in on <b>different bottlenecks</b>. Side-by-side helps you pick.</p>
+  <p class="ko">둘 다 2026년에 나온 LLM 서빙 시뮬레이터로, "클러스터를 빌리지 않고 서빙 성능을 예측하자"는 큰 목적은 같습니다. 다만 <b>각자 다른 병목</b>에 초점을 둡니다. 같이 놓고 보면 선택이 쉬워집니다.</p>
+
+  <h3>7-1.
+    <span class="en">Feature matrix</span>
+    <span class="ko">기능 매트릭스</span>
+  </h3>
+
+  <table>
+    <tr>
+      <th><span class="en">Dimension</span><span class="ko">차원</span></th>
+      <th>Frontier</th>
+      <th>LLMServingSim 2.0</th>
+    </tr>
+    <tr>
+      <td><span class="en">paper</span><span class="ko">논문</span></td>
+      <td><a href="https://arxiv.org/abs/2605.21312">arXiv:2605.21312</a></td>
+      <td><a href="https://arxiv.org/abs/2602.23036">arXiv:2602.23036</a></td>
+    </tr>
+    <tr>
+      <td><span class="en">authors / affiliation</span><span class="ko">저자 / 소속</span></td>
+      <td>Feng et al. — CUHK / ByteDance Seed</td>
+      <td>Cho et al. — KAIST CASYS</td>
+    </tr>
+    <tr>
+      <td><span class="en">primary niche</span><span class="ko">주된 영역</span></td>
+      <td><span class="en">disaggregation × runtime opts × stateful workloads</span>
+          <span class="ko">분리형 × 런타임 최적화 × 상태 보존 워크로드</span></td>
+      <td><span class="en">heterogeneous HW × disaggregated topology</span>
+          <span class="ko">이종 하드웨어 × 분리형 토폴로지</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">architecture abstraction</span><span class="ko">아키텍처 추상화</span></td>
+      <td><span class="en">3 planes (Control / Fidelity / Execution); Cluster→Replica with role</span>
+          <span class="ko">3 plane (Control / Fidelity / Execution); 역할 있는 Cluster→Replica</span></td>
+      <td><span class="en">4 components (Planner / MSG / System Sim / Router); MSG per instance</span>
+          <span class="ko">4 컴포넌트 (Planner / MSG / System Sim / Router); 인스턴스당 MSG</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">execution model</span><span class="ko">실행 모델</span></td>
+      <td><span class="en">discrete-event + table-lookup costs (~70K LoC Python)</span>
+          <span class="ko">이산 사건 + 테이블 룩업 비용 (~70K LoC Python)</span></td>
+      <td><span class="en">Python frontend ↔ ASTRA-Sim C++ subprocess (cycle-level analytical)</span>
+          <span class="ko">Python 프런트엔드 ↔ ASTRA-Sim C++ 서브프로세스 (cycle-level 분석)</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">profile / HW model source</span><span class="ko">프로파일·HW 모델 출처</span></td>
+      <td><span class="en">per-op latency tables (BF16/FP8), interpolated across (batch_size, seq_len)</span>
+          <span class="ko">op별 지연 테이블 (BF16/FP8), (batch_size, seq_len) 보간</span></td>
+      <td><span class="en">vLLM-based layerwise profiler producing CSVs (~2.1h per device×model pair)</span>
+          <span class="ko">vLLM 기반 레이어 프로파일러가 CSV 생성 (device×model 쌍당 ~2.1h)</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">PDD (prefill-decode disagg)</span><span class="ko">PDD (prefill-decode 분리)</span></td>
+      <td>✅ <span class="en">first-class — separate roles</span><span class="ko">1급 — 역할 분리</span></td>
+      <td>✅ <span class="en">first-class — pd_type per scheduler</span><span class="ko">1급 — 스케줄러별 pd_type</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">AFD (attn-FFN disagg)</span><span class="ko">AFD (attn-FFN 분리)</span></td>
+      <td>✅ <span class="en">first-class (Step3-316B case)</span><span class="ko">1급 (Step3-316B 케이스)</span></td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><span class="en">CUDA Graphs</span><span class="ko">CUDA Graphs</span></td>
+      <td>✅ <span class="en">Runtime Adapter; reproduces 2.86–3.05× envelope within 1.7–6.1%</span><span class="ko">Runtime Adapter; 2.86–3.05× 영역을 1.7~6.1% 오차로 재현</span></td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><span class="en">speculative decoding (MTP)</span><span class="ko">speculative decoding (MTP)</span></td>
+      <td>✅ <span class="en">Runtime Adapter; ±11.28% on Qwen3-30B MoE</span><span class="ko">Runtime Adapter; Qwen3-30B MoE에서 ±11.28%</span></td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><span class="en">chunked prefill</span><span class="ko">chunked prefill</span></td>
+      <td>✅ Runtime Adapter</td>
+      <td>✅ scheduler flag</td>
+    </tr>
+    <tr>
+      <td><span class="en">prefix cache</span><span class="ko">prefix cache</span></td>
+      <td>✅ <span class="en">Adapter; 36.98%/37.11% hit ratio matches vLLM exactly</span><span class="ko">Adapter; vLLM과 hit율 36.98%/37.11% 정확 일치</span></td>
+      <td>✅ <span class="en">radix tree + multi-tier (NPU/CPU/CXL)</span><span class="ko">radix tree + 다층 (NPU/CPU/CXL)</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">stateful workloads (reasoning/agentic/RL)</span><span class="ko">상태 보존 워크로드 (reasoning · 에이전트 · RL)</span></td>
+      <td>✅ <span class="en">first-class — phase-aware scheduler, RL rollout reconfig</span><span class="ko">1급 — phase-aware 스케줄러, RL rollout 재구성</span></td>
+      <td><span class="en">light — agentic session tracking exists in router</span><span class="ko">약함 — 라우터에 agentic 세션 추적은 있음</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">heterogeneous GPU mix (cost-aware)</span><span class="ko">이종 GPU 혼합 (비용 인지)</span></td>
+      <td>✅ <span class="en">use case 2 — role-specific GPU types</span><span class="ko">use case 2 — 역할별 GPU 타입</span></td>
+      <td><span class="en">limited — GPU-centric, no built-in cost layer</span><span class="ko">제한적 — GPU 중심, 비용 계층은 없음</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">PIM offload</span><span class="ko">PIM 오프로드</span></td>
+      <td>—</td>
+      <td>✅ <span class="en">first-class — 1.43× decode tput, −14.8% energy/token</span><span class="ko">1급 — decode 1.43× / 토큰당 에너지 −14.8%</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">CXL memory pool</span><span class="ko">CXL 메모리 풀</span></td>
+      <td>—</td>
+      <td>✅ <span class="en">first-class — multi-tier KV with migration latency</span><span class="ko">1급 — 마이그레이션 지연 포함 다층 KV</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">TPU / other accelerators</span><span class="ko">TPU / 기타 가속기</span></td>
+      <td><span class="en">GPU-only (H800 primarily)</span><span class="ko">GPU만 (주로 H800)</span></td>
+      <td>✅ <span class="en">TPU case study: full-run error &lt;0.3%; profile-once integration for new HW</span><span class="ko">TPU 케이스: 전체 평균 오차 &lt;0.3%; 새 HW를 프로파일만으로 통합</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">power modeling</span><span class="ko">파워 모델링</span></td>
+      <td><span class="en">implicit via op-tables</span><span class="ko">op 테이블로 암묵적</span></td>
+      <td>✅ <span class="en">explicit — 7 components × 3 states (idle/active/standby), ±1.34% energy</span><span class="ko">명시적 — 7 컴포넌트 × 3상태(idle/active/standby), 에너지 ±1.34%</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">accuracy vs vLLM</span><span class="ko">vLLM 대비 정확도</span></td>
+      <td><span class="en">≤9.37% E2E co-loc · ≤10.99% PDD · throughput error 0.07–0.40% on SharedGPT</span>
+          <span class="ko">co-loc E2E ≤9.37% · PDD ≤10.99% · SharedGPT 처리량 오차 0.07–0.40%</span></td>
+      <td><span class="en">~1% aggregated · 3–5% time-series throughput · 0.41–0.93% memory</span>
+          <span class="ko">집계 ~1% · 시계열 처리량 3–5% · 메모리 0.41–0.93%</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">test HW</span><span class="ko">검증 HW</span></td>
+      <td>16× H800 (1024 in use cases)</td>
+      <td>H100, RTX A6000, RTXPRO6000, TPU (case study)</td>
+    </tr>
+    <tr>
+      <td><span class="en">models evaluated</span><span class="ko">검증 모델</span></td>
+      <td><span class="en">Llama-3.1-8B/70B/3.3-70B/3.1-405B-FP8, Qwen3-30B MoE/235B, Step3-316B</span>
+          <span class="ko">Llama-3.1-8B/70B/3.3-70B/3.1-405B-FP8, Qwen3-30B MoE/235B, Step3-316B</span></td>
+      <td><span class="en">Llama-3.1-8B/70B, Qwen3-30B-A3B/32B, Mixtral-8x7B, Phi-MoE</span>
+          <span class="ko">Llama-3.1-8B/70B, Qwen3-30B-A3B/32B, Mixtral-8x7B, Phi-MoE</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">scalability</span><span class="ko">확장성</span></td>
+      <td><span class="en">1K+ GPUs simulated on a CPU host</span><span class="ko">CPU 호스트에서 GPU 1K+ 시뮬</span></td>
+      <td><span class="en">~10 min wall-clock per complex config</span><span class="ko">복잡한 config당 wall-clock ~10분</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">code released</span><span class="ko">코드 공개</span></td>
+      <td>❌ <span class="en">not yet</span><span class="ko">미공개</span></td>
+      <td>✅ <a href="https://github.com/casys-kaist/LLMServingSim">github.com/casys-kaist/LLMServingSim</a></td>
+    </tr>
+  </table>
+
+  <h3>7-2.
+    <span class="en">Where they overlap, where they diverge</span>
+    <span class="ko">겹치는 영역 · 갈리는 영역</span>
+  </h3>
+
+  <svg viewBox="0 0 880 320" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Frontier vs LLMServingSim 2.0 — overlap and divergence" style="margin:14px 0 6px;display:block;max-width:100%;height:auto">
+    <!-- Two overlapping ellipses -->
+    <ellipse cx="290" cy="160" rx="220" ry="120" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.8" opacity="0.85"/>
+    <ellipse cx="590" cy="160" rx="220" ry="120" fill="#f1e8fb" stroke="#bfa0eb" stroke-width="1.8" opacity="0.85"/>
+
+    <!-- Headers -->
+    <text x="160" y="36" text-anchor="middle" font-size="14" font-weight="700" fill="#0c447c">Frontier 만의 강점</text>
+    <text x="160" y="52" text-anchor="middle" font-size="10" fill="#0c447c">arXiv:2605.21312</text>
+    <text x="720" y="36" text-anchor="middle" font-size="14" font-weight="700" fill="#3f1f72">LLMServingSim 2.0 만의 강점</text>
+    <text x="720" y="52" text-anchor="middle" font-size="10" fill="#3f1f72">arXiv:2602.23036</text>
+
+    <!-- Frontier-only side -->
+    <g font-size="11" fill="#0c447c">
+      <text x="140" y="106" text-anchor="middle">· AFD (Attn–FFN disagg)</text>
+      <text x="140" y="124" text-anchor="middle">· CUDA Graphs (Adapter)</text>
+      <text x="140" y="142" text-anchor="middle">· Speculative decoding</text>
+      <text x="140" y="160" text-anchor="middle">· Phase-aware scheduling</text>
+      <text x="140" y="178" text-anchor="middle">· RL rollout reconfig</text>
+      <text x="140" y="196" text-anchor="middle">· Cost-aware GPU mix</text>
+      <text x="140" y="214" text-anchor="middle">· 1K+ GPU on CPU</text>
+    </g>
+
+    <!-- Center (overlap) -->
+    <g font-size="11" fill="#3a3934">
+      <text x="440" y="100" text-anchor="middle" font-weight="700">공통 (둘 다 잘 함)</text>
+      <text x="440" y="120" text-anchor="middle">· PDD (prefill-decode 분리)</text>
+      <text x="440" y="138" text-anchor="middle">· Chunked prefill</text>
+      <text x="440" y="156" text-anchor="middle">· Prefix cache</text>
+      <text x="440" y="174" text-anchor="middle">· TP / PP / DP / EP 병렬화</text>
+      <text x="440" y="192" text-anchor="middle">· vLLM-호환 워크로드 trace</text>
+      <text x="440" y="210" text-anchor="middle">· vLLM ±10% 내 검증</text>
+    </g>
+
+    <!-- LLMServingSim-only side -->
+    <g font-size="11" fill="#3f1f72">
+      <text x="740" y="106" text-anchor="middle">· PIM 오프로드</text>
+      <text x="740" y="124" text-anchor="middle">· CXL 메모리 풀</text>
+      <text x="740" y="142" text-anchor="middle">· TPU / 새 가속기</text>
+      <text x="740" y="160" text-anchor="middle">· 명시적 파워 모델 (7×3)</text>
+      <text x="740" y="178" text-anchor="middle">· ASTRA-Sim cycle-level net</text>
+      <text x="740" y="196" text-anchor="middle">· Sub-Batch Interleaving</text>
+      <text x="740" y="214" text-anchor="middle">· 오픈소스 (Apache 2.0)</text>
+    </g>
+
+    <text x="440" y="275" text-anchor="middle" font-size="11" fill="#6b6a63" font-style="italic">
+      한 줄: Frontier는 "분리형 + 런타임 트릭 + 상태 보존"에서, LLMServingSim 2.0은 "이종 HW + 메모리 계층 + 파워"에서 더 날카로움
+    </text>
+    <text x="440" y="295" text-anchor="middle" font-size="11" fill="#6b6a63" font-style="italic">
+      공통 영역(PDD, prefix cache, chunked prefill)에선 둘 중 어느 쪽이든 답을 줄 수 있다
+    </text>
+  </svg>
+
+  <h3>7-3.
+    <span class="en">"Which one for my question?" — decision matrix</span>
+    <span class="ko">"내 질문엔 어느 쪽?" — 결정 매트릭스</span>
+  </h3>
+
+  <table>
+    <tr>
+      <th><span class="en">Question I have</span><span class="ko">내 질문</span></th>
+      <th><span class="en">Reach for</span><span class="ko">선택</span></th>
+      <th><span class="en">Why</span><span class="ko">이유</span></th>
+    </tr>
+    <tr>
+      <td><span class="en">Should I PD-split this LLM stack and at what ratio?</span>
+          <span class="ko">이 LLM 스택을 PD-분리할까, 몇 대 몇 비율로?</span></td>
+      <td>Either</td>
+      <td><span class="en">Both first-class; LLMServingSim has shipped configs, Frontier has a Pareto sweep example</span>
+          <span class="ko">둘 다 1급; LLMServingSim은 즉시 쓰는 config들, Frontier는 Pareto 스윕 예제</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">Will CUDA Graphs help my decode throughput?</span>
+          <span class="ko">CUDA Graphs가 내 decode throughput을 도와줄까?</span></td>
+      <td><b>Frontier</b></td>
+      <td><span class="en">Only Frontier explicitly models the graph-friendly batch shapes and the 2.86–3.05× envelope.</span>
+          <span class="ko">Frontier만 graph 친화 shape과 2.86–3.05× 영역을 명시적으로 모델링.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">Should I turn on speculative decoding (MTP / EAGLE-style)?</span>
+          <span class="ko">speculative decoding (MTP/EAGLE류) 켜야 하나?</span></td>
+      <td><b>Frontier</b></td>
+      <td><span class="en">Speculative Adapter is a built-in feature; LLMServingSim doesn't focus on it.</span>
+          <span class="ko">speculative Adapter가 내장; LLMServingSim은 중점 아님.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">How does my reasoning workload's hidden-planning phase affect scheduling?</span>
+          <span class="ko">내 reasoning 워크로드의 hidden-planning 페이즈가 스케줄링에 어떤 영향?</span></td>
+      <td><b>Frontier</b></td>
+      <td><span class="en">Phase-aware scheduler is one of the 4 worked use cases.</span>
+          <span class="ko">phase-aware 스케줄러가 4가지 use case 중 하나.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">Should I add PIM (or HBM-PIM) to offload attention?</span>
+          <span class="ko">attention 오프로드용으로 PIM(또는 HBM-PIM) 추가해야 하나?</span></td>
+      <td><b>LLMServingSim 2.0</b></td>
+      <td><span class="en">PIM is a first-class device type with shipped tech profiles (DDR4/HBM2/LPDDR4X/LPDDR5).</span>
+          <span class="ko">PIM이 1급 디바이스 타입, 기술 프로파일 4종 내장 (DDR4/HBM2/LPDDR4X/LPDDR5).</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">How big should my CXL memory pool be?</span>
+          <span class="ko">CXL 메모리 풀을 얼마나 크게?</span></td>
+      <td><b>LLMServingSim 2.0</b></td>
+      <td><span class="en">Multi-tier KV with migration latency is baked in. <code class="inl">single_node_cxl_instance.json</code> ready to go.</span>
+          <span class="ko">마이그레이션 지연 포함 다층 KV가 내장. <code class="inl">single_node_cxl_instance.json</code> 즉시 사용.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">I want to evaluate a TPU / new accelerator before owning it.</span>
+          <span class="ko">아직 안 사본 TPU / 신규 가속기를 평가하고 싶다.</span></td>
+      <td><b>LLMServingSim 2.0</b></td>
+      <td><span class="en">Profile-once integration was demonstrated on TPU with &lt;0.3% full-run error.</span>
+          <span class="ko">TPU에서 프로파일만으로 통합 검증 (전체 평균 오차 &lt;0.3%).</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">What's the energy bill per million tokens for this cluster?</span>
+          <span class="ko">이 클러스터의 백만 토큰당 전력 비용은?</span></td>
+      <td><b>LLMServingSim 2.0</b></td>
+      <td><span class="en">Explicit 7-component × 3-state power model, ±1.34% energy error.</span>
+          <span class="ko">7 컴포넌트 × 3상태 명시 파워 모델, 에너지 오차 ±1.34%.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">I want to A/B agentic schedulers before writing prod code.</span>
+          <span class="ko">프로덕션 코드 쓰기 전에 agentic 스케줄러를 A/B하고 싶다.</span></td>
+      <td><b>Frontier</b></td>
+      <td><span class="en">Stateful sessions and phase-aware scheduling are first-class.</span>
+          <span class="ko">상태 보존 세션과 phase-aware 스케줄링이 1급.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">I need the code today.</span>
+          <span class="ko">코드가 지금 당장 필요하다.</span></td>
+      <td><b>LLMServingSim 2.0</b></td>
+      <td><span class="en">Open-source on GitHub (with shipped profile CSVs and 15 cluster blueprints). Frontier is not yet public.</span>
+          <span class="ko">GitHub 공개 + 프로파일 CSV와 cluster 청사진 15종 내장. Frontier는 아직 미공개.</span></td>
+    </tr>
+  </table>
+
+  <h3>7-4.
+    <span class="en">Same question, two answers — a worked example</span>
+    <span class="ko">같은 질문, 두 시뮬레이터의 답 — 실측 예시</span>
+  </h3>
+
+  <p class="en"><b>Question:</b> "For Llama-3.1-70B serving with 80% prompts ≤ 1K tokens and 20% ≥ 8K tokens, how should I split prefill and decode across 64× H100?"</p>
+  <p class="ko"><b>질문:</b> "Llama-3.1-70B 서빙에서 프롬프트의 80%가 ≤ 1K 토큰, 20%가 ≥ 8K 토큰일 때, 64× H100을 prefill/decode로 어떻게 나눠야 할까?"</p>
+
+  <div class="grid2">
+    <div class="mini">
+      <h4>Frontier로 푸는 방법</h4>
+      <p><span class="en">Sweep (pp, tp_attn, dp_attn, tp_ffn, ep_ffn) tuples × (P:D) ratios from 16:48 to 48:16. Frontier runs each as a discrete-event sim; output is a Pareto frontier in (throughput, p99 TTFT) space. CUDA Graph Adapter on. Reads back the answer as the (P:D, parallelism) that maximizes throughput at SLO.</span>
+         <span class="ko">(pp, tp_attn, dp_attn, tp_ffn, ep_ffn) 튜플 × (P:D) 비율(16:48부터 48:16까지) 스윕. Frontier가 각각을 이산 사건 시뮬로 돌리고, (throughput, p99 TTFT) 공간의 Pareto 프런티어 출력. CUDA Graph Adapter 켬. SLO 안에서 throughput 최대화하는 (P:D, 병렬화) 조합을 답으로 반환.</span></p>
+      <p style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted)">
+        # paper의 256× H800 예시 결과: PDD P:D = 112:144 → 137.4K tok/s<br>
+        # 64× H100 스케일로 해석하면 비례적으로 P:D ≈ 28:36 근처가 최적이라 추정
+      </p>
+    </div>
+    <div class="mini">
+      <h4>LLMServingSim 2.0으로 푸는 방법</h4>
+      <p><span class="en">Copy <code class="inl">single_node_pd_per_instance_config.json</code>, edit instance counts; run the profiler once on H100 if not shipped, then <code class="inl">python -m serving --cluster-config ... --dataset workloads/my_trace.jsonl --output outputs/llama70b_64h100.csv</code> for each split. Pandas-diff the CSVs over p50/p99 TTFT and TPOT. Also gets a power summary at the end (idle/active/standby joules).</span>
+         <span class="ko"><code class="inl">single_node_pd_per_instance_config.json</code>을 복사해 인스턴스 수만 수정; H100용 프로파일이 없으면 1회 프로파일 후, 각 분할마다 <code class="inl">python -m serving --cluster-config ... --dataset workloads/my_trace.jsonl --output outputs/llama70b_64h100.csv</code>. Pandas로 p50/p99 TTFT·TPOT diff. 마지막에 파워 요약(idle/active/standby joules)도 함께.</span></p>
+      <p style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted)">
+        # 각 sweep 점이 ~10분, 10점이면 약 1.5h<br>
+        # 동시에 토큰당 에너지 비용도 함께 떨어짐 → 운영비 추정까지
+      </p>
+    </div>
+  </div>
+
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">key difference in the answer</span><span class="ko">답의 핵심 차이</span></span>
+    <span class="en">Frontier gives you a <b>Pareto front in performance space</b> with CUDA-Graph/speculative effects modeled — closer to "what's the best architecture-and-flag combo?" LLMServingSim 2.0 gives you the <b>same throughput/latency numbers + an energy bill</b> via an explicit power model — closer to "what's the total cost of ownership?"</span>
+    <span class="ko">Frontier는 CUDA-Graph·speculative 효과까지 반영한 <b>성능 공간 Pareto 프런티어</b>를 줌 — "어떤 아키텍처 + 플래그 조합이 최선?"에 가까움. LLMServingSim 2.0은 같은 throughput/latency 수치에 명시 파워 모델로 <b>에너지 청구서</b>까지 줌 — "총 소유 비용은?"에 가까움.</span>
+  </div>
+
+  <h3>7-5.
+    <span class="en">Combined workflow — use both?</span>
+    <span class="ko">조합 워크플로 — 둘 다 쓰면?</span>
+  </h3>
+
+  <p class="en">They're not mutually exclusive. A reasonable two-stage flow:</p>
+  <p class="ko">서로 배타적이지 않습니다. 합리적인 2단계 흐름:</p>
+
+  <ol class="en">
+    <li><b>LLMServingSim 2.0 to pick the HW envelope</b> — sweep "GPU vs GPU+PIM vs GPU+CXL pool" with explicit power, narrow down to 1–2 hardware configurations that hit your energy / cost budget.</li>
+    <li><b>Frontier to optimize the serving stack on the chosen HW</b> — sweep CUDA Graphs on/off × speculative on/off × PDD ratios × scheduler choice within the hardware Frontier won.</li>
+  </ol>
+  <ol class="ko">
+    <li><b>LLMServingSim 2.0으로 HW 영역 좁히기</b> — "GPU vs GPU+PIM vs GPU+CXL 풀"을 명시 파워 모델과 함께 스윕, 에너지·비용 예산 안에 드는 HW 후보 1~2개로 좁힘.</li>
+    <li><b>Frontier로 선택된 HW 위 서빙 스택 최적화</b> — CUDA Graphs on/off × speculative on/off × PDD 비율 × 스케줄러 선택을 그 HW 안에서 스윕.</li>
+  </ol>
+
+  <p class="en">The two are answering "<b>what hardware to buy</b>" vs "<b>how to serve on it</b>" — orthogonal questions, both worth asking before you sign a cluster order.</p>
+  <p class="ko">두 도구는 "<b>어떤 HW를 살까</b>" vs "<b>그 위에서 어떻게 서빙할까</b>"라는 직교 질문에 답합니다. 클러스터 주문서에 사인하기 전 둘 다 짚어볼 만함.</p>
 </section>
 
 <footer>
