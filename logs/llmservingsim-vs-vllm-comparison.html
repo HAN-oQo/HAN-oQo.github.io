@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLMServingSim 예측 vs 실 vLLM — 정확도 비교 (진행중)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  h4 { font-size: 0.95rem; margin-top: 18px; color: var(--blue); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc ol { margin: 8px 0; }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .toc a:hover { color: var(--blue); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .note strong { color: var(--amber); }
+  .tip  { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .tip strong { color: var(--teal); }
+  .status-todo { color: var(--muted); }
+  .status-wip  { color: var(--amber); font-weight: 600; }
+  .status-done { color: var(--teal); font-weight: 600; }
+  .status-blocked { color: var(--red); font-weight: 600; }
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+              background: var(--blue); color: #fff; border-radius: 50%; font-weight: 700; margin-right: 10px; font-size: 0.95rem; }
+  .wip-banner { background: var(--amber-bg); border: 2px dashed var(--amber-bd); padding: 14px 20px;
+                border-radius: 10px; margin: 16px 0; color: var(--amber); font-weight: 600; }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · <a href="llmservingsim-qwen3-runbook.html">Qwen3 런북</a> · <a href="llmservingsim-code-flow.html">코드 흐름</a></p>
+
+<h1>LLMServingSim 예측 vs 실 vLLM — 정확도 비교</h1>
+<p class="sub">작성 시작: 2026-06-10 · 상태: <span class="status-wip">진행 중 (vLLM 측 측정 대기)</span> · 목표: 같은 워크로드(JSONL)를 (1) LLMServingSim으로 예측, (2) 실 GPU에 띄운 vLLM으로 측정 후 메트릭별 발산 정량화</p>
+
+<div class="wip-banner">⚙ 진행중 문서 — vLLM 측정은 GPU 확보 시 추가. 현재 LLMServingSim baseline + replay client + 비교 스크립트까지 작성됨.</div>
+
+<div class="card toc">
+<strong>목차</strong>
+<ol>
+  <li><a href="#why">왜 이 비교가 의미 있나</a></li>
+  <li><a href="#setup">설정 — 모델, 워크로드, HW 가정</a></li>
+  <li><a href="#sim">LLMServingSim 측 (baseline, GPU 불필요)</a></li>
+  <li><a href="#vllm">실 vLLM 측 (GPU 필요, 진행 중)</a></li>
+  <li><a href="#cmp">비교 메트릭 정의</a></li>
+  <li><a href="#repro">재현 명령어 모음</a></li>
+  <li><a href="#status">진행 상태표</a></li>
+  <li><a href="#results">결과 (TBD)</a></li>
+</ol>
+</div>
+
+<h2 id="why">1. 왜 이 비교가 의미 있나</h2>
+<div class="card">
+<p>LLMServingSim은 "프로파일 1회 + sim 영원히 무료" 아키텍처 (자세한 건 <a href="../study/frontier.html">Frontier 노트 §3-1</a>). 핵심 가정:</p>
+<ul>
+  <li>vLLM이 측정한 op latency CSV를 룩업으로 재사용</li>
+  <li>스케줄링/큐잉/comm은 시뮬레이터가 자체 모델로 처리</li>
+</ul>
+<p>이 가정이 얼마나 잘 맞는지 검증하려면 <strong>실제 vLLM 측정값과 시뮬레이터 예측값을 같은 워크로드에 대해 직접 비교</strong>해야 함. LLMServingSim 논문은 sim 오차 &lt;10% 클레임하지만 그건 그쪽 검증 셋. 우리 케이스에서도 그런지가 진짜 질문.</p>
+
+<p>비교 결과로 얻고 싶은 것:</p>
+<ul>
+  <li><strong>절대 오차</strong>: TTFT / TPOT / latency p50/p95/p99 의 실측 vs 예측 (% 단위)</li>
+  <li><strong>발산 패턴</strong>: 어떤 요청에서 가장 많이 빗나가는가 (긴 input? 높은 concurrency? KV 압박 구간?)</li>
+  <li><strong>실용성 판단</strong>: 시뮬 결과를 어디까지 신뢰할 수 있나 — 절대값? 상대 비교? 트렌드만?</li>
+</ul>
+</div>
+
+<h2 id="setup">2. 설정 — 모델, 워크로드, HW 가정</h2>
+<div class="card">
+
+<h3>2-1. 모델</h3>
+<table>
+<tr><th>항목</th><th>값</th><th>이유</th></tr>
+<tr><td>모델</td><td><code>meta-llama/Llama-3.1-8B</code></td><td>LLMServingSim 인벤토리에 있음. 8B라 단일 GPU에 들어가 vLLM 띄우기 가장 쉬움</td></tr>
+<tr><td>dtype</td><td><code>bfloat16</code></td><td>shipped 프로파일이 bf16</td></tr>
+<tr><td>TP</td><td>1</td><td>single GPU 시나리오 — 가장 noise 적음</td></tr>
+</table>
+
+<h3>2-2. 워크로드</h3>
+<table>
+<tr><th>항목</th><th>값</th></tr>
+<tr><td>JSONL</td><td><code>workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl</code> (LLMServingSim shipped)</td></tr>
+<tr><td>요청 수</td><td>300</td></tr>
+<tr><td>도착률</td><td>10 samples / sec (Poisson)</td></tr>
+<tr><td>스키마</td><td><code>{input_toks, output_toks, arrival_time_ns, input_tok_ids}</code></td></tr>
+</table>
+
+<div class="tip"><strong>핵심:</strong> JSONL에 <code>input_tok_ids</code> (실제 토큰 ID 리스트) 가 들어있음 → 같은 토크나이저로 디토큰화해서 vLLM에 prompt로 보내면 <strong>완전히 동일한 입력</strong> 사용 가능. 두 sim 모두 같은 토큰 시퀀스로 동작 보장.</div>
+
+<h3>2-3. HW</h3>
+<table>
+<tr><th>항목</th><th>값</th><th>비고</th></tr>
+<tr><td>HW label (sim)</td><td><code>RTXPRO6000</code></td><td>shipped profile</td></tr>
+<tr><td>실제 GPU (vLLM)</td><td>NVIDIA RTX PRO 6000 Blackwell Server Edition</td><td><strong>요 동일 HW 확보가 핵심 변수.</strong> 다른 GPU면 그 GPU용 프로파일 새로 만들어야 함 (<a href="llmservingsim-profiling-guide.html">프로파일링 가이드</a> 참고)</td></tr>
+<tr><td>VRAM</td><td>96 GB</td><td>Llama-3.1-8B (~16GB) + KV cache 충분</td></tr>
+<tr><td>대역폭</td><td>1597 GB/s</td><td>cluster config의 <code>mem_bw</code> 와 일치</td></tr>
+</table>
+
+<div class="note"><strong>HW 매칭 못 하면:</strong> 보유 GPU (H100 등) 로 한 번 <code>profiler/profile.sh</code> 돌려서 새 프로파일 만들고, cluster config의 <code>hardware</code> 라벨만 그 새 라벨로 바꾸면 됨. 추가 시간 ~1-2h + GPU 비용.</div>
+
+</div>
+
+<h2 id="sim">3. LLMServingSim 측 (baseline)</h2>
+<div class="card">
+
+<h3>3-1. Cluster config</h3>
+<p>레포 기본 <code>configs/cluster/single_node_single_instance.json</code> 이 Llama-3.1-8B / RTXPRO6000 / TP=1 으로 이미 세팅돼있음 — 그대로 사용.</p>
+<pre><code>{
+    "num_nodes": 1,
+    "link_bw": 16,
+    "link_latency": 20000,
+    "nodes": [{
+        "num_instances": 1,
+        "cpu_mem": {"mem_size": 512, "mem_bw": 256, "mem_latency": 0},
+        "instances": [{
+            "model_name": "meta-llama/Llama-3.1-8B",
+            "hardware": "RTXPRO6000",
+            "npu_mem": {"mem_size": 96, "mem_bw": 1597, "mem_latency": 0},
+            "num_npus": 1, "tp_size": 1, "pd_type": null
+        }]
+    }]
+}</code></pre>
+
+<h3>3-2. 실행 명령</h3>
+<pre><code>docker exec servingsim_docker bash -c "
+  cd /app/LLMServingSim && \
+  python -m serving \
+    --cluster-config configs/cluster/single_node_single_instance.json \
+    --dtype bfloat16 --block-size 16 \
+    --dataset workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl \
+    --output outputs/llama8b_baseline_300.csv \
+    --log-interval 1.0
+"</code></pre>
+
+<h3>3-3. 결과 (실측, GPU 0대)</h3>
+<p>완료되면 <code>outputs/llama8b_baseline_300.csv</code> 가 떨어짐 (12 컬럼: instance_id, request_id, model, input, output, arrival, end_time, latency, queuing_delay, TTFT, TPOT, ITL). 본 문서 작성 시점 실측값:</p>
+
+<table>
+<tr><th>메트릭</th><th>예측값 (LLMServingSim)</th></tr>
+<tr><td>전체 처리 시간</td><td><em>(sim 종료 후 채움)</em></td></tr>
+<tr><td>평균 TTFT</td><td><em>(채움)</em></td></tr>
+<tr><td>평균 TPOT</td><td><em>(채움)</em></td></tr>
+<tr><td>p50 latency</td><td><em>(채움)</em></td></tr>
+<tr><td>p95 latency</td><td><em>(채움)</em></td></tr>
+<tr><td>p99 latency</td><td><em>(채움)</em></td></tr>
+<tr><td>전체 throughput (req/s)</td><td><em>(채움)</em></td></tr>
+</table>
+
+</div>
+
+<h2 id="vllm">4. 실 vLLM 측 (진행 중)</h2>
+<div class="card">
+
+<h3>4-1. JSONL replay 클라이언트</h3>
+<p>일반 LMeterX는 random prompt를 던지는 방식이라 JSONL의 정확한 arrival timing 재생 못 함. 그래서 전용 replay 스크립트 작성: <code>tools/replay_jsonl.py</code> (이 레포에 같이 커밋).</p>
+
+<p>역할:</p>
+<ul>
+  <li>JSONL을 한 줄씩 읽음</li>
+  <li><code>input_tok_ids</code> → 토크나이저로 디토큰화 → prompt 문자열</li>
+  <li><code>arrival_time_ns</code> 만큼 기다린 후 vLLM <code>/v1/completions</code> 에 stream 요청 발사</li>
+  <li>per-token 응답으로 TTFT / ITL / TPOT 측정</li>
+  <li>LLMServingSim CSV와 <strong>동일한 12 컬럼 스키마</strong>로 결과 저장 → 직접 diff 가능</li>
+</ul>
+
+<h3>4-2. vLLM 서빙 명령</h3>
+<pre><code># GPU 머신에서
+docker run --gpus all --rm -p 8000:8000 \
+  -e HF_TOKEN=$HF_TOKEN \
+  vllm/vllm-openai:latest \
+    --model meta-llama/Llama-3.1-8B \
+    --dtype bfloat16 \
+    --block-size 16 \
+    --tensor-parallel-size 1 \
+    --max-model-len 4096</code></pre>
+
+<h3>4-3. Replay 실행</h3>
+<pre><code>python tools/replay_jsonl.py \
+  --workload ~/LLMServingSim/workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl \
+  --endpoint http://&lt;gpu-host&gt;:8000/v1/completions \
+  --model meta-llama/Llama-3.1-8B \
+  --output outputs/llama8b_real_300.csv \
+  --tokenizer meta-llama/Llama-3.1-8B</code></pre>
+
+<h3>4-4. 결과 (TBD — GPU 확보 시)</h3>
+<table>
+<tr><th>메트릭</th><th>실측값 (vLLM)</th></tr>
+<tr><td>전체 처리 시간</td><td><em>TBD</em></td></tr>
+<tr><td>평균 TTFT / TPOT</td><td><em>TBD</em></td></tr>
+<tr><td>p50/p95/p99 latency</td><td><em>TBD</em></td></tr>
+</table>
+</div>
+
+<h2 id="cmp">5. 비교 메트릭 정의</h2>
+<div class="card">
+<p>두 CSV가 같은 스키마이므로 request_id로 1:1 매칭 후 메트릭별 비교:</p>
+
+<table>
+<tr><th>메트릭</th><th>정의</th><th>판단 기준</th></tr>
+<tr><td>per-request TTFT 오차</td><td>|sim - real| / real</td><td>중앙값 &lt; 15% 이면 sim 신뢰 가능</td></tr>
+<tr><td>per-request TPOT 오차</td><td>동일</td><td>중앙값 &lt; 10% 이면 좋음</td></tr>
+<tr><td>per-request latency 오차</td><td>동일</td><td>TTFT + TPOT × N 의 누적 — 분산 큼</td></tr>
+<tr><td>throughput (전체)</td><td>req/s 단위 비교</td><td>±5% 이내면 시뮬이 정상</td></tr>
+<tr><td>p95/p99 latency</td><td>분포의 꼬리 비교</td><td>여기서 큰 차이 나면 큐잉/eviction 모델이 부정확</td></tr>
+<tr><td>발산 요청 분석</td><td>오차 상위 10개 요청의 (input_len, output_len, arrival_time) 패턴</td><td>긴 input? 혼잡 시점? 특정 KV size?</td></tr>
+</table>
+
+<p>비교 스크립트 (<code>tools/compare_csv.py</code>) 가 위 표 자동 출력 + matplotlib으로 scatter plot 2개 (TTFT sim vs real, TPOT sim vs real) 생성. <em>다음 푸시에 포함 예정.</em></p>
+</div>
+
+<h2 id="repro">6. 재현 명령어 모음</h2>
+<div class="card">
+<pre><code># --- LLMServingSim 측 (GPU 없음) ---
+git clone --recurse-submodules https://github.com/casys-kaist/LLMServingSim.git
+cd LLMServingSim
+docker pull astrasim/tutorial-micro2024
+docker run -d --name servingsim_docker \
+  -v $(pwd):/app/LLMServingSim -w /app/LLMServingSim \
+  astrasim/tutorial-micro2024 sleep infinity
+docker exec servingsim_docker pip3 install pyyaml pyinstrument transformers datasets \
+  msgspec scikit-learn xgboost==3.1.2 matplotlib==3.5.3 pandas==1.5.3 numpy==1.23.5
+docker exec servingsim_docker bash scripts/compile.sh
+
+docker exec servingsim_docker bash -c "
+  cd /app/LLMServingSim && python -m serving \
+    --cluster-config configs/cluster/single_node_single_instance.json \
+    --dtype bfloat16 --block-size 16 \
+    --dataset workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl \
+    --output outputs/llama8b_baseline_300.csv --log-interval 1.0
+"
+
+# --- 실 vLLM 측 (GPU 필요) ---
+# (GPU 머신에서)
+docker run --gpus all --rm -p 8000:8000 \
+  -e HF_TOKEN=$HF_TOKEN \
+  vllm/vllm-openai:latest \
+    --model meta-llama/Llama-3.1-8B --dtype bfloat16 \
+    --block-size 16 --tensor-parallel-size 1 --max-model-len 4096
+
+# (별도 터미널)
+python tools/replay_jsonl.py \
+  --workload ~/LLMServingSim/workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl \
+  --endpoint http://localhost:8000/v1/completions \
+  --model meta-llama/Llama-3.1-8B \
+  --tokenizer meta-llama/Llama-3.1-8B \
+  --output outputs/llama8b_real_300.csv
+
+# --- 비교 ---
+python tools/compare_csv.py \
+  --sim outputs/llama8b_baseline_300.csv \
+  --real outputs/llama8b_real_300.csv \
+  --out comparison-report.html</code></pre>
+</div>
+
+<h2 id="status">7. 진행 상태표</h2>
+<div class="card">
+<table>
+<tr><th>#</th><th>단계</th><th>상태</th><th>아티팩트</th></tr>
+<tr><td>1</td><td>HTML 스켈레톤 작성</td><td class="status-done">완료</td><td>이 페이지</td></tr>
+<tr><td>2</td><td>워크로드 / cluster config 인벤토리</td><td class="status-done">완료</td><td>Llama-3.1-8B + sharegpt 300req JSONL 채택</td></tr>
+<tr><td>3</td><td>LLMServingSim baseline 시뮬 실행</td><td class="status-wip">실행중</td><td>outputs/llama8b_baseline_300.csv 생성중</td></tr>
+<tr><td>4</td><td>JSONL replay 클라이언트 작성</td><td class="status-wip">진행중</td><td>tools/replay_jsonl.py</td></tr>
+<tr><td>5</td><td>CSV 비교 스크립트 작성</td><td class="status-todo">예정</td><td>tools/compare_csv.py</td></tr>
+<tr><td>6</td><td>GPU 확보 (RTXPRO6000 또는 동등 HW)</td><td class="status-blocked">사용자 입력 필요</td><td>—</td></tr>
+<tr><td>7</td><td>vLLM 서빙 + replay 실행</td><td class="status-todo">GPU 후</td><td>outputs/llama8b_real_300.csv</td></tr>
+<tr><td>8</td><td>비교 결과 + 분석</td><td class="status-todo">vLLM 후</td><td>이 페이지 §결과 섹션</td></tr>
+</table>
+</div>
+
+<h2 id="results">8. 결과</h2>
+<div class="card">
+<p><em>vLLM 측정 완료 후 작성.</em></p>
+</div>
+
+<footer>
+LLMServingSim 2.0 (KAIST CASYS) · 실 vLLM 정확도 비교 실험 · 2026-06-10 시작 · 진행중 문서. 본 비교는 LLMServingSim commit <code>8b5b943a3a37</code> 기준이며, vLLM 측 모델은 <code>meta-llama/Llama-3.1-8B</code> bf16 TP=1 single-GPU.
+</footer>
+
+</div>
+</body>
+</html>
