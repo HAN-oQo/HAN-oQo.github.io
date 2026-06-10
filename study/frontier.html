@@ -435,10 +435,171 @@
     <span class="ko">구체적 사용</span>
   </h2>
 
-  <p class="en">Frontier's spec is "<i>compile a user-level serving specification into a runnable simulation</i>." So the user input is a config that names the architecture, parallelism, optimizations, and workload — and Frontier produces per-request metrics. Below are the four use cases the paper itself walks through, each of which is a worked example of "what would I actually use this for?"</p>
-  <p class="ko">Frontier의 사양은 "<i>사용자 서빙 스펙을 실행 가능한 시뮬로 컴파일</i>". 사용자 입력은 아키텍처·병렬화·최적화·워크로드를 명시한 config, 출력은 요청별 메트릭. 아래는 논문이 직접 다루는 4개 use case — 각각 "실제로 이걸 뭐에 쓸 건데?"의 답.</p>
+  <p class="en">Frontier's spec is "<i>compile a user-level serving specification into a runnable simulation</i>." So the user input is a config that names the architecture, parallelism, optimizations, and workload — and Frontier produces per-request metrics. Below: first the fundamental trick (so you trust what's happening), then four worked use cases.</p>
+  <p class="ko">Frontier의 사양은 "<i>사용자 서빙 스펙을 실행 가능한 시뮬로 컴파일</i>". 사용자 입력은 아키텍처·병렬화·최적화·워크로드를 명시한 config, 출력은 요청별 메트릭. 먼저 핵심 트릭(시뮬을 믿을 수 있는 이유) → 그 다음 4개 use case.</p>
 
   <h3>3-1.
+    <span class="en">The cost-table trick — "you DO run vLLM, but only once"</span>
+    <span class="ko">cost-table 트릭 — "vLLM을 안 돌리는 게 아니라 한 번만 돌린다"</span>
+  </h3>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">the question everyone asks first</span><span class="ko">처음 듣고 다 하는 질문</span></span>
+    <span class="en">"How can the simulator predict vLLM behavior on workloads it never actually ran?" — short answer: <b>it did run vLLM, exactly once, and it bottled the measurements.</b> Every later "prediction" is looking up that bottle.</span>
+    <span class="ko">"시뮬레이터가 한 번도 안 돌려본 워크로드에서 어떻게 vLLM 동작을 예측하지?" — 짧은 답: <b>vLLM을 딱 한 번 돌렸고, 그때 측정값을 병에 담아뒀다.</b> 이후의 모든 "예측"은 그 병을 들여다보는 것.</span>
+  </div>
+
+  <h4>(a)
+    <span class="en">The two phases</span>
+    <span class="ko">두 단계 구조</span>
+  </h4>
+
+  <div class="ascii">┌─────────────────────────────────────┐         ┌────────────────────────────────┐
+│  PHASE A — Profile (ONCE per HW)    │         │  PHASE B — Simulate (MANY)     │
+│                                     │         │                                │
+│  Run real vLLM on real HW           │   →    │  No HW, no vLLM, runs on CPU   │
+│  ~2 hours, sweep batch & seq        │  CSVs  │  ~10 min per config            │
+│  hook into vLLM's forward pass      │        │  reads the CSVs at every step  │
+│  emit per-op latency CSVs           │        │  outputs TTFT/TPOT/throughput  │
+└─────────────────────────────────────┘         └────────────────────────────────┘</div>
+
+  <p class="en">Phase A is paid <b>once per (device, model) pair</b>. The bottled CSVs work forever after that — for any cluster shape, any workload trace, any combination of runtime flags.</p>
+  <p class="ko">Phase A는 <b>(device, model) 쌍당 1회</b>만 지불. 한 번 채워둔 CSV는 이후 영원히 — 어떤 cluster 형태든, 어떤 워크로드든, 어떤 런타임 플래그 조합이든 — 그대로 사용.</p>
+
+  <h4>(b)
+    <span class="en">What's actually in a profile (concrete)</span>
+    <span class="ko">프로파일이 실제로 담고 있는 것 (구체)</span>
+  </h4>
+
+  <p class="en">A profile is a folder of CSVs, one per operator category. Concrete example from the sister project LLMServingSim 2.0 (which uses the identical idea and has its profiles public — Frontier's own format isn't released but the structure is the same):</p>
+  <p class="ko">프로파일은 op 카테고리별 CSV가 든 폴더. 자매 프로젝트 LLMServingSim 2.0의 실제 예시 (Frontier 자체 포맷은 미공개지만 구조는 동일):</p>
+
+  <pre>profiler/perf/RTXPRO6000/meta-llama/Llama-3.1-8B/bf16/tp1/
+├── attention.csv      ← (batch_size, seq_len_q, kv_len) → latency_ns
+├── dense.csv          ← (M, N, K) → latency_ns         # 그냥 행렬곱
+├── moe.csv            ← (top_k, num_experts, hidden) → latency_ns
+├── per_sequence.csv   ← 시퀀스 단위 부수 비용
+├── skew.csv           ← 측정 분산 (variance over repeated measures)
+├── skew_fit.csv       ← α-law fit 계수 (미관측 shape 외삽용)
+└── meta.yaml          ← (dtype, tp, device 정보)</pre>
+
+  <p class="en">A row in <code class="inl">attention.csv</code> looks roughly like:</p>
+  <p class="ko"><code class="inl">attention.csv</code>의 한 행 대략:</p>
+
+  <pre>batch_size, seq_len_q, kv_len, latency_ns
+4,          512,       512,    12_300_000
+4,          1024,      1024,   18_900_000
+4,          2048,      2048,   31_200_000
+8,          512,       512,    18_400_000
+8,          1024,      1024,   28_100_000
+16,         512,       512,    27_900_000
+...</pre>
+
+  <p class="en">This is just a function: <code class="inl">latency = f(op, shape)</code>, sampled at concrete points. Phase B asks "what's <code class="inl">f(attention, batch=5, seq=1500)</code>?" and the simulator looks up the table or interpolates via <code class="inl">skew_fit.csv</code> if the shape wasn't measured.</p>
+  <p class="ko">결국 함수 <code class="inl">latency = f(op, shape)</code>를 점점이 측정한 결과. Phase B에서 "<code class="inl">f(attention, batch=5, seq=1500)</code>은?"이라고 물으면 룩업 또는 <code class="inl">skew_fit.csv</code>의 보간 곡선으로 답.</p>
+
+  <h4>(c)
+    <span class="en">How the profile is generated — vLLM with hooks</span>
+    <span class="ko">프로파일은 어떻게 만들어지나 — vLLM에 후크 부착</span>
+  </h4>
+
+  <p class="en">The profiler is not a separate inference engine — it's <b>vLLM with timing hooks plugged into its forward path</b>. Concretely (LLMServingSim's profiler, which mirrors what Frontier's also does):</p>
+  <p class="ko">프로파일러는 별도의 추론 엔진이 아니라, <b>vLLM의 forward 경로에 측정 후크를 꽂은 것</b>입니다. 구체 (LLMServingSim의 프로파일러; Frontier도 동일 구조):</p>
+
+  <pre><span style="color:#7f8aa3"># conceptual pseudocode — what runs during profiling</span>
+<span style="color:#c39bf0">for</span> batch_size <span style="color:#c39bf0">in</span> [1, 2, 4, 8, 16, 32, 64, 128, ...]:
+    <span style="color:#c39bf0">for</span> seq_len <span style="color:#c39bf0">in</span> [128, 256, 512, 1024, 2048, 4096, 8192, ...]:
+        <span style="color:#7f8aa3"># build a synthetic batch of this shape</span>
+        prompts = make_batch(batch_size, seq_len)
+
+        <span style="color:#c39bf0">with</span> attach_hooks(vllm_engine.model):  <span style="color:#7f8aa3"># torch hooks on attention/dense/moe/...</span>
+            <span style="color:#c39bf0">for</span> _ <span style="color:#c39bf0">in</span> range(N_warmup): vllm_engine.forward(prompts)  <span style="color:#7f8aa3"># warm CUDA</span>
+            <span style="color:#c39bf0">for</span> _ <span style="color:#c39bf0">in</span> range(N_measure):
+                t = vllm_engine.forward(prompts)             <span style="color:#7f8aa3"># hooks fire</span>
+                <span style="color:#7f8aa3"># hooks record (op_category, shape) → latency into a buffer</span>
+
+        flush_to_csv(buffer, output_dir)                    <span style="color:#7f8aa3"># attention.csv etc.</span>
+
+<span style="color:#7f8aa3"># at the end: fit α-law curves for extrapolation</span>
+fit_alpha(attention_data) <span style="color:#c39bf0">→</span> skew_fit.csv</pre>
+
+  <p class="en">The hooks themselves are tiny — they sit between PyTorch ops and record GPU timestamps via CUDA events. The <b>profiler doesn't replace vLLM's logic</b>; it just observes vLLM running normally and writes down what happened.</p>
+  <p class="ko">후크 자체는 작습니다 — PyTorch op들 사이에 끼어들어가 CUDA event로 GPU 타임스탬프를 기록. <b>vLLM의 로직을 교체하지 않고</b>, 그냥 vLLM이 정상적으로 도는 걸 관찰하면서 무슨 일이 일어났는지 적습니다.</p>
+
+  <p class="en">For Frontier specifically, the paper says: "<i>Frontier characterizes ops at the granularity of attention, linear (GEMM), GroupedGEMM (MoE), allreduce, alltoall</i>" — same categorical decomposition, same hook-based capture, written to internal tables instead of CSVs.</p>
+  <p class="ko">Frontier 논문 표현: "<i>Frontier는 attention, linear (GEMM), GroupedGEMM (MoE), allreduce, alltoall 단위로 op를 측정</i>" — 동일한 카테고리 분해, 동일한 후크 기반 캡처, CSV 대신 내부 테이블에 저장.</p>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">how long does this take?</span><span class="ko">시간이 얼마나 걸리나</span></span>
+    <span class="en">LLMServingSim's profiler quotes <b>~2.1 hours per (device, model) pair</b> on H100 for Llama-3.1-70B. Smaller models are faster. The bottleneck is the number of (batch, seq) sweep points × number of measurement reps for noise reduction. You pay this once, ever.</span>
+    <span class="ko">LLMServingSim 프로파일러는 Llama-3.1-70B를 H100에서 측정할 때 <b>(device, model) 쌍당 약 2.1시간</b>. 작은 모델은 더 빠름. 병목은 (batch, seq) sweep 점 개수 × noise 줄이려고 반복 측정하는 횟수. <b>평생 한 번만</b> 지불.</span>
+  </div>
+
+  <h4>(d)
+    <span class="en">Two parts that imitate vLLM — cost model + behavior model</span>
+    <span class="ko">vLLM을 흉내내는 두 부분 — 비용 모델 + 동작 모델</span>
+  </h4>
+
+  <p class="en">The cost table answers "how long does this op take?" — but that's not enough to predict a serving system. You also need to know <b>which ops get scheduled together</b>, <b>when KV cache evicts</b>, <b>which requests get batched</b>. That's the second half:</p>
+  <p class="ko">cost 테이블은 "이 op이 얼마나 걸리나?"에는 답하지만, 서빙 시스템 예측엔 그것만으론 부족. <b>어떤 op들이 한 배치에 묶이는지</b>, <b>KV 캐시가 언제 축출되는지</b>, <b>어느 요청이 함께 배치되는지</b>도 알아야 함. 이게 후반부:</p>
+
+  <table>
+    <tr><th><span class="en">Part</span><span class="ko">부분</span></th>
+        <th><span class="en">What it does</span><span class="ko">하는 일</span></th>
+        <th><span class="en">Where it comes from</span><span class="ko">출처</span></th></tr>
+    <tr><td><b><span class="en">Cost model</span><span class="ko">비용 모델</span></b></td>
+        <td><span class="en">"this op with this shape takes X ns"</span><span class="ko">"이 op이 이 shape에서 X ns 걸린다"</span></td>
+        <td><span class="en">profile CSVs (data, captured from real vLLM run)</span><span class="ko">프로파일 CSV (실 vLLM 측정 데이터)</span></td></tr>
+    <tr><td><b><span class="en">Behavior model</span><span class="ko">동작 모델</span></b></td>
+        <td><span class="en">"vLLM would form this batch, evict that block, route here"</span><span class="ko">"vLLM이라면 이런 배치를 만들고, 저 블록을 축출하고, 여기로 라우팅"</span></td>
+        <td><span class="en">simulator code that mirrors vLLM's scheduler / KV manager / router logic</span><span class="ko">vLLM의 스케줄러·KV 매니저·라우터 로직을 흉내낸 시뮬레이터 코드</span></td></tr>
+  </table>
+
+  <p class="en">In Frontier specifically: the cost model is the <b>Fidelity Plan</b> (§2), and the behavior model is the <b>Execution Plane + Runtime Adapters</b> (§2). Each Runtime Adapter encodes one piece of vLLM's behavior (CUDA Graph padding, speculative draft logic, prefix-cache lookup, ...).</p>
+  <p class="ko">Frontier에선: 비용 모델 = <b>Fidelity Plan</b>(§2), 동작 모델 = <b>Execution Plane + Runtime Adapters</b>(§2). 각 Runtime Adapter가 vLLM의 한 동작(CUDA Graph 패딩, speculative draft, prefix-cache 룩업, …)을 인코딩.</p>
+
+  <h4>(e)
+    <span class="en">Why it generalizes to new scenarios</span>
+    <span class="ko">새 시나리오로 일반화되는 이유</span>
+  </h4>
+
+  <p class="en">Three reasons the "measure once, simulate many" trick actually works:</p>
+  <p class="ko">"한 번 측정해서 많이 시뮬"이 실제로 동작하는 세 가지 이유:</p>
+  <ol class="en">
+    <li><b>LLM inference repeats the same few ops.</b> Attention, dense GEMM, MoE GroupedGEMM, layer-norm, all-reduce. There are no rare ops to miss.</li>
+    <li><b>Op latency is a smooth function of shape.</b> Once you have measurements at (batch=4, seq=512), (batch=4, seq=1024), …, you can interpolate (batch=5, seq=800) with low error. The <code class="inl">skew_fit.csv</code> stores the curve coefficients.</li>
+    <li><b>Cluster topology is orthogonal to op cost.</b> The same attention takes the same time whether you're running co-location or PDD. What changes is <b>which</b> ops happen on <b>which</b> device and <b>when</b> — and that's the simulator's behavior model handling it, not the cost model.</li>
+  </ol>
+  <ol class="ko">
+    <li><b>LLM 추론은 같은 몇 종류 op의 반복.</b> attention, dense GEMM, MoE GroupedGEMM, layer-norm, all-reduce. 놓칠 만한 희귀 op이 거의 없음.</li>
+    <li><b>op 지연은 shape에 대해 매끄러운 함수.</b> (batch=4, seq=512), (batch=4, seq=1024), … 측정값이 있으면 (batch=5, seq=800)을 낮은 오차로 보간 가능. <code class="inl">skew_fit.csv</code>가 곡선 계수 저장.</li>
+    <li><b>클러스터 토폴로지는 op 비용과 직교.</b> 같은 attention은 co-location이든 PDD이든 같은 시간이 걸림. 달라지는 건 <b>어느</b> op이 <b>어느</b> 디바이스에서 <b>언제</b> 일어나느냐 — 그건 비용 모델이 아니라 시뮬레이터의 동작 모델이 처리.</li>
+  </ol>
+
+  <h4>(f)
+    <span class="en">What this means for validation accuracy</span>
+    <span class="ko">검증 정확도에 미치는 의미</span>
+  </h4>
+
+  <p class="en">When the paper claims "±4% throughput vs real vLLM," it's saying: <b>cost model + behavior model</b>, evaluated on a workload that was held out from profile generation, predicted the same TTFT/throughput as a real vLLM run within 4%. That's a strong claim because:</p>
+  <p class="ko">논문이 "실 vLLM 대비 ±4% throughput"이라 주장할 때 의미: <b>비용 모델 + 동작 모델</b>이 프로파일 생성에 안 쓰인 워크로드에 대해 실 vLLM과 TTFT/throughput을 4% 이내로 일치시킴. 강력한 주장인 이유:</p>
+  <ul class="en">
+    <li>The held-out workload uses (batch, seq) shapes that may not be exact profile sample points → tests the interpolation.</li>
+    <li>The cluster config may be different from profiling → tests the behavior model.</li>
+    <li>Optional flags (CUDA Graph, speculative) toggle on/off → tests the Runtime Adapters.</li>
+  </ul>
+  <ul class="ko">
+    <li>held-out 워크로드는 정확한 프로파일 sample 점이 아닌 (batch, seq)를 씀 → 보간 정확도 시험.</li>
+    <li>cluster config가 프로파일 때와 다를 수 있음 → 동작 모델 정확도 시험.</li>
+    <li>옵션 플래그(CUDA Graph, speculative) on/off → Runtime Adapter 정확도 시험.</li>
+  </ul>
+
+  <p class="muted">
+    <span class="en">If your workload's distribution is way outside the profile sweep (e.g. batches of 500+, prompts of 100K tokens — typically not sampled), accuracy can degrade. Profile coverage = the simulator's "knowledge horizon."</span>
+    <span class="ko">워크로드 분포가 프로파일 sweep 범위를 한참 벗어나면(예: 배치 500+, 10만 토큰 프롬프트 — 보통 샘플링 안 됨) 정확도가 떨어질 수 있음. 프로파일 커버리지 = 시뮬레이터의 "지식 범위".</span>
+  </p>
+
+  <h3>3-2.
     <span class="en">Use case 1 — Pareto frontier across architectures (256 H800)</span>
     <span class="ko">Use case 1 — 아키텍처 간 Pareto 프런티어 (256× H800)</span>
   </h3>
@@ -479,7 +640,7 @@
   <p class="en">Reading this: PDD wins by ~5× at the right split ratio. Worth noting: <b>without a simulator</b> finding "112 prefill + 144 decode" experimentally on a real cluster would take dozens of cluster reconfigurations.</p>
   <p class="ko">해석: PDD가 적절한 비율에서 ~5× 우세. 주목할 점: <b>시뮬 없이</b> "prefill 112 + decode 144"를 실 클러스터에서 찾으려면 클러스터 재구성을 수십 번 해야 함.</p>
 
-  <h3>3-2.
+  <h3>3-3.
     <span class="en">Use case 2 — Heterogeneous GPU mix (cheap nodes for prefill?)</span>
     <span class="ko">Use case 2 — 이종 GPU 혼합 (prefill엔 싼 노드?)</span>
   </h3>
@@ -490,7 +651,7 @@
   <p class="en">Frontier evaluates Qwen3-235B-A22B with role-specific GPU assignment + cost-efficiency gates. The user can sweep over (prefill-GPU type, decode-GPU type, ratio) and read off the Pareto front in dollars per million tokens.</p>
   <p class="ko">Frontier가 Qwen3-235B-A22B에 대해 역할별 GPU 배정 + 비용 효율 게이트로 평가. 사용자는 (prefill GPU 타입, decode GPU 타입, 비율)을 스윕하고 백만 토큰당 비용으로 Pareto 프런티어를 읽음.</p>
 
-  <h3>3-3.
+  <h3>3-4.
     <span class="en">Use case 3 — Scheduling for stateful reasoning (agentic)</span>
     <span class="ko">Use case 3 — 상태 보존 reasoning 스케줄링</span>
   </h3>
@@ -509,7 +670,7 @@
   <p class="en"><b>What this proves:</b> the win comes from <i>understanding</i> the workload's hidden structure, not from a generic queue trick. Frontier lets you A/B schedulers before writing any production code.</p>
   <p class="ko"><b>증명되는 것:</b> 이득은 단순 큐 트릭이 아니라 워크로드 숨은 구조를 <i>이해</i>하는 데서 옴. Frontier로 프로덕션 코드 작성 전에 스케줄러 A/B 가능.</p>
 
-  <h3>3-4.
+  <h3>3-5.
     <span class="en">Use case 4 — RL rollout reconfiguration</span>
     <span class="ko">Use case 4 — RL rollout 재구성</span>
   </h3>
@@ -520,7 +681,7 @@
   <p class="en"><b>Frontier's verdict:</b> dynamic policy <b>reduces rollout makespan 528.8s → 259.1s</b> and improves effective decode throughput <b>2.04×</b>. Concrete, actionable answer to a "should we add this feature" question.</p>
   <p class="ko"><b>Frontier 결론:</b> 동적 정책이 rollout makespan을 <b>528.8s → 259.1s</b>로 줄이고, 유효 decode throughput <b>2.04×</b>. "이 기능 추가할 가치 있나?"에 대한 구체적 답.</p>
 
-  <h3>3-5.
+  <h3>3-6.
     <span class="en">Where Frontier sits vs. running real vLLM</span>
     <span class="ko">실 vLLM 실행 대비 Frontier 자리</span>
   </h3>
