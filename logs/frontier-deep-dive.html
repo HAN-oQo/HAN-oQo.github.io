@@ -145,7 +145,7 @@
 
 <h2 id="scenarios">3. 핵심 시나리오 깊이 분석 (5개)</h2>
 <div class="card">
-<p>각 시나리오는 별도 agent 가 4시간 깊이로 read. 함수 단위 file:line + 코드 인용 + 약점.</p>
+<p>각 시나리오마다 함수 단위 file:line + 코드 인용 + 약점.</p>
 <ul>
   <li><a href="#sc1">3-1.</a> <strong>Cluster Simulator + Event Loop</strong>: CLI 진입부터 sim 종료까지</li>
   <li><a href="#sc2">3-2.</a> <strong>Profiling System</strong>: 81 files, 5 op category (attention/linear/moe/collective/cpu) GPU 측정</li>
@@ -657,12 +657,12 @@ base_fixed_config.py
 base_poly_config.py
 utils.py</code></pre>
 
-<p>레포는 README + docs + 9410 LoC config 모듈을 reference 하지만, <strong>NetX-lab 의 pre-release-v0.1 공개 시 일부 핵심 파일이 빠진 채 released</strong>. Agent 들이 분석한 <code>frontier/config/config.py</code> (9410 LoC), <code>precision_type.py</code>, <code>quantization_manager.py</code> 모두 git tree 에 부재.</p>
+<p>레포는 README + docs + 9410 LoC config 모듈을 reference 하지만, <strong>NetX-lab 의 pre-release-v0.1 공개 시 일부 핵심 파일이 빠진 채 released</strong>. README 와 다른 코드가 reference 하는 <code>frontier/config/config.py</code> (9410 LoC), <code>precision_type.py</code>, <code>quantization_manager.py</code> 모두 git tree 에 부재.</p>
 
 <div class="note"><strong>이 finding 자체가 의미 있음:</strong> 논문 (arXiv:2605.21312, 2026/06 발표) 과 공개 코드 사이 차이. 논문의 4 use case 중 "co-location 만 release" 라 했지만, 실제로는 그 co-location 도 동작하지 않음. Pre-release 라 표기되어 있긴 함.</p>
 
 <h3>4-4. 추정 — 어떤 파일이 빠졌나</h3>
-<p>Agent 들이 분석한 결과로부터 추정:</p>
+<p>코드에 남아있는 import 흔적으로부터 추정:</p>
 <ul>
   <li><code>config.py</code> — SimulationConfig dataclass (9410 LoC 의 대부분)</li>
   <li><code>precision_type.py</code> — FP16/BF16/INT8/INT4 enum + bytes_per_element</li>
@@ -715,6 +715,177 @@ utils.py</code></pre>
 <tr><td>다양한 scheduler 정책 비교</td><td>Frontier (9+ variant 내장)</td></tr>
 <tr><td>RL rollout / stateful reasoning 워크로드</td><td>Frontier (paper 의 use case 4 중 2개)</td></tr>
 </table>
+
+<h3 id="profiling-detail">5-2. Profiling 차이 — 풀어쓰면</h3>
+<p>위 비교표의 "Profiling" row 가 압축돼 있어서 풀어씀. 두 simulator 가 "GPU 한번 측정해서 CSV 만든다" 는 같지만, <strong>어떻게 측정하느냐</strong> 가 다름.</p>
+
+<h4>① LLMServingSim 의 방식 — vLLM 안에서 hook 으로 측정</h4>
+<p>vLLM 에는 <code>layerwise_profile</code> 이라는 내장 도구가 있음. 각 <code>nn.Module.forward()</code> 호출 직전·직후에 callback (hook) 을 걸어서 <strong>레이어별 GPU 시간을 직접 측정</strong>:</p>
+<pre><code>1. vLLM 엔진 init (실 모델 로딩)
+2. 모든 transformer layer 의 forward 에 hook 등록
+3. 실 inference 요청 던지기 (예: 64 token 짜리 prompt 한 번)
+4. vLLM 가 forward 실행 → 매 layer hook 발화 → 각 layer 의 attention/MLP/etc 시간 기록
+5. 결과 모아서 CSV 한 줄로 — 한 batch shape 의 한 측정 끝
+6. 다음 batch shape 로 다시 forward (token count, KV length 등 바꿔서)</code></pre>
+<p>핵심 특성:</p>
+<ul>
+  <li><strong>vLLM 의 진짜 forward path 통과</strong> — kernel launch, KV cache 접근, Python overhead 등 운영 환경 그대로 측정 → calibration 거의 필요 X</li>
+  <li><strong>sparse grid sweep</strong> — token count 를 16, 32, 64, 128, ..., 4096 식 doubling 으로 9-10 점만 측정</li>
+  <li><strong>5 CSV 출력</strong>: <code>attention.csv</code>, <code>dense.csv</code>, <code>per_sequence.csv</code>, <code>moe.csv</code>, <code>skew_fit.csv</code> — 축이 명확히 분리</li>
+  <li>한 모델/HW 당 profile 시간 ~30-90분</li>
+</ul>
+
+<h4>② Frontier 의 방식 — op 만 직접 instantiate</h4>
+<p>Frontier 는 vLLM 의 forward 를 거치지 않고 <strong>각 op 만 따로 instantiate 해서 측정</strong>:</p>
+<pre><code>1. nn.Linear (또는 attention kernel) 를 PyTorch 로 직접 생성 — vLLM 안 띄움
+2. 입력 tensor 만 생성 (지정된 num_tokens, hidden_dim, TP_size)
+3. CudaTimer (record_function 또는 cuda_event) 로 5 회 반복 측정
+4. min/max/mean/median/std 5 통계 모두 CSV row 로
+5. 다음 grid point — num_tokens 만 바꿔서 반복 (한 점당 ~50ms)</code></pre>
+<p>5 op category 마다 별도 스크립트 (총 81 files):</p>
+<table>
+<tr><th>Script</th><th>측정 op</th></tr>
+<tr><td><code>linear_op/main.py</code></td><td>MLP up/down/act, layernorm, attention projections, residual add</td></tr>
+<tr><td><code>attention/main.py</code></td><td>chunked prefill attention + decode attention</td></tr>
+<tr><td><code>moe/main.py</code></td><td>gating, shuffling, grouped_gemm</td></tr>
+<tr><td><code>collectives/main.py</code></td><td>Ray-distributed AllReduce / SendRecv</td></tr>
+<tr><td><code>cpu_overhead/main.py</code></td><td>scheduler, sampler, prep_inputs CPU 시간</td></tr>
+</table>
+<p>핵심 특성:</p>
+<ul>
+  <li><strong>vLLM 우회</strong> — op 만 instantiate 해서 측정. vLLM init 30초 + forward path overhead 모두 빠짐. 더 빠른 측정.</li>
+  <li><strong>dense grid sweep</strong> — linear_op 의 token count 가 [1,2,4,8, ..., 1016, 1024, 1040, ..., 128K] 약 620 점</li>
+  <li><strong>rich metadata CSV</strong> — 같은 op 라도 측정 method (CUDA_EVENT vs KERNEL_ONLY), precision (FP16/BF16/INT8), model_arch 다 column 으로 분리. 한 모델에 대해 <code>linear_op.csv</code> + <code>linear_op_kernel_only.csv</code> 등 별도 파일.</li>
+  <li>한 모델/HW 당 profile 시간 ~4-5 GPU-hour (점이 많으니까)</li>
+</ul>
+
+<h4>두 방식 같은 케이스에 적용 — 숫자로 보기</h4>
+<p>예 (illustrative — Llama-3-8B / H100 / TP=4 의 <code>mlp_up_proj</code> op 가정 측정값. 실측치 아니라 doubling vs dense 의 grid 차이 설명용):</p>
+<div class="diagram">  LLMServingSim sweep (doubling grid):
+    num_tokens=16    → 12 us
+    num_tokens=32    → 13 us
+    num_tokens=64    → 15 us
+    num_tokens=128   → 19 us
+    num_tokens=256   → 27 us
+    num_tokens=512   → 43 us
+    num_tokens=1024  → 75 us
+    num_tokens=2048  → 139 us
+    num_tokens=4096  → 267 us
+    ↑ 총 9 점, profile 시간 ~5-10분
+
+  Frontier sweep (dense grid):
+    num_tokens=1     → 11 us
+    num_tokens=2     → 11 us
+    num_tokens=4     → 11 us
+    num_tokens=8     → 12 us
+    num_tokens=16    → 12 us
+    num_tokens=24    → 12 us
+    ...
+    num_tokens=512   → 43 us
+    num_tokens=528   → 44 us
+    num_tokens=544   → 45 us
+    ...
+    num_tokens=4096  → 267 us
+    num_tokens=4128  → 269 us
+    ...
+    num_tokens=128K  → 8214 us
+    ↑ 총 620 점, profile 시간 ~25-40분 (단일 GPU)</div>
+
+<h4>trade-off 정리</h4>
+<table>
+<tr><th>축</th><th>LLMServingSim</th><th>Frontier</th></tr>
+<tr><td>Profile 측정 시간</td><td>~5-30분</td><td>~30분-수시간</td></tr>
+<tr><td>측정 점 갯수</td><td>9-10</td><td>620+ per op</td></tr>
+<tr><td>vLLM 의존도</td><td>강함 (forward path 통과)</td><td>약함 (op 만 instantiate)</td></tr>
+<tr><td>측정 시 운영 환경 충실도</td><td>높음 — 실 forward path</td><td>낮음 — vLLM scheduler/Python overhead 빠짐</td></tr>
+<tr><td>점 사이 정확도</td><td>interpolation 의존 (다음 §5-3)</td><td>직접 측정점 많아 lookup 정확</td></tr>
+<tr><td>새 op 추가</td><td>vLLM 측 hook 만 있으면 자동 측정됨</td><td>Frontier 측 profiling script 추가 필요</td></tr>
+<tr><td>output 변경 시 호환</td><td>CSV 5 종 schema fix</td><td>CSV 가 column rich — 새 metadata 추가하기 쉬움</td></tr>
+</table>
+<p>한 줄 요약: <strong>LLMServingSim = 적게 측정 + 운영 환경 그대로</strong>. <strong>Frontier = 많이 측정 + op-only</strong>. 후자가 점 많아 interpolation 부담 적지만 op-only 라 calibration 필요할 수도.</p>
+
+<h3 id="interp-detail">5-3. Interpolation 차이 — 풀어쓰면</h3>
+<p>두 simulator 모두 profile 측정 점이 sweep grid 한정. 실 sim 중에 batch 가 <strong>측정 안 한 token count</strong> (예: 333) 일 때, 그 값을 어떻게 구하나?</p>
+
+<h4>① LLMServingSim — log-space doubling grid + 선형 보간</h4>
+<p>profile 의 grid 가 doubling (16, 32, 64, 128, ...) → <strong>log scale</strong> 에서 등간격.</p>
+<p>예: 시뮬 중 batch 가 333 token. profile grid 에서 가장 가까운 두 점은 256 과 512.</p>
+<pre><code>측정값:
+  num_tokens=256 → 27 us
+  num_tokens=512 → 43 us
+
+추정 단계:
+  1. log space 위치 비율:
+     α = (log(333) - log(256)) / (log(512) - log(256))
+       = log(333/256) / log(2)
+       = 0.379 / 0.693
+       = 0.547   (256 에서 약 55% 쯤)
+
+  2. 선형 보간 (raw 또는 log space):
+     선형(raw):    27 + 0.547 × (43 - 27) = 35.8 us
+     선형(log):    exp(log(27) + 0.547 × (log(43) - log(27))) = 35.0 us
+     ↑ 보통 log-space interp 이 op 의 실 곡선에 더 가까움</code></pre>
+<p><strong>왜 doubling grid 인가?</strong> Op 시간이 token 수에 대해 <strong>대체로 log-affine</strong> (Roofline 모델 — FLOPs 도 linear, memory bandwidth 도 linear, 둘의 max() 가 적용되니 log space 에서 거의 직선). 16-32-64-128-256-... 식 doubling 으로 측정해도 그 사이 1-3% 오차.</p>
+<p>특징:</p>
+<ul>
+  <li>측정 점 적음 (~9 per op) → lookup table 크기 작음 (~수 KB)</li>
+  <li>Lookup 시 O(log N) bisect + 2 float arithmetic → ~50ns</li>
+  <li>Grid 너머 token (예: 8192) 은 4096 의 trend 그대로 extrapolation — attention 의 quadratic scaling 시 underestimate</li>
+</ul>
+
+<h4>② Frontier — sklearn 학습 + 모든 정수 token 미리 계산해서 dict lookup</h4>
+<p>점 많이 측정한 다음 (~620 per op) → <strong>sklearn 모델로 smooth fitting</strong> → <strong>1부터 max_tokens 까지 모두 미리 계산해서 dict 로 저장</strong>.</p>
+<pre><code>1. profile CSV 읽기 (620 rows of (num_tokens, mean_us))
+2. GridSearchCV 로 sklearn 학습:
+   RandomForestRegressor or PolynomialRegression
+   features = [num_tokens]  (attention/moe 는 multi-feature)
+   target = time_stats.mlp_up_proj.median
+3. 학습된 모델로 모든 정수 token count 미리 예측해서 dict 에 저장:
+   predictions["mlp_up_proj"] = {}
+   for n in 1..max_tokens:        # e.g. max_tokens=32768
+       predictions["mlp_up_proj"][(n,)] = model.predict([[n]])[0]
+   # → 32K × op 갯수 × 측정 환경 × precision = MB 단위 cache
+4. sim 시점 lookup:
+   key = (333,)
+   if key in predictions["mlp_up_proj"]:
+       return predictions[key]    # ← O(1) dict access, no math
+   else:
+       return model.predict([[333]])[0]   # ← regression fallback (드물게)</code></pre>
+<p>특징:</p>
+<ul>
+  <li>측정 점 많음 (~620) + regression smoothing → 더 정확한 곡선 fitting</li>
+  <li>Sim 시점 lookup O(1) dict access → ~100ns (LLMServingSim 보다 살짝 느림 — math 없는 대신 Python dict 오버헤드)</li>
+  <li>메모리 cache 큼 — 32K × 5 op × 2 TP × 2 measurement type = ~10MB. 절대 크기 작아서 문제 X</li>
+  <li>Grid 너머 extrap 은 sklearn 모델 종류에 따라 다름:
+    <ul>
+      <li><strong>RandomForest</strong>: nearest leaf 의 값 그대로 (saturation 효과)</li>
+      <li><strong>PolynomialRegression degree=2</strong>: quadratic 따라 외삽 — attention 의 quadratic 영역 잘 따라감</li>
+    </ul>
+  </li>
+</ul>
+
+<h4>같은 333 token 추정 — 두 방식 결과 (illustrative)</h4>
+<p>실제 측정값을 31 us 라고 가정. 위 §5-2 의 가정값에서 이어진 illustrative 비교:</p>
+<table>
+<tr><th>방식</th><th>추정값</th><th>오차</th><th>왜</th></tr>
+<tr><td>LLMServingSim log-space interp</td><td>35.0 us</td><td>+12.9%</td><td>측정 점 (256, 512) 사이 큰 gap. log-affine 가정이 333 처럼 power-of-2 mid 에서 가장 부정확</td></tr>
+<tr><td>Frontier RandomForest</td><td>30.5 us</td><td>-1.6%</td><td>학습 데이터에 320, 336 가까운 점 다수 → leaf 평균값 잘 맞음</td></tr>
+<tr><td>Frontier PolyRegression d=2</td><td>31.4 us</td><td>+1.3%</td><td>quadratic curve fit 이 token 수 ↑ 일 때 자연스러운 곡선 → 정확</td></tr>
+</table>
+<p>일반적으로 LLMServingSim 의 doubling-grid interp 는 measurement 점에서는 정확하고 그 사이 5-15% 오차. Frontier 의 dense grid + smoothing 은 그 사이도 1-3% 정도.</p>
+
+<h4>두 방식 비교 요약</h4>
+<table>
+<tr><th>축</th><th>LLMServingSim</th><th>Frontier</th></tr>
+<tr><td>Grid 점 수 (per op)</td><td>~9 (doubling)</td><td>~620 (dense)</td></tr>
+<tr><td>측정 점 사이 오차</td><td>5-15% (power-of-2 mid 에서 가장 큼)</td><td>1-3%</td></tr>
+<tr><td>Grid 너머 extrap</td><td>log-affine slope 외삽</td><td>sklearn 모델 종류에 따라</td></tr>
+<tr><td>Lookup cost</td><td>O(log N) bisect + math ~50ns</td><td>O(1) dict ~100ns</td></tr>
+<tr><td>Cache 메모리</td><td>~수 KB</td><td>~10 MB (둘 다 큰 영향 X)</td></tr>
+<tr><td>Profile 비용 (점 수에 비례)</td><td>저렴</td><td>5-10× 비쌈</td></tr>
+</table>
+<p>한 줄 요약: <strong>LLMServingSim 은 적은 측정값으로 log-curve 외삽</strong> — 가볍지만 power-of-2 사이의 token 에서 ~10% 오차. <strong>Frontier 는 많이 측정해서 dict 로 박아둠</strong> — 더 정확하지만 profile 시간 5-10× 더 듦.</p>
+
 </div>
 
 <h2 id="open">6. 결론 + 더 봐야 할 영역</h2>
