@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLMServingSim — 프로파일링 가이드 (인벤토리 + 새 (HW × 모델) 만들기)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  h4 { font-size: 0.95rem; margin-top: 18px; color: var(--blue); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.85rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.9rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc ol { margin: 8px 0; }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .toc a:hover { color: var(--blue); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .note strong { color: var(--amber); }
+  .tip  { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .tip strong { color: var(--teal); }
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+              background: var(--blue); color: #fff; border-radius: 50%; font-weight: 700; margin-right: 10px; font-size: 0.95rem; }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · <a href="llmservingsim-qwen3-runbook.html">Qwen3 런북</a></p>
+
+<h1>LLMServingSim — 프로파일링 가이드</h1>
+<p class="sub">작성일: 2026-06-10 · 대상: <a href="https://github.com/casys-kaist/LLMServingSim">casys-kaist/LLMServingSim</a> @ <code>8b5b943a3a37</code> · 목표: <strong>(HW × 모델) 프로파일을 새로 만들고 시뮬에 쓰는 법을 끝까지 재현 가능하게 정리</strong>.</p>
+
+<div class="card toc">
+<strong>목차</strong>
+<ol>
+  <li><a href="#why">왜 이 문서가 필요한가</a></li>
+  <li><a href="#inv">현재 사용 가능한 프로파일 인벤토리</a></li>
+  <li><a href="#arch">지원되는 모델 아키텍처 (YAML 카탈로그)</a></li>
+  <li><a href="#scen">시나리오 분류 — 뭐가 필요한가</a></li>
+  <li><a href="#prereq">필수 준비물</a></li>
+  <li><a href="#step">Step-by-step — 새 HW × 모델 프로파일 (가장 흔한 경우)</a></li>
+  <li><a href="#yaml">새 모델 아키텍처 YAML 작성 (드문 케이스)</a></li>
+  <li><a href="#out">산출물 구조</a></li>
+  <li><a href="#fast">프로파일 시간 단축 트릭</a></li>
+  <li><a href="#cost">비용 추정</a></li>
+  <li><a href="#use">새 프로파일을 시뮬에서 쓰는 법</a></li>
+  <li><a href="#check">빠른 체크리스트</a></li>
+</ol>
+</div>
+
+<h2 id="why">1. 왜 이 문서가 필요한가</h2>
+<div class="card">
+<p>LLMServingSim 2.0은 <strong>"비용 표 + 행동 모델"</strong> 구조로 동작 (자세한 건 <a href="../study/frontier.html">Frontier 노트 §3-1</a> 참고). 핵심은:</p>
+<ul>
+  <li><strong>cost table = (HW × 모델 × dtype × TP) 별 op 지연 CSV</strong></li>
+  <li>이 표가 있으면 sim은 GPU 없이 돌아감. 없으면 못 돔.</li>
+</ul>
+<p>레포에는 KAIST 팀이 미리 만들어둔 일부 조합 CSV가 들어있음. 다른 (HW, 모델) 조합을 쓰려면 직접 만들어야 함. 이 문서는 그 작업의 전체 흐름.</p>
+</div>
+
+<h2 id="inv">2. 현재 사용 가능한 프로파일 인벤토리 (실측 확인)</h2>
+<div class="card">
+<p>2026-06-10 기준 레포 (<code>profiler/perf/</code>) 에 커밋되어 있는 (HW × model × variant × TP) 전체 목록. <strong>이 표에 있는 조합은 GPU 없이 그대로 sim 가능:</strong></p>
+
+<table>
+<tr><th>HW (label)</th><th>실제 GPU</th><th>모델</th><th>구조 (model_type)</th><th>variant</th><th>TP</th><th>프로파일 날짜</th></tr>
+<tr><td rowspan="3"><code>RTXPRO6000</code></td><td rowspan="3">NVIDIA RTX PRO 6000 Blackwell Server Edition (96GB VRAM, 1597 GB/s)</td>
+    <td><code>meta-llama/Llama-3.1-8B</code></td><td><code>llama</code></td><td>bf16</td><td>1, 2</td><td>2026-04-24</td></tr>
+<tr><td><code>Qwen/Qwen3-32B</code></td><td><code>qwen3</code></td><td>bf16</td><td>1, 2</td><td>2026-04-24</td></tr>
+<tr><td><code>Qwen/Qwen3-30B-A3B-Instruct-2507</code> (MoE)</td><td><code>qwen3_moe</code></td><td>bf16</td><td>1, 2</td><td>2026-04-24</td></tr>
+</table>
+
+<p><strong>요약:</strong> HW 1종 × 모델 3종 × TP 2종 = 즉시 사용 가능 6 셋업.</p>
+
+<div class="note"><strong>참고:</strong> 공식 docs는 <code>bf16-kvfp8</code> variant도 언급하지만 main 브랜치엔 아직 미커밋. 현재 <code>bf16</code>만.</div>
+
+<h3>2-1. 즉시 가능한 cluster config 조합</h3>
+<table>
+<tr><th>모델</th><th>레포 내장 cluster config (사용 가능)</th></tr>
+<tr><td>Llama-3.1-8B</td><td><code>single_node_single_instance.json</code>, <code>single_node_multi_instance.json</code>, <code>single_node_pd_instance.json</code>, <code>single_node_pd_per_instance_config.json</code>, <code>single_node_4_instance_2TP.json</code>, <code>single_node_cxl_instance.json</code>, <code>single_node_memory_instance.json</code>, <code>single_node_heterogeneous.json</code>, <code>dual_node_multi_instance.json</code> 등</td></tr>
+<tr><td>Qwen3-32B</td><td>레포에 기성 config 없음. <a href="llmservingsim-qwen3-runbook.html#s7">런북 §7</a>에서 자작한 <code>qwen3_32b_single.json</code> 참고</td></tr>
+<tr><td>Qwen3-30B-A3B-Instruct-2507</td><td><code>single_node_moe_single_instance.json</code>, <code>single_node_moe_multi_instance.json</code>, <code>single_node_moe_pd_instance.json</code>, <code>single_node_moe_dp_ep_instance.json</code>, <code>dual_node_moe_dp_ep_intra_inter_instance.json</code> (이미 Qwen3-30B-A3B 용으로 작성됨)</td></tr>
+</table>
+</div>
+
+<h2 id="arch">3. 지원되는 모델 아키텍처 (YAML 카탈로그)</h2>
+<div class="card">
+<p>새 모델을 프로파일할 때 그 모델의 <code>config.json</code>의 <code>model_type</code> 필드가 아래 중 하나면 <strong>YAML 작업 없이 바로 가능</strong>:</p>
+<pre><code>profiler/models/
+├── llama.yaml          # Llama 1/2/3.x/3.3 (Llama-3.1-8B/70B, Llama-3.3-70B 등)
+├── qwen3.yaml          # Qwen3 dense (Qwen3-0.6B/1.7B/4B/8B/14B/32B/...)
+├── qwen3_moe.yaml      # Qwen3 MoE (Qwen3-30B-A3B, Qwen3-235B-A22B 등)
+├── mixtral.yaml        # Mixtral 8x7B / 8x22B
+└── phimoe.yaml         # Phi-mini-MoE-instruct 등</code></pre>
+
+<div class="tip"><strong>지원 안 되는 모델 예시:</strong> Mistral-7B (별도 model_type), Gemma, Phi-3 dense, DeepSeek 등은 직접 YAML 작성 필요 (이 문서 §7 참고).</div>
+</div>
+
+<h2 id="scen">4. 시나리오 분류 — 뭐가 필요한가</h2>
+<div class="card">
+<table>
+<tr><th>상황</th><th>필요한 작업</th><th>대략 시간</th></tr>
+<tr><td>레포 내장 (HW × 모델) 그대로 사용</td><td>아무것도. 위 §2 표에 있으면 바로 sim</td><td>0분</td></tr>
+<tr><td>새 HW + 내장 모델 (예: H100 × Llama-3.1-8B)</td><td>그 HW에 vLLM 띄워서 한 번 프로파일</td><td>~1–2h (모델 크기 따라)</td></tr>
+<tr><td>내장 HW + 새 모델, 모델 아키텍처는 지원됨 (Llama-3.3-70B 등)</td><td>그 HW에서 프로파일 1회</td><td>~1–3h</td></tr>
+<tr><td>완전히 새 모델 (Mistral, Gemma, DeepSeek 등)</td><td>YAML 작성 + 프로파일</td><td>YAML ~1–4h + 프로파일</td></tr>
+<tr><td>GPU 아닌 가속기 (TPU, NPU)</td><td>별도 워크플로 (<a href="https://llmservingsim.ai/docs/profiler/adding-hardware#adding-non-gpu-hardware">공식 docs</a>)</td><td>—</td></tr>
+</table>
+</div>
+
+<h2 id="prereq">5. 필수 준비물</h2>
+<div class="card">
+<ul>
+<li>✅ <strong>실제 NVIDIA GPU</strong> — 모델이 적어도 1장에 들어가는 VRAM (TP &gt; 1이면 그만큼 더)</li>
+<li>✅ <strong>레포 클론</strong> — <code>git clone --recurse-submodules https://github.com/casys-kaist/LLMServingSim.git</code></li>
+<li>✅ <strong>vLLM Docker 컨테이너</strong> (sim 컨테이너와 별개) — 레포의 <code>scripts/docker-vllm.sh</code> 사용</li>
+<li>✅ <strong>HF_TOKEN 환경변수</strong> — gated 모델 (Llama 등) 다운용. <code>huggingface.co</code>에서 발급</li>
+<li>✅ <strong>여유 시간</strong> — 작은 모델 30분~1h, 큰 모델 2~3h</li>
+</ul>
+
+<div class="note"><strong>중요:</strong> sim 컨테이너 (<code>astrasim/tutorial-micro2024</code>, CPU 동작)와 profiler 컨테이너 (vLLM, GPU 동작)는 별도 환경. profiler는 GPU 머신에서 돌리고, 산출된 <code>profiler/perf/&lt;HW&gt;/...</code> 폴더만 sim 머신으로 복사하면 됨.</div>
+</div>
+
+<h2 id="step">6. Step-by-step — 새 HW × 모델 프로파일 (가장 흔한 경우)</h2>
+<div class="card">
+
+<h4><span class="step-num">1</span>vLLM 컨테이너 띄우기 (GPU 머신에서)</h4>
+<pre><code>cd ~/LLMServingSim
+export HF_TOKEN=hf_xxxxxxxxxx       # gated 모델 받으려면
+bash scripts/docker-vllm.sh
+# → vllm_docker 라는 별도 컨테이너 띄움, --gpus all 자동 적용</code></pre>
+
+<h4><span class="step-num">2</span><code>profiler/profile.sh</code> 변수 편집</h4>
+<p>스크립트 상단의 변수만 손대면 됨:</p>
+<pre><code>MODEL="Qwen/Qwen3-32B"        # HF 이름 (config.json 자동 다운)
+HARDWARE="H100"                # 자유 라벨 (perf/&lt;이거&gt;/ 폴더가 됨)
+TP_DEGREES="1,2,4"             # 측정할 TP 차수 (반드시 1 포함)
+MAX_NUM_BATCHED_TOKENS=2048
+MAX_NUM_SEQS=256
+MEASUREMENT_ITERATIONS=3       # 5로 올리면 분산 ↓, ~1.67× 느려짐
+# SKIP_SKEW=1                  # skew sweep 스킵 (분 단위 단축)</code></pre>
+
+<h4><span class="step-num">3</span>실행</h4>
+<pre><code>docker exec vllm_docker bash -c "cd /workspace && ./profiler/profile.sh"</code></pre>
+
+<p>내부 동작:</p>
+<ol>
+<li><code>configs/model/&lt;MODEL&gt;.json</code> 읽음 (없으면 HF에서 자동 다운로드 + 캐싱)</li>
+<li><code>config.json</code>의 <code>model_type</code> 필드로 <code>profiler/models/&lt;type&gt;.yaml</code> 매칭</li>
+<li>tmpdir에 model config 써놓고 vLLM 엔진 띄움</li>
+<li><strong>4가지 grid sweep</strong>: dense / per_sequence / attention / moe → CSV 작성</li>
+<li>(기본) heterogeneous decode <strong>skew sweep</strong> → α-law fitting → <code>skew_fit.csv</code></li>
+<li><code>meta.yaml</code> 작성 (vllm_version, cuda_version, gpu 등 환경 기록)</li>
+</ol>
+
+<h4><span class="step-num">4</span>실시간 진행 모니터링 (선택)</h4>
+<pre><code># 다른 터미널에서
+docker logs -f vllm_docker</code></pre>
+<p>각 sweep 단계가 "Profiling dense:", "Profiling attention:" 같은 헤더로 시작. 중단됐다 다시 실행하면 이미 한 shot은 skip (resume 기능, <code>FORCE=1</code> 환경변수로 무효화 가능).</p>
+
+</div>
+
+<h2 id="yaml">7. 새 모델 아키텍처 YAML 작성 (드문 케이스)</h2>
+<div class="card">
+
+<p>대상 모델이 §3 YAML 목록에 없으면 <code>profiler/models/&lt;model_type&gt;.yaml</code>을 새로 작성. <code>qwen3.yaml</code>을 템플릿으로:</p>
+
+<pre><code># profiler/models/&lt;model_type&gt;.yaml
+sequence:
+  prologue:  [embedding]
+  pre_attn:  [layernorm, qkv_proj, qk_norm, rotary_emb, attention]
+  post_attn: [o_proj, layernorm]
+  mlp_dense: [gate_up_proj, act_fn, down_proj]
+  mlp_moe:   []                # MoE면 [router, experts, ...]
+  head:      [final_layernorm, lm_head, sampler]
+
+catalog:
+  dense:
+    embedding:     {vllm: VocabParallelEmbedding}
+    layernorm:     {vllm: RMSNorm, within: &lt;DecoderLayer클래스명&gt;, tp_stable: true}
+    qkv_proj:      {vllm: QKVParallelLinear}
+    rotary_emb:    {vllm: RotaryEmbedding}
+    o_proj:        {vllm: RowParallelLinear, within: &lt;Attention클래스명&gt;}
+    gate_up_proj:  {vllm: MergedColumnParallelLinear}
+    act_fn:        {vllm: SiluAndMul}
+    down_proj:     {vllm: RowParallelLinear, within: &lt;MLP클래스명&gt;}
+    final_layernorm: {vllm: RMSNorm, within: &lt;CausalLM클래스명&gt;, tp_stable: true}
+    lm_head:       {vllm: ParallelLMHead}
+    sampler:       {vllm: Sampler}</code></pre>
+
+<p>각 항목의 <code>vllm:</code> 필드는 vLLM 소스 (<code>vllm/model_executor/models/&lt;model&gt;.py</code>)의 클래스 이름. 카탈로그 채우려면 그 파이썬 파일을 읽으면서 매핑.</p>
+
+<h3>7-1. <code>tp_stable</code> 의미</h3>
+<p><code>tp_stable: true</code>로 표시한 op는 TP=1로 한 번만 측정하고 다른 TP 폴더로 복제. layernorm 처럼 TP에 따라 시간이 변하지 않는 layer가 해당. 잘못 표시하면 (예: 실제론 TP-dependent한데 stable로 표시) 다른 TP에서 sim 결과가 틀어짐.</p>
+
+<h3>7-2. 검증</h3>
+<p>YAML 작성 후 <strong>TP=1 + TP=2 둘 다 측정</strong>해서 <code>tp1/dense.csv</code>와 <code>tp2/dense.csv</code>를 비교. <code>tp_stable</code>로 표시한 row가 두 파일에서 거의 동일하면 (~5% 이내) 맞음.</p>
+</div>
+
+<h2 id="out">8. 산출물 구조</h2>
+<div class="card">
+<pre><code>profiler/perf/H100/Qwen/Qwen3-32B/bf16/
+├── meta.yaml                  # vllm_version, cuda_version, gpu, 측정 옵션
+├── tp1/
+│   ├── attention.csv          # (prefill_chunk, kv_prefill, n_decode, kv_decode) → time_us
+│   ├── dense.csv              # (layer, tokens) → time_us
+│   ├── per_sequence.csv       # (layer, sequences) → time_us
+│   ├── moe.csv                # (tokens, experts) → time_us (MoE 모델만)
+│   ├── skew.csv               # heterogeneous decode 측정 raw
+│   └── skew_fit.csv           # α-law fitting 계수
+├── tp2/
+└── tp4/</code></pre>
+
+<div class="tip"><strong>TP=1만 측정해도 다른 TP는 자동 derive 가능</strong> — TP-stable layer (layernorm 등)는 한 번만 측정하고 모든 TP 폴더로 복제됨. TP에 의존하는 layer (QKV/FFN GEMM)만 각 TP에서 따로 측정.</div>
+
+<h3>8-1. <code>meta.yaml</code> 예시</h3>
+<pre><code>created_at: '2026-04-24T03:12:00Z'
+vllm_version: '0.19.0'
+cuda_version: '13.0'
+torch_version: '2.6.0+cu130'
+gpu_name: 'NVIDIA RTX PRO 6000 Blackwell Server Edition'
+model: 'Qwen/Qwen3-32B'
+model_type: 'qwen3'
+dtype: 'bfloat16'
+kv_cache_dtype: 'auto'
+variant: 'bf16'
+tp_degrees: [1, 2]
+skew_fit: true
+measurement_iterations: 3</code></pre>
+</div>
+
+<h2 id="fast">9. 프로파일 시간 단축 트릭</h2>
+<div class="card">
+<table>
+<tr><th>플래그</th><th>효과</th><th>트레이드오프</th></tr>
+<tr><td><code>TP_DEGREES="1"</code></td><td>대략 ⅓~½ 시간</td><td>다른 TP는 sim 시 정확도 ↓ (TP-dependent layer 외삽)</td></tr>
+<tr><td><code>SKIP_SKEW=1</code></td><td>10–30분 단축</td><td>heterogeneous decode 정확도 ↓ (constant α로 fallback)</td></tr>
+<tr><td><code>MEASUREMENT_ITERATIONS=1</code></td><td>~3× 빠름</td><td>분산 15–25% (vs 5% with N=3)</td></tr>
+<tr><td><code>ATTENTION_MAX_KV=4096</code> (기본 16384)</td><td>attention grid 1/4</td><td>긴 context (&gt; 4K) 시 외삽</td></tr>
+<tr><td><code>FORCE=1</code> 안 쓰기 (기본)</td><td>resume — 중단 후 재실행 시 이미 한 shot은 건너뜀</td><td>없음 (기본값)</td></tr>
+</table>
+</div>
+
+<h2 id="cost">10. 비용 추정</h2>
+<div class="card">
+<table>
+<tr><th>케이스</th><th>대략 시간</th><th>클라우드 spot 비용 (~)</th></tr>
+<tr><td>Llama-3.1-8B × A6000</td><td>~30분</td><td>~$0.4 (A6000 spot ~$0.8/h)</td></tr>
+<tr><td>Qwen3-32B × H100 (TP=2)</td><td>~1.5h</td><td>~$3 (H100 spot ~$2/h × 2장)</td></tr>
+<tr><td>Llama-3.1-70B × H100 (TP=4)</td><td>~2.1h (논문)</td><td>~$17 (H100 spot ~$2/h × 4장)</td></tr>
+<tr><td>Qwen3-235B-A22B × H100 (TP=8)</td><td>~3h 추정</td><td>~$50</td></tr>
+</table>
+<p>위 비용을 <strong>한 번</strong> 지불하면 그 (HW, model) 조합으로는 영원히 무료 sim. 100개 sweep 돌리든, PD-split 비율 50가지 돌리든, 추가 GPU 비용 0.</p>
+</div>
+
+<h2 id="use">11. 새 프로파일을 시뮬에서 쓰는 법</h2>
+<div class="card">
+
+<h4><span class="step-num">1</span>profiler 산출물을 sim 머신으로 복사</h4>
+<pre><code># profiler 머신 (GPU) 에서
+tar czf perf-h100-qwen3-32b.tar.gz profiler/perf/H100
+
+# sim 머신으로 전송
+scp perf-h100-qwen3-32b.tar.gz simhost:~/
+
+# sim 머신에서
+cd ~/LLMServingSim
+tar xzf ~/perf-h100-qwen3-32b.tar.gz
+# → profiler/perf/H100/ 에 풀림</code></pre>
+
+<h4><span class="step-num">2</span>새 HW 라벨 가리키는 cluster config 작성</h4>
+<pre><code>cat &gt; configs/cluster/qwen3_32b_h100.json &lt;&lt;'EOF'
+{
+    "num_nodes": 1,
+    "link_bw": 16,
+    "link_latency": 20000,
+    "nodes": [{
+        "num_instances": 1,
+        "cpu_mem": {"mem_size": 512, "mem_bw": 256, "mem_latency": 0},
+        "instances": [{
+            "model_name": "Qwen/Qwen3-32B",
+            "hardware": "H100",
+            "npu_mem": {"mem_size": 80, "mem_bw": 3350, "mem_latency": 0},
+            "num_npus": 2,
+            "tp_size": 2,
+            "pd_type": null
+        }]
+    }]
+}
+EOF</code></pre>
+
+<p><code>hardware</code> 필드 값이 <code>profile.sh</code>에서 사용한 <code>HARDWARE</code> 라벨과 <strong>정확히 일치해야 함</strong>. 시뮬레이터는 <code>profiler/perf/&lt;hardware&gt;/&lt;model_name&gt;/&lt;variant&gt;/tp&lt;N&gt;/</code> 경로로 CSV를 찾음.</p>
+
+<h4><span class="step-num">3</span>시뮬 실행 (GPU 없이)</h4>
+<pre><code>docker exec servingsim_docker bash -c "
+python -m serving \
+  --cluster-config configs/cluster/qwen3_32b_h100.json \
+  --dtype bfloat16 --block-size 16 \
+  --dataset workloads/sharegpt-qwen3-32b-300-sps10.jsonl \
+  --output outputs/qwen3_32b_h100.csv \
+  --log-interval 1.0
+"</code></pre>
+
+<h4><span class="step-num">4</span>결과 확인</h4>
+<pre><code>head outputs/qwen3_32b_h100.csv
+# instance_id,request_id,model,input,output,arrival,end_time,latency,queuing_delay,TTFT,TPOT,ITL</code></pre>
+
+</div>
+
+<h2 id="check">12. 빠른 체크리스트</h2>
+<div class="card">
+<ol>
+<li>대상 (HW, 모델) 조합이 §2 표에 있나? → 있으면 끝</li>
+<li>없다면, 모델의 <code>model_type</code>이 §3 YAML 5종 중 하나인가? → 맞으면 YAML 작업 ×</li>
+<li>GPU 머신 잡기 (로컬 또는 cloud spot)</li>
+<li>레포 클론 + <code>scripts/docker-vllm.sh</code>로 vLLM 컨테이너 띄움</li>
+<li><code>HF_TOKEN</code> 설정 (gated 모델인 경우)</li>
+<li><code>profiler/profile.sh</code> 상단 변수 편집 (MODEL, HARDWARE, TP_DEGREES)</li>
+<li><code>./profiler/profile.sh</code> 실행 → 1~3h 기다림</li>
+<li>산출물 <code>profiler/perf/&lt;HW&gt;/&lt;model&gt;/</code> 확인</li>
+<li>sim 머신으로 복사 (또는 같은 머신이면 그대로)</li>
+<li>그 HW 라벨을 가리키는 cluster config 작성 → <code>python -m serving</code> 실행</li>
+</ol>
+
+<div class="tip"><strong>공식 docs 링크 (자세히 들어가야 할 때):</strong><br>
+· <a href="https://llmservingsim.ai/docs/profiler/overview">Profiler overview</a><br>
+· <a href="https://llmservingsim.ai/docs/profiler/running">Running the profiler</a><br>
+· <a href="https://llmservingsim.ai/docs/profiler/adding-hardware">Adding new hardware</a><br>
+· <a href="https://llmservingsim.ai/docs/profiler/adding-model-architecture">Adding a model architecture</a><br>
+· <a href="https://llmservingsim.ai/docs/profiler/skew-alpha-fit">Skew &amp; alpha fit methodology</a><br>
+· <a href="https://llmservingsim.ai/docs/profiler/output-bundle">Output bundle schema</a></div>
+</div>
+
+<footer>
+LLMServingSim 2.0 (KAIST CASYS) · 프로파일링 가이드 · 2026-06-10 작성. 본 가이드는 commit <code>8b5b943a3a37</code> 기준이며, 실제 인벤토리는 <code>profiler/perf/</code> 에서 직접 확인하는 게 가장 정확함.
+</footer>
+
+</div>
+</body>
+</html>

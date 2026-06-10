@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLMServingSim — 단일 요청 코드 흐름 분석 (Qwen3-32B 시나리오)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  h4 { font-size: 0.95rem; margin-top: 18px; color: var(--blue); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc ol { margin: 8px 0; }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .toc a:hover { color: var(--blue); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .note strong { color: var(--amber); }
+  .tip  { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .tip strong { color: var(--teal); }
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+              background: var(--blue); color: #fff; border-radius: 50%; font-weight: 700; margin-right: 10px; font-size: 0.95rem; }
+  .ref { font-size: 0.78rem; color: var(--muted); font-family: "SF Mono", Menlo, monospace; }
+  .ref a { color: var(--blue); text-decoration: none; }
+  .ref a:hover { text-decoration: underline; }
+  .diagram { background: var(--gray-bg); padding: 18px 22px; border-radius: 8px; font-family: "SF Mono", Menlo, monospace;
+             font-size: 0.78rem; line-height: 1.45; white-space: pre; overflow-x: auto; border: 1px solid var(--line); }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · <a href="llmservingsim-qwen3-runbook.html">Qwen3 런북</a> · <a href="llmservingsim-profiling-guide.html">프로파일링 가이드</a></p>
+
+<h1>LLMServingSim — 단일 요청 코드 흐름 분석</h1>
+<p class="sub">작성일: 2026-06-10 · 대상: <a href="https://github.com/casys-kaist/LLMServingSim">casys-kaist/LLMServingSim</a> @ <code>8b5b943a3a37</code> · 시나리오: <strong>Qwen3-32B 단일 노드 + 단일 인스턴스 + TP=2 + 1개 요청</strong>. JSONL 한 줄이 어떻게 들어가서 outputs CSV 한 줄로 나오는지, 실제 file:line 인용으로 따라가기.</p>
+
+<div class="card toc">
+<strong>목차</strong>
+<ol>
+  <li><a href="#why">왜 한 시나리오로 따라가나</a></li>
+  <li><a href="#map">코드 지도 (한 눈에)</a></li>
+  <li><a href="#s1">① <code>python -m serving</code> — argparse + 설정 로드</a></li>
+  <li><a href="#s2">② Cluster config 파싱 — JSON → NPU mapping</a></li>
+  <li><a href="#s3">③ Profile CSV 로드 — cost table 메모리에 올리기</a></li>
+  <li><a href="#s4">④ 데이터셋 + Router 준비</a></li>
+  <li><a href="#s5">⑤ ASTRA-Sim subprocess 기동</a></li>
+  <li><a href="#s6">⑥ 메인 이벤트 루프 (한 iteration 분해)</a></li>
+  <li><a href="#s7">⑦ CSV 출력</a></li>
+  <li><a href="#data">데이터 클래스 요약 (Request, Batch)</a></li>
+  <li><a href="#diagram">전체 흐름 다이어그램</a></li>
+  <li><a href="#repro">재현하기 — 직접 따라가려면</a></li>
+</ol>
+</div>
+
+<h2 id="why">1. 왜 한 시나리오로 따라가나</h2>
+<div class="card">
+<p>LLMServingSim 2.0은 <strong>4757 LoC</strong> 정도 되는 코드 (<code>serving/</code> 하위). 모든 경로를 다 설명하기엔 분량이 너무 큼 — PD-split, DP/EP 동기화, prefix sharing, MoE expert routing, ns-3 network backend, agentic session 등은 각자 별도 줄기. 그래서 <strong>가장 단순하고 자주 쓰는 경로</strong> 하나만 깊이 따라가는 게 처음 본 사람한테 더 유용함.</p>
+<p>선택한 시나리오:</p>
+<ul>
+  <li>모델: <code>Qwen/Qwen3-32B</code> (dense, MoE 분기 안 탐)</li>
+  <li>토폴로지: 1 노드 × 1 인스턴스 × TP=2 (router의 routing policy가 trivial)</li>
+  <li>워크로드: ShareGPT JSONL 1줄 (prefill 단일 청크에 들어갈 만한 짧은 input)</li>
+  <li>옵션: prefix cache off, chunked prefill off, PD split off, DP off — 모든 분기 false</li>
+</ul>
+<p>이렇게 단순화하면 핵심 줄기 — <strong>"비용 표가 어떻게 쓰여서 한 batch의 시간이 나오는가"</strong> — 만 남음.</p>
+</div>
+
+<h2 id="map">2. 코드 지도 (한 눈에)</h2>
+<div class="card">
+<pre><code>serving/
+├── __init__.py
+├── __main__.py         (958 lines) ← CLI 진입, 메인 이벤트 루프
+├── run.sh
+└── core/
+    ├── config_builder.py    (~640 lines)  cluster JSON → 인스턴스/NPU 매핑
+    ├── controller.py        (57 lines)    ASTRA-Sim subprocess stdin/stdout I/O
+    ├── gate_function.py                   MoE expert routing (이 시나리오는 안 탐)
+    ├── graph_generator.py   (~40 lines)   trace.txt → Chakra .et 변환
+    ├── logger.py                          공용 로거
+    ├── memory_model.py                    CXL/memory 확장 모델 (안 탐)
+    ├── pim_model.py                       Processing-in-Memory (안 탐)
+    ├── power_model.py                     전력 모델 (안 탐)
+    ├── radix_tree.py        (671 lines)   prefix cache radix tree (안 탐)
+    ├── request.py           (107 lines)   Request, Batch 데이터 클래스
+    ├── router.py            (327 lines)   요청 → 인스턴스 dispatch
+    ├── scheduler.py         (945 lines)   batching, KV cache, eviction
+    ├── trace_generator.py   (1693 lines)  ← <strong>cost table lookup</strong> 핵심
+    └── utils.py</code></pre>
+
+<h3>2-1. 호출 체인 (간략)</h3>
+<pre><code>main()                                   # __main__.py:137
+  ├─ argparse                            # __main__.py:146-229
+  ├─ build_cluster_config()              # config_builder.py:245
+  ├─ Scheduler(...) × N                  # __main__.py:384  → scheduler.py:17
+  ├─ Controller(total_npu)               # __main__.py:400  → controller.py:5
+  ├─ Router(...)                         # __main__.py:402  → router.py:8
+  ├─ router.load_requests(dataset)       # __main__.py:410  → router.py:103
+  ├─ subprocess.Popen(astra_sim_binary)  # __main__.py:461
+  └─ while True:                         # __main__.py:482 (메인 루프)
+        controller.read_wait(p)          # controller.py:13
+        controller.parse_output(...)     # controller.py:39
+        router.route_arrived_requests()  # router.py:189
+        schedulers[i].add_done()         # scheduler.py:650
+        schedulers[i].schedule()         # scheduler.py:54
+          └─ schedule_base()             # scheduler.py:61
+        generate_trace(batch, ...)       # trace_generator.py:1447
+        generate_graph(batch, ...)       # graph_generator.py:9
+        controller.write_flush()         # controller.py:32
+        (loop until all done)
+  schedulers[i].save_output(file)        # scheduler.py:911</code></pre>
+</div>
+
+<h2 id="s1">3. ① <code>python -m serving</code> — argparse + 설정 로드</h2>
+<div class="card">
+
+<h3>3-1. 진입점</h3>
+<p class="ref">파일: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/__main__.py#L137"><code>serving/__main__.py:137</code></a> · 함수 <code>main()</code></p>
+
+<p>실행 명령:</p>
+<pre><code>python -m serving \
+  --cluster-config configs/cluster/qwen3_32b_single.json \
+  --dtype bfloat16 --block-size 16 \
+  --dataset workloads/sharegpt-qwen3-32b-1req.jsonl \
+  --output outputs/qwen3_32b_single.csv \
+  --log-interval 1.0</code></pre>
+
+<p><code>__main__.py</code> 내부 <code>main()</code>에서 argparse가 다음을 정의 (<code>__main__.py:146-229</code>):</p>
+<ul>
+  <li><code>--cluster-config</code> (필수) — instance/NPU 토폴로지 JSON</li>
+  <li><code>--dtype</code> — model dtype (bfloat16, float16, fp8 등). profile variant 폴더 결정에 사용</li>
+  <li><code>--dataset</code> — JSONL workload 경로</li>
+  <li><code>--block-size</code> — KV-cache block size (vLLM 기본 16)</li>
+  <li><code>--enable-prefix-caching</code>, <code>--enable-chunked-prefill</code>, <code>--max-num-seqs</code>, <code>--max-num-batched-tokens</code> 등 vLLM-알리아스 옵션들</li>
+</ul>
+
+<h3>3-2. Cluster JSON 1차 파싱</h3>
+<p class="ref">파일: <code>serving/__main__.py:249-257</code></p>
+<pre><code>raw_cluster_config = _load_cluster_config_for_overrides(args.cluster_config)
+raw_instances = list(_iter_raw_instances(raw_cluster_config))
+build_enable_local_offloading = args.enable_local_offloading or any(
+    inst.get("enable_local_offloading", False) for inst in raw_instances)
+build_enable_attn_offloading = args.enable_attn_offloading or any(
+    inst.get("enable_attn_offloading", False) for inst in raw_instances)
+# ---------------------------------- Extract cluster config -----------------------------------
+cluster = build_cluster_config(
+    astra_sim, args.cluster_config, build_enable_local_offloading, build_enable_attn_offloading)</code></pre>
+
+<p>JSON을 두 번 읽음: (1) 인스턴스 단위 옵션 (offloading 플래그 등) 미리 봐서 빌더한테 넘기고, (2) 진짜 빌더 <code>build_cluster_config()</code>에서 본격 파싱.</p>
+</div>
+
+<h2 id="s2">4. ② Cluster config 파싱 — JSON → NPU mapping</h2>
+<div class="card">
+
+<p class="ref">파일: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/config_builder.py#L245"><code>serving/core/config_builder.py:245</code></a> · 함수 <code>build_cluster_config()</code></p>
+
+<p>입력 JSON 예시 (<code>qwen3_32b_single.json</code>):</p>
+<pre><code>{
+    "num_nodes": 1,
+    "link_bw": 16,
+    "link_latency": 20000,
+    "nodes": [{
+        "num_instances": 1,
+        "cpu_mem": {"mem_size": 512, "mem_bw": 256, "mem_latency": 0},
+        "instances": [{
+            "model_name": "Qwen/Qwen3-32B",
+            "hardware": "RTXPRO6000",       ← 프로파일 폴더 라벨
+            "npu_mem": {"mem_size": 96, "mem_bw": 1597, "mem_latency": 0},
+            "num_npus": 2,
+            "tp_size": 2,
+            "pd_type": null
+        }]
+    }]
+}</code></pre>
+
+<p>빌더가 채워서 돌려주는 dict (<code>__main__.py:256-274</code>에서 unpack):</p>
+<pre><code>cluster = {
+    "num_nodes": 1,
+    "num_instances": 1,
+    "instances": [...],                  # 각 인스턴스에 instance_id, node_id 부여
+    "inst2node_mapping": {0: 0},         # instance 0 → node 0
+    "inst2npu_mapping": {0: 0},          # instance 0의 첫 NPU = NPU 0
+    "npu2inst_mapping": {0: 0, 1: 0},    # NPU 0, 1 둘 다 instance 0 소속 (TP=2)
+    "prefill_instance": [0],             # PD split 안 했으므로 동일 인스턴스가 prefill+decode
+    "decode_instance": [0],
+    "start_npu_ids": "",                 # ASTRA-Sim CLI에 넘길 NPU 범위 (비어있으면 전체)
+    "end_npu_ids": "",
+    "placement": [...],                  # MoE expert placement (이 시나리오 안 탐)
+    "block_mode_on": [False],
+    "total_npu": 2,
+    "cpu_mem_size": [512],
+    ...
+}</code></pre>
+
+<p>핵심은 <strong>NPU ID 정수 ↔ instance ID 정수 양방향 매핑</strong>. ASTRA-Sim은 NPU ID 단위로 이벤트를 보내고, 시뮬레이터는 그걸 받아서 어느 인스턴스의 어느 스케줄러에 dispatch할지 결정.</p>
+</div>
+
+<h2 id="s3">5. ③ Profile CSV 로드 — cost table 메모리에 올리기</h2>
+<div class="card">
+
+<p class="ref">파일: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/trace_generator.py"><code>serving/core/trace_generator.py</code></a> · 함수 <code>_load_perf_db()</code> 주변 (~line 325-380)</p>
+
+<p>이게 <strong>"비용 표 트릭"</strong>의 알맹이. <code>generate_trace()</code>가 첫 호출될 때 (<code>trace_generator.py:1447</code>) 그 (HW, model, variant, TP) 조합의 CSV를 한 번 읽어서 메모리에 올려둠. 이후 호출은 lookup 만.</p>
+
+<h4>경로 해석</h4>
+<p><code>trace_generator.py:1458</code> 부근:</p>
+<pre><code>variant = resolve_variant(dtype, kv_cache_dtype, config)
+# 예: dtype=bfloat16, kv_cache_dtype=auto, config=qwen3 → variant="bf16"
+
+perf_root = profiler/perf/{hardware}/{model}/{variant}/
+# 예: profiler/perf/RTXPRO6000/Qwen/Qwen3-32B/bf16/</code></pre>
+
+<h4>CSV 5종 + meta.yaml 읽기</h4>
+<p><code>_load_perf_db()</code>가 그 폴더에서 다음을 읽음:</p>
+<pre><code>profiler/perf/RTXPRO6000/Qwen/Qwen3-32B/bf16/
+├── meta.yaml          # vllm_version, cuda_version, skew_fit 플래그
+├── tp1/
+│   ├── attention.csv  (prefill_chunk, kv_prefill, n_decode, kv_decode) → time_us
+│   ├── dense.csv      (layer, tokens) → time_us
+│   ├── per_sequence.csv  (layer, sequences) → time_us
+│   ├── skew.csv       heterogeneous decode 측정 raw
+│   └── skew_fit.csv   α-law fitting 계수
+└── tp2/
+    └── (동일 5종, TP=2 측정값)</code></pre>
+
+<h4>메모리 표현</h4>
+<p>각 CSV는 pandas DataFrame으로 읽고 <code>_build_1d_table()</code> / <code>_build_attention_table()</code> 으로 가공해서 in-memory dict로 둠. 키 grid는 <strong>doubling grid</strong> (16, 32, 64, 128, 256, ...) 라서 lookup 시 <strong>log-space linear interpolation</strong> 사용 (<code>_linear_interpolate()</code>, <code>_lookup_1d()</code>).</p>
+
+<div class="tip"><strong>왜 doubling grid?</strong> Op 시간이 토큰 수에 대해 대체로 log-affine. 16, 32, 64, ... 로 측정해두면 그 사이 값은 보간으로 1-3% 오차 안에 들어옴. linear grid (16, 17, 18, ...)로 똑같은 정확도 내려면 측정 점이 100배 더 필요.</div>
+
+<p>한 번 로드한 perf_db는 <code>TraceCtx</code> 객체 (<code>trace_generator.py:87</code>)에 박혀서 그 인스턴스의 모든 batch trace 생성에 재사용됨.</p>
+</div>
+
+<h2 id="s4">6. ④ 데이터셋 + Router 준비</h2>
+<div class="card">
+
+<h3>6-1. Scheduler 생성</h3>
+<p class="ref">파일: <code>serving/__main__.py:384-397</code></p>
+<pre><code>schedulers.append(Scheduler(
+    instance["model_name"], instance["node_id"], instance_id,
+    inst_cfg["max_num_seqs"], inst_cfg["max_num_batched_tokens"],
+    instance["num_npus"], instance["tp_size"], instance["pp_size"],
+    instance["npu_mem"]["mem_size"], cpu_mem_size[instance["node_id"]],
+    inst2npu_mapping[instance_id], instance["pd_type"],
+    inst_cfg["fp"], inst_cfg["block_size"], num_req,
+    inst_cfg["prioritize_prefill"], inst_cfg["enable_prefix_caching"],
+    enable_prefix_sharing, prefix_pool, pool_device, inst_cfg["enable_chunked_prefill"],
+    inst_cfg["long_prefill_token_threshold"],
+    cxl_mem,
+    ep_size=instance.get("ep_total", 1),
+    kv_cache_dtype=inst_cfg["kv_cache_dtype"],
+))</code></pre>
+
+<p>이 시나리오는 인스턴스 1개니까 schedulers 리스트 길이가 1. <code>Scheduler.__init__</code>에서 KV cache용 블록 수 계산, 빈 <code>request</code>/<code>inflight</code>/<code>done</code> 리스트 초기화.</p>
+
+<h3>6-2. Router 생성</h3>
+<p class="ref">파일: <code>serving/__main__.py:402</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/router.py#L8"><code>router.py:8</code></a></p>
+<pre><code>self.routing_policy = routing_policy.upper()   # "RR" 기본값
+...
+if self.routing_policy == "RR":
+    self._select_instance = self._rr_select
+elif self.routing_policy == "LOAD":
+    self._select_instance = self._least_load_select
+...</code></pre>
+
+<p>인스턴스 1개면 정책 무관하게 항상 instance 0 선택.</p>
+
+<h3>6-3. 데이터셋 로드</h3>
+<p class="ref">파일: <code>serving/__main__.py:410</code> → <code>router.py:103-137</code> <code>load_requests()</code></p>
+<p>JSONL 한 줄 한 줄을 dict로 파싱해서 <code>self._pending_requests</code> 리스트에 쌓아둠 (<strong>아직 라우팅 안 됨</strong>). arrival_time_ns 기준 정렬.</p>
+<pre><code># pending_requests 한 항목 예시:
+{
+  "index": 0,
+  "arrival_time_ns": 0,
+  "input_toks": 287,
+  "output_toks": 158,
+  "input_hash_ids": [],   # prefix caching off라 빈 리스트
+  "output_hash_ids": []
+}</code></pre>
+</div>
+
+<h2 id="s5">7. ⑤ ASTRA-Sim subprocess 기동</h2>
+<div class="card">
+
+<p class="ref">파일: <code>serving/__main__.py:449-461</code></p>
+<pre><code>generate_graph(None, None, total_npu, event=True)  # 초기 빈 Chakra graph
+workload = get_workload(None, None, event=True)
+args = [binary,
+        "--workload-configuration="+workload,
+        "--system-configuration="+system,
+        "--network-configuration="+network,
+        "--memory-configuration="+memory]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE, universal_newlines=True)</code></pre>
+
+<p>ASTRA-Sim 바이너리 (C++)를 별도 프로세스로 띄움. stdin/stdout으로 통신:</p>
+<ul>
+  <li><strong>Python → C++</strong>: workload (Chakra <code>.et</code>) 경로를 한 줄로 던짐 (혹은 "pass", "done", "exit" sentinel)</li>
+  <li><strong>C++ → Python</strong>: 한 iteration 끝낼 때마다 "<code>sys[N] iteration M finished, C cycles, exposed communication X cycles.</code>" 형식 한 줄, 그 다음 "<code>Waiting</code>" 라인으로 입력 대기 알림</li>
+</ul>
+</div>
+
+<h2 id="s6">8. ⑥ 메인 이벤트 루프 (한 iteration 분해)</h2>
+<div class="card">
+
+<p class="ref">파일: <code>serving/__main__.py:482-863</code> · <code>while True:</code> 루프</p>
+
+<p>요청 1개의 lifecycle은 여러 iteration에 걸쳐 진행됨:</p>
+<ul>
+  <li><strong>iter 1:</strong> 요청이 arrival 시각에 도착 → 라우팅 → 첫 batch(=prefill)로 schedule → trace 생성 → ASTRA-Sim에 던짐</li>
+  <li><strong>iter 2:</strong> ASTRA-Sim이 prefill 완료 통보 → add_done에서 ttft 기록 → schedule (이제 decode 단계) → 새 batch (decode 1 token)</li>
+  <li><strong>iter 3 ~ N+1:</strong> decode iteration 반복 (1 token씩)</li>
+  <li><strong>iter N+2:</strong> 마지막 add_done에서 요청 완료 마킹 → <code>self.done</code> 리스트에 추가</li>
+</ul>
+
+<p>한 iteration 내부의 7단계를 따라가자.</p>
+
+<h3>8-1. Controller가 ASTRA-Sim 대기 메시지 읽기</h3>
+<p class="ref">파일: <code>serving/__main__.py:484</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/controller.py#L13"><code>controller.py:13</code></a></p>
+<pre><code>def read_wait(self, p):
+    out = [""]
+    while "Waiting" not in out[-1] and out[-1] != "Checking Non-Exited Systems ...\n":
+        line = p.stdout.readline()
+        out.append(line)
+        p.stdout.flush()
+    return out</code></pre>
+<p>"Waiting" 라인이 나올 때까지 ASTRA-Sim의 stdout 블로킹 read. 직전 라인에 "sys[N] iteration M finished ..." 가 와있음.</p>
+
+<h3>8-2. 출력 파싱</h3>
+<p class="ref">파일: <code>__main__.py:485</code> → <code>controller.py:39</code></p>
+<pre><code>def parse_output(self, output):
+    pattern = r"sys\[(\d+)\] iteration (\d+) finished, (\d+) cycles, exposed communication (\d+) cycles."
+    match = re.search(pattern, output)
+    if match:
+        sys = int(match.group(1))    # NPU ID
+        id = int(match.group(2))     # batch ID
+        cycle = int(match.group(3))  # 이 iteration까지 누적 cycle
+        ...
+        return {'sys': sys, 'id': id, 'cycle': cycle}
+    return</code></pre>
+<p><code>cycle</code>은 누적 시뮬레이션 시간 (ns 단위로 변환되어 <code>current</code>에 할당). 1 cycle ≈ 1 ns 가정.</p>
+
+<h3>8-3. 새로 도착한 요청 라우팅</h3>
+<p class="ref">파일: <code>__main__.py:494</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/router.py#L189"><code>router.py:189</code></a></p>
+<pre><code>def route_arrived_requests(self, current_time_ns):
+    routed = 0
+    while self._pending_idx < len(self._pending_requests):
+        req_data = self._pending_requests[self._pending_idx]
+        if req_data['arrival_time_ns'] > current_time_ns:
+            break
+        instance_id = self._select_instance(self.prefill_schedulers, "prefill")
+        sched = self.prefill_schedulers[instance_id]
+        sched.add_request([
+            req_data['index'], sched.model,
+            req_data['input_toks'], req_data['output_toks'],
+            req_data['arrival_time_ns'], sched.instance_id,
+        ], is_init=self._is_init)
+        self._pending_idx += 1
+        routed += 1
+    return routed</code></pre>
+<p>arrival 시각이 <code>current_time_ns</code> 이하인 모든 요청을 한 번에 라우팅. 본 시나리오는 1개. <code>sched.add_request()</code> 안에서 <code>Request</code> 객체 (<code>request.py:2</code>) 생성 후 <code>sched.request</code> 큐에 push.</p>
+
+<h3>8-4. <code>add_done</code> — 직전 batch 완료 처리</h3>
+<p class="ref">파일: <code>__main__.py:513</code> → <code>scheduler.py:650-801</code></p>
+<p>방금 ASTRA-Sim이 끝냈다고 알린 batch에 대해:</p>
+<ul>
+  <li><strong>Prefill batch였으면</strong> (<code>scheduler.py:686-741</code>): <code>req.num_computed_tokens += chunk_len</code>. 만약 <code>num_computed_tokens >= req.input</code>이면 prefill 완료, <code>set_ttft(current)</code> 호출 (<code>request.py:62</code>).</li>
+  <li><strong>Decode batch였으면</strong> (<code>scheduler.py:742-783</code>): <code>req.num_computed_tokens += 1</code>. <code>add_itl(current)</code>로 inter-token latency 누적. <code>num_computed_tokens >= req.output</code>이면 <code>add_latency()</code> + <code>self.done.append(req)</code> 후 KV-cache free.</li>
+</ul>
+<p>리턴: <code>(prompt_tokens_this_step, gen_tokens_this_step, finished_requests)</code>. 메인 루프가 throughput 계산에 사용.</p>
+
+<h3>8-5. <code>schedule</code> — 다음 batch 만들기</h3>
+<p class="ref">파일: <code>__main__.py:532</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/scheduler.py#L54"><code>scheduler.py:54</code></a></p>
+<pre><code>def schedule(self, current, sys, batch_id=-1):
+    if self.enable_prefix_caching:
+        return self.schedule_with_prefix(current, sys, batch_id)
+    else:
+        return self.schedule_base(current, sys, batch_id)</code></pre>
+
+<p>본 시나리오 (prefix caching off) → <code>schedule_base()</code>. 핵심 단계 (<code>scheduler.py:61-296</code>):</p>
+
+<ol>
+  <li><strong>도착 필터링</strong> (line 73): <code>batch_req = [req for req in self.request if req.arrival <= current]</code></li>
+  <li><strong>max_num_seqs 제한</strong> (line 76-78): inflight + 새 batch 합쳐서 max_num_seqs 초과 못 하게 자름</li>
+  <li><strong>Chunked prefill 분기</strong> (line 102-106): chunked prefill on이면 decode를 먼저, prefill을 뒤로 정렬. off면 prefill만/decode만 일관 batch</li>
+  <li><strong>토큰 budget 할당</strong> (line 108-173): 각 req에 이번 step에서 줄 토큰 수 (<code>scheduled_tokens</code> dict) 결정. <code>max_num_batched_tokens</code> 초과 안 하게 prefill 청크 잘라넣음</li>
+  <li><strong>KV-cache 메모리 체크 + eviction</strong> (line 174-215): <code>get_block_kv()</code>로 batch가 필요한 KV bytes 계산. 부족하면 decode req 일부를 CPU로 evict (<code>req.evict=True</code>)</li>
+  <li><strong>Batch 객체 생성</strong> (line 245-282): <code>q_list</code>, <code>prefill_q_list</code>, <code>decode_k_list</code> 채워서 <code>Batch(...)</code> 인스턴스화 (<code>request.py:74</code>)</li>
+  <li><strong>리턴</strong>: 생성한 <code>Batch</code> 객체 (없으면 <code>None</code>)</li>
+</ol>
+
+<p>본 시나리오 첫 iteration: prefill batch — q_list=[287], num_prefill=1, num_decode=0.</p>
+
+<h3>8-6. <code>generate_trace</code> — cost table lookup으로 batch 시간 계산</h3>
+<p class="ref">파일: <code>__main__.py:579</code> 부근 (DP/PD 분기에 따라 호출 위치 여러 군데) → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/trace_generator.py#L1447"><code>trace_generator.py:1447</code></a></p>
+
+<p>이 함수가 <strong>비용 표 트릭의 사용 지점</strong>. Batch (token 카운트 + KV 길이) → per-layer per-op 지연 시간 → ASCII trace 파일.</p>
+
+<pre><code>generate_trace(batch, hardware, tp_size, pp_size,
+               local_ep, ep_total, pd_type,
+               node_id, instance_id, ...)
+  ├─ get_config(model_name)              # HF config.json → num_layers, hidden_size, num_heads
+  ├─ _load_perf_db(hardware, model, ...) # 캐시된 CSV (§5에서 로드)
+  ├─ _synthesize_trace(batch_ctx, ...)   # trace_generator.py:1293-1445
+  │    for layer in range(num_hidden_layers):
+  │      for op in catalog (qkv_proj, attn, o_proj, gate_up_proj, ...):
+  │        lookup perf_db[op][tp_size][input_size]
+  │        → 보간으로 time_us 계산
+  │        → ASCII trace에 한 줄 (op_name, duration_ns, comm_size_bytes)
+  │      collectives (AllReduce for TP, AllToAll for EP)도 한 줄씩
+  └─ write to inputs/trace/{hw}/{model}/instance{id}_batch{id}.txt</code></pre>
+
+<p>핵심: <strong>"이 batch에 이 op가 몇 us 걸리는지"</strong> 는 GPU 안 띄우고 CSV lookup으로 결정. 그게 cost table trick.</p>
+
+<h3>8-7. <code>generate_graph</code> + <code>write_flush</code> — ASTRA-Sim에 던지기</h3>
+<p class="ref">파일: <code>__main__.py:592</code> 부근 → <code>graph_generator.py:9</code> + <code>controller.py:32</code></p>
+<pre><code># graph_generator.py 내부:
+python -m chakra.src.converter.converter LLM \
+  --input inputs/trace/{hw}/{model}/instance{id}_batch{id}.txt \
+  --output inputs/workload/{hw}/{model}/instance{id}_batch{id}/llm \
+  --num-npus {num_npus}
+# → llm.0.et, llm.1.et 같은 binary 파일이 만들어짐</code></pre>
+<pre><code># controller.py:32
+def write_flush(self, p, input):
+    p.stdin.write(input+'\n')
+    p.stdin.flush()
+# Python이 ASTRA-Sim 프로세스에 "inputs/workload/.../llm" 경로 한 줄 던짐
+# ASTRA-Sim이 그걸 받아서 시뮬레이션 1 iteration 더 돌림</code></pre>
+
+<p>ASTRA-Sim이 trace의 collective comm 명령(AllReduce 등) 시간을 자기 네트워크 모델로 시뮬해서 한 iteration cycle을 계산하고, 끝나면 다시 "Waiting" 보내고 다음 입력을 기다림. 그 시점에 메인 루프가 <code>read_wait</code>로 돌아옴 (위 8-1로 순환).</p>
+</div>
+
+<h2 id="s7">9. ⑦ CSV 출력</h2>
+<div class="card">
+
+<p class="ref">파일: 메인 루프 종료 후 → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/scheduler.py#L911"><code>scheduler.py:911</code></a> <code>save_output()</code></p>
+
+<pre><code>def save_output(self, output_file, is_append=False):
+    output_file = f'../{output_file}'
+    mode = 'a' if is_append else 'w'
+    with open(output_file, mode=mode, newline='') as file:
+        writer = csv.writer(file)
+        if not is_append:
+            writer.writerow(['instance id', 'request id', 'model', 'input', 'output',
+                            'arrival', 'end_time', 'latency',
+                            'queuing_delay', 'TTFT', 'TPOT', 'ITL'])
+        for req in self.done:
+            writer.writerow([
+                req.instance_id, req.id, req.model,
+                req.input, req.output - req.input,
+                req.arrival, req.end_time, req.latency,
+                req.queuing_delay, req.ttft, req.tpot, req.itl
+            ])</code></pre>
+
+<p>각 컬럼 의미:</p>
+<ul>
+  <li><code>arrival</code> — 요청 도착 (ns)</li>
+  <li><code>end_time</code> — 마지막 토큰 생성 완료 (ns)</li>
+  <li><code>latency</code> = <code>end_time - arrival</code></li>
+  <li><code>queuing_delay</code> — arrival → 첫 batch에 들어간 시각</li>
+  <li><code>TTFT</code> — arrival → 첫 토큰 시각 (prefill 끝)</li>
+  <li><code>TPOT</code> — (latency - ttft) / (output_tokens - 1), 평균 decode 토큰 간격</li>
+  <li><code>ITL</code> — 각 decode 토큰의 inter-token-latency 리스트 (가변 길이)</li>
+</ul>
+
+<div class="note"><strong>경로 주의:</strong> 출력 경로 앞에 <code>'../'</code>가 붙음 (<code>scheduler.py:912</code>). 컨테이너에서 <code>--output outputs/foo.csv</code> 던지면 실제로는 <code>/app/outputs/foo.csv</code>가 아니라 <code>/app/LLMServingSim/../outputs/foo.csv</code>에 떨어질 수 있음. 본 시나리오에선 작업 디렉토리 구조상 잘 떨어지지만, sweep 스크립트 짤 때 주의.</div>
+</div>
+
+<h2 id="data">10. 데이터 클래스 요약</h2>
+<div class="card">
+
+<h3>10-1. <code>Request</code></h3>
+<p class="ref">파일: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/request.py#L2"><code>serving/core/request.py:2</code></a></p>
+<table>
+<tr><th>필드</th><th>의미</th></tr>
+<tr><td><code>id</code></td><td>요청 ID (JSONL의 index)</td></tr>
+<tr><td><code>model</code>, <code>instance_id</code></td><td>라우팅된 모델/인스턴스</td></tr>
+<tr><td><code>input</code>, <code>output</code></td><td>입력 토큰 수, 총 출력 토큰 수 (input 포함)</td></tr>
+<tr><td><code>arrival</code></td><td>도착 시각 (ns)</td></tr>
+<tr><td><code>num_computed_tokens</code></td><td>현재까지 계산된 누적 토큰 (prefill+decode). 진행 상태 추적</td></tr>
+<tr><td><code>is_init</code></td><td>prefill 단계 통과해야 하는지 여부 (skip-prefill 옵션 시 False)</td></tr>
+<tr><td><code>evict</code></td><td>KV가 CPU로 evict 된 상태인지</td></tr>
+<tr><td><code>chunk_len</code></td><td>현재 step에서 이 요청에 할당된 토큰 수 (chunked prefill용)</td></tr>
+<tr><td><code>end_time</code>, <code>latency</code>, <code>queuing_delay</code>, <code>ttft</code>, <code>tpot</code>, <code>itl</code></td><td>출력 메트릭 (CSV row와 1:1)</td></tr>
+<tr><td><code>input_hash_ids</code>, <code>output_hash_ids</code></td><td>prefix cache용 토큰 hash 시퀀스 (off면 빈 리스트)</td></tr>
+</table>
+
+<h3>10-2. <code>Batch</code></h3>
+<p class="ref">파일: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/request.py#L74"><code>serving/core/request.py:74</code></a></p>
+<table>
+<tr><th>필드</th><th>의미</th></tr>
+<tr><td><code>batch_id</code>, <code>model</code></td><td>식별자</td></tr>
+<tr><td><code>total_len</code></td><td>이 batch가 처리할 총 토큰 수 (prefill 청크 + decode 1×N)</td></tr>
+<tr><td><code>kv_len</code></td><td>이 batch가 보는 KV 길이 (per-request 합)</td></tr>
+<tr><td><code>q_list</code>, <code>k_list</code></td><td>요청별 Q/K 길이 리스트 (attention CSV lookup에 사용)</td></tr>
+<tr><td><code>num_prefill</code>, <code>num_decode</code></td><td>이 batch 안의 prefill/decode 요청 수</td></tr>
+<tr><td><code>prefill_q_list</code>, <code>prefill_k_list</code>, <code>decode_k_list</code></td><td>prefill/decode 분리된 길이 리스트</td></tr>
+<tr><td><code>kv_size</code>, <code>evict</code>, <code>load</code></td><td>이 batch가 잡거나/내보낼 KV 바이트</td></tr>
+<tr><td><code>requests</code></td><td>이 batch에 속한 Request 객체 리스트</td></tr>
+<tr><td><code>fired</code>, <code>end</code></td><td>이 batch가 fire/end 된 NPU ID 리스트 (TP=N일 때 N번 fire/end)</td></tr>
+</table>
+</div>
+
+<h2 id="diagram">11. 전체 흐름 다이어그램</h2>
+<div class="card">
+
+<h3>11-1. 초기화 (한 번만)</h3>
+<div class="diagram">  CLI: python -m serving --cluster-config qwen3_32b_single.json ...
+        │
+        ▼
+  argparse              │ __main__.py:146-229
+        │
+        ▼
+  build_cluster_config()│ config_builder.py:245
+        │ (returns instances + NPU mappings)
+        ▼
+  Scheduler × N         │ __main__.py:384 (이 시나리오 N=1)
+  Controller(total_npu) │ __main__.py:400
+  Router(...)           │ __main__.py:402
+        │
+        ▼
+  router.load_requests(dataset)
+        │ (JSONL → pending_requests[], 라우팅 아직 X)
+        ▼
+  generate_graph(None, event=True)  ← 빈 초기 Chakra graph
+        │
+        ▼
+  subprocess.Popen(astra_sim_binary)│ __main__.py:461
+        │ (C++ 백엔드 stdin/stdout pipe 연결)
+        ▼
+  while True: (메인 루프) ─────────────────────►</div>
+
+<h3>11-2. 메인 루프 한 iteration (단일 요청 lifecycle 따라가기)</h3>
+<div class="diagram">  ┌─────────────────────────────────────────────────────────────────────┐
+  │ Python 측 (메인 루프)              │ ASTRA-Sim 측 (subprocess)        │
+  ├─────────────────────────────────────┼─────────────────────────────────┤
+  │ controller.read_wait(p)             │ ...iteration N 시뮬 중...        │
+  │     ↓ (블로킹)                       │ "sys[1] iteration M finished,    │
+  │     ◄────────────────────────────── │  12345 cycles, ..."              │
+  │                                     │ "Waiting"                        │
+  │ controller.parse_output()           │                                  │
+  │   → current = 12345 ns              │                                  │
+  │                                     │                                  │
+  │ router.route_arrived_requests(c)    │                                  │
+  │   → 도착시간 ≤ 12345 인 req 라우팅   │                                  │
+  │   → sched.request.append(Request)   │                                  │
+  │                                     │                                  │
+  │ schedulers[i].add_done(id, sys, c)  │                                  │
+  │   → 직전 batch 토큰 수 정산          │                                  │
+  │   → req.num_computed_tokens += dt   │                                  │
+  │   → 끝났으면 self.done.append(req)   │                                  │
+  │                                     │                                  │
+  │ schedulers[i].schedule(c, sys, id)  │                                  │
+  │   ↓ schedule_base()                 │                                  │
+  │     token budget 할당                │                                  │
+  │     KV-cache eviction 검사           │                                  │
+  │     Batch 객체 생성                  │                                  │
+  │   → 리턴: Batch (또는 None)          │                                  │
+  │                                     │                                  │
+  │ generate_trace(batch, ...)          │                                  │
+  │   ↓ _load_perf_db(...)              │                                  │
+  │     CSV lookup (cost table!)         │                                  │
+  │   ↓ _synthesize_trace(batch_ctx)    │                                  │
+  │     레이어 × op 순회                 │                                  │
+  │     각 op 시간 = interp(perf_db)    │                                  │
+  │   → ASCII trace.txt 작성            │                                  │
+  │                                     │                                  │
+  │ generate_graph(batch, ...)          │                                  │
+  │   → chakra converter subprocess      │                                  │
+  │   → llm.{0,1,...}.et 바이너리        │                                  │
+  │                                     │                                  │
+  │ controller.write_flush(p, workload) │                                  │
+  │   ─────────────────────────────────►│ stdin에서 workload 경로 read     │
+  │                                     │ trace 실행: collective comm 시뮬 │
+  │                                     │ → cycle 계산 → 다시 출력         │
+  │ (loop back to read_wait)            │                                  │
+  └─────────────────────────────────────┴─────────────────────────────────┘</div>
+
+<h3>11-3. 단일 요청 timeline</h3>
+<div class="diagram">  t=0:        요청 arrival (JSONL에 적힌 arrival_time_ns)
+  t=0:        route_arrived_requests → sched.request에 append
+              schedule → prefill batch (287 토큰)
+              generate_trace → trace.txt
+              write_flush → ASTRA-Sim 던짐
+
+  t=0~Tp:     ASTRA-Sim이 prefill batch 시뮬레이션 (cycle 계산)
+
+  t=Tp:       parse_output → current=Tp ns
+              add_done(batch_id, sys, Tp)
+                req.num_computed_tokens = 287 (= input)
+                req.set_ttft(Tp)         ← TTFT 기록!
+              schedule → decode batch (1 토큰)
+              generate_trace → trace.txt (decode shape)
+              write_flush
+
+  t=Tp~Tp+Td: ASTRA-Sim이 decode 1 iteration 시뮬
+
+  t=Tp+Td:    add_done
+                req.num_computed_tokens = 288
+                req.add_itl(Tp+Td)        ← ITL[0]
+              schedule → decode batch (1 토큰)
+              ...
+
+  (반복 157번)
+
+  t=Tp+157×Td: add_done
+                 req.num_computed_tokens = 445 (= output)
+                 req.add_latency(현재시각)   ← TPOT 계산
+                 self.done.append(req)       ← 요청 완료!
+                 KV-cache free
+
+  (모든 요청 done이면 메인 루프 break)
+  schedulers[0].save_output("outputs/foo.csv")  ← 한 줄 적힘</div>
+</div>
+
+<h2 id="repro">12. 재현하기 — 직접 따라가려면</h2>
+<div class="card">
+
+<h3>12-1. 소스 띄우기</h3>
+<pre><code>cd ~/Desktop
+git clone --recurse-submodules https://github.com/casys-kaist/LLMServingSim.git
+cd LLMServingSim
+git checkout 8b5b943a3a37    # 이 문서가 참조한 정확한 commit
+code .                        # 또는 vim/cursor</code></pre>
+
+<h3>12-2. 따라가는 순서 (추천)</h3>
+<ol>
+  <li><code>serving/__main__.py</code>의 <code>main()</code> 함수 (line 137부터) 끝까지 스크롤 — argparse → cluster load → scheduler/router 생성 → 메인 while 루프 한 번 끝까지 본다.</li>
+  <li><code>serving/core/controller.py</code> 전체 (57 lines, 5분이면 다 읽음). subprocess 통신 패턴이 명확해짐.</li>
+  <li><code>serving/core/request.py</code> 전체 (107 lines). 데이터 모델이 명확해짐.</li>
+  <li><code>serving/core/router.py</code>의 <code>load_requests</code> (line 103), <code>route_arrived_requests</code> (line 189). 라우팅 정책은 4종 (RR/RAND/LOAD/CUSTOM).</li>
+  <li><code>serving/core/scheduler.py</code>의 <code>schedule_base</code> (line 61부터 295까지). 가장 깊은 함수. token budget + KV eviction + Batch 생성이 한 함수에 다 있음.</li>
+  <li><code>serving/core/trace_generator.py</code>의 <code>generate_trace</code> (line 1447) → 내부 <code>_synthesize_trace</code> (line 1293). 여기서 perf_db lookup이 어떻게 일어나는지 직접 봄.</li>
+</ol>
+
+<h3>12-3. 디버깅 트릭</h3>
+<ul>
+  <li><strong>로그 자세히 보기</strong>: <code>--log-level DEBUG</code> 옵션 (메인 루프 각 iteration의 batch 내용 다 찍힘).</li>
+  <li><strong>Batch 한 번만 보기</strong>: <code>request.py:99</code>의 <code>Batch.log()</code> 호출하면 모든 필드 출력.</li>
+  <li><strong>trace.txt 들여다보기</strong>: <code>inputs/trace/RTXPRO6000/Qwen/Qwen3-32B/instance0_batch0.txt</code> — 사람이 읽을 수 있는 ASCII. 한 줄 = 한 op (op명, 노드 ID, 시간 ns, comm bytes).</li>
+  <li><strong>Chakra .et 파싱</strong>: <code>python -m chakra.src.viz.viz --input llm.0.et</code> (별도 viz 도구).</li>
+</ul>
+
+<h3>12-4. 다른 시나리오로 확장하려면</h3>
+<table>
+<tr><th>분기</th><th>키 파일/함수</th></tr>
+<tr><td>Prefix caching</td><td><code>scheduler.py:322+</code> <code>schedule_with_prefix</code>, <code>radix_tree.py</code></td></tr>
+<tr><td>PD split</td><td><code>__main__.py</code>에서 <code>pd_type=="prefill"</code> 분기, <code>router.py:transfer_prefill_request</code></td></tr>
+<tr><td>MoE expert routing</td><td><code>trace_generator.py</code>의 <code>GateRouter</code> 생성 (line 1467), <code>gate_function.py</code></td></tr>
+<tr><td>DP sync</td><td><code>__main__.py:463-478, 540-602</code> dp_pending 부분</td></tr>
+<tr><td>Chunked prefill</td><td><code>scheduler.py:102-106</code></td></tr>
+<tr><td>CXL/CPU offloading</td><td><code>scheduler.py</code>의 <code>req.evict</code>, <code>memory_model.py</code></td></tr>
+</table>
+
+</div>
+
+<footer>
+LLMServingSim 2.0 (KAIST CASYS) · 코드 흐름 분석 · 2026-06-10 작성. 본 문서의 모든 file:line 인용은 commit <a href="https://github.com/casys-kaist/LLMServingSim/tree/8b5b943a3a37"><code>8b5b943a3a37</code></a> 기준이며, 그 이후 변경 시 위치가 달라질 수 있음. 검증은 직접 소스를 보고 하길 권장.
+</footer>
+
+</div>
+</body>
+</html>
