@@ -100,11 +100,11 @@
   <li><a href="#env">2. 환경 평가 + 작전</a></li>
   <li><a href="#step1">3. Step 1 — engine + 작은 모델 단일 instance (vLLM 실패 → llama.cpp 로 우회)</a></li>
   <li><a href="#step2">4. Step 2 — 두 instance + nginx LB (미니 cluster)</a></li>
-  <li><a href="#step3">5. Step 3 — minikube + Service LB + llm-d 차트 진짜 시도</a></li>
-  <li><a href="#bench">6. 벤치마크 — 4 setup 비교 (예상 vs 실제)</a></li>
+  <li><a href="#step3">5. Step 3 — minikube + llama.cpp 2 Pod + llm-d helm chart</a></li>
+  <li><a href="#bench">6. 벤치마크 — apple-to-apple (vLLM-metal / llama.cpp / orchestrator / Dynamo 시도)</a></li>
   <li><a href="#wrap">7. 정리 — 무엇을 얻었나 / 못 한 것</a></li>
   <li><a href="#justify">8. 다시 — vLLM / Dynamo / llm-d 가 각각 왜 필요한가</a></li>
-  <li><a href="#refs">9. 참고 자료 + K8s/LLM 용어 풀이</a></li>
+  <li><a href="#refs">9. 참고 자료 + K8s / LLM 용어 풀이</a></li>
 </ol>
 </div>
 
@@ -157,7 +157,7 @@
   </div>
 </div>
 
-<p><small style="color:var(--muted);">↑ 노란 점이 요청 packet. <strong>Orchestrator layer 는 llm-d 와 Dynamo 가 같은 layer 의 경쟁 솔루션</strong> — 실무에선 보통 하나만 선택. 둘은 다른 layer 가 아님. NVIDIA 가 두 프로젝트 모두에 참여 중이라 component 차원에서 수렴 가능성 있음. (시장 시각 자세히는 §7-5 참조.)</small></p>
+<p><small style="color:var(--muted);">↑ 노란 점이 요청 packet. <strong>Orchestrator layer 는 llm-d 와 Dynamo 가 같은 layer 의 경쟁 솔루션</strong> — 실무에선 보통 하나만 선택. 둘은 다른 layer 가 아님. NVIDIA 가 두 프로젝트 모두에 참여 중이라 component 차원에서 수렴 가능성 있음. (시장 시각 자세히는 §8-5 참조.)</small></p>
 
 <table>
 <tr><th>Layer</th><th>책임</th><th>없으면 무슨 일이 안 되나</th></tr>
@@ -165,7 +165,7 @@
 <tr><td><strong>vLLM Engine</strong></td><td>한 GPU (또는 TP group) 안의 inference 최적화. PagedAttention, continuous batching, in-engine prefix cache</td><td>한 GPU 안에서 concurrent request 처리가 안 됨. throughput 1/10. 작은 cluster (단일 노드) 면 engine 만으로 충분</td></tr>
 </table>
 
-<p>두 layer 구조: <strong>orchestrator (선택) → engine</strong>. orchestrator 안에서 llm-d 와 Dynamo 는 같은 카테고리의 경쟁 솔루션. 어떤 시나리오에서 어느 쪽을 고르는지는 §7-5 의 선택 기준 표 참조.</p>
+<p>두 layer 구조: <strong>orchestrator (선택) → engine</strong>. orchestrator 안에서 llm-d 와 Dynamo 는 같은 카테고리의 경쟁 솔루션. 어떤 시나리오에서 어느 쪽을 고르는지는 §8-5 의 선택 기준 표 참조.</p>
 </div>
 
 <h2 id="env">2. 환경 평가 + 작전</h2>
@@ -183,24 +183,16 @@
 <tr><td>Python</td><td>3.12 (Frontier 때 만든 venv 재활용)</td><td>OK (vLLM 3.10+ 필요)</td></tr>
 </table>
 
-<div class="note"><strong>디스크 정리 영향</strong>: 처음 13GB 자유 공간일 때는 "Step 3 의 minikube + 차트는 부담 클 것 같다" 가정. 실제 작업 도중 호스트 정리로 89GB 확보되어 <strong>Step 3 진짜 시도 가능</strong>해짐. 작전 1차 (skip 가능성 명시) → 작전 2차 (모두 시도) 로 갱신함.</div>
-
-<h3>작전 (1차 — 디스크 13GB 가정)</h3>
+<h3>작전</h3>
 <ol>
-<li><strong>Step 1</strong>: vLLM pip install + Qwen2.5-0.5B-Instruct 단일 instance, OpenAI 호환 API + curl.</li>
-<li><strong>Step 2</strong>: 두 instance + nginx LB (호스트 process 두 개 + nginx). K8s 없는 미니 cluster.</li>
-<li><strong>Step 3</strong>: minikube + llm-d 차트. 디스크 여유 보면서 시도. 막히면 Step 2 까지로 만족.</li>
-<li><strong>Dynamo</strong>: skip. GPU 가정이 강해서 CPU 의미 적음.</li>
+<li><strong>Step 1</strong> — engine 선택: vLLM pip install + 작은 모델 단일 instance. 실패하면 우회 후 결과 솔직히. (실제: vLLM 빌드 실패 → vllm-metal 시도 (install OK 하지만 매우 느림) → llama.cpp 가 실용적)</li>
+<li><strong>Step 2</strong> — Pod 갯수 효과: 두 instance + nginx LB. K8s 없는 미니 cluster — 단일 vs 2 인스턴스 throughput 비교.</li>
+<li><strong>Step 3</strong> — K8s + orchestrator: minikube + llama.cpp 2 Pod + Service LB (Setup C) + llm-d helm chart 실 install (Setup D).</li>
+<li><strong>Dynamo</strong> — install 시도. (실제: <code>ai-dynamo-runtime</code> 의 macOS arm64 wheel 없음 → install 자체 불가)</li>
+<li><strong>벤치마크</strong> — 모든 setup 동일 워크로드 (conc 1/4/8) 로 측정. apple-to-apple. 각 setup 직후 server kill.</li>
 </ol>
 
-<h3>작전 (2차 — 디스크 89GB 확보 후 갱신)</h3>
-<ol>
-<li><strong>Step 1</strong>: 그대로. (실제로 vLLM 빌드는 실패 → Ollama 도 실패 → llama.cpp 로 우회. §3 참조)</li>
-<li><strong>Step 2</strong>: 그대로. nginx LB 동작 확인.</li>
-<li><strong>Step 3</strong>: <strong>진짜 시도</strong>. minikube + llama.cpp 2 Pod + Service LB (Setup C) + llm-d-modelservice helm chart install (Setup D). 둘 다 작동까지 확인.</li>
-<li><strong>Dynamo</strong>: 여전히 skip. <code>ai-dynamo/dynamo</code> 의 install 가정이 NVIDIA GPU + CUDA driver + NIXL (NVLink/RDMA) 라 Apple Silicon 환경에선 backend engine 이 GPU 못 찾고 init 실패. 명령만 흉내 내는 건 학습 가치 낮아서 skip 유지.</li>
-<li><strong>각 setup 벤치마크</strong>: §6 신규 — 4 setup × concurrent 1/4/8 측정 + 예상 vs 실제 비교.</li>
-</ol>
+<div class="note"><strong>중간에 환경 바뀐 점</strong>: 처음 disk 13GB → 작업 중 호스트 정리로 89GB 확보. 덕분에 Step 3 의 minikube + 차트 다 시도 가능. nginx / helm 도 작업 중 <code>brew install</code>.</div>
 </div>
 
 <h2 id="step1">3. Step 1 — engine + 작은 모델 단일 instance</h2>
@@ -222,9 +214,29 @@ python -m pip install vllm
 
 <p>원인: macOS Apple Silicon 용 <strong>공식 wheel 없음</strong>. pip 가 sdist 받아서 source build 시도 → vLLM 의 C extension (<code>_C</code>) 빌드 실패. vLLM 공식 가이드 도 macOS 는 git clone + uv source build 권장 (시간 부담 큼).</p>
 
-<div class="note"><strong>교훈</strong>: <code>pip install vllm</code> 가 Linux 에서는 즉시 되지만 Apple Silicon 에서는 안 됨. 가능한 정통 경로는 <strong>(a) Docker 안에서 Linux vLLM 컨테이너</strong>, <strong>(b) vllm-metal plugin</strong> (Apple Silicon 의 Metal backend, 정통 vLLM 의 공식 fork), <strong>(c) git clone + uv 로 source build</strong>. 셋 다 시간/디스크 부담 큼.</div>
+<div class="note"><strong>교훈</strong>: <code>pip install vllm</code> 가 Linux 에서는 즉시 되지만 Apple Silicon 에서는 안 됨. 가능한 정통 경로 3가지: (a) Docker 안 Linux vLLM 컨테이너, (b) vllm-metal plugin (Apple Silicon Metal backend, 정통 vLLM 의 공식 fork), (c) git clone + uv source build. (b) 는 §3-2 에서 시도, 결과는 §6.</div>
 
-<h3>3-2. Ollama 시도 → <span class="status-fail">실패</span> (brew package broken)</h3>
+<h3>3-2. vllm-metal plugin 시도 → <span class="status-ok">install 성공</span> / <span class="status-fail">성능 매우 느림</span></h3>
+<pre><code># vllm-metal 공식 install script
+curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
+# → ~/.venv-vllm-metal 생성, vllm 0.22.1 + vllm-metal 0.3.0.dev + MLX (mlx-metal/mlx-lm)
+
+source ~/.venv-vllm-metal/bin/activate
+vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8090 --host 127.0.0.1 &amp;
+# → 약 43초 후 health OK (모델 로드 + Metal compile)
+
+curl http://127.0.0.1:8090/v1/models | jq '.data[0].id'
+# → "Qwen/Qwen2.5-0.5B-Instruct"</code></pre>
+
+<p>Install + serve 까지는 성공. 그러나 첫 chat completion 부터 매우 느림 — p50 35초 (§6 의 Setup E1 결과). 원인 추정:</p>
+<ul>
+<li><strong>vllm-metal 0.3.0.dev preview</strong> — README 도 "experimental, FP32/FP16 만 지원" 명시</li>
+<li>MLX backend 의 JIT compilation overhead</li>
+<li>vLLM PagedAttention 이 MLX 위에서 fully optimized 안 됨</li>
+</ul>
+<p>같은 모델로 llama.cpp 가 5-13 req/s, vLLM-metal 은 0.02-0.11 req/s — 약 100-500× 느림. <strong>Apple Silicon 에서 정통 vLLM 의 production 성능은 아직 못 봄</strong>. 실 vLLM 성능은 Linux + NVIDIA GPU 에서야 의미.</p>
+
+<h3>3-3. Ollama 시도 → <span class="status-fail">실패</span> (brew package broken)</h3>
 <pre><code>brew install ollama
 ollama serve &amp;
 ollama pull qwen2.5:0.5b   # 397 MB pull OK
@@ -234,7 +246,7 @@ curl http://localhost:11434/api/chat ...
 
 <p>현재 Homebrew 의 <code>ollama 0.30.7</code> 패키지가 <code>llama-server</code> 바이너리를 포함하지 않음 (알려진 이슈). Ollama 공식 macOS GUI app 을 받으면 동작하지만 GUI 의존 — cluster 시나리오에 부적합.</p>
 
-<h3>3-3. llama.cpp 직접 사용 → <span class="status-ok">성공</span></h3>
+<h3>3-4. llama.cpp 직접 사용 → <span class="status-ok">성공</span></h3>
 <p>Ollama 의 backend 가 곧 llama.cpp. 거기서 한 단계 내려가서 직접 사용. brew 의 <code>llama.cpp</code> 패키지는 <code>llama-server</code> binary 정상 제공. OpenAI compatible API 포함.</p>
 
 <pre><code>brew install llama.cpp
@@ -252,7 +264,7 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/v1/models | jq '.models[0].name'
 # → "Qwen/Qwen2.5-0.5B-Instruct-GGUF"</code></pre>
 
-<h3>3-4. 첫 chat completion + 메트릭</h3>
+<h3>3-5. 첫 chat completion + 메트릭</h3>
 <pre><code>curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -475,16 +487,26 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 
 <p><strong>inference-sim 이 반환하는 응답은 random text</strong>. 진짜 LLM 추론이 아닌 latency / throughput / API 형태만 시뮬레이션. 그래서 매우 빠름 (p50 ~7ms).</p>
 
-<h3>5-4. Dynamo 는 왜 시도 안 했나 (솔직히)</h3>
+<h3>5-4. Dynamo install 시도 → <span class="status-fail">install 자체 불가</span></h3>
 
-<p>NVIDIA Dynamo 의 install 가정:</p>
+<pre><code>pip install ai-dynamo
+# → ai-dynamo 0.1.0 depends on ai-dynamo-runtime==0.1.0
+# → Additionally, some packages in these conflicts have no
+#    matching distributions available for your environment:
+#      ai-dynamo-runtime
+# → ERROR: ResolutionImpossible
+# → ModuleNotFoundError: No module named 'ai_dynamo'</code></pre>
+
+<p><strong>핵심</strong>: <code>ai-dynamo-runtime</code> 패키지가 <strong>macOS arm64 wheel 을 제공 안 함</strong>. NVIDIA Linux + CUDA driver + NIXL (NVLink/RDMA) 가정이 packaging 차원에서 강제됨. CPU 환경에서 dummy 동작도 불가.</p>
+
+<p>Dynamo 의 install 가정:</p>
 <ul>
-  <li>NVIDIA GPU + CUDA driver (Apple Silicon 환경 X)</li>
-  <li>NIXL 기반 KV cache transfer (NVLink / RDMA 가정)</li>
+  <li>NVIDIA GPU + CUDA driver</li>
+  <li>NIXL 기반 KV cache transfer (NVLink / RDMA)</li>
   <li>vLLM / TRT-LLM 의 GPU 빌드 backend</li>
 </ul>
 
-<p>CPU 환경에서 Dynamo install 자체는 가능하지만 실 동작 X — backend engine 들이 GPU device 못 찾으면 init 실패. install 명령만 흉내내는 건 학습 가치 낮아서 skip. 실 NVIDIA 환경 (clouds, on-prem H100 cluster) 에서 별도 시도 권장.</p>
+<p>본 환경에선 install 도 안 되어 시도 종료. Dynamo 의 실 평가는 NVIDIA H100 + Linux 환경에서야 가능. <strong>이 발견 자체가 사용자에게 중요</strong> — Dynamo 는 "K8s 위의 또 다른 orchestrator" 같은 느낌이지만 사실 NVIDIA 인프라에 매우 깊이 묶여있음.</p>
 
 </div>
 
@@ -578,42 +600,45 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 
 </div>
 
-<h2 id="wrap">6. 정리 — 무엇을 얻었나 / 못 한 것</h2>
+<h2 id="wrap">7. 정리 — 무엇을 얻었나 / 못 한 것</h2>
 <div class="card">
 
-<h3>6-1. 얻은 것 ✓</h3>
+<h3>7-1. 얻은 것 ✓</h3>
 <ul>
-<li>OpenAI compatible API 의 실제 wire format 손맛 (request / response JSON, usage 필드, finish_reason, timings)</li>
-<li>GGUF 모델이 어떻게 자동 다운로드 + 메모리 로드되는지 (llama-server <code>--hf-repo / --hf-file</code>)</li>
-<li>multi-replica + LB 가 단순 round-robin 일 때 한계 (KV cache hit 0, 같은 prefix 도 다른 Pod 으로 감)</li>
-<li>이게 왜 production 에서 부족한지 → §8 의 llm-d / Dynamo 가 풀려고 하는 문제 정확히 보임</li>
-<li>"Apple Silicon 에서 pip install vllm 안 됨" 의 root cause (sdist + CMake 실패)</li>
+<li><strong>OpenAI compatible API 의 실제 wire format 손맛</strong> — request/response JSON, usage 필드, finish_reason, timings</li>
+<li><strong>3 engine 시도 + 결과</strong>: vLLM pip 빌드 실패 → vllm-metal install 성공하지만 매우 느림 → llama.cpp 가 Apple Silicon 에서 압도적 실용</li>
+<li><strong>multi-replica + LB 의 Pod 갯수 비례 효과 측정</strong>: conc=1, 4 에선 거의 차이 X, conc=8 에서 1.6× — 단일 instance 한계를 넘어야 의미</li>
+<li><strong>K8s container 가 host GPU 활용 깨뜨림</strong>: 같은 llama.cpp 가 host 에선 5-13 req/s, k8s Pod 안에선 0.3-0.7 req/s (19-27× 느림). Apple Silicon Metal 안 보임. <strong>production NVIDIA 환경에서도 device plugin 명시 필수</strong>인 이유</li>
+<li><strong>llm-d 의 chart 구조 + inference-sim 의 의미</strong>: chart default 가 mock backend, 실 vLLM backend 로 교체하려면 별도 values 와 cluster 자원 필요</li>
+<li><strong>Dynamo 의 Apple Silicon install 불가</strong>: <code>ai-dynamo-runtime</code> wheel 없음 — NVIDIA Linux + CUDA 가정이 packaging 차원에서 강제됨</li>
+<li><strong>Step 2 의 round-robin LB 한계 직접 체험</strong> → §8 의 llm-d / Dynamo 가 푸는 문제 정확히 보임</li>
 </ul>
 
-<h3>6-2. 못 한 것 ✗</h3>
+<h3>7-2. 못 한 것 ✗</h3>
 <ul>
-<li>vLLM 정통 PagedAttention / continuous batching 의 실제 동작 (llama.cpp 는 다른 구현)</li>
-<li>K8s 위 cluster (minikube 안 띄움 — 시간/디스크 부담)</li>
-<li>llm-d 의 prefix-cache scorer 실 동작 (Step 3 skip)</li>
-<li>NVIDIA Dynamo — GPU 강한 의존, CPU 환경에선 의미 X</li>
-<li>high concurrency 부하 측정 — 0.5B + Q4 모델이라 작아서 부하 의미 없음</li>
+<li>vLLM 정통 PagedAttention / continuous batching 실 동작 측정 (Apple Silicon 빌드 실패, vllm-metal 은 dev 미숙)</li>
+<li>llm-d + 실 vLLM backend 측정 — minikube 자원 부족 + vLLM container CPU 빌드 부담</li>
+<li>NVIDIA Dynamo 실 동작 — install 자체 안 됨</li>
+<li>high concurrency 부하 측정 (conc=32+) — 0.5B + Q4 모델이라 작아서 부하 의미 없음</li>
+<li>prefix-cache hit rate 측정 (같은 prefix 반복 시 EPP scorer 가 같은 Pod 보내는지) — llm-d real backend 가 있어야 의미</li>
 </ul>
 
-<h3>6-3. 다음 단계 (시간/자원 있을 때)</h3>
+<h3>7-3. 다음 단계 (NVIDIA Linux 환경에서)</h3>
 <ol>
-<li><strong>Docker 안 Linux vLLM</strong> — Apple Silicon Rosetta 로 amd64 emulation. <code>docker run vllm/vllm-openai:latest --model facebook/opt-125m</code>. 정통 vLLM 의 PagedAttention 실 동작 확인.</li>
-<li><strong>minikube + simple Service LB</strong> — llm-d 없이도 K8s 위에서 LB 어떻게 동작하는지.</li>
-<li><strong>llm-d minikube chart</strong> — prefix-cache scorer 가 실제로 같은 prompt 의 turn 2 를 같은 Pod 으로 보내는지 측정.</li>
+<li><strong>Docker 안 Linux vLLM (Apple Silicon Rosetta amd64)</strong> — 정통 PagedAttention 동작 확인. 단 emulation 으로 느림.</li>
+<li><strong>실 GPU node 1개 (cloud 또는 on-prem)</strong> — vLLM real + llm-d helm chart + vLLM backend swap. EPP scorer 의 prefix-cache hit rate 측정 가능.</li>
+<li><strong>NVIDIA H100 cluster</strong> — Dynamo install + multi-node P/D disaggregation 실 측정. NIXL KV transfer 시간 측정.</li>
+<li><strong>비교 벤치마크</strong>: 같은 워크로드를 vLLM 단일 vs vLLM + llm-d 의 prefix-aware routing 으로 비교. throughput / KV hit rate / latency 모두 측정 → llm-d 의 실제 이점 정량화.</li>
 </ol>
 
 </div>
 
-<h2 id="justify">7. 다시 — vLLM / Dynamo / llm-d 가 각각 왜 필요한가</h2>
+<h2 id="justify">8. 다시 — vLLM / Dynamo / llm-d 가 각각 왜 필요한가</h2>
 <div class="card">
 
 <p>Step 2 의 simple round-robin LB 가 production 에서 왜 부족한지 알면 위 컴포넌트들의 존재 이유가 명확해짐. <strong>주의</strong>: Dynamo 와 llm-d 는 같은 layer (orchestrator) 의 <strong>경쟁 솔루션</strong>이고 vLLM 은 그 아래 engine. 차례대로:</p>
 
-<h3>7-1. vLLM 만으론 뭐가 안 되는가</h3>
+<h3>8-1. vLLM 만으론 뭐가 안 되는가</h3>
 
 <p>vLLM 은 <strong>한 GPU (또는 한 GPU 그룹) 안에서 inference 를 최적화</strong>하는 engine. 핵심 강점:</p>
 <ul>
@@ -634,7 +659,7 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 
 <p>이 모든 일을 누가 함? <strong>그래서 orchestrator layer 가 필요</strong>. orchestrator 의 두 후보 (Dynamo, llm-d) 를 차례대로:</p>
 
-<h3>7-2. Dynamo 가 푸는 문제 — orchestrator option #1</h3>
+<h3>8-2. Dynamo 가 푸는 문제 — orchestrator option #1</h3>
 
 <p>NVIDIA Dynamo 는 <strong>여러 inference engine instance 를 한 cluster 처럼 묶는 orchestrator</strong>. vLLM / TRT-LLM / SGLang 등 다양한 engine 을 backend 로 받아들임. 핵심 기능:</p>
 
@@ -648,7 +673,7 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 
 <p>즉 Dynamo 는 <strong>"여러 GPU 노드 위에서 inference 를 한 분산 시스템처럼 운영"</strong> 하는 orchestrator. NVIDIA 가 만들었으니 NVLink / NIXL / NCCL 등 NVIDIA 인프라 가정이 강함. 시장 포지션: NVIDIA proprietary, vertical performance 강조 ("7x throughput on NVIDIA GPUs").</p>
 
-<h3>7-3. llm-d 가 푸는 문제</h3>
+<h3>8-3. llm-d 가 푸는 문제</h3>
 
 <p>llm-d 는 <strong>Kubernetes 위의 LLM-aware gateway + scheduler</strong>. K8s SIG-Network 의 <strong>Gateway Inference Extensions (GIE)</strong> 표준의 한 구현. 핵심:</p>
 
@@ -662,23 +687,23 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 
 <p>즉 llm-d 는 Dynamo 와 <strong>같은 카테고리</strong> (K8s 위 LLM serving orchestrator). 시장 포지션: CNCF sandbox + vendor-neutral + GIE 표준 + Red Hat / Google / IBM / CoreWeave / NVIDIA 공동 founder. NVIDIA 가 Dynamo Planner / KV Cache Manager 를 llm-d 에 통합 발표 (2026).</p>
 
-<h3>7-4. Dynamo 와 llm-d 는 대체제다 (한 번에 정리)</h3>
+<h3>8-4. Dynamo 와 llm-d 는 대체제다 (한 번에 정리)</h3>
 
 <p><strong>결론: 대체제</strong>. 실무에선 둘 중 하나만 선택. "보완" 으로 보이려면 NVIDIA 가 Dynamo 의 component (Planner, KV Cache Manager) 를 llm-d 에 integration 하는 양다리 시각에서만 성립. 일반 organization 시각에서는 같은 카테고리 — 같은 문제 (K8s 위 LLM serving 의 routing + P/D 분리 + autoscaling) 를 다른 방식으로 푸는 경쟁 솔루션.</p>
 
 <table>
 <tr><th>차원</th><th>llm-d 와 Dynamo 의 관계</th></tr>
 <tr><td><strong>기능 카테고리</strong></td><td>같음 — 둘 다 orchestrator. KV-cache aware routing, P/D 분리, multi-node, autoscaling</td></tr>
-<tr><td><strong>구현 차원</strong></td><td>다름 — llm-d 는 Pod 단위 routing + HTTP backend, Dynamo 는 KV block 단위 + NIXL 통합 (§7-6 참조)</td></tr>
+<tr><td><strong>구현 차원</strong></td><td>다름 — llm-d 는 Pod 단위 routing + HTTP backend, Dynamo 는 KV block 단위 + NIXL 통합 (§8-6 참조)</td></tr>
 <tr><td><strong>표준 / 거버넌스</strong></td><td>다름 — llm-d 는 CNCF sandbox + GIE 표준, Dynamo 는 NVIDIA proprietary</td></tr>
 <tr><td><strong>둘 다 같이 deploy 가능?</strong></td><td>기술적으론 가능하지만 routing 이 2번 일어남 (redundant). 권장 X. component 차원에서 NVIDIA 가 통합 작업 중</td></tr>
 </table>
 
-<p>실무 선택 기준은 §7-5 에서 자세히.</p>
+<p>실무 선택 기준은 §8-5 에서 자세히.</p>
 
-<h3>7-5. 실무 / 시장 시각 — 둘은 경쟁 솔루션인가</h3>
+<h3>8-5. 실무 / 시장 시각 — 둘은 경쟁 솔루션인가</h3>
 
-<div class="note"><strong>위 §7-4 의 "다른 layer" 설명 정정</strong>: 깔끔하게 layer 로 나눠 보였지만 <strong>시장에서는 같은 카테고리</strong>. 실무에선 보통 하나 선택. §7-4 표가 "기능 직교성" 시각이라면, 여기는 "운영 시각".</div>
+<div class="note"><strong>위 §8-4 의 "다른 layer" 설명 정정</strong>: 깔끔하게 layer 로 나눠 보였지만 <strong>시장에서는 같은 카테고리</strong>. 실무에선 보통 하나 선택. §8-4 표가 "기능 직교성" 시각이라면, 여기는 "운영 시각".</div>
 
 <h4>둘 다 같은 카테고리: K8s 위 LLM serving orchestrator</h4>
 <p>두 솔루션 모두 답하려는 질문이 같음:</p>
@@ -718,7 +743,7 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 <tr><td>Multi-model multi-tenant SaaS 형태</td><td><strong>llm-d</strong></td><td>K8s namespace + RBAC 와 자연스럽게 통합. InferencePool 추상화</td></tr>
 </table>
 
-<p><strong>요약</strong>: §7-4 의 "두 layer 동시 사용 가능" 은 NVIDIA 의 양다리 (Dynamo 컴포넌트를 llm-d 에 통합) 시각에서만 성립. 일반 organization 운영 시각에서는 <strong>둘은 경쟁 솔루션이고 하나만 선택</strong>이 맞음.</p>
+<p><strong>요약</strong>: §8-4 의 "두 layer 동시 사용 가능" 은 NVIDIA 의 양다리 (Dynamo 컴포넌트를 llm-d 에 통합) 시각에서만 성립. 일반 organization 운영 시각에서는 <strong>둘은 경쟁 솔루션이고 하나만 선택</strong>이 맞음.</p>
 
 <p>출처:</p>
 <ul>
@@ -729,7 +754,7 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 <li><a href="https://www.spheron.network/blog/nvidia-dynamo-disaggregated-inference-guide/">Spheron Blog: Dynamo 1.0 Disaggregated Inference Guide</a> — 시장 포지셔닝 설명</li>
 </ul>
 
-<h3>7-6. llm-d 의 prefix-cache routing 과 Dynamo 의 KV-aware routing 의 차이</h3>
+<h3>8-6. llm-d 의 prefix-cache routing 과 Dynamo 의 KV-aware routing 의 차이</h3>
 
 <p>둘 다 "cache aware routing" 이라고 묶여서 같은 일 같은데 <strong>layer 가 완전히 다름</strong>. 헷갈리기 쉬워서 정리:</p>
 
@@ -764,7 +789,7 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 <li>Dynamo KV aware routing + NIXL: <a href="https://github.com/ai-dynamo/dynamo">NVIDIA Dynamo repo</a></li>
 </ul>
 
-<h3>7-7. 한 줄 정리 + 실제 배포 시 선택</h3>
+<h3>8-7. 한 줄 정리 + 실제 배포 시 선택</h3>
 
 <p>실제 배포 시나리오 두 가지 — orchestrator 를 어느 쪽으로 가느냐:</p>
 
@@ -809,7 +834,7 @@ curl http://127.0.0.1:9200/v1/chat/completions \
   │  └────────────────────────────────────────────────────┘      │
   └──────────────────────────────────────────────────────────────┘</div>
 
-<p><strong>선택 가이드</strong> (§7-5 의 표를 한 번 더):</p>
+<p><strong>선택 가이드</strong> (§8-5 의 표를 한 번 더):</p>
 <ul>
 <li><strong>단일 모델 + 작은 cluster + GPU 1-N 대</strong>: vLLM 만으로 충분. orchestrator 없이 K8s Service LB 만으로 시작 가능.</li>
 <li><strong>K8s 위 multi-tenant + 여러 모델 + vendor-neutral / 표준 추구</strong>: <strong>llm-d</strong> 선택. CNCF sandbox + GIE 표준.</li>
@@ -823,7 +848,7 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 
 </div>
 
-<h2 id="refs">참고 자료 + 용어 풀이</h2>
+<h2 id="refs">9. 참고 자료 + 용어 풀이</h2>
 <div class="card">
 
 <h3>참고 자료 (확인한 출처)</h3>
