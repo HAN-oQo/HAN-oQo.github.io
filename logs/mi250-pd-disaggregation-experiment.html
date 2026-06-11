@@ -275,16 +275,39 @@ docker run -d --rm \
   vllm serve &lt;model&gt; --tensor-parallel-size 4 --port 8000 \
     --kv-transfer-config '...'</code></pre>
 
-<h3>4-2. KV connector 후보</h3>
+<h3>4-2. KV connector 후보 — 전체 9개</h3>
+
+<p>본 실험의 vLLM image (<code>rocm/vllm:latest</code>, v0.11.2.dev673) 에 있는 모든 KV connector. <code>vllm/distributed/kv_transfer/kv_connector/v1/</code> 디렉토리 ls 결과:</p>
+
 <table>
-<tr><th>Connector</th><th>AMD MI250 가능성</th></tr>
-<tr><td><code>NixlConnector</code></td><td>✗ NVIDIA NIXL 전용</td></tr>
-<tr><td><code>MoRIIOConnector</code></td><td>✓ <strong>ROCm only 명시 — 1순위 후보</strong></td></tr>
-<tr><td><code>P2pNcclConnector</code></td><td>⚠ vLLM 의 NCCL 호출이 ROCm 빌드에서 RCCL 로 매핑됨 — 시도</td></tr>
-<tr><td><code>LMCacheConnectorV1</code></td><td>⚠ CPU mode fallback 가능</td></tr>
-<tr><td><code>ExampleConnector</code></td><td>✓ filesystem 기반 (가장 가벼움) — mechanism 확인 용</td></tr>
+<tr><th>Connector</th><th>설명 — 어떤 일을 하는가</th><th>의존성</th><th>AMD MI250 가능?</th><th>본 실험에서</th></tr>
+<tr><td><code>NixlConnector</code></td><td>NVIDIA <strong>NIXL</strong> (NVLink / InfiniBand RDMA) 으로 GPU-GPU 직접 transfer. KV block 단위. 가장 빠른 정통 production connector</td><td>NVIDIA GPU + NIXL library + NVLink 또는 RDMA NIC</td><td>✗</td><td>시도 불가</td></tr>
+<tr><td><code>MooncakeConnector</code></td><td><strong>Mooncake transfer engine</strong> (Moonshot AI 의 KV cache pool) 통해 transfer. 외부 mooncake 서버 + InfiniBand RDMA</td><td>CUDA + IB + mooncake 서버</td><td>✗</td><td>시도 불가</td></tr>
+<tr><td><code>LMCacheConnectorV1</code></td><td><strong>LMCache</strong> (별도 KV cache pool 서버) 통해 KV 저장/공유. 여러 vLLM instance 가 LMCache 의 shared pool 활용. CPU offload + remote tier 지원. <strong>v1 = vLLM v1 engine 호환</strong></td><td>LMCache 서버 (별도 deploy)</td><td>⚠</td><td>image 에 lmcache module 없음 — 시도 못 함</td></tr>
+<tr><td><code>LMCacheMPConnector</code></td><td>LMCache 의 <strong>multi-process</strong> variant. 같은 host 안 여러 vLLM process 가 LMCache shared memory 로 KV 교환. 단일 host 시나리오</td><td>LMCache + 같은 host</td><td>⚠</td><td>위와 동일</td></tr>
+<tr><td><code>P2pNcclConnector</code></td><td>두 vLLM instance 사이 <strong>NCCL collective</strong> 으로 KV 직접 transfer. ROCm 빌드면 NCCL 호출이 <strong>RCCL 자동 매핑</strong>. ZMQ ROUTER socket + 외부 proxy server 가 producer↔consumer 매칭. <strong>본 실험 성공 경로 (§7-bis)</strong></td><td>NCCL/RCCL + 외부 proxy server (quart-based)</td><td>✓</td><td>✅ 11번 시도 끝에 성공</td></tr>
+<tr><td><code>SharedStorageConnector</code></td><td>filesystem 또는 shared storage 로 KV blob save/load. layer 별 <strong>safetensors</strong> 파일 (한 file 당 한 transformer layer 의 K,V tensor). source comment 가 "<strong>debug implementation</strong>" 명시. PDD 라기보다 prefix cache 공유 / 학습용</td><td>filesystem (또는 shared mount)</td><td>✓</td><td>⚠ mechanism 동작, quality 깨짐</td></tr>
+<tr><td><code>OffloadingConnector</code></td><td>KV cache 일부를 GPU 에서 <strong>CPU memory 로 offload</strong>. cross-instance PDD 가 아닌 <strong>single-instance 의 memory 압박 해소</strong> 용. 긴 context 받을 때 사용</td><td>CPU memory (host RAM)</td><td>✓</td><td>PDD 시나리오 아님 — 시도 안 함</td></tr>
+<tr><td><code>MultiConnector</code></td><td>여러 connector 를 <strong>동시 / hierarchical 사용</strong>. 예: NixlConnector (가까운 GPU 사이) + LMCacheConnector (멀리). fallback chain 또는 tier별 KV storage</td><td>위 connector 들의 조합</td><td>위에 의존</td><td>시도 안 함</td></tr>
+<tr><td><code>DecodeBenchConnector</code></td><td><strong>decode 측 throughput 분리 측정</strong>용 벤치마크 전용 connector. 실 PDD 아님 — decode 단계만 isolated 으로 측정해서 P/D 의 decode 부분 성능 분석에 사용</td><td>없음 (mock)</td><td>✓</td><td>벤치마크 전용 — 시도 안 함</td></tr>
 </table>
-<p>전략: <strong>MoRIIO 우선 시도 → 실패 시 P2pNccl → 마지막 fallback ExampleConnector</strong>.</p>
+
+<p>참고로 image 의 v1 디렉토리에는 안 보이지만 vLLM docs 에 언급되는 connector:</p>
+<table>
+<tr><th>Connector</th><th>설명</th><th>본 image 에 있나</th></tr>
+<tr><td><code>MoRIIOConnector</code></td><td>AMD <strong>ROCm 전용</strong>. MI 시리즈의 fast KV transfer 라고 docs 에 명시. 그러나 본 image (vllm 0.11.2.dev673) 에는 file 없음 — 최신 release 만 있을 가능성</td><td>✗ — 시도 불가</td></tr>
+<tr><td><code>ExampleConnector</code></td><td>SharedStorageConnector 와 비슷한 학습용. 별도 글 (<a href="pd-disaggregation-metal-tryout.html">Apple Silicon PDD 시도</a>) 에서 사용</td><td>본 image 의 0.11.2 에는 SharedStorage 가 대응</td></tr>
+</table>
+
+<h4>전략 결정 (실험 시작 시)</h4>
+<ol>
+<li><strong>1순위 — MoRIIOConnector</strong> (ROCm 전용): 없음 → skip</li>
+<li><strong>2순위 — P2pNcclConnector</strong> (NCCL→RCCL): 시도. <strong>성공 (§7-bis)</strong></li>
+<li><strong>3순위 fallback — SharedStorageConnector</strong>: mechanism 시연 용이지만 quality 깨짐</li>
+<li><strong>4순위 — LMCache</strong>: image 에 없어서 시도 못 함</li>
+</ol>
+
+<div class="note"><strong>핵심 finding</strong>: AMD MI250 + ROCm 환경에서 가능한 정통 PDD connector 는 <strong>P2pNcclConnector + 외부 proxy server</strong> 가 사실상 유일. NIXL/Mooncake 는 NVIDIA 전용, LMCache 는 별도 server 필요 (image 에 없으면 빌드). SharedStorage 는 debug 용. MoRIIO 는 최신 image 에만 있을 가능성.</div>
 
 </div>
 
