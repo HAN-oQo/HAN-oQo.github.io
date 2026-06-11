@@ -68,7 +68,7 @@
 
 <h2 id="pitch">1. 30초 요약</h2>
 <div class="card">
-<p>Frontier 는 <strong>vLLM 기반 LLM 서빙의 discrete-event simulator</strong>. NetX-lab (홍콩과기대) 가 만든 open-source. 핵심 특징:</p>
+<p>Frontier 는 <strong>vLLM 기반 LLM 서빙의 discrete-event simulator</strong>. NetX-lab (홍콩과기대) 가 만든 open-source. <strong>처음부터 새로 만든 게 아니라 Vidur (Microsoft) 의 fork 위에 modern runtime + scheduler variants + disaggregation 코드 추가한 것</strong> (lineage: vLLM → Sarathi-Serve → Vidur → Frontier — 자세한 건 §4-2 GPTModel 출처 참조). 핵심 특징:</p>
 <ul>
   <li><strong>Modern runtime 모델링</strong>: CUDA Graph, speculative decoding/MTP, prefix caching, quantization, chunked prefill, hierarchical caching 모두 sim 안에서 모델</li>
   <li><strong>Operator-level fidelity</strong>: 단순 average-case 모델 아닌, profiling 된 op-level latency 를 룩업해서 batch 시간 계산</li>
@@ -165,7 +165,7 @@
   │                    ▼                                                       │
   │   ┌───────────────────────────────────────┐                                │
   │   │ LinearOpWrapper.profile(num_tokens)   │                                │
-  │   │   ├─ GPTModel(model_config, TP)       │ ← frontier 자체 model class    │
+  │   │   ├─ GPTModel(model_config, TP)       │ ← Vidur 의 profile harness fork (origin: Sarathi/vLLM)
   │   │   ├─ WARMUP=3, ACTIVE=20 회 forward   │                                │
   │   │   └─ stats = TimerStatsStore.get()    │ ← 모든 CudaTimer 결과 모음     │
   │   └────────────────┬──────────────────────┘                                │
@@ -246,8 +246,8 @@
 <p>부분적으로 맞고 부분적으로 다름. 정확히:</p>
 <table>
 <tr><th>구성 요소</th><th>실제로 어디서 옴</th></tr>
-<tr><td><code>GPTModel</code> 클래스 자체</td><td><strong>Frontier 자체 구현</strong> (<code>frontier/profiling/linear_op/linear_op_impl.py</code>). vLLM 의 <code>LlamaForCausalLM</code> 같은 클래스 직접 import 안 함</td></tr>
-<tr><td>안에 들어가는 layer (Linear/Norm/Rotary/Activation)</td><td><strong>Frontier 자체 layer</strong> (<code>frontier/profiling/common/layers/</code>): <code>SiluAndMul</code>, <code>RMSNorm</code>, <code>GemmaRMSNorm</code>, <code>get_rope</code>, <code>ColumnParallelLinear</code>, <code>RowParallelLinear</code>, <code>VocabParallelEmbedding</code>. 이게 vLLM 의 같은 이름 layer 와 <strong>알고리즘/kernel 호환</strong> 되도록 작성 (mirror)</td></tr>
+<tr><td><code>GPTModel</code> 클래스 자체</td><td><strong>Vidur (Microsoft) 의 profile harness 에서 fork</strong> — <code>frontier/profiling/linear_op/linear_op_impl.py:965</code>. Frontier 가 처음 만든 게 아님. 진짜 lineage: <strong>vLLM (layer 원본) → Sarathi-Serve (Microsoft, chunked prefill paper) → Vidur (Microsoft) → Frontier (NetX-lab/HKUST)</strong>. 코드 안에 흔적 명확 — <code>cluster_simulator.py:5</code> "Vidur's disaggregated architecture", <code>logger.py:3</code> "Logging configuration for Sarathi", <code>SarathiSchedulerConfig</code> / <code>VidurCCBackendConfig</code> 클래스, <code>VIDUR_DISABLE_WANDB</code> env 등.</td></tr>
+<tr><td>안에 들어가는 layer (Linear/Norm/Rotary/Activation)</td><td><strong>Vidur/Sarathi-Serve 의 layer mirror</strong> (<code>frontier/profiling/common/layers/</code>): <code>SiluAndMul</code>, <code>RMSNorm</code>, <code>GemmaRMSNorm</code>, <code>get_rope</code>, <code>ColumnParallelLinear</code>, <code>RowParallelLinear</code>, <code>VocabParallelEmbedding</code>. Sarathi-Serve 가 처음에 vLLM 의 layer 알고리즘/kernel call 호환되도록 작성한 것을 Vidur 가 그대로 받고 Frontier 가 또 fork. Frontier 가 추가한 건 일부 신규 모델 (Qwen3 MoE 등) 의 attention/QK-norm/share-expert 변형 정도.</td></tr>
 <tr><td>Attention kernel</td><td><strong>vLLM 의 attention backend 직접</strong> — FlashInfer 의 <code>get_kv_cache_layout</code> 등 호출</td></tr>
 <tr><td>MoE kernel</td><td><strong>vLLM 의 fused MoE 직접</strong> — <code>vllm.model_executor.layers.fused_moe.fused_moe_kernel</code></td></tr>
 <tr><td>측정 mechanism</td><td>각 op 가 자기 안에 <code>CudaTimer</code> context 를 박아둠. <code>GPTModel.forward()</code> 한 번 호출 = 모든 op timer 가 순차 발화 → 모든 op 시간 한꺼번에 측정</td></tr>
@@ -300,7 +300,7 @@
 
 <h4>왜 vLLM 의 LlamaForCausalLM 직접 import 안 하나</h4>
 <p>vLLM 의 model class 는 <strong>scheduler / KV cache manager / sampler / 전체 inference engine</strong> 과 묶여서 동작. 그래서 직접 import 해서 forward 하려면 vLLM 엔진 전체 띄워야 함 (init 시간 30초+). 그리고 그러면 측정값에 vLLM Python 오버헤드까지 다 들어가서 "순수 op 시간" 분리가 어려움.</p>
-<p>Frontier 는 <strong>layer 만 mirror</strong> 해서 wrap — vLLM 의 <code>nn.Linear</code> subclass 들 (ColumnParallelLinear 등) 과 같은 kernel 을 호출하지만 Python class wrapper 만 자체 구현. 결과적으로 vLLM 띄우는 시간 없이 빠른 측정 + Python 오버헤드 측정값에 안 들어감. 단점은 vLLM 의 production forward path 의 다른 overhead (cache 관리, scheduler 등) 가 빠짐 — 그래서 calibration 필요할 수도.</p>
+<p>이 design 자체는 Frontier 가 만든 게 아니라 <strong>Sarathi-Serve 가 원래 한 선택</strong>. Sarathi-Serve 가 chunked prefill paper 용 simulator 만들면서 vLLM 의 <code>nn.Linear</code> subclass 들 (ColumnParallelLinear, RowParallelLinear, RMSNorm 등) 을 mirror 해서 stripped-down GPTModel 작성. Vidur 가 그대로 받고, Frontier 가 또 받음. 장점은 vLLM 띄우는 시간 없이 빠른 측정 + Python 오버헤드 측정값에 안 들어감. 단점은 vLLM 의 production forward path 의 다른 overhead (cache 관리, scheduler 등) 가 빠짐 — 그래서 calibration 필요할 수도.</p>
 
 <h3>10-A. Workflow A: Profile DB 만들기</h3>
 
