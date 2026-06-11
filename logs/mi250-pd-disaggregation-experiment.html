@@ -300,9 +300,107 @@ ts,device,temp_c,power_w,gpu_use_pct,vram_pct,mem_activity
 
 </div>
 
-<h2 id="deploy">6. Deploy</h2>
+<h2 id="deploy">6. Deploy — baseline 단일 instance</h2>
 <div class="card">
-<p class="status-todo">⏳ 진행 중.</p>
+
+<h3>6-1. Image 검증 (실 stack trace)</h3>
+<pre><code>$ docker pull rocm/vllm:latest
+# → 30.7GB, 8분 download + extract. 6 months old.
+
+$ docker run --rm --device=/dev/kfd --device=/dev/dri \
+    --security-opt seccomp=unconfined --group-add video \
+    rocm/vllm:latest python3 -c 'import vllm; print(vllm.__version__)'
+# → vllm 0.11.2.dev673+g839868462</code></pre>
+
+<p>vLLM <strong>0.11.2.dev673 ROCm 7.0 build</strong>, host ROCm 6.2 — minor version mismatch 가능성 있음.</p>
+
+<h3>6-2. 첫 실패 — Worker proc 죽음 (실 stack trace)</h3>
+<pre><code>$ docker run -d --name vllm-baseline \
+    -e HIP_VISIBLE_DEVICES=0,1,2,3 \
+    rocm/vllm:latest \
+    vllm serve Qwen/Qwen2.5-1.5B-Instruct --tensor-parallel-size 4 ...
+
+# 200초 후 container exited (1). docker logs:
+INFO 06-11 09:10:41 [gpu_model_runner.py:3567] Model loading took 0.8047 GiB memory and 87.119832 seconds
+(Worker_TP3 pid=456) [aiter] import [module_rmsnorm] under /usr/local/lib/python3.12/dist-packages/aiter/jit/module_rmsnorm.so
+ERROR 06-11 09:11:04 [multiproc_executor.py:233] Worker proc VllmWorker-3 died unexpectedly, shutting down executor.
+ERROR 06-11 09:11:08 [core.py:843] EngineCore failed to start.
+...
+RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}</code></pre>
+
+<p><strong>Root cause</strong>: AMD 의 <code>aiter</code> (AI Tensor library) 가 <code>module_rmsnorm.so</code> JIT compile 시 죽음. Worker-3 가 가장 먼저 죽으면서 cascade 종료. 다른 worker 들도 같은 module import 직후 종료.</p>
+
+<p>가설: ROCm 7.0 빌드된 aiter 가 host ROCm 6.2 / gfx9010 (MI250) 에서 JIT compile fail. 또는 silent segfault.</p>
+
+<h3>6-3. TP=1 단순 시도 — 같은 fail</h3>
+<pre><code>$ docker run -d --name vllm-tp1 -e HIP_VISIBLE_DEVICES=0 \
+    rocm/vllm:latest vllm serve ... --tensor-parallel-size 1 ...
+
+# 동일한 aiter module_rmsnorm import 후 EngineCore_DP0 cancellation.
+# → aiter 자체가 문제. TP 무관.</code></pre>
+
+<h3>6-4. <span class="status-ok">해결</span> — aiter 비활성화 + enforce-eager</h3>
+
+<pre><code>$ docker run -d --name vllm-tp1 \
+    --device=/dev/kfd --device=/dev/dri \
+    --security-opt seccomp=unconfined --group-add video \
+    --ipc=host --shm-size=8g \
+    -v ~/.cache/huggingface:/root/.cache/huggingface \
+    -p 8000:8000 \
+    -e HIP_VISIBLE_DEVICES=0 \
+    -e <strong>VLLM_ROCM_USE_AITER=0</strong> \
+    -e <strong>VLLM_ROCM_USE_AITER_RMSNORM=0</strong> \
+    rocm/vllm:latest \
+    vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+      --tensor-parallel-size 1 \
+      <strong>--enforce-eager</strong> \
+      --host 0.0.0.0 --port 8000 \
+      --max-model-len 4096</code></pre>
+
+<p>약 3분 후 server up. 환경변수 <code>VLLM_ROCM_USE_AITER=0</code> 가 aiter 의 fused kernel 사용을 끔. <code>--enforce-eager</code> 가 torch.compile graph capture 도 skip — 추가 안전망.</p>
+
+<h3>6-5. 첫 chat completion (실 결과)</h3>
+
+<pre><code>$ curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "Qwen/Qwen2.5-1.5B-Instruct",
+    "messages": [
+      {"role":"system","content":"Be concise."},
+      {"role":"user","content":"In one sentence: why is the sky blue?"}
+    ],
+    "max_tokens": 80,
+    "temperature": 0.3
+  }'
+
+content: The sky appears blue because of scattering of sunlight by air molecules in the atmosphere.
+usage: {'prompt_tokens': 26, 'total_tokens': 43, 'completion_tokens': 17}
+finish: stop</code></pre>
+
+<h3>6-6. 동시 모니터링 캡쳐 (실 데이터)</h3>
+<pre><code>$ ~/pd-experiment/monitor_rocm.sh /tmp/mon_baseline.csv 5 &amp;
+$ &lt;curl 호출&gt;
+$ wait
+saved 33 rows to /tmp/mon_baseline.csv
+
+# baseline (chat completion 1 호출 동안)
+ts            device,temp,power,gpu%,vram%,mem_act
+1781169589933,card0,35.0,121.0,0,<strong>90</strong>,0      ← 모델 + KV 로드된 GCD 0
+1781169589933,card1,39.0,N/A,    0,0,    0    ← idle (secondary die)
+1781169589933,card2,36.0,119.0,0,0,    0    ← idle
+1781169589933,card3,31.0,N/A,    0,0,    0
+...</code></pre>
+
+<p><strong>관찰</strong>:</p>
+<ul>
+<li>card0 의 <strong>VRAM% = 90</strong> — Qwen2.5-1.5B (3GB FP16) + KV cache + working buffer 가 64GB 의 90% 사용 (사실 KV cache 가 max_model_len 만큼 미리 할당되어 큼)</li>
+<li>다른 GCD 7개 모두 VRAM 0% — single instance 라 한 GCD 만 사용</li>
+<li>GPU use% = 0 — 측정 순간 idle (1 chat 의 17 token 이 매우 짧음. monitoring 1초 polling 에 비해 chat 이 빨리 끝남)</li>
+<li>Power 변동 없음 — chat 부하가 너무 작음</li>
+</ul>
+
+<div class="note"><strong>다음</strong>: 부하 더 큰 워크로드 (concurrent 호출 + 긴 prompt) 로 GPU% 변동 캡쳐. 그 다음 PDD 두 instance 시도 (TP=4 + AITER 비활성화 조합).</div>
+
 </div>
 
 <h2 id="bench">7. 벤치마크 + 모니터링 캡쳐</h2>
