@@ -634,7 +634,60 @@ conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 1
 <tr><td>backend 측면</td><td><strong>다른 추상화</strong></td><td>llm-d 는 backend (vLLM, TGI 등) 와 디커플. EPP 는 일반 HTTP 로 backend 호출. Dynamo 는 backend 와 더 깊이 통합 (NIXL 으로 KV cache 직접 transfer 등)</td></tr>
 </table>
 
-<h3>7-5. llm-d 의 prefix-cache routing 과 Dynamo 의 KV-aware routing 의 차이</h3>
+<h3>7-5. 실무 / 시장 시각 — 둘은 경쟁 솔루션인가</h3>
+
+<div class="note"><strong>위 §7-4 의 "다른 layer" 설명 정정</strong>: 깔끔하게 layer 로 나눠 보였지만 <strong>시장에서는 같은 카테고리</strong>. 실무에선 보통 하나 선택. §7-4 표가 "기능 직교성" 시각이라면, 여기는 "운영 시각".</div>
+
+<h4>둘 다 같은 카테고리: K8s 위 LLM serving orchestrator</h4>
+<p>두 솔루션 모두 답하려는 질문이 같음:</p>
+<ul>
+<li>여러 GPU 노드 위에서 LLM serving 을 어떻게 운영할까</li>
+<li>Prefill / Decode 를 어떻게 분리할까</li>
+<li>KV cache aware routing 을 어떻게 할까</li>
+<li>SLO-driven autoscaling 을 어떻게 할까</li>
+<li>K8s 위에서 어떻게 표준화할까</li>
+</ul>
+
+<h4>시장 포지셔닝의 차이</h4>
+<table>
+<tr><th>차원</th><th>llm-d</th><th>NVIDIA Dynamo</th></tr>
+<tr><td><strong>거버넌스</strong></td><td>CNCF sandbox 프로젝트 (오픈소스 표준)</td><td>NVIDIA 의 proprietary 프로젝트 (Apache 라이센스이지만 NVIDIA 통제)</td></tr>
+<tr><td><strong>창립 / 후원</strong></td><td>Red Hat, Google Cloud, IBM Research, CoreWeave, NVIDIA (공동)</td><td>NVIDIA 단독</td></tr>
+<tr><td><strong>발표 시점</strong></td><td>2025년 후반 (Red Hat Summit, CNCF)</td><td>2026-03-16 GA at GTC</td></tr>
+<tr><td><strong>Backend 가정</strong></td><td>vLLM 중심이지만 vendor-neutral 지향 — TGI / TRT-LLM 등 가능</td><td>vLLM / TRT-LLM / SGLang 모두 backend 로 받지만 NVIDIA stack (NIXL, NVLink) 가정 강함</td></tr>
+<tr><td><strong>K8s 표준</strong></td><td>SIG-Network Gateway API + Gateway Inference Extensions (GIE) 표준 따름</td><td>NVIDIA 의 자체 패턴 + K8s integration 제공 (Helm chart, Operator)</td></tr>
+<tr><td><strong>마케팅 메시지</strong></td><td>"open / vendor-neutral / CNCF-first"</td><td>"7x throughput on NVIDIA GPUs" — vertical performance</td></tr>
+</table>
+
+<h4>NVIDIA 의 이중 참여 — 묘한 관계</h4>
+<p>흥미로운 점: <strong>NVIDIA 는 llm-d 의 founder 중 하나</strong>이기도 함. 동시에 자체 Dynamo 도 운영. 2026 년 들어 NVIDIA 는 <a href="https://developer.nvidia.com/blog/nvidia-dynamo-accelerates-llm-d-community-initiatives-for-advancing-large-scale-distributed-inference/">Dynamo Planner 와 KV Cache Manager 를 llm-d 에 통합</a>한다고 발표. 즉:</p>
+<ul>
+<li>NVIDIA 입장에선 "NVIDIA 풀스택 가는 organization 은 Dynamo, K8s 표준 가는 organization 은 llm-d (단 NVIDIA 컴포넌트 활용 가능)" 으로 양다리.</li>
+<li>장기적으로 두 프로젝트가 component 차원에서 수렴 가능성 — Dynamo 의 KV Manager 가 llm-d 안에서 동작하는 식.</li>
+</ul>
+
+<h4>실무에서 하나 선택할 때 기준</h4>
+<table>
+<tr><th>상황</th><th>선택</th><th>이유</th></tr>
+<tr><td>K8s native + multi-vendor 인프라 (cloud 혼합 / on-prem)</td><td><strong>llm-d</strong></td><td>GIE 표준 따름. AWS / Azure / GCP / on-prem 일관. vendor lock-in 회피</td></tr>
+<tr><td>NVIDIA H100/H200 풀스택 + NVLink/InfiniBand 인프라</td><td><strong>Dynamo</strong></td><td>NIXL + NVLink 활용 가능. 7x throughput 마케팅 수치 (실 워크로드별 다름)</td></tr>
+<tr><td>Red Hat OpenShift / IBM 환경</td><td><strong>llm-d</strong></td><td>Red Hat / IBM 이 founder 라 first-party 통합 강함</td></tr>
+<tr><td>이미 NVIDIA Triton / NeMo 운영 중</td><td><strong>Dynamo</strong></td><td>NVIDIA 풀스택 안에서 연속성</td></tr>
+<tr><td>Multi-model multi-tenant SaaS 형태</td><td><strong>llm-d</strong></td><td>K8s namespace + RBAC 와 자연스럽게 통합. InferencePool 추상화</td></tr>
+</table>
+
+<p><strong>요약</strong>: §7-4 의 "두 layer 동시 사용 가능" 은 NVIDIA 의 양다리 (Dynamo 컴포넌트를 llm-d 에 통합) 시각에서만 성립. 일반 organization 운영 시각에서는 <strong>둘은 경쟁 솔루션이고 하나만 선택</strong>이 맞음.</p>
+
+<p>출처:</p>
+<ul>
+<li><a href="https://github.com/llm-d/llm-d">llm-d/llm-d GitHub</a> — CNCF sandbox, founder list 확인</li>
+<li><a href="https://github.com/ai-dynamo/dynamo">ai-dynamo/dynamo GitHub</a> — NVIDIA 주도</li>
+<li><a href="https://developer.nvidia.com/blog/nvidia-dynamo-accelerates-llm-d-community-initiatives-for-advancing-large-scale-distributed-inference/">NVIDIA Dynamo Accelerates llm-d Community Initiatives</a> — NVIDIA 의 양다리 포지셔닝 발표</li>
+<li><a href="https://www.infoq.com/news/2026/01/nvidia-dynamo-ai-kubernetes/">InfoQ: NVIDIA Dynamo Planner Brings SLO-Driven Automation</a> — Dynamo 의 K8s 통합 의도</li>
+<li><a href="https://www.spheron.network/blog/nvidia-dynamo-disaggregated-inference-guide/">Spheron Blog: Dynamo 1.0 Disaggregated Inference Guide</a> — 시장 포지셔닝 설명</li>
+</ul>
+
+<h3>7-6. llm-d 의 prefix-cache routing 과 Dynamo 의 KV-aware routing 의 차이</h3>
 
 <p>둘 다 "cache aware routing" 이라고 묶여서 같은 일 같은데 <strong>layer 가 완전히 다름</strong>. 헷갈리기 쉬워서 정리:</p>
 
@@ -669,7 +722,7 @@ conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 1
 <li>Dynamo KV aware routing + NIXL: <a href="https://github.com/ai-dynamo/dynamo">NVIDIA Dynamo repo</a></li>
 </ul>
 
-<h3>7-6. 한 줄 정리 + 실제 배포 시 선택</h3>
+<h3>7-7. 한 줄 정리 + 실제 배포 시 선택</h3>
 
 <div class="diagram">  ┌────────────────────────────────────────────────────────────┐
   │  K8s cluster                                                │
