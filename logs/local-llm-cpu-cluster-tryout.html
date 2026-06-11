@@ -488,62 +488,93 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 
 </div>
 
-<h2 id="bench">6. 벤치마크 — 4 setup 비교</h2>
+<h2 id="bench">6. 벤치마크 — apple-to-apple 비교</h2>
 <div class="card">
 
-<h3>6-1. 벤치마크 방법</h3>
-<pre><code># /tmp/bench.py — asyncio + aiohttp 기반
-python bench.py http://&lt;url&gt;/v1/chat/completions &lt;concurrent&gt; &lt;total&gt; "&lt;label&gt;"
+<h3>6-1. 벤치마크 방법 (동일 조건)</h3>
+<pre><code># /tmp/bench_apple.py — asyncio + aiohttp, force_close=True
+# 모든 setup 에 동일하게:
+#   - 같은 8 종 prompt round-robin
+#   - system prompt 고정 "You are a concise assistant..."
+#   - max_tokens=40, temperature=0.2
+#   - conc=1 (total=8), conc=4 (total=32), conc=8 (total=64)
+# 측정: success rate, throughput (req/s, tok/s), latency p50/p95/min/max</code></pre>
 
-# 측정: success rate, throughput (req/s), latency p50/p95/p99
-# 워크로드: 8 종의 짧은 user prompt 를 N_total 만큼 round-robin.
-#   system prompt 고정 → prefix cache 기회 일부 있음.
-#   max_tokens=40, temperature=0.2</code></pre>
+<p>각 setup 직후 server kill → 다음 setup. 자원 격리 보장.</p>
 
-<h3>6-2. 결과 표</h3>
+<h3>6-2. 결과 표 (전체 setup, 동일 conc)</h3>
+
+<p><strong>단일 engine</strong> (orchestrator 없음):</p>
 <table>
-<tr><th>Setup</th><th>구성</th><th>conc</th><th>throughput (req/s)</th><th>p50 (ms)</th><th>p95 (ms)</th><th>실 추론?</th></tr>
-<tr><td>A</td><td>host llama.cpp 단일 (Metal)</td><td>1</td><td>3.8</td><td>187</td><td>634</td><td>✓ 실 추론</td></tr>
-<tr><td>A</td><td>host llama.cpp 단일 (Metal)</td><td>4</td><td>13.9</td><td>252</td><td>358</td><td>✓ 실 추론</td></tr>
-<tr><td>B</td><td>nginx LB + 2 host instance</td><td>4</td><td>10.8</td><td>313</td><td>796</td><td>✓ 실 추론</td></tr>
-<tr><td>B</td><td>nginx LB + 2 host instance</td><td>8</td><td>19.7</td><td>378</td><td>561</td><td>✓ 실 추론</td></tr>
-<tr><td>C</td><td>minikube + 2 Pod Service LB</td><td>4</td><td><strong>0.4</strong></td><td><strong>9818</strong></td><td>13201</td><td>✓ 실 추론 (CPU)</td></tr>
-<tr><td>C</td><td>minikube + 2 Pod Service LB</td><td>8</td><td>0.5</td><td>13677</td><td>21301</td><td>✓ 실 추론 (CPU)</td></tr>
-<tr><td>D</td><td>llm-d chart (inference-sim, decode-only)</td><td>1</td><td>116</td><td>7</td><td>35</td><td>✗ mock</td></tr>
-<tr><td>D</td><td>llm-d chart (inference-sim, decode-only)</td><td>4</td><td>399</td><td>8</td><td>13</td><td>✗ mock</td></tr>
-<tr><td>D</td><td>llm-d chart (inference-sim, decode-only)</td><td>8</td><td>368</td><td>12</td><td>49</td><td>✗ mock</td></tr>
+<tr><th>Setup</th><th>구성</th><th>conc=1<br>req/s · p50</th><th>conc=4<br>req/s · p50</th><th>conc=8<br>req/s · p50</th></tr>
+<tr><td>A1</td><td>llama.cpp single (host Metal)</td><td>5.6 · 166ms</td><td>12.9 · 269ms</td><td>12.9 · 598ms</td></tr>
+<tr><td>E1</td><td>vLLM-metal single (host)</td><td>0.02 · <strong>35s</strong></td><td>0.03 · 63s (4 fail)</td><td>0.11 · 57s</td></tr>
 </table>
 
-<h3>6-3. 결과 분석 — 예상 vs 실제</h3>
+<p><strong>Orchestrator + 2 instance</strong> (Pod 갯수 효과):</p>
+<table>
+<tr><th>Setup</th><th>구성</th><th>conc=1<br>req/s · p50</th><th>conc=4<br>req/s · p50</th><th>conc=8<br>req/s · p50</th></tr>
+<tr><td>B1</td><td>nginx LB + llama.cpp 2 host (Metal)</td><td>5.8 · 163ms</td><td>13.7 · 274ms</td><td><strong>20.8 · 325ms</strong></td></tr>
+<tr><td>C1</td><td>minikube + llama.cpp 2 Pod (no Metal)</td><td>0.27 · 3.9s</td><td>0.47 · 7.1s</td><td>0.69 · 10.7s</td></tr>
+<tr><td>D1</td><td>minikube + llm-d + inference-sim (mock)</td><td>139 · 6ms</td><td>510 · 7ms</td><td>704 · 10ms</td></tr>
+</table>
 
-<h4>A → B (단일 → LB): 예상 = throughput ↑, 실제 = 비슷 / 약간 ↑</h4>
-<p>예상: 2 instance 면 throughput 2 배. <br>
-실제: conc=4 에선 오히려 B 가 A 보다 약간 낮음 (10.8 &lt; 13.9). 이유 — 같은 host 의 CPU/Metal 자원을 두 process 가 공유. concurrent 4 정도 부하로는 단일 process 도 충분히 효율적. <br>
-conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 15-17 보다 위). LB 의 효과는 <strong>concurrent 부하가 단일 process 의 능력을 넘어설 때</strong> 비로소 나타남.</p>
+<p><strong>못 측정한 것</strong>:</p>
+<table>
+<tr><th>시도</th><th>결과</th></tr>
+<tr><td>vLLM + Dynamo</td><td><strong>install 불가</strong>. <code>pip install ai-dynamo</code> → <code>ai-dynamo-runtime</code> 의 macOS arm64 wheel 없음. NVIDIA Linux + CUDA 가정.</td></tr>
+<tr><td>llama.cpp + Dynamo</td><td>위와 동일 — Dynamo 자체가 안 깔림.</td></tr>
+<tr><td>vLLM + llm-d</td><td>llm-d chart 의 default 가 inference-sim mock. vLLM backend 로 교체하려면 minikube 위에 vLLM linux container 띄워야 함 — Apple Silicon 의 amd64 emulation + CPU mode 빌드 둘 다 부담. 이번엔 skip.</td></tr>
+<tr><td>llama.cpp + llm-d (real)</td><td>llm-d chart 가 vLLM-specific args (DP_SIZE, TP_SIZE 등) 가정. llama.cpp 호환 안 됨. Custom backend adapter 필요.</td></tr>
+</table>
 
-<h4>A/B → C (host Metal → k8s container): 예상 = 약간 ↓, 실제 = <strong>35배 ↓</strong></h4>
-<div class="note"><strong>가장 놀라운 발견</strong>. A 의 단일 instance 가 252ms p50 인데 C 의 같은 software (llama.cpp + Qwen2.5-0.5B) 가 9818ms — 같은 모델 같은 binary 인데도 K8s container 안에선 <strong>거의 40 배 느림</strong>.</div>
-<p>이유: <strong>Apple Silicon 의 Metal GPU 활용 차이</strong>. host 의 llama-server 는 직접 Metal kernel 호출. minikube Pod 안의 llama.cpp 는 Linux container 라 Metal device 못 봄 → 순수 CPU 추론 fallback. Apple Silicon 의 unified memory 우위가 사라짐.</p>
-<p>이 finding 자체가 큰 학습:</p>
+<h3>6-3. 핵심 finding (사용자 질문에 대한 답)</h3>
+
+<h4>"Pod 갯수에 비례하는 성능 증가가 있어야 하지 않나?"</h4>
+<p>A1 (single) vs B1 (2 host + LB) 직접 비교 — 같은 engine, 같은 host, 같은 Metal:</p>
+<table>
+<tr><th>conc</th><th>A1 req/s</th><th>B1 req/s</th><th>비율</th><th>해석</th></tr>
+<tr><td>1</td><td>5.6</td><td>5.8</td><td>1.04×</td><td>차이 없음 (단일 요청은 한 instance 도 충분)</td></tr>
+<tr><td>4</td><td>12.9</td><td>13.7</td><td>1.06×</td><td>거의 차이 없음 — 단일 process 가 4 concurrent 까지 효율적</td></tr>
+<tr><td>8</td><td>12.9</td><td><strong>20.8</strong></td><td><strong>1.61×</strong></td><td>이제 효과 — 단일 process 가 8 concurrent 에 포화, LB 가 두 instance 로 나눠 처리</td></tr>
+</table>
+
+<div class="note"><strong>이상적 2× 가 아닌 1.6× 인 이유</strong>: 두 instance 가 같은 host 의 CPU core / Metal GPU 자원을 공유. host 가 dedicated 가 아니므로 ideal scaling 안 됨. 실제 production 의 두 다른 GPU node 면 ~ 2× 에 더 가까움. <strong>중요한 결론</strong>: <strong>concurrent 부하가 단일 instance 의 능력을 넘어설 때만 multi-instance LB 가 의미</strong>. 낮은 부하면 단일이 더 효율적.</div>
+
+<h4>K8s container 가 Apple Silicon Metal 활용 못 함 — A1 vs C1</h4>
+<p>같은 software (llama.cpp), 같은 모델, 다른 deploy 방식:</p>
+<table>
+<tr><th>conc</th><th>A1 (host Metal)</th><th>C1 (k8s Pod, no Metal)</th><th>배율</th></tr>
+<tr><td>1</td><td>5.6 req/s, 166ms p50</td><td>0.27 req/s, 3.9s</td><td><strong>21× 느림</strong></td></tr>
+<tr><td>4</td><td>12.9 req/s, 269ms</td><td>0.47 req/s, 7.1s</td><td>27× 느림</td></tr>
+<tr><td>8</td><td>12.9 req/s, 598ms</td><td>0.69 req/s, 10.7s</td><td>19× 느림</td></tr>
+</table>
+<p><strong>원인</strong>: Linux container 안에선 host 의 Metal GPU device 보이지 않음. 순수 CPU fallback. Apple Silicon 의 unified memory + GPU 우위 사라짐.</p>
+<p><strong>학습</strong>: production K8s 에서 LLM 띄울 때 <strong>NVIDIA GPU operator (또는 ROCm device plugin) 가 반드시 필요</strong>. 단순히 container image 넣고 deploy 한다고 GPU 자동 활용 안 됨.</p>
+
+<h4>vLLM-metal 단일 — dev 버전이라 매우 느림</h4>
+<p>E1 의 결과는 다른 setup 대비 200-500배 느림 (p50 35-63초). 원인 추정:</p>
 <ul>
-  <li>같은 software 라도 <strong>container 화 가 GPU 활용을 깨뜨릴 수 있음</strong>. K8s 위로 옮길 때 device plugin (NVIDIA GPU operator 같은) 으로 명시적으로 GPU 노출 안 하면 사라짐.</li>
-  <li>벤치마크 결과 비교 시 "같은 software" 인지만 보면 안 됨 — backend acceleration path 까지 같은지 확인.</li>
-  <li>production 에서 K8s 위 vLLM 배포 시 NVIDIA device plugin 이 반드시 필요한 이유가 이거.</li>
+<li>vllm-metal 0.3.0.dev20260610034226 — <strong>dev preview, 미숙</strong>. README 도 "experimental, FP32/FP16 만 지원" 명시</li>
+<li>MLX backend 의 first-request compilation overhead (JIT)</li>
+<li>vLLM 의 PagedAttention 가 MLX 위에서 fully optimized 안 됨</li>
 </ul>
+<p>같은 모델 (Qwen2.5-0.5B-Instruct) 인데 양자화 차이 (vLLM-metal 은 FP16 weights, llama.cpp 는 Q4_K_M) + dev 버전 미숙 = 큰 격차. <strong>정통 vLLM 의 production 성능은 Linux + NVIDIA GPU 에서야 의미 있음</strong>. Apple Silicon 에서는 llama.cpp 가 압도적으로 실용적.</p>
 
-<h4>D (llm-d + inference-sim): 예상 = 실 LLM 비교 어려움, 실제 = <strong>비교 불가</strong></h4>
-<p>D 가 가장 빨라 보이지만 (p50 7-12ms) <strong>실제 LLM 추론이 아님</strong>. inference-sim 은 mock — token generation 없고 random text 즉시 반환. D 의 수치는 llm-d 의 routing layer (routing-proxy sidecar + EPP 결정 + Service 통과) 의 <strong>overhead</strong> 만 보여줌. 약 7ms 가 stack overhead.</p>
-<p>의미 있는 비교는 D 의 backend 를 실 vLLM 으로 교체했을 때 가능. 그러려면 vLLM CPU container image + 충분한 자원 + 모델 weights mount. minikube 4CPU/4GB 환경에선 vLLM 띄우기 자체가 어려움 (vLLM 의 기본 메모리 footprint 가 큼).</p>
+<h4>llm-d 의 mock — overhead 만 측정</h4>
+<p>D1 (inference-sim) 의 700 req/s 가 가장 빨라 보이지만 mock 이라 비교 불가. 가치 있는 측정 = <strong>llm-d 의 routing-proxy + EPP overhead 가 약 6-10ms</strong> 라는 것. 실 LLM backend (예: vLLM) 의 추론 시간이 거기 더해짐.</p>
 
-<h3>6-4. llm-d 의 효과를 측정하려면 — 미완 작업</h3>
-<p>llm-d 의 진짜 효과 (prefix-cache aware routing, P/D 분리, EPP scorer) 를 보려면:</p>
+<h4>Dynamo install 자체 불가 — Apple Silicon 의 한계</h4>
+<p><code>pip install ai-dynamo</code> 가 dependency resolution 실패. <code>ai-dynamo-runtime</code> 패키지가 macOS arm64 wheel 을 제공 안 함 (NVIDIA Linux 가정). 명령 자체 install 도 안 됨. <strong>Dynamo 의 실 평가는 NVIDIA H100 + Linux 환경 필수</strong>.</p>
+
+<h3>6-4. 종합 결론</h3>
 <ol>
-  <li>backend 를 vLLM 으로 교체 — values.yaml 의 image 와 args 갈아끼움</li>
-  <li>prefill + decode 두 Pool 활성화 (multinode: false 라도 P/D 분리 가능)</li>
-  <li>같은 system prompt 시작 요청 N 회 → 첫 요청 후 cache hit 가 어떤 instance 에서 일어나는지 확인</li>
-  <li>round-robin 대비 throughput / KV hit rate 측정</li>
+<li><strong>Apple Silicon 에서는 llama.cpp 가 압도적</strong> — vLLM-metal 은 아직 dev 단계, llama.cpp 가 Metal 활용 잘.</li>
+<li><strong>Pod 갯수에 비례하는 성능 증가는 concurrent 부하가 단일 instance 능력 넘어설 때만</strong>. 낮은 부하면 단일이 더 효율.</li>
+<li><strong>K8s container 화 가 GPU 활용 망가뜨림</strong> — device plugin 명시 필수. 본 환경에선 Metal device passthrough 안 됨 → 19-27× 느림.</li>
+<li><strong>llm-d chart 가 실 vLLM 으로 동작 시키려면 minikube 자원 부족</strong> — 실 cluster 환경에서 측정 필요.</li>
+<li><strong>Dynamo 는 Apple Silicon 에서 install 자체 불가</strong> — NVIDIA + Linux 가정 강함.</li>
 </ol>
-<p>본 환경 (Apple Silicon + 16GB + minikube 4CPU/4GB) 에선 vLLM CPU 모드 자체가 빌드 어려움 (§3-1 finding). 실 GPU + linux 환경에서 별도 시도 필요.</p>
 
 </div>
 
