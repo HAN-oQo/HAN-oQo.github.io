@@ -55,9 +55,10 @@
   <li><a href="#kv-connectors">3. KV transfer connector 9 종 검토</a></li>
   <li><a href="#try">4. ExampleConnector 로 실 시도</a></li>
   <li><a href="#result">5. 결과 — handshake 미구현</a></li>
-  <li><a href="#analysis">6. 분석 — 왜 안 됐나, 다른 경로 있나</a></li>
-  <li><a href="#wrap">7. 결론 + 다음 단계 (NVIDIA Linux 에서 무엇을 해야)</a></li>
-  <li><a href="#refs">8. 참고 자료 + 용어 풀이</a></li>
+  <li><a href="#patch">6. <strong>3줄 monkey-patch 로 동작 확인</strong> ← 업데이트</a></li>
+  <li><a href="#analysis">7. 분석 — 다른 경로 + 다음 단계</a></li>
+  <li><a href="#wrap">8. 결론 + 다음 단계 (NVIDIA Linux 에서 무엇을 해야)</a></li>
+  <li><a href="#refs">9. 참고 자료 + 용어 풀이</a></li>
 </ol>
 </div>
 
@@ -219,7 +220,106 @@ NotImplementedError: Method 'get_kv_connector_handshake_metadata' is not impleme
 
 </div>
 
-<h2 id="analysis">6. 분석 — 왜 안 됐나, 다른 경로 있나</h2>
+<h2 id="patch">6. <span class="status-ok">3줄 monkey-patch 로 동작 확인</span></h2>
+<div class="card">
+
+<div class="tip"><strong>업데이트 — 사용자 질문 "그냥 CPU 로 전송하면 안되는거야?" + "간단히 구현해서 해볼 수는?" 에 대한 답</strong>: <strong>YES. 둘 다 가능</strong>. 정통 GPU worker 의 method 한 개를 MetalWorker 에 monkey-patch 로 추가하니 ExampleConnector (CPU buffer + filesystem) 가 그대로 동작.</div>
+
+<h3>6-1. 정통 GPU worker 의 reference 구현</h3>
+<pre><code># vllm/v1/worker/gpu_worker.py
+def get_kv_connector_handshake_metadata(self) -&gt; dict | None:
+    """Get KV connector metadata from this worker if available."""
+    if not has_kv_transfer_group():
+        return None
+    connector = get_kv_transfer_group()
+    if (metadata := connector.get_handshake_metadata()) is None:
+        return None
+    tp_rank = get_tp_group().rank_in_group
+    return {tp_rank: metadata}</code></pre>
+
+<p>vllm-metal 의 <code>MetalWorker</code> (vllm_metal/v1/worker.py) 가 이 method 만 override 안 함. 모방해서 monkey-patch 작성:</p>
+
+<h3>6-2. patch script (3줄 핵심)</h3>
+<pre><code># /tmp/pdd-test/patch_metal_worker.py
+from vllm_metal.v1.worker import MetalWorker
+
+def get_kv_connector_handshake_metadata(self):
+    """Stub — same logic as GPU worker, tp_rank=0 (single process)."""
+    from vllm.distributed.kv_transfer import has_kv_transfer_group, get_kv_transfer_group
+    if not has_kv_transfer_group():
+        return None
+    metadata = get_kv_transfer_group().get_handshake_metadata()
+    return {0: metadata} if metadata is not None else None
+
+MetalWorker.get_kv_connector_handshake_metadata = get_kv_connector_handshake_metadata</code></pre>
+
+<p>prefill_example.py / decode_example.py 상단에 <code>import patch_metal_worker</code> 한 줄 추가.</p>
+
+<h3>6-3. 실행 + 결과</h3>
+
+<h4>Phase 1: Prefill</h4>
+<pre><code>VLLM_ENABLE_V1_MULTIPROCESSING=0 python prefill_patched.py
+# ...
+# [factory.py:62] Creating v1 connector with name: ExampleConnector
+# [example_connector.py:107] KVTransferConfig(
+#   kv_connector='ExampleConnector',
+#   kv_buffer_device='cpu',          ← 사용자가 정확히 예측한 그것
+#   kv_buffer_size=1000000000.0,     ← 1GB CPU buffer
+#   kv_role='kv_both',
+#   kv_connector_extra_config={'shared_storage_path': 'local_storage'},
+#   enable_permute_local_kv=False,
+# )
+# [example_connector.py:108] Shared storage path is local_storage
+# Processed prompts: 100% [00:47, 11.91s/it]
+# Saved 4 prompts to output.txt</code></pre>
+
+<p>핵심 동작:</p>
+<ul>
+<li><code>kv_buffer_device='cpu'</code> — KV cache 가 Metal GPU 메모리에서 <strong>CPU 메모리로 dump</strong> 됨</li>
+<li><code>shared_storage_path='local_storage'</code> — CPU buffer 가 filesystem 으로 flush</li>
+<li>다른 process (decode) 가 같은 filesystem 읽어서 KV 복원</li>
+</ul>
+
+<h4>Phase 2: Decode</h4>
+<pre><code>VLLM_ENABLE_V1_MULTIPROCESSING=0 python decode_patched.py
+# ...
+# [example_connector.py:108] Shared storage path is local_storage  ← 같은 path
+# Processed prompts: 100% [01:55, 28.84s/it]
+# ------------------------------
+# Prompt: 'Hi Hi ... Hello, my name is hi'   ← prefill 의 input + 첫 token
+# Generated text: ' Hi HiHi HiHi HiHi HiHi Hi'  ← decode 가 이어서 generation</code></pre>
+
+<p><strong>mechanism path 가 작동</strong>:</p>
+<ol>
+<li>✅ MetalWorker 의 KV connector handshake (patch 한 method)</li>
+<li>✅ ExampleConnector init (factory)</li>
+<li>✅ Prefill 의 KV → CPU buffer → filesystem (<code>local_storage/</code>)</li>
+<li>✅ Decode 가 같은 filesystem 에서 KV 읽고 generation 이어감</li>
+</ol>
+
+<h3>6-4. Quality 는 별개 — 동작 vs 정확도 구분</h3>
+
+<p>generation quality 는 의미 없는 token 반복 (<code>"hi Hi Hi Hi..."</code>). 이건 mechanism 의 작동 여부와 별개 이슈:</p>
+<ul>
+<li>ExampleConnector 가 <strong>학습용 예제</strong> — production-grade KV serialization 이 아님. KV blob 의 dtype / layout 가 normal vs disaggregated 사이 정확히 일치 안 할 수도</li>
+<li>vllm-metal 0.3.0.dev 의 KV cache layout 이 vLLM core 의 reference 와 다를 수 있음</li>
+<li>같은 모델을 두 process 가 각자 load → 두 process 의 random init 결과 (weights 외 LoRA 등) 가 같은지 검증 필요</li>
+<li>prefill 의 <code>max_tokens=1</code> + decode 의 <code>max_tokens=10</code> 가 정상 generation 시나리오 아님 (실 PDD 는 prefill 이 prompt 끝까지 forward 만, decode 가 generation 다 함)</li>
+</ul>
+
+<div class="note"><strong>핵심 finding</strong>: vllm-metal 의 KV connector 미구현은 <strong>method 하나만 빠진 작은 누락</strong>이었음. 3줄 patch 로 mechanism 동작. CPU 거쳐 KV transfer 하는 path 가 Apple Silicon 에서도 작동 가능. 단 quality 는 dev preview 의 한계 + ExampleConnector 의 학습용 simplification 으로 인해 실 운영에는 못 씀. <strong>실 production 은 여전히 NVIDIA + NIXL 환경 필수</strong>.</div>
+
+<h3>6-5. 시도 의의</h3>
+<ul>
+<li>"이론적으론 가능, 실 안 됨" 가설이 <strong>틀렸음</strong>. monkey-patch 시도해보니 실 동작.</li>
+<li>upstream vllm-metal 에 PR 보내면 받아질 가능성 높은 작은 fix (정통 GPU worker 의 method 그대로 가져옴).</li>
+<li><strong>"동작 vs quality" 구분</strong>이 중요 — mechanism 작동 검증 ≠ production 품질 보장.</li>
+<li>사용자가 정확히 직관적으로 답한 "CPU 로 transfer" 가 실제 vLLM 의 ExampleConnector 가 하는 일.</li>
+</ul>
+
+</div>
+
+<h2 id="analysis">7. 분석 — 다른 경로 + 다음 단계</h2>
 <div class="card">
 
 <h3>6-1. 왜 vllm-metal worker 가 미구현인가</h3>
@@ -258,7 +358,7 @@ NotImplementedError: Method 'get_kv_connector_handshake_metadata' is not impleme
 
 </div>
 
-<h2 id="wrap">7. 결론 + 다음 단계</h2>
+<h2 id="wrap">8. 결론 + 다음 단계</h2>
 <div class="card">
 
 <h3>7-1. 한 줄 결론</h3>
@@ -291,7 +391,7 @@ vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8200 \
 
 </div>
 
-<h2 id="refs">8. 참고 자료 + 용어 풀이</h2>
+<h2 id="refs">9. 참고 자료 + 용어 풀이</h2>
 <div class="card">
 
 <h3>출처 (확인한 자료)</h3>
