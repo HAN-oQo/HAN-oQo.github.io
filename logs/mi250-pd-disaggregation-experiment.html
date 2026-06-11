@@ -221,7 +221,109 @@ docker run -d --rm \
 
 <h2 id="kv-trace">8. KV cache 가 실제로 어디서 어떻게 전송되는가</h2>
 <div class="card">
-<p class="status-todo">⏳ 진행 중.</p>
+
+<h3>8-1. 단일 engine 의 KV 생명주기 (baseline)</h3>
+<p>먼저 일반 vLLM 단일 instance 의 KV 흐름. 비교 baseline 으로 명확히 짚어둠.</p>
+
+<div class="diagram">  한 vLLM instance (예: 8 GPU TP=8) 안에서
+  ┌─────────────────────────────────────────────────────────┐
+  │                                                          │
+  │  ① Prefill (한 batch step):                              │
+  │    request prompt → tokenize → embed → forward (모든     │
+  │    layer) → KV (key, value) tensor 가 layer 마다 생성   │
+  │    → PagedAttention 의 block manager 가 GPU VRAM 안의    │
+  │    block table 에 page 단위로 저장 (16 token / page)    │
+  │                                                          │
+  │  ② Decode (매 token 마다):                              │
+  │    이전 token + cached KV → forward (모든 layer)        │
+  │    → 새 K, V 만 append 해서 cache 에 추가 → 1 token 생성│
+  │                                                          │
+  │  ※ KV cache 는 같은 GPU process 의 VRAM 안에서만 살음.  │
+  │    TP 시에도 GPU 사이 KV 는 stay — token dim 만 split.  │
+  │  ※ Continuous batching: P 와 D 요청이 token-level 로     │
+  │    같은 batch 에 섞임. 한 step 에서 P 토큰 일부 + D 토큰  │
+  │    일부 동시 처리.                                       │
+  └─────────────────────────────────────────────────────────┘</div>
+
+<p>핵심: <strong>KV 가 같은 process / 같은 VRAM block table 에 머무름</strong>. transfer 자체가 없음. 같은 batch 안의 P 와 D 가 GPU compute 자원을 token-level 로 공유.</p>
+
+<h3>8-2. P/D 분리 시 KV 의 생명주기</h3>
+
+<div class="diagram">  Prefill instance (4 GPU TP=4) → KV transfer → Decode instance (4 GPU TP=4)
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                                                                   │
+  │  ① Prefill instance 안:                                          │
+  │    request 받음 → tokenize → embed → forward (모든 layer)        │
+  │    → KV tensor 가 GCD 0-3 의 VRAM 의 block table 에 생성          │
+  │    → 첫 token 1 개 생성 (또는 prefill 종료 시점)                 │
+  │    → "이 request 의 KV 다 만들었음" 신호                          │
+  │                                                                   │
+  │  ② KV connector 가 transfer:                                     │
+  │    block table 안의 K, V tensor 들을 serialize → 다른 instance   │
+  │    로 보냄. 구체적 transport 는 connector 마다:                  │
+  │      - MoRIIO: ROCm 의 GPU-to-GPU direct memcpy (RDMA-like)      │
+  │      - P2pNccl: RCCL collective (broadcast/send 같은)            │
+  │      - LMCache: 중간 서버 (CPU memory pool) 거침                 │
+  │      - ExampleConnector: filesystem write/read (CPU bounce)      │
+  │                                                                   │
+  │  ③ Decode instance 안:                                           │
+  │    KV 받아서 자기 block manager 에 install → 새 request 로 등록  │
+  │    → autoregressive 한 token 씩 generation. 모델 weights forward │
+  │    + cache 된 KV 사용 → 응답 stream.                              │
+  │                                                                   │
+  │  ※ Prefill instance 는 ② 끝나는 순간 그 request 의 KV 비움 →    │
+  │    다음 request 받음. P 는 throughput 위주, D 는 latency 위주.    │
+  └─────────────────────────────────────────────────────────────────┘</div>
+
+<h3>8-3. 실 측정 — 진행 중</h3>
+<p class="status-todo">⏳ Deploy 후 <code>RCCL_DEBUG=INFO</code> + vLLM <code>--log-stats</code> 로 KV transfer 시간 / 크기 / 경로 캡쳐 + 분석.</p>
+
+<h3>8-4. P/D 단일 대비 성능에 영향 줄 수 있는 요인 (실험 전 가설)</h3>
+
+<p>측정 전 미리 어떤 차이가 결과에 나타날지 정리. 실험 결과로 검증/수정.</p>
+
+<h4>(가) Throughput 에 + 일 가능성</h4>
+<table>
+<tr><th>요인</th><th>왜 + 효과</th><th>본 실험 환경에서 영향도</th></tr>
+<tr><td><strong>P 와 D 의 GPU resource contention 제거</strong></td><td>단일 engine 에선 한 step 의 GPU 가 P 토큰 (compute-bound) 과 D 토큰 (memory-bound) 을 동시에 처리 → 둘 다 sub-optimal. 분리하면 각자 fully 활용</td><td>★★★ (가장 큰 + 효과 예상)</td></tr>
+<tr><td><strong>P/D 별 batching policy 최적화</strong></td><td>P 는 큰 prompt 를 묶어 throughput, D 는 작은 batch 로 latency 우선 — 다른 batch size / scheduling 가능</td><td>★★</td></tr>
+<tr><td><strong>P 의 자원 회수 빠름</strong></td><td>P 가 KV 만들고 transfer 끝나면 그 GPU 의 VRAM 즉시 비움 → 다음 request 즉시 받음. 같은 GPU 면 D 가 답할 때까지 KV 잡고 있어야</td><td>★★</td></tr>
+<tr><td><strong>모델 weights 가 D 쪽에 동일하게 있음</strong></td><td>weights load 는 한 번이지만 P 와 D 가 같은 weights 의 다른 단계만 — KV transfer 외 redundant compute 없음</td><td>중립</td></tr>
+</table>
+
+<h4>(나) Throughput / latency 에 − 일 가능성</h4>
+<table>
+<tr><th>요인</th><th>왜 − 효과</th><th>본 실험 환경에서 영향도</th></tr>
+<tr><td><strong>KV transfer 자체의 시간</strong></td><td>P 끝난 후 D 시작 전에 KV 를 옮겨야 함. transfer 시간 만큼 TTFT 추가. 작은 모델 / 짧은 prompt 면 transfer 가 forward 시간 대비 비싸 보임</td><td>★★★ (가장 큰 − 효과 예상)</td></tr>
+<tr><td><strong>모델 weights 중복 load</strong></td><td>P 와 D 가 각자 모델 weights 를 자기 VRAM 에 갖고 있어야 함. 단일 engine 면 한 번만. weights memory × 2 → 모델 크기 한계 / 또는 더 작은 KV cache 공간만 남음</td><td>★★ (7B 면 weights 14GB × 2 = 28GB, 64GB GCD 중 작음. 70B 면 큰 문제)</td></tr>
+<tr><td><strong>P 와 D 의 batch size mismatch</strong></td><td>P 가 빠른데 D 가 느리면 D queue 쌓임 (또는 vice versa). load balancing 어려움. 단일 engine 은 자동으로 token-level mix</td><td>★★</td></tr>
+<tr><td><strong>같은 모델 두 번 init</strong></td><td>두 instance 가 각자 model warmup + Metal/HIP kernel compile 등 cold start. 운영 시작 시 RAM/GPU 자원 두 배</td><td>★ (한 번만 비용)</td></tr>
+<tr><td><strong>네트워크 overhead</strong></td><td>두 instance 사이 HTTP/gRPC handshake, RCCL init, NIXL handshake metadata 등. 매 request 마다는 아니지만 init 비용 + 매 transfer 의 control plane overhead</td><td>★</td></tr>
+<tr><td><strong>한 instance 가 죽으면 같이 죽음</strong></td><td>P 와 D 가 강하게 coupled. P 가 죽으면 in-flight request 다 잃음. Decode 도 의미 없어짐. 단일 engine 도 같은 문제이지만 failure surface 2 배</td><td>운영 측면</td></tr>
+</table>
+
+<h4>(다) 시나리오별 net effect 예상</h4>
+<table>
+<tr><th>시나리오</th><th>P/D 가 유리?</th><th>이유</th></tr>
+<tr><td>긴 prompt + 짧은 답 (요약, 분류)</td><td>★ 유리</td><td>P 가 compute-bound 으로 길게, D 가 짧게 — 단일 engine 면 P 가 D batching 막음. 분리하면 P 가 다음 request 빨리</td></tr>
+<tr><td>짧은 prompt + 짧은 답 (chat 일반)</td><td>비슷 또는 - 일 수도</td><td>P forward 시간이 짧아서 KV transfer 시간이 상대적으로 큼. transfer overhead 가 이득 잠식</td></tr>
+<tr><td>긴 답 (창작, 코드 생성)</td><td>★★ 유리</td><td>D 가 길게 돌아감 — 분리하면 D 가 dedicated GPU 자원으로 더 efficient. P 는 짧게 끝나고 다음 request</td></tr>
+<tr><td>High concurrency + 다양한 prompt 길이 mix</td><td>★★★ 가장 유리</td><td>다양한 P/D 토큰 비율의 request 들을 효율적 분배 가능. 단일 engine 은 batching 이 비효율적</td></tr>
+<tr><td>낮은 concurrency (1-2 사용자)</td><td>- 불리</td><td>KV transfer overhead 만 추가. 단일 engine 면 그 자원 다 쓸 수 있음</td></tr>
+<tr><td>같은 모델 다른 GPU 형 (P=H100, D=A10) mixed pool</td><td>★★★ 가장 유리</td><td>각 GPU 가 자기 강점만 활용. cost-efficiency 큼. 단 본 실험은 동일 MI250 8 GCD 라 이 효과 못 봄</td></tr>
+</table>
+
+<h4>(라) 본 실험 (MI250 8 GCD, 동일 GPU 형) 에서 예상되는 결과</h4>
+<p>본 실험은 P 와 D 둘 다 같은 MI250 GCD 4 개씩 — 비대칭 GPU 형 효과는 못 봄. 그래서:</p>
+<ul>
+<li><strong>예상 1</strong>: 낮은 concurrency (1-4) 에선 P/D 가 단일 vLLM (TP=8) 보다 <strong>느림</strong> — KV transfer 추가 비용 + 단일 engine 의 자원 활용이 이미 효율적</li>
+<li><strong>예상 2</strong>: 높은 concurrency (16-32+) 에서 P/D 가 같거나 약간 유리 — batching resource contention 효과 보이기 시작</li>
+<li><strong>예상 3</strong>: 긴 prompt + 짧은 답 워크로드에서 P/D 가 가장 유리 — P 의 빠른 회수가 효과</li>
+<li><strong>예상 4</strong>: KV transfer 시간이 TTFT 의 5-30% 차지 (작은 모델 / 짧은 prompt) — 큰 모델 / 긴 prompt 면 5% 이하</li>
+</ul>
+
+<p>이 예상들은 실험으로 검증. 결과는 §10 에서.</p>
+
 </div>
 
 <h2 id="issues">9. 만난 문제 + 진단</h2>
