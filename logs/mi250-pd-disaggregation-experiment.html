@@ -403,9 +403,127 @@ ts            device,temp,power,gpu%,vram%,mem_act
 
 </div>
 
-<h2 id="bench">7. 벤치마크 + 모니터링 캡쳐</h2>
+<h2 id="bench">7. PDD deploy + 모니터링 캡쳐 (실 결과)</h2>
 <div class="card">
-<p class="status-todo">⏳ 진행 중.</p>
+
+<h3>7-1. PDD 두 instance deploy — 시도 history</h3>
+
+<h4>시도 1: P2pNcclConnector → <span class="status-fail">ZMQ port 충돌</span></h4>
+<pre><code># prefill: HIP_VISIBLE_DEVICES=0,1,2,3 + kv_role=kv_producer
+# decode:  HIP_VISIBLE_DEVICES=4,5,6,7 + kv_role=kv_consumer
+# both with --kv-transfer-config='{"kv_connector":"P2pNcclConnector",...}'
+
+# prefill log:
+zmq.error.ZMQError: Address already in use (addr='tcp://192.168.3.52:14579')</code></pre>
+
+<p><strong>Root cause</strong>: P2pNcclConnector 가 ZMQ ROUTER socket 을 같은 host port (default 14579) 에 bind. 두 instance 가 같은 host network 라 충돌. P2pNcclConnector 는 <code>kv_port + port_offset</code> 식이고 <strong>외부 proxy server</strong> (vLLM 의 <code>disagg_proxy_server.py</code>) 가 producer-consumer 매칭에 필요. 본 환경에선 proxy script 따로 띄워야 — 복잡.</p>
+
+<h4>시도 2: SharedStorageConnector → <span class="status-ok">동작</span> (mechanism)</h4>
+<pre><code>docker run -d --name vllm-prefill \
+  --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
+  --ipc=host --shm-size=16g \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -v ~/pd-experiment/shared_kv:/shared_kv \
+  -p 8100:8100 \
+  -e HIP_VISIBLE_DEVICES=0,1,2,3 \
+  -e VLLM_ROCM_USE_AITER=0 -e VLLM_ROCM_USE_AITER_RMSNORM=0 \
+  rocm/vllm:latest \
+  vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --tensor-parallel-size 4 --enforce-eager \
+    --port 8100 --host 0.0.0.0 --max-model-len 4096 \
+    --kv-transfer-config '{"kv_connector":"SharedStorageConnector","kv_role":"kv_producer","kv_connector_extra_config":{"shared_storage_path":"/shared_kv"}}'
+
+# decode: 같은 명령, HIP_VISIBLE_DEVICES=4,5,6,7, port 8200, kv_role=kv_consumer
+
+# 약 3-4분 후 두 instance 모두 200 OK</code></pre>
+
+<h3>7-2. 실 chat completion + KV trace</h3>
+
+<pre><code>$ ls ~/pd-experiment/shared_kv/  # 초기
+(empty)
+
+$ curl http://127.0.0.1:8100/v1/chat/completions \
+    -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
+         "messages":[{"role":"user","content":"What is photosynthesis in one sentence?"}],
+         "max_tokens":50, "temperature":0.2}'
+
+PREFILL output: "Photosynthesis is the process by which plants use sunlight
+                 to convert carbon dioxide and water into oxygen and glucose."
+  usage: {prompt_tokens=37, completion_tokens=22, total_tokens=59}
+  wall: 6197ms
+
+# === KV transfer trace ===
+$ ls ~/pd-experiment/shared_kv/
+3db753d21379276ca478df4cc81964f4    ← request hash directory!
+
+$ du -sh ~/pd-experiment/shared_kv/3db753d21379276ca478df4cc81964f4/
+564K   ← 한 request 의 모든 KV (28 layer 합)
+
+$ ls shared_kv/3db753d21379276ca478df4cc81964f4/ | head
+model.layers.0.self_attn.attn.safetensors
+model.layers.1.self_attn.attn.safetensors
+model.layers.2.self_attn.attn.safetensors
+...
+model.layers.27.self_attn.attn.safetensors
+# total 28 files = Qwen2.5-1.5B 의 모든 transformer layer</code></pre>
+
+<div class="note"><strong>이게 PDD 내부 동작 실 캡쳐</strong>: prefill instance 가 한 request 의 KV 를 <strong>request hash 디렉토리</strong> + <strong>layer 별 safetensors</strong> 형식으로 dump. <code>self_attn.attn</code> 의 K, V tensor 가 한 safetensors 파일에. 사용자 4번째 질문 ("KV cache 어디서 어떻게 전송") 에 대한 직접 답.</div>
+
+<h3>7-3. Decode 호출 → 깨진 generation</h3>
+
+<pre><code>$ curl http://127.0.0.1:8200/v1/chat/completions \
+    -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
+         "messages":[{"role":"user","content":"What is photosynthesis in one sentence?"}],
+         "max_tokens":50, "temperature":0.2}'
+
+DECODE output: "10 to 10人 (如能本)便 11上11-11
+                ```
+                （
+                (Put 'The'P1Morka（如分）人）是3个oCtH"
+  usage: {prompt_tokens=37, completion_tokens=50, total_tokens=87}
+  wall: 6486ms</code></pre>
+
+<div class="note"><strong>현재 문제 (사용자 4번째 질문 일부)</strong>: KV transfer mechanism 은 작동 (file 생성 + decode 가 load) 하지만 <strong>generation quality 깨짐</strong>. 의미 없는 token 반복. 원인 분석은 §9.</div>
+
+<h3>7-4. GPU 모니터링 캡쳐 (chat 진행 중)</h3>
+
+<pre><code>$ ~/pd-experiment/monitor_rocm.sh /tmp/mon_pdd.csv 12 &amp;
+$ curl ... http://127.0.0.1:8100/...   # prefill 호출
+$ curl ... http://127.0.0.1:8200/...   # decode 호출 (1초 뒤)
+
+# === idle 시작 ===
+ts             card,temp,power,gpu%,vram%,mem
+1781195487195, card0,35.0,121.0,  0, 91, 0   ← VRAM 미리 할당
+1781195487195, card1,39.0,N/A,    0, 91, 0   ← secondary die
+1781195487195, card2,36.0,118.0,  0, 91, 0
+1781195487195, card3,32.0,N/A,    0, 91, 0
+1781195487195, card4,31.0,125.0,  0, 91, 0
+1781195487195, card5,36.0,N/A,    0, 91, 0
+1781195487195, card6,34.0,125.0,  0, 91, 0
+1781195487195, card7,35.0,N/A,    0, 91, 0
+
+# === prefill 호출 직후 (1초 후) ===
+1781195488288, card0,36.0,127.0, <strong>68</strong>, 91, 3   ← Prefill GCD 0
+1781195488288, card1,39.0,N/A,   <strong>67</strong>, 91, 2   ← Prefill GCD 1
+1781195488288, card2,36.0,125.0, <strong>84</strong>, 91, 2   ← Prefill GCD 2
+1781195488288, card3,32.0,N/A,   <strong>75</strong>, 91, 3   ← Prefill GCD 3
+1781195488288, card4,31.0,125.0,  0, 91, 0   ← Decode idle
+1781195488288, card5,36.0,N/A,    0, 91, 0
+1781195488288, card6,34.0,126.0,  0, 91, 0
+1781195488288, card7,35.0,N/A,    0, 91, 0
+
+# === 다음 sample (compute 끝났음 — 짧음) ===
+1781195489383, card0,36.0,157.0,  0, 91, 0
+...</code></pre>
+
+<p><strong>관찰</strong>:</p>
+<ul>
+<li><strong>VRAM 91%</strong> 두 instance 의 8 GCD 전부 — TP=4 × 2 instance 가 각자 모델 + KV cache buffer 미리 할당. Qwen2.5-1.5B (3GB) + KV cache 4096 max_model_len → GCD 당 약 58GB / 64GB.</li>
+<li><strong>Prefill 호출 시 GCD 0-3 GPU 68-84%</strong> 사용. GCD 2 가 가장 높음 (84%). TP=4 의 worker 사이 약간 부하 차이.</li>
+<li><strong>GCD 4-7 idle</strong> — 별도 호출이라 동시에 안 받음 + decode load 의 KV reload 는 짧은 시간. monitor 1초 sampling 으로 못 잡힘.</li>
+<li><strong>Power</strong>: idle 121W → 부하 시 127-157W (card 0). primary GCD 만 power sensor.</li>
+</ul>
+
 </div>
 
 <h2 id="kv-trace">8. KV cache 가 실제로 어디서 어떻게 전송되는가</h2>
