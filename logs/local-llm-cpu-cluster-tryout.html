@@ -550,38 +550,9 @@ curl http://127.0.0.1:9200/v1/chat/completions \
 <tr><td>llama.cpp + llm-d (real)</td><td>llm-d chart 가 vLLM-specific args (DP_SIZE, TP_SIZE 등) 가정. llama.cpp 호환 안 됨. Custom backend adapter 필요.</td></tr>
 </table>
 
-<h3>6-3. PDD (Prefill-Decode Disaggregation) 시도 → <span class="status-fail">vllm-metal 미구현</span></h3>
+<p><em>PDD (Prefill-Decode Disaggregation) 시도는 별도 로그로 분리: <a href="pd-disaggregation-metal-tryout.html">Apple Silicon 에서 vLLM PD Disaggregation 시도</a> — vllm-metal 의 KV connector handshake 미구현 finding.</em></p>
 
-<p>두 vLLM instance 띄워서 prefill 과 decode 를 분리하는 것 자체가 Apple Silicon 에서 가능한지 시도. PDD 의 핵심: prefill instance 가 KV cache 생성 → KV transfer → decode instance 가 받아서 generation.</p>
-
-<p>vLLM 의 KV transfer connector 9개 중 NVIDIA 가정 없는 후보:</p>
-<table>
-<tr><th>Connector</th><th>Apple Silicon 가능?</th></tr>
-<tr><td><code>NixlConnector</code></td><td>✗ NVIDIA NIXL (NVLink/RDMA) 가정</td></tr>
-<tr><td><code>LMCacheConnectorV1</code></td><td>⚠ LMCache 별도 서버 + GPU 가정 강함</td></tr>
-<tr><td><code>MooncakeConnector</code></td><td>✗ Mooncake transfer engine (CUDA)</td></tr>
-<tr><td><code>MoRIIOConnector</code></td><td>✗ ROCm only (AMD)</td></tr>
-<tr><td><code>ExampleConnector</code></td><td>✓ shared storage (filesystem) — 가장 가벼움, 시도 가능 후보</td></tr>
-<tr><td><code>OffloadingConnector</code></td><td>⚠ CPU memory</td></tr>
-</table>
-
-<p><strong>ExampleConnector 로 offline batch 시도</strong> (실 serve 가 아니라 두 LLM Python instance 가 같은 filesystem 통해 KV 교환):</p>
-<pre><code># prefill_example.py / decode_example.py (vLLM 공식 예제)
-# Qwen/Qwen2.5-0.5B-Instruct + ExampleConnector + shared_storage_path
-
-VLLM_ENABLE_V1_MULTIPROCESSING=0 python prefill_example.py</code></pre>
-<pre><code># 결과
-Traceback (most recent call last):
-  ...
-  File ".../v1/serial_utils.py", line 505, in run_method
-    raise NotImplementedError(
-NotImplementedError: Method 'get_kv_connector_handshake_metadata' is not implemented.</code></pre>
-
-<p><strong>핵심 finding</strong>: vllm-metal 0.3.0.dev 의 worker (Metal/MLX backend) 가 KV connector handshake metadata API 를 <strong>미구현</strong>. 가장 가벼운 ExampleConnector 도 동작 안 함. PDD 동작 자체가 vllm-metal 에서 현재 불가.</p>
-
-<div class="note"><strong>Apple Silicon 에서 PDD 의 결론</strong>: vllm-metal 의 dev 단계 + KV connector backend 의 NVIDIA/Linux 가정 → 현재 환경에선 mechanism 시연도 안 됨. PDD 실 평가는 NVIDIA H100 + Linux + NIXL 또는 LMCache 환경 필수.</div>
-
-<h3>6-4. 핵심 finding (사용자 질문에 대한 답)</h3>
+<h3>6-3. 핵심 finding (사용자 질문에 대한 답)</h3>
 
 <h4>"Pod 갯수에 비례하는 성능 증가가 있어야 하지 않나?"</h4>
 <p>A1 (single) vs B1 (2 host + LB) 직접 비교 — 같은 engine, 같은 host, 같은 Metal:</p>
@@ -620,14 +591,14 @@ NotImplementedError: Method 'get_kv_connector_handshake_metadata' is not impleme
 <h4>Dynamo install 자체 불가 — Apple Silicon 의 한계</h4>
 <p><code>pip install ai-dynamo</code> 가 dependency resolution 실패. <code>ai-dynamo-runtime</code> 패키지가 macOS arm64 wheel 을 제공 안 함 (NVIDIA Linux 가정). 명령 자체 install 도 안 됨. <strong>Dynamo 의 실 평가는 NVIDIA H100 + Linux 환경 필수</strong>.</p>
 
-<h3>6-5. 종합 결론</h3>
+<h3>6-4. 종합 결론</h3>
 <ol>
 <li><strong>Apple Silicon 에서는 llama.cpp 가 압도적</strong> — vLLM-metal 은 아직 dev 단계, llama.cpp 가 Metal 활용 잘.</li>
 <li><strong>Pod 갯수에 비례하는 성능 증가는 concurrent 부하가 단일 instance 능력 넘어설 때만</strong>. 낮은 부하면 단일이 더 효율.</li>
 <li><strong>K8s container 화 가 GPU 활용 망가뜨림</strong> — device plugin 명시 필수. 본 환경에선 Metal device passthrough 안 됨 → 19-27× 느림.</li>
 <li><strong>llm-d chart 가 실 vLLM 으로 동작 시키려면 minikube 자원 부족</strong> — 실 cluster 환경에서 측정 필요.</li>
 <li><strong>Dynamo 는 Apple Silicon 에서 install 자체 불가</strong> — NVIDIA + Linux 가정 강함.</li>
-<li><strong>PDD 도 vllm-metal 의 KV connector handshake 미구현으로 불가</strong> — NVIDIA NIXL / LMCache / Mooncake 모두 GPU 가정.</li>
+<li><strong>PDD 도 vllm-metal 의 KV connector handshake 미구현으로 불가</strong> — 별도 로그 <a href="pd-disaggregation-metal-tryout.html">PD Disaggregation 시도</a> 참조.</li>
 </ol>
 
 </div>
