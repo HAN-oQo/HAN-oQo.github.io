@@ -468,7 +468,68 @@ ts            device,temp,power,gpu%,vram%,mem_act
 
 <div class="tip"><strong>핵심 finding</strong>: SharedStorageConnector 는 source comment 가 "debug implementation" 명시 + cross-instance quality 깨짐. <strong>정통 PDD 는 P2pNccl + 공식 proxy server</strong> + 정확한 kv_port / proxy_port / http_port config 필요. 11 번 시도 끝에 동작.</div>
 
-<h3>7-bis-1. 정확한 명령 (vLLM 공식 예제 from <code>disaggregated_serving_p2p_nccl_xpyd/</code>)</h3>
+<h3>7-bis-0. 아키텍처 — 3 컴포넌트가 어떻게 떠 있나</h3>
+
+<p>본 실험에 떠 있는 3 컴포넌트 + 그들 사이 4 종류의 통신 channel:</p>
+
+<div class="diagram">  mi250-052 노드 (--network host 라 모두 192.168.3.52 공유)
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                                                                              │
+  │   Client (curl)                                                             │
+  │       │                                                                      │
+  │       │ ① HTTP POST /v1/completions  (단일 endpoint)                          │
+  │       ↓                                                                      │
+  │   ┌────────────────────────────────────────────────────────────────┐        │
+  │   │  vllm-proxy container                                            │        │
+  │   │   - Image: vllm-proxy:latest (rocm/vllm + quart)                 │        │
+  │   │   - listen :10001  → client request 받음                          │        │
+  │   │   - listen :30001  → prefill/decode 의 ping 받음 (service disc.)  │        │
+  │   │   - 로직: ② prefill 에 max_tokens=1 으로 forward (KV 만 만듬)      │        │
+  │   │          ③ decode 에 원본 request forward                          │        │
+  │   │          → decode 의 response 를 client 에 stream                   │        │
+  │   └─────────┬──────────────────────┬───────────────────────────────┘        │
+  │             │ ②                    │ ③                                       │
+  │             │ HTTP                 │ HTTP                                    │
+  │             │ (max_tokens=1)       │ (원본)                                  │
+  │             ↓                      ↓                                         │
+  │   ┌─────────────────────┐   ┌─────────────────────┐                          │
+  │   │ vllm-prefill        │   │ vllm-decode         │                          │
+  │   │  - GCD 0 (HIP_VIS)  │   │  - GCD 4 (HIP_VIS)  │                          │
+  │   │  - vLLM :20003 HTTP │   │  - vLLM :20005 HTTP │                          │
+  │   │  - ZMQ ROUTER :20001│   │  - ZMQ ROUTER :22001│                          │
+  │   │  - kv_role=producer │   │  - kv_role=consumer │                          │
+  │   │  - buffer 1e1 (작음)│   │  - buffer 8e9 (8GB) │                          │
+  │   │  - mem-util 0.9     │   │  - mem-util 0.7     │                          │
+  │   └─────┬───┬───────────┘   └─────────┬───┬───────┘                          │
+  │         │   │ ④ ping :30001            │   │ ④ ping :30001                  │
+  │         │   └──────────────────────────┴───┘                                 │
+  │         │                                                                    │
+  │         │ ⑤ NCCL/RCCL P2P (16 channels)  KV cache transfer                   │
+  │         │     ZMQ 20001 → ZMQ 22001                                          │
+  │         │     RCCL 으로 GCD 0 의 KV → GCD 4 의 KV                              │
+  │         └────────────────────────────────────────→ vllm-decode               │
+  │                                                                              │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ② ③ = HTTP 평범 통신
+  ④ = "service discovery" — prefill/decode 가 살아있다고 proxy 에 ping
+  ⑤ = KV cache 의 진짜 transfer — RCCL 으로 GPU-GPU 직접</div>
+
+<h3>7-bis-0-b. Proxy 가 왜 필요한가</h3>
+
+<p>vLLM 자체는 단일 endpoint 가정. PDD 는 두 endpoint (prefill, decode) 가 한 logical "service" 처럼 동작해야 함. 사용자가 client 측에서 두 호출 분리하기 X. <strong>proxy 가 그 추상화 layer</strong>. 4 가지 일 함:</p>
+
+<table>
+<tr><th>역할</th><th>구체 행동</th><th>왜 필요</th></tr>
+<tr><td><strong>① Single endpoint 제공</strong></td><td>client 는 <code>POST :10001/v1/completions</code> 한 번. proxy 가 내부적으로 prefill 호출 → decode 호출</td><td>OpenAI 호환 API 유지 — client 가 PDD 인 줄 모름</td></tr>
+<tr><td><strong>② Prefill 단계 트리거</strong></td><td>받은 request 의 <code>max_tokens</code> 을 <strong>1 로 강제 변경</strong> 한 후 prefill 에 forward. prefill 는 prompt forward → KV 생성 → KV 를 RCCL 로 decode 에 send</td><td>prefill instance 가 "1 token 만 출력 + KV 보내라" 라는 신호. 실제 generation 은 decode 가 함</td></tr>
+<tr><td><strong>③ Decode 라우팅</strong></td><td>원본 request 를 decode 에 forward. request_id 에 <strong>prefill_addr + decode_addr</strong> 인코딩 (예: <code>cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_&lt;uuid&gt;</code>) — decode 가 그 ZMQ address 의 prefill 로부터 KV 받음을 알게 함</td><td>decode 는 자기 ZMQ port 로 들어온 KV 가 어느 request 의 것인지 매칭해야 함. request_id 가 routing key</td></tr>
+<tr><td><strong>④ Service discovery</strong></td><td>prefill/decode 가 시작 시 proxy 의 :30001 에 ping 보냄. proxy 가 그들의 <code>http_address</code> + <code>zmq_address</code> 등록. proxy 가 죽으면 새 instance 도 등록 가능</td><td>proxy 가 어느 instance 가 살아있는지 + zmq 주소 동적 발견. config 에 hardcode 안 해도 됨 (XpYd scaling 위해)</td></tr>
+</table>
+
+<p>즉 proxy = <strong>(a) client API gateway + (b) prefill/decode 매칭 + (c) request-ID 기반 KV routing key + (d) service discovery</strong>. 4 in 1.</p>
+
+<h3>7-bis-1. 정확한 명령 — 양 instance 모두 (생략 없이)</h3>
 <pre><code># Prefill instance: GCD 0, http port 20003, ZMQ port 20001
 docker run -d --name vllm-prefill \
   --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
@@ -496,21 +557,90 @@ docker run -d --name vllm-prefill \
       }
     }'
 
-# Decode instance: GCD 4, http port 20005, ZMQ port 22001
+# Decode instance: GCD 4, http port 20005, ZMQ port 22001 (전체, 생략 없음)
 docker run -d --name vllm-decode \
-  ... -e HIP_VISIBLE_DEVICES=4 ... \
-  vllm serve ... --port 20005 --gpu-memory-utilization 0.7 \
+  --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
+  --ipc=host --shm-size=16g <strong>--network host</strong> \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HIP_VISIBLE_DEVICES=4 -e <strong>NCCL_DEBUG=INFO</strong> \
+  -e VLLM_ROCM_USE_AITER=0 -e VLLM_ROCM_USE_AITER_RMSNORM=0 \
+  rocm/vllm:latest \
+  vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --enforce-eager --host 0.0.0.0 --port 20005 --tensor-parallel-size 1 \
+    --seed 1024 <strong>--dtype float16</strong> --max-model-len 4096 \
+    --max-num-batched-tokens 4096 --max-num-seqs 64 --trust-remote-code \
+    <strong>--gpu-memory-utilization 0.7</strong> \
     --kv-transfer-config '{
       "kv_connector":"P2pNcclConnector",
       "kv_role":"kv_consumer",
       <strong>"kv_buffer_size":"8e9",</strong>           <!-- 큰 consumer buffer (8GB) -->
-      <strong>"kv_port":"22001",</strong>               <!-- 다른 ZMQ port -->
+      <strong>"kv_port":"22001",</strong>               <!-- 다른 ZMQ port (prefill 의 20001 과 unique) -->
       "kv_connector_extra_config":{
         "proxy_ip":"0.0.0.0", "proxy_port":"30001",
-        <strong>"http_port":"20005",</strong>
+        <strong>"http_port":"20005",</strong>           <!-- decode 의 vLLM port -->
         "send_type":"PUT_ASYNC", "nccl_num_channels":"16"
       }
     }'</code></pre>
+
+<h3>7-bis-1-b. 모든 config 옵션 — 한 줄 한 줄 설명</h3>
+
+<h4>Docker 옵션 (instance container)</h4>
+<table>
+<tr><th>옵션</th><th>역할</th><th>왜 필요</th></tr>
+<tr><td><code>--device=/dev/kfd --device=/dev/dri</code></td><td>ROCm 의 두 kernel device 를 container 에 노출</td><td>AMD GPU 사용 위한 device passthrough. NVIDIA 의 <code>--gpus all</code> 대응</td></tr>
+<tr><td><code>--security-opt seccomp=unconfined --group-add video</code></td><td>seccomp filter 풀고 video group 추가</td><td>ROCm 의 IOCTL 호출 허용. AMD GPU container 의 표준 권장</td></tr>
+<tr><td><code>--ipc=host</code></td><td>host 의 IPC namespace 사용 — shared memory 공유</td><td>vLLM 의 multi-process worker (TP) 가 shm_open 으로 IPC. <code>--shm-size</code> 만으로는 부족할 때</td></tr>
+<tr><td><code>--shm-size=16g</code></td><td>container 의 /dev/shm 크기 16GB</td><td>vLLM worker 간 broadcast shared memory queue 의 max</td></tr>
+<tr><td><code>--network host</code></td><td>container 의 network namespace 도 host 와 공유</td><td>prefill ↔ decode ↔ proxy 가 모두 같은 host 의 127.0.0.1 / 192.168.3.52 로 접근. NCCL handshake 도 동일 IP — port 만 unique 면 됨. <strong>이게 안 되면 두 container 가 docker bridge 내부 IP 라 NCCL handshake 어려움</strong></td></tr>
+<tr><td><code>-v ~/.cache/huggingface:...</code></td><td>모델 weight 캐시 mount</td><td>두 instance 가 같은 모델 두 번 download 안 하게</td></tr>
+<tr><td><code>-e HIP_VISIBLE_DEVICES=&lt;N&gt;</code></td><td>이 container 에서 보이는 GPU 만 (예: 0 = GCD 0)</td><td>prefill 과 decode 가 다른 GPU 사용하도록 격리. NVIDIA 의 <code>CUDA_VISIBLE_DEVICES</code> 대응</td></tr>
+<tr><td><code>-e NCCL_DEBUG=INFO</code></td><td>NCCL/RCCL 의 log level</td><td>handshake 시 channel 수 / link 종류 / error 캡쳐 — 디버깅 핵심</td></tr>
+<tr><td><code>-e VLLM_ROCM_USE_AITER=0</code></td><td>vLLM 의 aiter (AMD fused kernel) 끄기</td><td>image ROCm 7.0 vs host ROCm 6.2 mismatch 우회 (§9-1 참조)</td></tr>
+<tr><td><code>-e VLLM_ROCM_USE_AITER_RMSNORM=0</code></td><td>aiter 의 RMSNorm fused kernel 만 따로 끄기</td><td>aiter 전체보다 specific. RMSNorm 모듈이 silent kill 의 직접 원인</td></tr>
+</table>
+
+<h4>vLLM serve 옵션</h4>
+<table>
+<tr><th>옵션</th><th>역할</th><th>본 실험 설정</th></tr>
+<tr><td><code>--enforce-eager</code></td><td>torch.compile graph capture 끄기 (eager mode)</td><td>capture 단계 ROCm 호환 문제 우회 + cold start 빠름. 단 ~10-20% 손해</td></tr>
+<tr><td><code>--host 0.0.0.0 --port &lt;N&gt;</code></td><td>vLLM 의 HTTP API listen address</td><td>prefill=20003, decode=20005. proxy 가 이 port 로 forward</td></tr>
+<tr><td><code>--tensor-parallel-size 1</code></td><td>한 instance 의 TP 크기</td><td>TP=1 로 단순화 (각 1 GCD). 사용자 4+4 GCD 원래 plan 은 TP=4 였지만 TP=1 부터 검증</td></tr>
+<tr><td><code>--seed 1024</code></td><td>random seed</td><td>두 instance 가 같은 seed → 같은 init. 결과 reproducibility</td></tr>
+<tr><td><code>--dtype float16</code></td><td>모델 weight + KV cache 의 dtype</td><td>bf16 default 인데 P2pNccl 의 NCCL 통신이 fp16 에서 더 안정. 공식 예제도 fp16</td></tr>
+<tr><td><code>--max-model-len 4096</code></td><td>최대 sequence length</td><td>KV cache 가 이만큼 미리 할당. 작게 하면 KV 작아져 빠르지만 긴 prompt 불가</td></tr>
+<tr><td><code>--max-num-batched-tokens 4096</code></td><td>한 forward step 에 forward 가능한 max token</td><td>prefill 의 batch 크기 한계. 작은 모델이면 더 크게도 가능</td></tr>
+<tr><td><code>--max-num-seqs 64</code></td><td>동시 처리 가능한 max sequence 수</td><td>concurrent request 한계</td></tr>
+<tr><td><code>--trust-remote-code</code></td><td>HF 모델의 custom code 신뢰</td><td>Qwen 등 일부 모델 필요</td></tr>
+<tr><td><code>--gpu-memory-utilization 0.9 / 0.7</code></td><td>VRAM 의 사용 비율</td><td>prefill 0.9 (KV producer 라 KV buffer 작음, 모델 + 작업용 VRAM 많이 사용). decode 0.7 (KV consumer buffer 가 8GB 잡아서 모델 + working 위한 VRAM 0.7 만큼). 둘이 다른 이유 = consumer buffer 크기 차이</td></tr>
+</table>
+
+<h4>--kv-transfer-config 의 JSON 옵션 (PDD 의 핵심)</h4>
+<table>
+<tr><th>JSON key</th><th>역할</th><th>prefill 값 / decode 값</th></tr>
+<tr><td><code>kv_connector</code></td><td>어떤 KV transfer backend 쓸지 (§4-2 의 9개 중)</td><td><strong>P2pNcclConnector</strong> (둘 다)</td></tr>
+<tr><td><code>kv_role</code></td><td>이 instance 의 역할</td><td>prefill = <strong>kv_producer</strong> (KV 생성+send) / decode = <strong>kv_consumer</strong> (KV receive+use)</td></tr>
+<tr><td><code>kv_buffer_size</code></td><td>이 instance 의 KV transfer buffer 크기 (bytes)</td><td>prefill = <strong>1e1</strong> = 10 bytes (KV 만들자마자 즉시 send, queue 거의 안 함) / decode = <strong>8e9</strong> = 8GB (받은 KV 를 buffer 에 쌓아두고 generation 진행)</td></tr>
+<tr><td><code>kv_port</code></td><td>이 instance 의 <strong>ZMQ ROUTER socket</strong> bind port. peer 가 이 port 로 connect</td><td>prefill = <strong>20001</strong> / decode = <strong>22001</strong>. <strong>같은 host 면 둘이 unique 해야 ZMQ bind 충돌 안 남</strong></td></tr>
+<tr><td colspan="3" style="background:var(--blue-bg);"><strong>kv_connector_extra_config</strong> 안의 옵션들:</td></tr>
+<tr><td><code>proxy_ip</code> + <code>proxy_port</code></td><td>이 instance 가 service discovery ping 보낼 proxy 주소</td><td>둘 다 <strong>0.0.0.0:30001</strong>. proxy 가 이 port listen</td></tr>
+<tr><td><code>http_port</code></td><td>이 instance 의 <strong>vLLM API port</strong> (위 <code>--port</code> 와 일치해야)</td><td>prefill = <strong>20003</strong> / decode = <strong>20005</strong>. proxy 가 이 port 로 HTTP forward</td></tr>
+<tr><td><code>send_type</code></td><td>KV transfer 방식</td><td><strong>PUT_ASYNC</strong> — producer 가 만든 즉시 push, decode 가 받음 (async). 대안: PUT (sync), GET (consumer pull)</td></tr>
+<tr><td><code>nccl_num_channels</code></td><td>NCCL/RCCL 의 communication channel 수</td><td><strong>16</strong> — 같은 transfer 를 16 channel 으로 병렬. bandwidth 증가</td></tr>
+</table>
+
+<h4>한 시각으로 — config 가 만드는 4 종류의 channel</h4>
+<div class="diagram">  Channel                            Prefill 측              Decode 측
+  ────────────────────────────────────────────────────────────────────────
+  ① HTTP (client → proxy → vLLM)    :20003 listen          :20005 listen
+                                     (--port)               (--port)
+  ② ZMQ (P2pNccl control plane)     :20001 ROUTER bind     :22001 ROUTER bind
+                                     (kv_port)              (kv_port)
+  ③ Proxy 의 ping 받는 port          ─ (proxy 가 :30001)    ─ (proxy 가 :30001)
+                                     proxy_ip / proxy_port  same
+  ④ NCCL/RCCL data plane            16 channels: prefill_gpu ↔ decode_gpu
+                                     RCCL handshake 통해 만들어짐</div>
+
+<p>4 종류 channel 다 살아있어야 PDD 동작. 어느 하나 broken (예: ZMQ port 충돌 / NCCL handshake fail / HTTP 못 받음) 면 garbage 또는 hang.</p>
 
 <h3>7-bis-2. Proxy server 직접 build + 실행 (간단 구현)</h3>
 
