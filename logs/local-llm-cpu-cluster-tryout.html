@@ -93,9 +93,11 @@
   <li><a href="#env">2. 환경 평가 + 작전</a></li>
   <li><a href="#step1">3. Step 1 — engine + 작은 모델 단일 instance (vLLM 실패 → llama.cpp 로 우회)</a></li>
   <li><a href="#step2">4. Step 2 — 두 instance + nginx LB (미니 cluster)</a></li>
-  <li><a href="#step3">5. Step 3 — minikube + Service LB (간단 K8s)</a></li>
-  <li><a href="#wrap">6. 정리 — 무엇을 얻었나 / 못 한 것</a></li>
-  <li><a href="#justify">7. 다시 — vLLM / Dynamo / llm-d 가 각각 왜 필요한가</a></li>
+  <li><a href="#step3">5. Step 3 — minikube + Service LB + llm-d 차트 진짜 시도</a></li>
+  <li><a href="#bench">6. 벤치마크 — 4 setup 비교 (예상 vs 실제)</a></li>
+  <li><a href="#wrap">7. 정리 — 무엇을 얻었나 / 못 한 것</a></li>
+  <li><a href="#justify">8. 다시 — vLLM / Dynamo / llm-d 가 각각 왜 필요한가</a></li>
+  <li><a href="#refs">9. 참고 자료 + K8s/LLM 용어 풀이</a></li>
 </ol>
 </div>
 
@@ -344,44 +346,182 @@ done
 
 </div>
 
-<h2 id="step3">5. Step 3 — minikube + Service LB</h2>
+<h2 id="step3">5. Step 3 — minikube + Service LB + llm-d 진짜 시도</h2>
 <div class="card">
 
-<h3>5-1. 시도 안 한 이유 (솔직히)</h3>
-<p>minikube 위에 진짜 llm-d 차트를 깔려면:</p>
+<h3>5-1. minikube 시작</h3>
+<pre><code>minikube start --cpus=4 --memory=4096 --driver=docker
+# → cluster Ready (264일 된 minikube 재사용)
+
+kubectl get nodes
+# → minikube  Ready  control-plane  264d  v1.34.0</code></pre>
+
+<p>K8s 의 기본 단위:</p>
+<table>
+<tr><th>리소스</th><th>역할</th></tr>
+<tr><td><strong>Pod</strong></td><td>한 개 이상 container 의 묶음. 가장 작은 deployable 단위</td></tr>
+<tr><td><strong>Deployment</strong></td><td>"이 spec 의 Pod 을 N 개 항상 띄워둬" — replica controller</td></tr>
+<tr><td><strong>Service</strong></td><td>여러 Pod 을 묶어 하나의 endpoint (ClusterIP) 로 노출. 자동 LB (kube-proxy 가 iptables/IPVS 로 분배)</td></tr>
+<tr><td><strong>port-forward</strong></td><td>host 에서 cluster 안 Service 에 직접 접근 (개발 시 사용)</td></tr>
+</table>
+
+<h3>5-2. llama.cpp Deployment + Service (Setup C)</h3>
+<pre><code>cat &gt; llm-k8s.yaml &lt;&lt;'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: llama-cpp }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: llama-cpp } }
+  template:
+    metadata: { labels: { app: llama-cpp } }
+    spec:
+      containers:
+      - name: server
+        image: ghcr.io/ggml-org/llama.cpp:server
+        args: ["--hf-repo", "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+               "--hf-file", "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+               "--port", "8080", "--host", "0.0.0.0"]
+        ports: [{containerPort: 8080}]
+        readinessProbe:
+          httpGet: { path: /health, port: 8080 }
+          initialDelaySeconds: 30
+        resources:
+          requests: { cpu: "500m", memory: "1Gi" }
+          limits:   { cpu: "2000m", memory: "2Gi" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: llama-cpp }
+spec:
+  selector: { app: llama-cpp }
+  ports: [{port: 80, targetPort: 8080}]
+EOF
+kubectl apply -f llm-k8s.yaml
+kubectl wait --for=condition=ready pod -l app=llama-cpp --timeout=300s
+# → pod/llama-cpp-...-klz6m condition met
+# → pod/llama-cpp-...-tz4hr condition met
+
+kubectl port-forward svc/llama-cpp 9100:80 &amp;
+curl http://127.0.0.1:9100/health
+# → {"status":"ok"}</code></pre>
+
+<p><strong>config 옵션 가짓수</strong> (Deployment + Service 만): replicas 수, container image, args (모델/포트/사용자정의), resource request/limit (CPU/RAM), readinessProbe (시작 대기 정책), Service type (ClusterIP / NodePort / LoadBalancer). 본 시도에선 모두 최소값으로.</p>
+
+<h3>5-3. llm-d-modelservice helm chart 진짜 install (Setup D)</h3>
+
+<pre><code># llm-d-deployer 는 deprecated. llm-d-infra 는 CI 용.
+# 실제 chart 는 llm-d-incubation 의 modelservice
+brew install helm
+helm repo add llm-d https://llm-d-incubation.github.io/llm-d-modelservice
+helm search repo llm-d
+# → llm-d/llm-d-modelservice  v0.4.13  v0.4.0  A Helm chart for ModelService
+
+kubectl create namespace llm-d
+helm install llm-d-test llm-d/llm-d-modelservice -n llm-d
+# → STATUS: deployed
+# → 2 Deployment (decode + prefill) + 1 ServiceAccount
+
+kubectl get pods -n llm-d
+# → llm-d-test-llm-d-modelservice-decode-...  2/2 Running</code></pre>
+
+<p><strong>chart 의 의외의 발견</strong>: default 가 진짜 vLLM 이 아닌 <code>ghcr.io/llm-d/llm-d-inference-sim:latest</code> (mock simulator) 를 사용. 그래서 GPU 없이도 동작. <strong>실 vLLM backend 는 별도 values 로 교체</strong>해야 함.</p>
+
+<table>
+<tr><th>chart values 의 config 가짓수 (714 줄 values.yaml)</th><th>의미</th></tr>
+<tr><td><code>multinode</code></td><td>한 모델이 여러 노드에 분산되는지</td></tr>
+<tr><td><code>accelerator</code></td><td>GPU type / driver 설정</td></tr>
+<tr><td><code>requester</code></td><td>InferencePool / Gateway 와의 연결</td></tr>
+<tr><td><code>routing</code></td><td>EPP scorer 설정 (prefix-cache, load 등)</td></tr>
+<tr><td><code>decode</code> / <code>prefill</code></td><td>P/D 분리 — replica 수, image, resource, env vars (DP_SIZE, TP_SIZE, HF_HOME)</td></tr>
+<tr><td><code>modelArtifacts</code></td><td>모델 weights 위치 (HF / PVC / s3)</td></tr>
+<tr><td><code>tracing</code></td><td>OpenTelemetry 통합 (sampler, vllm 의 trace level)</td></tr>
+</table>
+
+<p>본 시도는 default 로 install. <code>routing-proxy</code> sidecar + inference-sim main container 의 2-container Pod 가 생성.</p>
+
+<pre><code># inference-sim 의 endpoint 확인
+kubectl get pod -n llm-d -o jsonpath='{.items[0].spec.containers[*].args}' | jq
+# → ["--model", "random/model", "--port", "8200", "--served-model-name", "random/model"]
+
+POD=$(kubectl get pod -n llm-d -l llm-d.ai/role=decode -o jsonpath='{.items[0].metadata.name}')
+kubectl port-forward -n llm-d pod/$POD 9200:8200 &amp;
+
+curl http://127.0.0.1:9200/v1/chat/completions \
+  -d '{"model":"random/model","messages":[{"role":"user","content":"hi"}],"max_tokens":10}'
+# → {"choices":[{"message":{"content":"Give a man "...}}],"usage":{...}}</code></pre>
+
+<p><strong>inference-sim 이 반환하는 응답은 random text</strong>. 진짜 LLM 추론이 아닌 latency / throughput / API 형태만 시뮬레이션. 그래서 매우 빠름 (p50 ~7ms).</p>
+
+<h3>5-4. Dynamo 는 왜 시도 안 했나 (솔직히)</h3>
+
+<p>NVIDIA Dynamo 의 install 가정:</p>
+<ul>
+  <li>NVIDIA GPU + CUDA driver (Apple Silicon 환경 X)</li>
+  <li>NIXL 기반 KV cache transfer (NVLink / RDMA 가정)</li>
+  <li>vLLM / TRT-LLM 의 GPU 빌드 backend</li>
+</ul>
+
+<p>CPU 환경에서 Dynamo install 자체는 가능하지만 실 동작 X — backend engine 들이 GPU device 못 찾으면 init 실패. install 명령만 흉내내는 건 학습 가치 낮아서 skip. 실 NVIDIA 환경 (clouds, on-prem H100 cluster) 에서 별도 시도 권장.</p>
+
+</div>
+
+<h2 id="bench">6. 벤치마크 — 4 setup 비교</h2>
+<div class="card">
+
+<h3>6-1. 벤치마크 방법</h3>
+<pre><code># /tmp/bench.py — asyncio + aiohttp 기반
+python bench.py http://&lt;url&gt;/v1/chat/completions &lt;concurrent&gt; &lt;total&gt; "&lt;label&gt;"
+
+# 측정: success rate, throughput (req/s), latency p50/p95/p99
+# 워크로드: 8 종의 짧은 user prompt 를 N_total 만큼 round-robin.
+#   system prompt 고정 → prefix cache 기회 일부 있음.
+#   max_tokens=40, temperature=0.2</code></pre>
+
+<h3>6-2. 결과 표</h3>
+<table>
+<tr><th>Setup</th><th>구성</th><th>conc</th><th>throughput (req/s)</th><th>p50 (ms)</th><th>p95 (ms)</th><th>실 추론?</th></tr>
+<tr><td>A</td><td>host llama.cpp 단일 (Metal)</td><td>1</td><td>3.8</td><td>187</td><td>634</td><td>✓ 실 추론</td></tr>
+<tr><td>A</td><td>host llama.cpp 단일 (Metal)</td><td>4</td><td>13.9</td><td>252</td><td>358</td><td>✓ 실 추론</td></tr>
+<tr><td>B</td><td>nginx LB + 2 host instance</td><td>4</td><td>10.8</td><td>313</td><td>796</td><td>✓ 실 추론</td></tr>
+<tr><td>B</td><td>nginx LB + 2 host instance</td><td>8</td><td>19.7</td><td>378</td><td>561</td><td>✓ 실 추론</td></tr>
+<tr><td>C</td><td>minikube + 2 Pod Service LB</td><td>4</td><td><strong>0.4</strong></td><td><strong>9818</strong></td><td>13201</td><td>✓ 실 추론 (CPU)</td></tr>
+<tr><td>C</td><td>minikube + 2 Pod Service LB</td><td>8</td><td>0.5</td><td>13677</td><td>21301</td><td>✓ 실 추론 (CPU)</td></tr>
+<tr><td>D</td><td>llm-d chart (inference-sim, decode-only)</td><td>1</td><td>116</td><td>7</td><td>35</td><td>✗ mock</td></tr>
+<tr><td>D</td><td>llm-d chart (inference-sim, decode-only)</td><td>4</td><td>399</td><td>8</td><td>13</td><td>✗ mock</td></tr>
+<tr><td>D</td><td>llm-d chart (inference-sim, decode-only)</td><td>8</td><td>368</td><td>12</td><td>49</td><td>✗ mock</td></tr>
+</table>
+
+<h3>6-3. 결과 분석 — 예상 vs 실제</h3>
+
+<h4>A → B (단일 → LB): 예상 = throughput ↑, 실제 = 비슷 / 약간 ↑</h4>
+<p>예상: 2 instance 면 throughput 2 배. <br>
+실제: conc=4 에선 오히려 B 가 A 보다 약간 낮음 (10.8 &lt; 13.9). 이유 — 같은 host 의 CPU/Metal 자원을 두 process 가 공유. concurrent 4 정도 부하로는 단일 process 도 충분히 효율적. <br>
+conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 15-17 보다 위). LB 의 효과는 <strong>concurrent 부하가 단일 process 의 능력을 넘어설 때</strong> 비로소 나타남.</p>
+
+<h4>A/B → C (host Metal → k8s container): 예상 = 약간 ↓, 실제 = <strong>35배 ↓</strong></h4>
+<div class="note"><strong>가장 놀라운 발견</strong>. A 의 단일 instance 가 252ms p50 인데 C 의 같은 software (llama.cpp + Qwen2.5-0.5B) 가 9818ms — 같은 모델 같은 binary 인데도 K8s container 안에선 <strong>거의 40 배 느림</strong>.</div>
+<p>이유: <strong>Apple Silicon 의 Metal GPU 활용 차이</strong>. host 의 llama-server 는 직접 Metal kernel 호출. minikube Pod 안의 llama.cpp 는 Linux container 라 Metal device 못 봄 → 순수 CPU 추론 fallback. Apple Silicon 의 unified memory 우위가 사라짐.</p>
+<p>이 finding 자체가 큰 학습:</p>
+<ul>
+  <li>같은 software 라도 <strong>container 화 가 GPU 활용을 깨뜨릴 수 있음</strong>. K8s 위로 옮길 때 device plugin (NVIDIA GPU operator 같은) 으로 명시적으로 GPU 노출 안 하면 사라짐.</li>
+  <li>벤치마크 결과 비교 시 "같은 software" 인지만 보면 안 됨 — backend acceleration path 까지 같은지 확인.</li>
+  <li>production 에서 K8s 위 vLLM 배포 시 NVIDIA device plugin 이 반드시 필요한 이유가 이거.</li>
+</ul>
+
+<h4>D (llm-d + inference-sim): 예상 = 실 LLM 비교 어려움, 실제 = <strong>비교 불가</strong></h4>
+<p>D 가 가장 빨라 보이지만 (p50 7-12ms) <strong>실제 LLM 추론이 아님</strong>. inference-sim 은 mock — token generation 없고 random text 즉시 반환. D 의 수치는 llm-d 의 routing layer (routing-proxy sidecar + EPP 결정 + Service 통과) 의 <strong>overhead</strong> 만 보여줌. 약 7ms 가 stack overhead.</p>
+<p>의미 있는 비교는 D 의 backend 를 실 vLLM 으로 교체했을 때 가능. 그러려면 vLLM CPU container image + 충분한 자원 + 모델 weights mount. minikube 4CPU/4GB 환경에선 vLLM 띄우기 자체가 어려움 (vLLM 의 기본 메모리 footprint 가 큼).</p>
+
+<h3>6-4. llm-d 의 효과를 측정하려면 — 미완 작업</h3>
+<p>llm-d 의 진짜 효과 (prefix-cache aware routing, P/D 분리, EPP scorer) 를 보려면:</p>
 <ol>
-  <li>minikube ISO + container runtime (~ 2GB 디스크)</li>
-  <li>helm install — 차트 + 의존성 컨테이너 image (~ 3-5GB)</li>
-  <li>vLLM container image — Linux x86 이라 Rosetta emulation 필요. CPU mode build 가 official 한지 불명확</li>
-  <li>llm-d 의 EPP, scheduler, gateway 컨테이너 — 모두 정상 동작 가정</li>
+  <li>backend 를 vLLM 으로 교체 — values.yaml 의 image 와 args 갈아끼움</li>
+  <li>prefill + decode 두 Pool 활성화 (multinode: false 라도 P/D 분리 가능)</li>
+  <li>같은 system prompt 시작 요청 N 회 → 첫 요청 후 cache hit 가 어떤 instance 에서 일어나는지 확인</li>
+  <li>round-robin 대비 throughput / KV hit rate 측정</li>
 </ol>
-<p>현재 디스크 18GB 자유 공간. 가능은 하지만 시간 부담 큼 (1-2 시간), 그리고 핵심 학습 포인트 (LB + multi-replica + API) 는 이미 Step 2 에서 체득. 추가 가치 대비 비용 효율 낮음.</p>
-
-<h3>5-2. 했다면 어떻게 했을 것</h3>
-<pre><code># 1. minikube 시작 — 4 CPU, 8GB RAM 할당
-minikube start --cpus=4 --memory=8g --driver=docker
-
-# 2. 두 vLLM Pod (Deployment)
-kubectl create deployment vllm-1 --image=&lt;CPU vLLM image&gt; \
-  --replicas=2 \
-  -- --model Qwen/Qwen2.5-0.5B-Instruct --port 8080
-
-# 3. Service 만들면 자동 LB
-kubectl expose deployment vllm-1 --port=8080 --type=NodePort
-
-# 4. minikube service vllm-1 → LB URL 출력
-# 5. curl 으로 요청 → kube-proxy 가 두 Pod 에 라운드로빈
-
-# (옵션) llm-d 차트 추가
-helm repo add llm-d https://llm-d.github.io/charts
-helm install llm-d llm-d/llm-d \
-  --set inference.backends.url="http://vllm-1:8080"
-# → llm-d 의 gateway + scheduler 가 vLLM Pod 들을
-#   prefix-cache aware 하게 라우팅</code></pre>
-
-<p>K8s 위에서 "Service = LB", "Deployment = replica controller" 라는 추상화는 nginx 했던 것의 K8s native 버전. llm-d 가 추가되면 그 위에서 "그냥 round-robin 이 아니라 prefix cache hit 가능성 높은 Pod 으로 라우팅" 으로 업그레이드.</p>
-
-<p>다음 호스트 + 디스크 여유 있을 때 진행. (별도 로그로.)</p>
+<p>본 환경 (Apple Silicon + 16GB + minikube 4CPU/4GB) 에선 vLLM CPU 모드 자체가 빌드 어려움 (§3-1 finding). 실 GPU + linux 환경에서 별도 시도 필요.</p>
 
 </div>
 
@@ -518,6 +658,101 @@ helm install llm-d llm-d/llm-d \
 </ul>
 
 <p>오늘 Step 1-2 에서 직접 본 한계 (round-robin LB 의 KV cache miss) 가 위 세 layer 모두가 (각자 다른 각도에서) 해결하려는 문제. layer 가 많아 보이지만 각자 푸는 문제가 다름 — vLLM = single-engine 최적화, Dynamo = NVIDIA GPU cluster 위 disaggregation/KV-aware routing, llm-d = K8s 위 표준화된 LLM gateway. 셋이 같은 길에 같이 있을 수 있고 (각 layer 가 다른 layer 를 추상화), 하나만 있어도 작은 환경은 충분.</p>
+
+</div>
+
+<h2 id="refs">참고 자료 + 용어 풀이</h2>
+<div class="card">
+
+<h3>참고 자료 (확인한 출처)</h3>
+
+<h4>실 시도한 환경</h4>
+<ul>
+<li><a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> — brew 의 <code>llama.cpp</code> 패키지 (Setup A, B, C 에서 사용)</li>
+<li><a href="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF">Qwen/Qwen2.5-0.5B-Instruct-GGUF</a> — 사용한 모델 (Q4_K_M 양자화, ~ 400MB)</li>
+<li><a href="https://github.com/llm-d-incubation/llm-d-modelservice">llm-d-incubation/llm-d-modelservice</a> — Setup D 의 chart source</li>
+<li><a href="https://artifacthub.io/packages/helm/llm-d/llm-d">ArtifactHub: llm-d-modelservice chart</a> — helm repo 위치 찾을 때 참고</li>
+</ul>
+
+<h4>llm-d 의 역할 / 구조</h4>
+<ul>
+<li><a href="https://llm-d.ai/docs/guide/Installation/quickstart">llm-d.ai QuickStart 가이드</a> — llm-d 의 공식 install 절차</li>
+<li><a href="https://github.com/llm-d/llm-d-deployer">llm-d-deployer (deprecated)</a> — README 의 "더 이상 업데이트 안 됨, llm-d-infra 로 이동" 안내</li>
+<li><a href="https://github.com/llm-d/llm-d-infra">llm-d/llm-d-infra</a> — 새 path 라고 안내됐지만 실제로는 CI/CD reusable workflow 의 repo</li>
+<li><a href="https://gateway-api.sigs.k8s.io/">K8s Gateway API + Gateway Inference Extensions (GIE)</a> — llm-d 가 따르는 SIG-Network 표준</li>
+</ul>
+
+<h4>벤치마크 / fidelity 수치 (다른 글 인용)</h4>
+<ul>
+<li><a href="https://arxiv.org/abs/2508.03148">Frontier paper (arXiv:2508.03148)</a> — Frontier vs Vidur 의 op 단위 fidelity 비교</li>
+<li><a href="https://arxiv.org/abs/2405.05465">Vidur paper (arXiv:2405.05465)</a> — P95 latency 3.33% error 인용</li>
+<li><a href="https://blog.vllm.ai/2024/09/05/perf-update.html">vLLM blog: v0.6.0 perf update</a> — vLLM 의 prod throughput reference</li>
+<li><a href="https://llm-tracker.info/howto/LLM-Inference-Benchmarking-Cheat%E2%80%91Sheet-for-Hardware-Reviewers">LLM Inference Benchmarking Cheat-Sheet</a> — H100 + Llama-2-7B 의 일반적 수치</li>
+</ul>
+
+<h4>Apple Silicon vLLM 가능성</h4>
+<ul>
+<li><a href="https://github.com/vllm-project/vllm-metal">vllm-project/vllm-metal</a> — Apple Silicon 의 Metal backend plugin (정통 vLLM 의 공식 fork)</li>
+<li><a href="https://www.docker.com/blog/docker-model-runner-vllm-metal-macos/">Docker Model Runner + vLLM on macOS</a> — Docker Desktop 의 model runner 가 vLLM Metal 지원</li>
+<li><a href="https://docs.vllm.ai/en/stable/getting_started/installation/">vLLM 공식 install 문서</a> — macOS 는 source build 권장</li>
+</ul>
+
+<h4>Dynamo (시도 안 한 이유의 출처)</h4>
+<ul>
+<li><a href="https://github.com/ai-dynamo/dynamo">NVIDIA Dynamo repo</a> — NVIDIA GPU + NIXL 기반 KV cache transfer 가정</li>
+</ul>
+
+<h3>본 문서에서 등장하는 K8s 용어 풀이</h3>
+<table>
+<tr><th>용어</th><th>풀이</th></tr>
+<tr><td><strong>Kubernetes (K8s)</strong></td><td>여러 컨테이너를 cluster 단위로 운영하는 오케스트레이션 시스템. "어디에 어떤 컨테이너가, 얼마나 떠야 하는지" 를 선언적 yaml 으로 관리</td></tr>
+<tr><td><strong>minikube</strong></td><td>로컬 PC 에서 single-node K8s 를 띄우는 도구. 학습/개발 용. 본 글에선 Docker driver 로 띄움</td></tr>
+<tr><td><strong>kubectl</strong></td><td>K8s 의 CLI. <code>kubectl apply -f x.yaml</code>, <code>kubectl get pods</code>, <code>kubectl port-forward</code> 등</td></tr>
+<tr><td><strong>Pod</strong></td><td>한 개 이상 container 의 묶음. K8s 의 가장 작은 배포 단위. 같은 Pod 안의 container 들은 network + volume 공유</td></tr>
+<tr><td><strong>Deployment</strong></td><td>"이 Pod spec 을 N 개 항상 띄워둬, 죽으면 새로 만들어줘" 라고 선언하는 리소스. replica controller</td></tr>
+<tr><td><strong>ReplicaSet</strong></td><td>Deployment 가 내부적으로 만드는 "Pod N 개 보장" 리소스. 보통 직접 다룰 일 없음</td></tr>
+<tr><td><strong>Service</strong></td><td>여러 Pod 을 하나의 endpoint 로 묶음 — DNS 이름 (cluster 안에서) + ClusterIP. 자동 LB (kube-proxy 가 iptables/IPVS 로 분배)</td></tr>
+<tr><td><strong>port-forward</strong></td><td>host 에서 cluster 안 Pod/Service 의 port 를 임시 터널로 노출. 개발/디버깅 용. <code>kubectl port-forward svc/x 9100:80</code></td></tr>
+<tr><td><strong>Namespace</strong></td><td>K8s 리소스의 논리적 폴더. <code>kube-system</code>, <code>default</code> 가 기본. 권한 (RBAC) 의 경계</td></tr>
+<tr><td><strong>ServiceAccount</strong></td><td>Pod 이 K8s API 에 접근할 때 사용하는 identity. "이 Pod 은 어떤 권한으로 cluster 와 통신할지" 정의</td></tr>
+<tr><td><strong>RBAC</strong></td><td>Role-Based Access Control. "어떤 ServiceAccount 가 어떤 리소스에 어떤 동작" 매핑</td></tr>
+<tr><td><strong>readinessProbe</strong></td><td>Pod 이 "트래픽 받을 준비 됐나" 체크하는 HTTP/exec probe. fail 시 Service 가 해당 Pod 으로 라우팅 안 함</td></tr>
+<tr><td><strong>resource requests / limits</strong></td><td>requests = 스케줄러가 이 Pod 에 최소로 약속하는 자원. limits = 절대 못 넘는 상한. 둘 다 CPU / RAM 단위로 명시 (<code>500m</code> = 0.5 CPU core, <code>1Gi</code> = 1 GiB)</td></tr>
+<tr><td><strong>Helm</strong></td><td>K8s 의 패키지 매니저. <code>helm install x repo/chart</code> 한 줄로 복잡한 yaml 묶음 (chart) + 의존성 + 파라미터 (values.yaml) 적용</td></tr>
+<tr><td><strong>Helm chart</strong></td><td>위의 패키지 단위. 보통 <code>templates/</code> 의 yaml 들 + <code>values.yaml</code> default + <code>Chart.yaml</code> metadata</td></tr>
+<tr><td><strong>helm repo</strong></td><td>여러 chart 가 모인 저장소 URL. <code>helm repo add x https://...</code> 으로 등록</td></tr>
+<tr><td><strong>ArtifactHub</strong></td><td>helm chart 들을 공개 검색하는 사이트. 어느 repo 가 어떤 chart 를 가졌는지 확인</td></tr>
+<tr><td><strong>ghcr.io</strong></td><td>GitHub Container Registry. <code>docker.io</code>, <code>quay.io</code> 와 같은 container image 호스팅. <code>ghcr.io/&lt;org&gt;/&lt;image&gt;:&lt;tag&gt;</code></td></tr>
+<tr><td><strong>CRD (Custom Resource Definition)</strong></td><td>K8s 가 기본 제공하지 않는 새 리소스 타입을 정의. llm-d 에선 <code>InferencePool</code>, <code>InferenceObjective</code> 같은 게 CRD</td></tr>
+<tr><td><strong>Operator</strong></td><td>CRD + 그걸 다루는 controller 의 묶음. 사용자가 CRD 객체 만들면 자동으로 반응해서 cluster 상태를 맞춤</td></tr>
+<tr><td><strong>Reconcile</strong></td><td>controller 가 "현재 상태 vs 원하는 상태" 차이를 매꾸는 루프. 매 이벤트마다 trigger</td></tr>
+<tr><td><strong>Sidecar</strong></td><td>메인 container 와 같은 Pod 안의 보조 container. llm-d 에선 <code>routing-proxy</code> 가 sidecar</td></tr>
+<tr><td><strong>EPP (Endpoint Picker Plugin)</strong></td><td>GIE 표준의 핵심. "요청이 들어오면 어느 backend Pod 으로 보낼지" 결정하는 plugin 시스템. 보통 14개 정도의 scorer (load, prefix-cache, latency 등) + picker (Max, weighted) 조합</td></tr>
+<tr><td><strong>GIE (Gateway Inference Extensions)</strong></td><td>K8s SIG-Network 가 만든 LLM-aware gateway 의 표준. llm-d 가 이 구현 중 하나</td></tr>
+<tr><td><strong>InferencePool</strong></td><td>GIE 의 CRD. "어떤 Pod 들이 같은 모델을 서빙하는지" 묶는 단위</td></tr>
+<tr><td><strong>kube-proxy</strong></td><td>각 노드에서 Service 의 LB rule 을 iptables/IPVS 로 구현하는 daemon. 보통 직접 다룰 일 없음</td></tr>
+<tr><td><strong>node</strong></td><td>K8s cluster 에 속한 한 머신 (VM 또는 물리). 본 글에선 minikube = 1 node cluster</td></tr>
+<tr><td><strong>helm install ... --dry-run</strong></td><td>실제 cluster 에 적용 안 하고 어떤 yaml 이 만들어질지만 출력. config 검증 용</td></tr>
+<tr><td><strong>helm template</strong></td><td>dry-run 비슷. cluster 에 보내지 않고 chart 의 yaml 만 렌더링</td></tr>
+</table>
+
+<h3>본 문서에서 등장하는 LLM serving 용어 풀이</h3>
+<table>
+<tr><th>용어</th><th>풀이</th></tr>
+<tr><td><strong>OpenAI-compatible API</strong></td><td>OpenAI 의 <code>/v1/chat/completions</code> wire format 을 그대로 따르는 API. vLLM / llama.cpp / Ollama 모두 이 형태. 클라이언트 측 코드 재사용 가능</td></tr>
+<tr><td><strong>GGUF</strong></td><td>llama.cpp 가 쓰는 모델 weight 파일 형식. quantization 정보 + tokenizer + weights 한 파일에. <code>.gguf</code></td></tr>
+<tr><td><strong>Q4_K_M</strong></td><td>GGUF 의 양자화 방식 중 하나. 4-bit 양자화 + K-block quant + medium quality. 모델 크기 ~ 1/4, 약간의 정확도 손실</td></tr>
+<tr><td><strong>PagedAttention</strong></td><td>vLLM 의 핵심 최적화. KV cache 를 page 단위 (보통 16 token) 로 관리해 fragmentation 제거</td></tr>
+<tr><td><strong>Continuous batching</strong></td><td>고정 batch size 가 아니라 request 가 들어오는 대로 batch 에 합류 + 끝나는 대로 빠지는 token-level scheduling</td></tr>
+<tr><td><strong>KV cache</strong></td><td>LLM 의 Key/Value tensor cache. Prefill 에서 만들어지고 Decode 에서 재사용. 같은 prompt prefix 면 재계산 안 해도 됨 → prefix cache</td></tr>
+<tr><td><strong>Prefill / Decode (P/D)</strong></td><td>Prefill = prompt 전체 token 을 한 번에 forward → KV 생성 (compute-bound). Decode = 한 token 씩 autoregressive 생성 (memory-bound)</td></tr>
+<tr><td><strong>PDD (Prefill-Decode Disaggregation)</strong></td><td>P 와 D 를 서로 다른 Pod / GPU 에 분리. P 끝나면 KV cache 만 D 로 transfer</td></tr>
+<tr><td><strong>TTFT / TPOT / E2E</strong></td><td>TTFT (Time To First Token) = 첫 토큰까지 시간 ≈ prefill latency. TPOT (Time Per Output Token) = 토큰당 시간 ≈ decode latency. E2E (End-to-End) = 전체 응답 완료까지</td></tr>
+<tr><td><strong>vLLM</strong></td><td>가장 널리 쓰이는 production LLM inference engine (Python). PagedAttention, continuous batching 의 reference 구현</td></tr>
+<tr><td><strong>Dynamo</strong></td><td>NVIDIA 의 분산 inference orchestrator. vLLM / TRT-LLM / SGLang 을 backend 로 multi-node 운영</td></tr>
+<tr><td><strong>llm-d</strong></td><td>K8s 위 LLM-aware gateway + EPP 구현. GIE 표준의 한 구현</td></tr>
+<tr><td><strong>inference-sim</strong></td><td>llm-d 가 차트 default 로 쓰는 mock backend. 실 모델 추론 없이 latency / throughput 시뮬레이션만</td></tr>
+</table>
 
 </div>
 
