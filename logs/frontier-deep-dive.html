@@ -318,15 +318,65 @@ collective: AllReduce | SendRecv</code></pre>
     └── send_recv.csv</code></pre>
 <p>측정법별로 CSV 분리. Decoder CUDA Graph 면 kernel_only, eager 면 cuda_event 데이터를 trainer/predictor 가 선택.</p>
 
-<h4>설계 약점 (Profiling)</h4>
-<ol>
-  <li><strong>vLLM tight coupling</strong> — Attention/MoE/CPU overhead 모두 vLLM 의존. 비-vLLM 엔진 (TensorRT-LLM, lm-eval, 자체 inference) 측정 불가. vLLM API 변경 시 매번 깨짐 (0.3.x → 0.10.x 의 fused MoE API redesign)</li>
-  <li><strong>NVIDIA only</strong> — <code>torch.cuda.Event</code>, <code>nvidia-smi</code> 의존. AMD ROCm / Apple Silicon 미지원</li>
-  <li><strong>Sweep cost</strong> — 한 모델 × HW 완전 sweep 4-5 GPU-hour (~$4-15 H100 spot). 새 모델 → 처음부터, HW variant (A100→H100) → 처음부터</li>
-  <li><strong>Version drift</strong> — vLLM 0.5 로 측정한 데이터가 0.7 sim 에 부정확. CSV 에 vllm_version column 없음 → 사용자가 직접 관리</li>
-  <li><strong>Load imbalance: metadata 만</strong> — <code>load_imbalance_cv</code>, <code>load_gini_coefficient</code> 가 feature 로 들어가지만 실제 imbalanced sweep 안 함 (모두 uniform load 로 측정, imbalance 영향은 synthetic feature)</li>
-  <li><strong>Single-GPU TP fidelity</strong> — TP>8 같은 큰 차수에서 실제 cross-GPU communication 못 측정. analytical 외삽</li>
-</ol>
+<h4>설계 약점 (Profiling) — 어떤 게 진짜 본질적이고, 어떤 건 패치 가능한지</h4>
+<p>각 약점이 "진짜 fundamental" 인지, "tooling 만 고치면 풀리는지" 구분해서.</p>
+
+<h5>1. vLLM 의존 — 본질적 (코드 수준 결합)</h5>
+<p>Attention/MoE/CPU overhead 측정이 진짜로 vLLM 의 내부 API 호출:</p>
+<ul>
+  <li>Attention 측정: <code>vllm.v1.attention.backends.utils.get_kv_cache_layout</code> 호출 — FlashInfer backend 의 KV cache 레이아웃 의존</li>
+  <li>MoE 측정: <code>vllm.model_executor.layers.fused_moe.fused_moe_kernel</code> 직접 사용 — load imbalance 측정용</li>
+  <li>CPU overhead: vLLM 의 scheduler/sampler 실제 호출해서 측정 (또는 vLLM trace replay)</li>
+</ul>
+<p>대체 inference engine — TensorRT-LLM, SGLang, llama.cpp 등 — 측정하려면 그 엔진의 op 들을 따로 instantiate 하는 새 profiling script 작성 필요 (lm-eval 은 evaluation framework 라 여기 해당 X — vLLM 을 backend 로 쓰는 거지 대체 엔진 아님).</p>
+<p><strong>해결</strong>: Frontier 의 design choice 라 fork 해서 backend abstraction 만들거나 NetX-lab upstream PR. 양쪽 다 큰 작업.</p>
+
+<h5>2. "NVIDIA only" — 본질적이 아님. tooling 패치 1-2일</h5>
+<p>처음 본문에 "NVIDIA only" 라고 강하게 썼지만 다시 보니 부정확. 실제 차단 요소:</p>
+<table>
+<tr><th>현재 코드</th><th>실제 AMD 상황</th><th>해결</th></tr>
+<tr><td><code>torch.cuda.Event</code></td><td>PyTorch ROCm 빌드에서 <strong>그대로 작동</strong> — HIP 로 translate. API 동일</td><td>없음 (이미 동작)</td></tr>
+<tr><td><code>subprocess.run(["nvidia-smi", ...])</code></td><td>없음 — 대신 <code>rocm-smi</code> 사용 필요</td><td><code>if 'rocm' in torch.version.cuda: subprocess.run(["rocm-smi", ...])</code> 분기 추가 (~30분 작업)</td></tr>
+<tr><td>FlashInfer attention backend</td><td>FlashInfer 자체가 CUDA 전용 (ROCm 미지원)</td><td>NO_OP backend 사용 (Frontier 의 다른 선택지)</td></tr>
+<tr><td>vLLM 의 fused MoE kernel</td><td>vLLM ROCm 빌드 (vllm-rocm) 에서 일부만 지원. fused 가 아닌 fallback 경로 있음</td><td>vLLM ROCm 빌드 사용 — kernel 부재 시 자동 fallback</td></tr>
+</table>
+<p>Apple Silicon (MPS) 은 <code>torch.cuda</code> 호출 자체 가 안 됨 → fundamental. 하지만 AMD MI300 같은 datacenter GPU 는 <strong>tooling 패치 며칠</strong> 으로 가능.</p>
+
+<h5>3. Sweep cost — 부분 해결 가능 (theoretical fallback)</h5>
+<p>현재 한 모델 × HW 완전 sweep ~4-5 GPU-hour. 비용 줄이는 방법:</p>
+<table>
+<tr><th>접근</th><th>정확도</th><th>비용</th><th>현재 Frontier 지원?</th></tr>
+<tr><td>완전 sweep (현재)</td><td>실측 그대로 (점 수 많을 때 ±2%)</td><td>4-5 GPU-hour</td><td>O</td></tr>
+<tr><td><code>SKIP_SKEW=1</code> + sparse grid factor 4.0</td><td>중간 (~5-10% 오차)</td><td>1-2 GPU-hour</td><td>O (flag 있음)</td></tr>
+<tr><td><strong>Roofline 이론값으로 fill</strong></td><td>낮음 (~30-50% 오차 — 특히 작은 token 에서)</td><td>0 GPU-hour</td><td><strong>X (구현 안 됨)</strong></td></tr>
+<tr><td>Dummy mode (고정 1ms)</td><td>매우 낮음 — 절대값 의미 X, 구조 비교만 OK</td><td>0</td><td>O</td></tr>
+</table>
+<p><strong>Roofline 으로 때려넣는 게 안 되는 이유</strong> — 작은 token (e.g. 32 token decode) 에서 실 시간이 Roofline 예측 보다 5-10× 큼:</p>
+<ul>
+  <li>Kernel launch overhead (GPU 당 5-20μs) — token 적으면 dominate</li>
+  <li>Memory access pattern (cache miss, fragmentation)</li>
+  <li>Python overhead (PyTorch dispatcher, eager mode)</li>
+  <li>vLLM 의 batch 구성 overhead (padding, tensor 정렬)</li>
+</ul>
+<p>Roofline 은 <strong>큰 token (compute-bound 영역)</strong> 에서만 ~±15% 정도 맞음. 그래도 "초기 design space exploration" 용으론 충분. 권장 패치: Frontier 에 <code>--analytical_roofline</code> mode 추가 — sweep 안 하고 GPU TFLOPS + HBM BW 만으로 fill. Dummy 보다는 훨씬 의미있는 ballpark.</p>
+
+<h5>4. Version drift — 검출 방법 있음. 다만 완전 자동화는 어려움</h5>
+<p>vLLM 0.5 측정 → 0.7 시뮬 이라면 어떻게 알 수 있나? 전체 re-sweep 외에:</p>
+<table>
+<tr><th>방법</th><th>비용</th><th>한계</th></tr>
+<tr><td>CSV 에 <code>vllm_version</code>, <code>cuda_version</code>, <code>torch_version</code> column 추가</td><td>0 (코드 한 줄)</td><td>mismatch 알려주지만 영향 크기 모름</td></tr>
+<tr><td><strong>Smoke compare sweep</strong>: 새 vLLM 버전에서 10-20점 만 측정 후 old profile 의 같은 점과 비교</td><td>~5-10분 (full sweep 의 5%)</td><td>그 10점이 representative 한지 보장 X. 우연히 영향 받은 op 못 잡으면 false negative</td></tr>
+<tr><td>각 측정에 std 함께 저장 → 새 측정이 [mean - 3σ, mean + 3σ] 벗어나면 alert</td><td>0 (CSV 에 이미 있음)</td><td>std 가 5-25% 범위라 작은 drift 못 감지</td></tr>
+<tr><td>Full sim 결과 (LLMServingSim vs vLLM 비교 런북 식) 로 end-to-end accuracy 측정</td><td>1 워크로드 ~30분 + GPU 비용</td><td>profile drift 인지 다른 원인인지 구분 어려움</td></tr>
+<tr><td>CI 에 smoke sweep 통합 — vLLM bump 마다 자동 실행</td><td>구축 비용 + 매번 GPU 시간</td><td>운영 부담</td></tr>
+</table>
+<p><strong>현실적 권장</strong>: (1) version column 추가 + (2) 새 vLLM 버전 처음 쓸 때 smoke compare sweep ~10분 돌려서 confidence 보고 → 큰 차이면 full re-sweep. 완벽한 자동화는 어렵지만 "blind 사용" 보단 훨씬 안전.</p>
+
+<h5>5. Load imbalance, single-GPU TP fidelity 등 — 본문 그대로</h5>
+<ul>
+  <li><strong>MoE load imbalance metadata-only</strong> — <code>load_imbalance_cv</code>, <code>load_gini_coefficient</code> 가 feature 로 들어가지만 sweep 은 모두 uniform load 로. 실제 imbalanced 시 정확도 ↓. 해결: imbalanced sweep 추가 (sweep 비용 ↑)</li>
+  <li><strong>Single-GPU TP simulation</strong> — TP=N 측정도 single GPU 에서 weight 만 shard. TP&gt;8 같은 큰 차수에서 cross-GPU comm 못 측정. 해결: 실 multi-GPU profile 추가 (별도 cluster 비용)</li>
+</ul>
 </div>
 
 <!-- ======== 3-3 ======== -->
@@ -1108,8 +1158,8 @@ bash examples/architecture/co-location/offline/dense_model_basic.sh \
 <tr><th>한계</th><th>영향</th><th>우회</th></tr>
 <tr><td>Disaggregated (PDD/AFD) release guard</td><td>현재 paper의 use case 4 중 2 개 (Heterogeneous GPU, RL rollout) 실행 불가</td><td>main.py 의 release guard 제거 후 fork — 검증 안 된 path 라 자기 책임</td></tr>
 <tr><td>Config 모듈 일부 누락 (config.py, precision_type.py, etc.)</td><td>smoke run 자체 실패 — 본 문서 §4 finding</td><td>NetX-lab 이슈 또는 다음 release 대기</td></tr>
-<tr><td>vLLM tight coupling (~0.10.x API)</td><td>vLLM 0.5 같은 구버전 사용 클러스터에선 profile 호환 안 됨</td><td>벤더-side 작업 — vLLM 버전 통일</td></tr>
-<tr><td>NVIDIA only</td><td>AMD MI300 / Apple Silicon 시뮬 불가</td><td>현재 우회 X — 패치 필요</td></tr>
+<tr><td>vLLM tight coupling (~0.10.x API)</td><td>vLLM 0.5 같은 구버전 사용 클러스터에선 profile 호환 안 됨</td><td>vLLM 버전 통일 OR §3-2 의 version drift 절차 (smoke compare)</td></tr>
+<tr><td>"NVIDIA only" (실제로는 일부)</td><td>AMD MI300 는 <code>rocm-smi</code> 패치 + vLLM ROCm 빌드로 가능. Apple Silicon (MPS) 은 <code>torch.cuda</code> 자체 안 됨 → fundamental</td><td>AMD: tooling 패치 1-2일. Apple: 우회 X</td></tr>
 <tr><td>Multimodal encoder (E in E/P/D) profile sweep 부족</td><td>VLM (Llama-4 Maverick 등) 정확도 ↓</td><td>vision encoder 따로 측정 + analytical 추가</td></tr>
 <tr><td>Profile sweep cost (4-5 GPU-hour per model)</td><td>새 모델 등장 빈도 (월 1-2개) 와 비례 비용</td><td>adaptive sampling / incremental profile 추가 — 현재 미구현</td></tr>
 </table>
