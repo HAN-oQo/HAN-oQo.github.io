@@ -51,19 +51,20 @@
 <p class="sub">작성일: 2026-06-11 · 대상: <a href="https://github.com/NetX-lab/Frontier">NetX-lab/Frontier</a> @ <code>88f8afdc0665</code> · 분량: ~89K Python LoC · paper: <a href="https://arxiv.org/abs/2605.21312">arXiv:2605.21312</a> · 깊이 분석: 5개 시나리오 + 실행 시도 결과 + LLMServingSim 과의 차이</p>
 
 <div class="card toc">
-<strong>목차</strong>
+<strong>목차</strong> (사용자 워크플로 → 핵심 시나리오 순서로 권장 읽기 순)
 <ol>
   <li><a href="#pitch">30초 요약 — LLMServingSim 과 무엇이 다른가</a></li>
   <li><a href="#map">코드 지도 — 14 패키지 LoC 분석</a></li>
-  <li><a href="#scenarios">핵심 시나리오 trace (5개 깊이 분석)</a></li>
+  <li><a href="#userflow">사용자 워크플로 코드 흐름 — CLI 부터 결과까지</a></li>
+  <li><a href="#scenarios">핵심 시나리오 깊이 분석 (Scheduler 원리 / ML 학습 / Execution 예측 / Event loop / Modern runtime)</a></li>
   <li><a href="#run">실행 시도 — install + smoke run</a></li>
-  <li><a href="#cmp">vs LLMServingSim — 직접 비교표</a></li>
-  <li><a href="#open">읽어보면 좋은 docs + 결론</a></li>
-  <li><a href="#usage">어떻게 쓸 것인가 — Use case 매핑 + 운영 가이드 (보충)</a></li>
-  <li><a href="#newmodel">최신 모델 어떻게 적용할 것인가 (보충)</a></li>
-  <li><a href="#limits">한계 + 우회 (보충)</a></li>
-  <li><a href="#userflow">사용자 워크플로 코드 흐름 — CLI 부터 결과까지 (보충)</a></li>
+  <li><a href="#cmp">vs LLMServingSim — 직접 비교 + Profiling/Interpolation 풀어쓰기</a></li>
+  <li><a href="#usage">어떻게 쓸 것인가 — Use case 매핑 + 운영 가이드</a></li>
+  <li><a href="#newmodel">최신 모델 어떻게 적용할 것인가</a></li>
+  <li><a href="#limits">한계 + 우회</a></li>
+  <li><a href="#open">결론 (읽기 순서 추천 / 논문과 코드 차이 / 한 줄 평)</a></li>
 </ol>
+<p style="margin: 8px 0 0; font-size: 0.85em; color: var(--muted);">※ 본문 anchor 순서는 그대로지만, 위 목차의 순서로 읽으면 가장 자연스럽게 (워크플로 먼저 잡고 그 다음 시나리오 깊이 들어감).</p>
 </div>
 
 <h2 id="pitch">1. 30초 요약</h2>
@@ -144,16 +145,761 @@
 </table>
 </div>
 
-<h2 id="scenarios">3. 핵심 시나리오 깊이 분석 (5개)</h2>
+<h2 id="scenarios">3. 핵심 시나리오 깊이 분석</h2>
 <div class="card">
-<p>각 시나리오마다 함수 단위 file:line + 코드 인용 + 약점.</p>
+<p>4 핵심 메커니즘 + 그것들이 어떻게 조립되어 simulation 이 되는지. 단순 코드 인용이 아니라 <strong>알고리즘 / 왜 그렇게 짠 건지 / 다른 선택지와 비교</strong>까지.</p>
 <ul>
-  <li><a href="#sc1">3-1.</a> <strong>Cluster Simulator + Event Loop</strong>: CLI 진입부터 sim 종료까지</li>
-  <li><a href="#sc2">3-2.</a> <strong>Profiling System</strong>: 81 files, 5 op category (attention/linear/moe/collective/cpu) GPU 측정</li>
-  <li><a href="#sc3">3-3.</a> <strong>Execution Time Predictor</strong>: cost-table lookup + sklearn fallback</li>
-  <li><a href="#sc4">3-4.</a> <strong>Scheduler 4-level hierarchy</strong>: Global → Cluster → Replica → ReplicaStage</li>
-  <li><a href="#sc5">3-5.</a> <strong>cc_backend + modern runtime</strong>: 3 comm backend + CUDA Graph + spec dec + prefix cache + MoE + quantization</li>
+  <li><a href="#sc1">3-1.</a> <strong>Scheduler — 구성 + 원리 + vLLM 묘사 메커니즘</strong> (어떻게 vLLM 의 production scheduler 결정을 재현하나)</li>
+  <li><a href="#sc2">3-2.</a> <strong>Profiling 시스템</strong> — 5 op category 측정 + 산출 schema</li>
+  <li><a href="#sc3">3-3.</a> <strong>ML 학습 파이프라인</strong> — 어떤 데이터로 어떻게 sklearn 모델 학습 (BaseTrainer + 3 subclass + GridSearchCV)</li>
+  <li><a href="#sc4">3-4.</a> <strong>Execution time 예측</strong> — CSV → 학습된 모델 → dict cache → batch lookup 전체 chain</li>
+  <li><a href="#sc5">3-5.</a> <strong>Discrete event loop 통합</strong> — predictor + cc_backend + request generator 가 event loop 안에서 어떻게 조립되어 sim 진행</li>
+  <li><a href="#sc6">3-6.</a> <strong>Modern runtime 모델링</strong> — CUDA Graph / Speculative decoding (8 method) / Prefix cache / MoE / Quantization</li>
 </ul>
+</div>
+
+<!-- ======== 3-1 SCHEDULER ======== -->
+<h3 id="sc1">3-1. Scheduler — 구성 + 원리 + vLLM 묘사 메커니즘</h3>
+<div class="card">
+
+<h4>왜 4 level hierarchy 인가 (구조적 의도)</h4>
+<p>Frontier 의 scheduler 는 4 level. 단순 monolithic 시뮬엔 과한데, 왜 이렇게 만들었나:</p>
+<table>
+<tr><th>Level</th><th>책임</th><th>왜 필요</th></tr>
+<tr><td><strong>Global Scheduler</strong><br>(<code>scheduler/global_scheduler/</code>)</td><td>ClusterType (MONOLITHIC / PREFILL / DECODE / DECODE_ATTN / DECODE_FFN) 별 routing</td><td>PDD (prefill-decode) 또는 AFD (attention-FFN) disaggregation 지원. 현재 release co-location 만이라 사실상 no-op pass-through. PDD/AFD release 면 cluster 간 KV transfer + cross-cluster scheduling 필요</td></tr>
+<tr><td><strong>Cluster Scheduler</strong><br>(<code>scheduler/cluster_scheduler/</code>)</td><td>cluster 안 (replica_id, dp_id) 선택 — load balance</td><td>같은 cluster 안에 multi-replica 면 어디로 보낼지 결정. 7+ 정책 (RoundRobin / LOR=Least-Outstanding-Requests / Random / Sticky variants). Sticky 는 prefix caching enabled 시 강제 — 같은 request 가 매번 같은 replica 로 가야 cache hit</td></tr>
+<tr><td><strong>Replica Scheduler</strong><br>(<code>scheduler/replica_scheduler/</code>)</td><td>한 (replica, dp) 안에서 batch 형성 — 가장 중요한 결정</td><td><strong>이게 vLLM 의 scheduler 를 mirror 하는 부분.</strong> 9+ variants (vllm_v1_engine / sj2q_fastserve_lite / sglang_style / orca / lightllm / sarathi / faster_transformer 등) 가 각자 vLLM / SGLang / Orca / 등 production scheduler 의 batching 알고리즘 재현</td></tr>
+<tr><td><strong>ReplicaStage Scheduler</strong><br>(<code>scheduler/replica_stage_scheduler/</code>)</td><td>pipeline parallelism 시 stage 별 batch 순서</td><td>pipeline parallel 에서 한 batch 가 여러 stage 거치는데 어느 stage 에 우선 dispatch. priority heap by <code>(batch.global_id, insertion_counter)</code> 로 deadlock 방지</td></tr>
+</table>
+
+<h4>vLLM 의 scheduler 를 어떻게 "묘사" 할 수 있나 — 핵심 메커니즘</h4>
+<p>이게 사용자가 자주 묻는 질문. Frontier 의 <code>vllm_v1_engine_replica_scheduler.py</code> (4421 LoC!) 가 정확히 어떻게 vLLM 의 결정을 재현하는가:</p>
+
+<h5>① vLLM 의 scheduler 가 결정하는 것</h5>
+<p>실 vLLM 의 v1 scheduler 는 매 iteration 마다 다음 결정을 내림:</p>
+<ol>
+  <li><strong>Token budget</strong>: 이번 batch 의 총 token 수가 <code>max_num_batched_tokens</code> (e.g. 8192) 넘으면 더 admit 안 함</li>
+  <li><strong>Batch size cap</strong>: 동시 active request 수가 <code>max_num_seqs</code> (e.g. 256) 넘으면 더 admit 안 함</li>
+  <li><strong>KV cache watermark</strong>: 새 request 가 필요한 KV block 수가 available block 아래로 떨어지면 admit 안 함 (block_manager 가 추적)</li>
+  <li><strong>Chunked prefill</strong>: 긴 prompt 를 chunk 로 나눠서 decode 와 interleave (chunk_size = max(prefill, decode) 균등화)</li>
+  <li><strong>Preemption</strong>: KV 부족 시 lowest priority decode request swap-out (recompute or swap-to-CPU)</li>
+  <li><strong>Prefix cache</strong>: enable 시 이미 캐시된 block 은 num_new_tokens 에서 빼서 admission 계산</li>
+</ol>
+
+<h5>② Frontier 가 어떻게 같은 결정 흉내내나</h5>
+<p>실 vLLM 의 GPU forward 와 KV cache 메모리 관리 없이도 같은 결정을 내릴 수 있는 핵심: <strong>vLLM 의 결정은 GPU 의 실 시간이 아니라 "block 수 / token 수" 같은 가상 자원만 의존</strong>. Frontier 는 그 가상 자원 만 tracking:</p>
+<pre><code># frontier/scheduler/replica_scheduler/vllm_replica_scheduler.py:68-131
+# vLLM 의 continuous batching 의 핵심 admission loop 가 그대로:
+
+def _get_next_batch(self, is_micro_batch=False) -&gt; Batch:
+    requests = []
+    num_tokens = []
+    num_batch_tokens = 0
+
+    while self._request_queue:
+        request = self._request_queue[0]
+        next_num_tokens = self._get_request_next_num_tokens(request)
+        #   → prefill 중이면 남은 prefill token, decode 면 1 (spec dec 면 1+draft)
+
+        if not self._can_allocate_request(request):       ← KV watermark 체크
+            break
+        new_num_tokens = num_tokens + [next_num_tokens]
+        new_num_batch_tokens = len(new_num_tokens) * max(new_num_tokens)
+        if new_num_batch_tokens &gt; self._config.max_tokens_in_batch:  ← token budget
+            break
+        if len(self._allocation_map) == self._config.batch_size_cap: ← batch cap
+            break
+
+        request = self._request_queue.pop(0)
+        self._allocate_request(request)
+        requests.append(request)
+        num_tokens.append(next_num_tokens)
+        num_batch_tokens += next_num_tokens
+
+    if requests:
+        return self._create_batch(requests, num_tokens)
+
+    # Preemption: KV 부족하면 preempted_requests pop 해서 retry
+    while self._preempted_requests:
+        ...
+        while not self._can_allocate_request(request):
+            if self._preempted_requests:
+                victim = self._preempted_requests.pop(-1)
+                victim.restart()
+                self.free(victim.id)
+                self._request_queue = [victim] + self._request_queue
+            ...</code></pre>
+
+<p>핵심 idea: <strong>같은 admission rule, 같은 block accounting, 같은 preemption logic</strong>. 단 KV block 자체는 메모리에 없음 — <code>num_blocks</code> 정수만 추적. 그래서 vLLM 이 어떤 request 를 admit 하고 어떤 걸 preempt 하는지 sequence 가 같음.</p>
+
+<h5>③ <code>vllm_v1_engine_replica_scheduler.py</code> (4421 LoC) 가 큰 이유</h5>
+<p>vllm v1 의 새 기능들 (Multi-Token Prediction, prefix cache via KVCacheManager, monolithic PP 의 admission delay 등) 까지 재현하다 보니 길어짐. 주요 영역:</p>
+<table>
+<tr><th>책임</th><th>file:line</th></tr>
+<tr><td>Prefix cache admission (vLLM 의 KVCacheManager 호출)</td><td>1096-1180</td></tr>
+<tr><td>Target-embedded MTP (Qwen3/DeepSeek MTP) 처리</td><td>278-707</td></tr>
+<tr><td>Monolithic PP 의 admission delay (waiting buffer)</td><td>517-590</td></tr>
+<tr><td>MTP request 의 acceptance ratio 추적</td><td>642-700</td></tr>
+<tr><td>CUDA Graph decode batch metadata 생성</td><td>1191-1310</td></tr>
+<tr><td><code>_create_batch</code> (실제 batch 만들기)</td><td>266-275</td></tr>
+</table>
+
+<h5>④ 한계 — vLLM 결정 100% 재현 못 함</h5>
+<table>
+<tr><th>vLLM 의 실 동작</th><th>Frontier 의 재현</th></tr>
+<tr><td>GPU forward 실 시간 (FlashInfer kernel 의 burst 변동, GPU thermal throttle 등)</td><td>predict_stage_execution_time() 의 deterministic 예측값 — burst noise 없음</td></tr>
+<tr><td>실 KV cache 메모리 fragmentation</td><td>num_blocks 정수만 추적 — fragmentation 없음</td></tr>
+<tr><td>swap-to-CPU 시 PCIe 시간</td><td>preemption 자체는 모델링, swap 비용은 단순 추정</td></tr>
+<tr><td>vLLM scheduler 의 Python overhead</td><td>cpu_overhead.csv 로 추정 (별도 sweep)</td></tr>
+<tr><td>실 NCCL allreduce 의 jitter</td><td>cc_backend 의 deterministic 예측</td></tr>
+</table>
+<p>결과적으로 <strong>scheduling decision sequence 는 거의 일치</strong>, <strong>실 시간은 ±5-15% 오차</strong>. operator 가 calibration scale 로 조정.</p>
+
+<h4>9+ replica scheduler variants 의 알고리즘 차이</h4>
+<table>
+<tr><th>Variant</th><th>출처</th><th>핵심 알고리즘</th></tr>
+<tr><td><code>vllm_v1_engine_replica_scheduler</code></td><td>vLLM v1</td><td>위 4 condition + KVCacheManager 통합 prefix cache + MTP 지원. 가장 큰 (4421 LoC)</td></tr>
+<tr><td><code>vllm_replica_scheduler</code></td><td>vLLM legacy</td><td>v1 보다 단순 — KVCacheManager 분리 안 됨, MTP 없음</td></tr>
+<tr><td><code>sj2q_fastserve_lite_replica_scheduler</code></td><td>FastServe-lite + 자체 변형</td><td>2-queue 정책. QH (high-priority: short prompts &lt; threshold) vs QL (low: long prompts &gt; threshold). QH 가 충분히 token 처리되면 QL 을 QH 로 promote (boost credit)</td></tr>
+<tr><td><code>sj2q_bounded_carryover_replica_scheduler</code></td><td>SJ2Q variant</td><td>QH → QL transition 에 carryover 제한 추가</td></tr>
+<tr><td><code>sglang_style_replica_scheduler</code></td><td>SGLang</td><td>Constraint graph batching — request 간 dependency (RadixAttention) 고려해서 batch 형성</td></tr>
+<tr><td><code>orca_replica_scheduler</code></td><td>Orca</td><td>Batch-level padding + packing — 같은 길이 request 묶어서 padding 최소화</td></tr>
+<tr><td><code>lightllm_replica_scheduler</code></td><td>LightLLM</td><td>Fixed-size batches — token budget 대신 고정 batch size</td></tr>
+<tr><td><code>sarathi_replica_scheduler</code></td><td>Sarathi-Serve</td><td>원래 chunked prefill 정책 — 모든 prefill 을 균등 chunk 로</td></tr>
+<tr><td><code>faster_transformer_replica_scheduler</code></td><td>FasterTransformer</td><td>Static batching — 고정 시점에 batch flush</td></tr>
+</table>
+<p>모두 <code>BaseReplicaScheduler</code> 상속해서 <code>_get_next_batch()</code> 만 override. <code>BaseReplicaScheduler</code> 는 block accounting, preemption, KV cache 추상화 같은 공통 logic 제공.</p>
+</div>
+
+<!-- ======== 3-2 PROFILING (기존 보존, 약간 보강) ======== -->
+<h3 id="sc2">3-2. Profiling 시스템 — 81 files, 5 op category</h3>
+<div class="card">
+
+<h4>전체 파이프라인</h4>
+<pre><code>Real GPU (single, TP 시뮬)
+    ↓
+Profiling Module (op 별 grid sweep)
+    ↓
+CSV (operation × shape × time_stats)
+    ↓
+Training Module (sklearn: RandomForest / Polynomial) ← §3-3 에서 자세히
+    ↓
+Execution Time Predictor (cost-table lookup at sim time) ← §3-4 에서 자세히
+    ↓
+Discrete-Event Simulator ← §3-5 에서 자세히</code></pre>
+
+<h4>핵심 설계 원칙</h4>
+<ul>
+  <li><strong>Single-GPU TP simulation</strong> — TP=N 측정도 GPU 1대로. weight 를 N 등분해서 각 shard 계산 → distributed setup 불필요</li>
+  <li><strong>Operation-based organization</strong> — 토폴로지(TP/PP/EP) 아닌 model component (attention/linear/moe/collective) 별</li>
+  <li><strong>Pluggable backends</strong> — attention: FlashInfer + NoOp / MoE: vLLM fused kernel</li>
+  <li><strong>Measurement duality</strong>: <code>record_function</code> (KERNEL_ONLY) vs <code>cuda_event</code> (CUDA_EVENT) — 어떤 측정법 쓸지 사용자가 매번 명시</li>
+</ul>
+
+<h4>5 op category sweep</h4>
+<table>
+<tr><th>Script</th><th>측정 op</th><th>주요 sweep 변수</th></tr>
+<tr><td><code>linear_op/main.py</code></td><td>MLP up/down/act, layernorm, attention projections, residual add</td><td>num_tokens [1, 2, ..., 128K] × TP</td></tr>
+<tr><td><code>attention/main.py</code></td><td>chunked prefill attention + decode attention + KV cache save</td><td>(prefill_chunk, kv_cache_size, batch_size, TP) — 4 차원</td></tr>
+<tr><td><code>moe/main.py</code></td><td>gating, shuffling, grouped_gemm</td><td>num_tokens × num_experts_per_device × EP × router_topk</td></tr>
+<tr><td><code>collectives/main.py</code></td><td>Ray-distributed AllReduce / SendRecv</td><td>collective_size [1K, 5K, ..., 512M] × world_size</td></tr>
+<tr><td><code>cpu_overhead/main.py</code></td><td>scheduler, sampler, prep_inputs CPU 시간</td><td>batch_size × num_prefill × num_decode × scheduling_mode</td></tr>
+</table>
+
+<h4>측정 mechanism — 한 GPTModel.forward 안에서 모든 op 동시 측정</h4>
+<p>(자세한 코드 — 사용자 워크플로 §10-0-b 의 mechanism 다이어그램 참조).</p>
+<p>핵심: <strong>각 op 가 자기 안에 <code>CudaTimer</code> 박아둠</strong>. 한 forward 호출 = 모든 op timer 순차 발화 = 한 번에 모든 op latency 측정. ACTIVE_STEPS=20 회 반복으로 통계 (min/max/mean/median/std).</p>
+
+<h4>CSV 디렉토리 규약</h4>
+<pre><code>data/profiling/
+├── compute/{device}/{model_name}/
+│   ├── attention.csv               (cuda_event)
+│   ├── attention_kernel_only.csv   (record_function)
+│   ├── linear_op.csv / _kernel_only.csv
+│   └── moe.csv / _kernel_only.csv
+└── network/{device}/
+    ├── all_reduce.csv
+    └── send_recv.csv</code></pre>
+<p>측정법별로 CSV 분리. 그래서 같은 모델/HW 에 대해 eager 용 / CUDA graph 용 CSV 가 따로. predictor 가 batch 의 CUDA graph 상태에 따라 어느 CSV 데이터로 학습된 모델 쓸지 선택.</p>
+
+<h4>설계 약점 (Profiling) — 어떤 게 진짜 본질적이고, 어떤 건 패치 가능한지</h4>
+<p>(자세한 분석 — §6 vs LLMServingSim 의 §5-2 / §5-3 도 함께 참조).</p>
+
+<h5>1. vLLM 의존 — 본질적 (코드 수준 결합)</h5>
+<ul>
+  <li>Attention 측정: <code>vllm.v1.attention.backends.utils.get_kv_cache_layout</code> 호출 — FlashInfer backend 의 KV cache 레이아웃 의존</li>
+  <li>MoE 측정: <code>vllm.model_executor.layers.fused_moe.fused_moe_kernel</code> 직접 사용</li>
+  <li>CPU overhead: vLLM scheduler/sampler 실제 호출 (또는 vLLM trace replay)</li>
+</ul>
+<p>대체 inference engine (TensorRT-LLM, SGLang, llama.cpp) 측정하려면 그 엔진의 op 들을 따로 instantiate 하는 새 profiling script 작성 필요.</p>
+
+<h5>2. "NVIDIA only" — 본질적이 아님. tooling 패치 1-2일</h5>
+<table>
+<tr><th>현재 코드</th><th>실제 AMD 상황</th><th>해결</th></tr>
+<tr><td><code>torch.cuda.Event</code></td><td>PyTorch ROCm 빌드에서 <strong>그대로 작동</strong> (HIP translate)</td><td>없음 — 이미 동작</td></tr>
+<tr><td><code>subprocess.run(["nvidia-smi", ...])</code></td><td>없음 — 대신 <code>rocm-smi</code> 필요</td><td>분기 추가 ~30분</td></tr>
+<tr><td>FlashInfer (CUDA 전용)</td><td>NO_OP backend 사용 (Frontier 선택지)</td><td>config 변경</td></tr>
+<tr><td>vLLM fused MoE</td><td>vllm-rocm 빌드의 일부 지원 + fallback</td><td>vllm-rocm 사용</td></tr>
+</table>
+<p>Apple Silicon (MPS) 만 fundamental block — <code>torch.cuda</code> 자체 안 됨.</p>
+
+<h5>3-5. Sweep cost / Version drift / Load imbalance / Single-GPU TP fidelity</h5>
+<p>(자세한 분석은 §9 한계 표 참조.)</p>
+</div>
+
+<!-- ======== 3-3 TRAINING ======== -->
+<h3 id="sc3">3-3. ML 학습 파이프라인 — 어떤 데이터로 어떻게 학습하나</h3>
+<div class="card">
+
+<h4>전체 구조</h4>
+<p>Frontier 의 ML 학습은 <strong>simulator 와 분리된 별도 CLI 파이프라인</strong>. 한 번 학습 후 pickle 캐시 → simulator 가 그 캐시 로드.</p>
+<div class="diagram">  사용자: python -m frontier.training &lt;structure&gt; ...
+       ↓
+  frontier/training/cli.py:637-661 (argparse → 3 subcommand)
+       ├─ "moe"        → train_moe()    → MoETrainer(...).train()
+       ├─ "linear_op"  → train_linear_op() → LinearOpTrainer(...).train()
+       └─ "attention"  → train_attention() → AttentionTrainer(...).train()
+       ↓
+  각 Trainer 는 BaseTrainer (base_trainer.py) 상속
+       │
+       ├─ _get_model_names()          ← op 별 학습할 모델 이름 리스트
+       ├─ _get_feature_cols(name)     ← 어떤 column 을 feature 로
+       ├─ _get_target_col(name)       ← 어떤 column 을 target 으로
+       ├─ _get_training_df_for_model(name) ← profile CSV 에서 어떤 row 만 추려서 학습 데이터로
+       └─ _train_single_model(name, df, features, target)  ← 실제 GridSearchCV
+       ↓
+  Trained model → pickle.dump → {output_dir}/{model_name}_{hash}.pkl
+       ↓
+  Simulator init 시 ExecutionTimePredictionModelManager 가 같은 hash 로 load</code></pre></div>
+
+<h4>per-op-category 학습 디테일</h4>
+
+<h5>① Linear Op (MLP / LayerNorm / Projections)</h5>
+<p class="ref">파일: <code>frontier/training/linear_op_trainer.py</code></p>
+<table>
+<tr><th>학습 모델</th><th>Features</th><th>Target</th><th>Data Filter</th></tr>
+<tr><td><code>mlp_up_proj</code>, <code>mlp_down_proj</code>, <code>mlp_act</code></td><td><code>[num_tokens]</code></td><td><code>time_stats.{op}.median</code></td><td><code>num_tensor_parallel_workers == TP</code></td></tr>
+<tr><td><code>input_layernorm</code>, <code>post_attention_layernorm</code></td><td><code>[num_tokens]</code></td><td>同上</td><td>TP=1 (replicated)</td></tr>
+<tr><td><code>attn_pre_proj</code>, <code>attn_post_proj</code>, <code>attn_rope</code></td><td><code>[num_tokens]</code></td><td>同上</td><td>effective_attention_TP (KV-head 고려)</td></tr>
+<tr><td><code>emb</code>, <code>lm_head_linear</code>, <code>add</code></td><td><code>[num_tokens]</code></td><td>同上</td><td>TP=1 또는 metadata 따라</td></tr>
+</table>
+
+<h5>② Attention (가장 복잡 — feature 12개+)</h5>
+<p class="ref">파일: <code>frontier/training/attention_trainer.py</code></p>
+<table>
+<tr><th>모델</th><th>Features</th></tr>
+<tr><td><code>attn_kv_cache_save</code></td><td><code>[num_tokens]</code></td></tr>
+<tr><td><code>attn_prefill</code></td><td><code>[kv_cache_size, prefill_chunk_size_squared]</code></td></tr>
+<tr><td><code>attn_decode</code></td><td><code>[batch_size, kv_cache_size]</code></td></tr>
+<tr><td><code>attn_prefill_mixed</code> (mixed batch)</td><td><code>[batch_size, kv_cache_size, total_tokens, avg_seq_len, min_seq_len, max_seq_len, total_tokens_squared, seq_len_variance, seq_len_cv, seq_len_range, batch_variance_interaction, batch_cv_interaction]</code> — 12 feature</td></tr>
+<tr><td><code>attn_decode_in_mixed</code></td><td><code>[decode_batch_size, decode_avg_kv_cache_size, num_prefill_seqs, total_prefill_tokens, total_batch_size, batch_composition_ratio, total_tokens]</code> — 7 feature</td></tr>
+</table>
+<p><strong>Derived features 추가</strong> (lines 218-345): <code>num_tokens = max(prefill_chunk_size, batch_size)</code>, <code>prefill_chunk_size_squared</code>, <code>seq_len_range = max_seq_len - min_seq_len</code>, <code>batch_variance_interaction = batch_size * seq_len_variance</code> 등 비선형 interaction 명시적으로 feature 화.</p>
+
+<h5>③ MoE (load imbalance adaptive feature)</h5>
+<p class="ref">파일: <code>frontier/training/moe_trainer.py:213-251, 321-344</code></p>
+<pre><code># 자동 detection: load imbalance 14 feature 가 CSV 에 있나?
+LOAD_IMBALANCE_FEATURES = [
+    "total_routed_tokens", "num_experts_per_device", "hidden_dim",
+    "expert_hidden_dim", "router_topk", "model_expansion_ratio",
+    "tokens_per_expert_avg", "tokens_to_experts_ratio",
+    "expert_utilization", "min_load_ratio", "load_imbalance_cv",
+    "max_load_ratio", "load_entropy", "load_gini_coefficient"
+]
+
+if FULL set present in CSV:
+    moe_grouped_gemm uses ALL 14 features  ← enhanced mode
+    moe_gating/shuffling/etc use [num_tokens]
+elif NONE present:
+    all use [num_tokens]                    ← legacy fallback
+elif PARTIAL present:
+    HARD ERROR ("dataset inconsistency")</code></pre>
+<p>의도: 새 dataset 은 full feature 로 정확한 grouped_gemm 모델, 구 dataset 은 backward compat. 부분 dataset 은 silent fallback 위험해서 명시 error.</p>
+
+<h4>sklearn 모델 + GridSearchCV 디테일</h4>
+<p class="ref">파일: <code>frontier/training/base_trainer.py:236-260, 390-443</code></p>
+
+<h5>두 predictor 종류</h5>
+<pre><code># RandomForestRegressor (default, recommended)
+grid = {
+    "n_estimators":      [250, 500, 750],    # 3 값
+    "max_depth":         [8, 16, 32],         # 3 값
+    "min_samples_split": [2, 5, 10],          # 3 값
+}  # 총 27 조합
+
+# PolynomialRegression (alternative)
+grid = {
+    "polynomialfeatures__degree":            [1, 2, 3, 4, 5],
+    "polynomialfeatures__include_bias":      [True, False],
+    "polynomialfeatures__interaction_only":  [True, False],
+    "linearregression__fit_intercept":       [True, False],
+}  # 총 40 조합</code></pre>
+
+<h5>왜 RandomForest 가 default 인가</h5>
+<p>Op latency 의 비선형 특성 (kernel launch 가 small token 에서 dominate, 그 다음 compute, 그 다음 memory bandwidth) 잡기 좋음. Tree 가 region-별 다른 slope 학습 가능. Polynomial 은 smooth curve 필요할 때 (e.g. attention 의 quadratic scaling) 별도 옵션.</p>
+
+<h5>왜 MAPE scorer 인가</h5>
+<pre><code># base_trainer.py:263-279
+def mean_absolute_percentage_error(y_true, y_pred):
+    zero_true = y_true == 0
+    non_zero = ~zero_true
+    error[non_zero] = |y_true - y_pred| / y_true * 100
+    error[zero_true] = 0 if y_pred==0 else 100
+    return mean(error)
+
+# scorer = make_scorer(mean_absolute_percentage_error, greater_is_better=False)</code></pre>
+<p>Latency 의 multiplicative error 잘 측정. 5% 오차는 실 시간이 100us 든 10ms 든 비슷한 의미. MSE 면 큰 값 (long context) 이 학습 dominate.</p>
+
+<h5>Cross-validation</h5>
+<ul>
+  <li>5-fold CV default (configurable)</li>
+  <li>Adaptive: <code>k = min(k_fold_cv_splits, len(df))</code> — small dataset 도 fallback 안 함</li>
+  <li>No stratification (time series 라 의미 없음)</li>
+</ul>
+
+<h4>모델 캐싱 + invalidation</h4>
+<p class="ref">파일: <code>frontier/training/base_trainer.py:281-381</code></p>
+<pre><code># Hash 계산
+hash_input = (
+    sorted_hash_relevant_config  # Hyperparameter grid + prediction range
+    + model_name
+    + MD5(df.to_json())          # 입력 CSV 의 내용 해시
+    + profiling_precision        # FP16 / BF16 / FP32
+    + measurement_type           # CUDA_EVENT / KERNEL_ONLY
+)
+hash_value = MD5(hash_input)[0:8]
+
+# Cache 경로
+cache_file = f"{output_dir}/{model_name}_{model_hash}.pkl"
+
+# Cache lookup
+with InterProcessReaderWriterLock(lock_file):
+    if cache_file exists:
+        return pickle.load(cache_file)  # Cache hit
+    else:
+        model = train_new_model()        # GridSearchCV.fit()
+        pickle.dump(model, cache_file)
+        return model</code></pre>
+<p><strong>Invalidation trigger</strong>: (1) CSV 내용 변경 / (2) hyperparam grid 변경 / (3) precision 변경 / (4) measurement type 변경.</p>
+
+<h4>설계 약점 (Training)</h4>
+<table>
+<tr><th>#</th><th>약점</th></tr>
+<tr><td>1</td><td>Hyperparameter grid 좁음 — RandomForest 27 조합, Polynomial 40 조합. 더 큰 sensitivity 분석 안 함</td></tr>
+<tr><td>2</td><td>CV에 stratification 없음 — time-series 같은 데이터인데 random split. fold 간 distribution 다를 수 있음</td></tr>
+<tr><td>3</td><td>MAPE 가 near-zero prediction 에서 % 폭증 — outlier 영향 큼 (특히 작은 op)</td></tr>
+<tr><td>4</td><td>Cache invalidation 이 <code>df.to_json()</code> 해시 — 큰 CSV 면 hash 계산 자체 느림 + 정렬 차이 같은 trivial change 도 cache miss</td></tr>
+<tr><td>5</td><td>Linear ops 의 feature 가 <code>[num_tokens]</code> 단일 — hidden_dim, TP 같은 변수가 implicit (CSV 필터로 처리). Multi-model serving 시 모델별 따로 학습 필요</td></tr>
+<tr><td>6</td><td>Outlier 명시적 제거 없음 — RandomForest 의 robustness 에 의존. GPU thermal throttle / kernel preemption 같은 noise spike 가 학습 data 에 포함</td></tr>
+<tr><td>7</td><td>No held-out test set — 모든 data 가 CV 에 들어감. MAPE 가 optimistic biased</td></tr>
+<tr><td>8</td><td>MAPE &gt; threshold 시 warning 없음 — 학습 결과 silently bad 일 수 있음</td></tr>
+</table>
+</div>
+
+<!-- ======== 3-4 PREDICTION ======== -->
+<h3 id="sc4">3-4. Execution time 예측 — CSV + ML + cache 전체 chain</h3>
+<div class="card">
+
+<h4>End-to-end 데이터 흐름</h4>
+<div class="diagram">  Profile CSV (e.g. linear_op.csv, 500 rows)
+       ↓
+  ExecutionTimePredictionModelManager (simulator init 시점)
+       ├─ pd.read_csv(linear_op.csv)
+       ├─ FOR cluster_type × measurement_type × op:
+       │     df = _get_training_df_for_model(...)
+       │     ├─ Cache lookup (hash 매칭)
+       │     │     hit  → pickle.load → BaseEstimator
+       │     │     miss → GridSearchCV.fit(df[features], df[target])
+       │     │            → best_estimator_ → pickle.dump
+       │     └─ models["eager:mlp_up_proj"] = best_estimator
+       │
+       └─ Trained model 들 SklearnExecutionTimePredictor 로 넘김
+       ↓
+  SklearnExecutionTimePredictor.__init__():
+       ├─ _activate_measurement_type(MeasurementType.CUDA_EVENT)
+       └─ _predict_from_models()  ← 모든 정수 token count 미리 계산
+            for op in models:
+                for n in 1..max_tokens:
+                    self._predictions_eager[op][(n,)] = model.predict([[n]])[0]
+            for op in models:
+                for n in 1..max_tokens:
+                    self._predictions_kernel_only[op][(n,)] = model.predict([[n]])[0]
+       ↓
+  Simulator.run() 의 event loop:
+       매 REPLICA_STAGE_SCHEDULE event 마다 predictor 호출:
+       ↓
+  predict_stage_execution_time(batch, stage_id, cluster_type, num_layers):
+       ├─ measurement_type = _select_measurement_type_for_batch(batch)
+       │     (CUDA_EVENT vs KERNEL_ONLY 선택)
+       ├─ _activate_measurement_type(measurement_type)
+       │     → self._predictions = self._predictions_eager 또는 _kernel_only
+       ├─ effective_tokens = batch.get_effective_total_tokens_rounded(cluster_type)
+       │     (3-layer padding: stage / DP / CUDA Graph capture size)
+       │
+       ├─ FOR op in ["mlp_up_proj", "mlp_down_proj", "attn_rope", ...]:
+       │     key = (effective_tokens,)  # 단일 feature op
+       │     # 또는 (batch_size, kv_cache_size) for attention
+       │     if key in self._predictions[op]:
+       │         raw_time = self._predictions[op][key]    ← O(1) exact lookup
+       │     else:
+       │         raw_time = self._models[op].predict([[effective_tokens]])[0]
+       │         ← fallback regression (드물게 발생)
+       │     calibration_scale = self._get_calibration_scale("_mlp_up_proj_calibration_scale", ...)
+       │     time = raw_time * calibration_scale
+       │
+       ├─ comm_time = cc_backend.predict_allreduce(...)
+       │     → analytical / astra_sim_analytical / collective_sim / vidur ML
+       │
+       └─ return ExecutionTime(
+              attention_prefill_execution_time = ...,
+              mlp_layer_up_proj_execution_time = time,
+              tensor_parallel_communication_time = comm_time,
+              ...
+          )
+       ↓
+  Event loop 가 그 ExecutionTime 으로 BatchStageEndEvent 생성:
+       event_time = current_time + execution_time.total_time
+       heapq.heappush(event_queue, (event_time, BatchStageEndEvent(...)))</div>
+
+<h4>핵심 함수 file:line</h4>
+<table>
+<tr><th>단계</th><th>file:line</th><th>역할</th></tr>
+<tr><td>CSV 로드</td><td><code>sklearn_execution_time_predictor.py</code> _load_compute_df</td><td><code>pd.read_csv</code> + 모델 dimension 으로 row 필터</td></tr>
+<tr><td>학습 dispatch</td><td><code>shared_prediction_model_manager.py</code> _train_all_required_models</td><td>cluster × measurement type 조합마다 trainer 호출</td></tr>
+<tr><td>실제 학습</td><td>base_trainer.py:_train_single_model:390-443</td><td>GridSearchCV.fit() + pickle 캐시</td></tr>
+<tr><td>예측 cache 빌드</td><td>sklearn_execution_time_predictor.py:_predict_from_models</td><td>모든 정수 token count 미리 predict</td></tr>
+<tr><td>Sim 시 lookup</td><td>predict_stage_execution_time → _get_mlp_layer_up_proj_execution_time 등</td><td>dict access + calibration</td></tr>
+<tr><td>Exact lookup fallback</td><td><code>_build_exact_feature_lookup</code> at 45-90</td><td>profile row 의 exact feature → exact mean 매핑 (regression 전 빠른 path)</td></tr>
+</table>
+
+<h4>왜 모든 정수 token count 미리 predict 하나</h4>
+<p>두 단계 lookup 비교:</p>
+<table>
+<tr><th>방식</th><th>각 sim event 당 비용</th><th>메모리</th></tr>
+<tr><td>매 event 마다 <code>model.predict([[n]])</code> 호출</td><td>~100μs (sklearn overhead + scikit pipeline)</td><td>0</td></tr>
+<tr><td>Pre-compute dict + lookup</td><td>~100ns (Python dict access)</td><td>~10 MB (32K × op 갯수)</td></tr>
+</table>
+<p>1000× 빠른 lookup. Sim 한 번에 100만 event 가능하니 누적 시간 차이 큼.</p>
+
+<h4>Exact lookup vs regression — _build_exact_feature_lookup 의 역할</h4>
+<p class="ref">파일: <code>sklearn_execution_time_predictor.py:83-90</code></p>
+<pre><code>def _build_exact_feature_lookup(df, feature_cols, target_col):
+    """Build exact profiling-row lookups before falling back to regression."""
+    if df.empty: return {}
+    grouped = df.groupby(feature_cols, dropna=False)[target_col].mean()
+    lookup = {}
+    for key, value in grouped.items():
+        key_tuple = key if isinstance(key, tuple) else (key,)
+        lookup[tuple(float(item) for item in key_tuple)] = float(value)
+    return lookup</code></pre>
+<p>3-tier lookup priority (sim 시):</p>
+<ol>
+  <li><strong>Exact profile row 매칭</strong> — profile CSV 에 정확히 해당 feature 조합이 있으면 raw 측정값 사용 (regression 거치지 않음)</li>
+  <li><strong>Pre-computed integer cache</strong> — 미리 model.predict 한 dict 에 있으면 그 값</li>
+  <li><strong>Live regression</strong> — 둘 다 miss 면 <code>model.predict([[features]])</code> 실시간 호출</li>
+</ol>
+<p>1번이 가장 정확 (학습 거친 smooth curve 가 아닌 raw 측정값). 2번은 학습 결과의 smooth curve, 3번은 그 curve 의 즉석 계산.</p>
+
+<h4>Measurement type 동적 선택</h4>
+<p class="ref">파일: <code>sklearn_execution_time_predictor.py:771-826</code></p>
+<pre><code>def _select_measurement_type_for_batch(self, batch: Batch) -&gt; MeasurementType:
+    if self._cluster_type in (ClusterType.PREFILL,):
+        return MeasurementType.CUDA_EVENT  # prefill 은 항상 eager
+    if batch.num_decode_tokens &gt; 0:
+        runtime_mode = self._get_decode_cuda_graph_runtime_mode(batch)
+        if runtime_mode != "NONE":
+            return MeasurementType.KERNEL_ONLY  # CUDA graph captured profile 사용
+    return MeasurementType.CUDA_EVENT</code></pre>
+<p>같은 op 라도 batch 가 CUDA graph 영역 (decode, capture size 맞음) 이면 KERNEL_ONLY profile 데이터로 학습된 모델 사용, 아니면 CUDA_EVENT. 결과적으로 같은 sim 안에서 batch 마다 다른 dataset 으로 학습된 모델 cherry-pick.</p>
+
+<h4>3-tier feature lookup vs 2-tier — interpolation</h4>
+<p>(자세한 비교는 §6-3 vs LLMServingSim 의 interpolation 차이 참조.)</p>
+
+<h4>cc_backend 호출 흐름</h4>
+<p>execution_time_predictor 가 compute 만 처리, communication 은 cc_backend 위임:</p>
+<pre><code>def predict_allreduce_time(self, data_size_bytes, num_devices, cluster_type, comm_domain):
+    if self._cc_backend is not None:
+        return self._cc_backend.predict_allreduce(
+            data_size_bytes, num_devices, cluster_type, comm_domain
+        )
+    elif self._enable_dummy_mode:
+        return self._dummy_execution_time
+    else:
+        raise RuntimeError("CC Backend required")</code></pre>
+
+<h5>4 cc_backend 비교</h5>
+<table>
+<tr><th>Backend</th><th>LoC</th><th>알고리즘</th></tr>
+<tr><td><code>analytical_cc_backend</code></td><td>374</td><td>Ring formula: <code>time = latency + effective_data / bandwidth</code>. allreduce 의 effective_data = <code>2(n-1)/n × data</code>. 가장 빠름. config: bandwidth_gbps, latency_us</td></tr>
+<tr><td><code>astra_sim_analytical_cc_backend</code></td><td>749</td><td>Ring formula + domain-aware: TP/CP/DP/EP 별 다른 bandwidth/latency. Topology metadata (placement_order="TP,CP,DP,EP") 반영</td></tr>
+<tr><td><code>collective_sim_cc_backend</code></td><td>846</td><td>외부 <code>collective_sim_core.predict_collective_time()</code> 호출. Topology JSON (fattree/ring/custom) + network (linkspeed/mtu/q/cwnd) + intra_server (nvlink) + collective spec. <strong>가장 realistic</strong> — discrete-event 네트워크 시뮬</td></tr>
+<tr><td><code>vidur_cc_backend</code></td><td>1113</td><td>ML 기반 (sklearn RandomForest on profile CSV). all_reduce/send_recv 측정 데이터로 학습. config: cache_dir, pickle 캐시</td></tr>
+</table>
+
+<h5>Collective-Sim 의 외부 통합 메커니즘</h5>
+<p class="ref">파일: <code>collective_sim_cc_backend.py:100-118</code></p>
+<pre><code>def _load_collective_sim_predictor(self):
+    sys.path.insert(0, str(self._python_root))
+    module = importlib.import_module("collective_sim_core")
+    return getattr(module, "predict_collective_time")
+
+# Lazy 로딩 — 첫 predict 호출 시까지 import X
+# 호출:
+result = predict_collective_time(scenario={...}, repo_root=...)
+# scenario 안에 cluster topology + parallelism + collective spec 다 박음
+# return: {"predicted_time_ms": float}</code></pre>
+
+<h5>4 backend 언제 어느 거 쓰나</h5>
+<table>
+<tr><th>Backend</th><th>속도</th><th>정확도</th><th>요구사항</th><th>적합</th></tr>
+<tr><td>analytical</td><td>⚡⚡⚡</td><td>~60%</td><td>없음</td><td>smoke test, 빠른 prototype</td></tr>
+<tr><td>astra_sim_analytical</td><td>⚡⚡</td><td>~65%</td><td>parallelism config</td><td>coarse multi-scale 연구</td></tr>
+<tr><td>collective_sim</td><td>⚡</td><td>~85%</td><td>topology + collective-sim package</td><td>production-fidelity</td></tr>
+<tr><td>vidur (ML)</td><td>⚡⚡</td><td>~90%</td><td>cluster 별 profile CSV</td><td>특정 cluster 정확도</td></tr>
+</table>
+</div>
+
+<!-- ======== 3-5 EVENT LOOP INTEGRATION ======== -->
+<h3 id="sc5">3-5. Discrete event loop 통합 — 모든 게 어떻게 조립되어 sim 진행</h3>
+<div class="card">
+
+<h4>전체 그림 — Simulator.run() 안에서</h4>
+<div class="diagram">  Simulator.__init__()  (한 번)
+       ├─ cluster (Cluster + Replica)
+       ├─ MetricsStore
+       ├─ RequestGenerator              ← §3-5 request_generator
+       ├─ BaseGlobalScheduler           ← §3-1 scheduler hierarchy
+       │   └─ ClusterScheduler × N
+       │       └─ ReplicaScheduler × M   (vllm_v1_engine 등)
+       │           └─ ReplicaStageScheduler × P (pipeline parallel)
+       ├─ ExecutionTimePredictor        ← §3-4
+       │   ├─ Profile CSV load + 학습 dispatch
+       │   ├─ ExecutionTimePredictionModelManager (sklearn 학습)
+       │   └─ Pre-computed dict cache
+       └─ cc_backend                    ← §3-4
+       ↓
+  _init_event_queue():
+       ├─ requests = request_generator.generate()
+       │     ├─ SyntheticRequestGenerator (Poisson+length 조합) 또는
+       │     └─ TraceReplayRequestGenerator (CSV 읽음)
+       └─ if offline: GlobalScheduleEvent(0)
+          if online:  RequestArrivalEvent(t=arrived_at, req) 각각 enqueue
+       ↓
+  _run_sequential() event loop:
+    while not terminate:
+        while event_queue:
+            (priority, event) = heapq.heappop(event_queue)
+            self._time = event._time                         ← 글로벌 clock 전진
+            new_events = event.handle_event(scheduler, metric_store)
+            self._add_events(new_events)                     ← 새 event push
+
+  주요 event handler 호출 chain:
+    REQUEST_ARRIVAL → GlobalScheduleEvent
+    GlobalSchedule → ClusterScheduleEvent × cluster_type
+    ClusterSchedule → cluster_scheduler.schedule() → ReplicaScheduleEvent
+    ReplicaSchedule → replica_scheduler.on_schedule()
+                       └─ vLLM v1 의 admission logic 그대로 (§3-1 ②)
+                       └─ Batch 생성 (§3-1 ②)
+                     → BatchStageArrivalEvent
+    BatchStageArrival → ReplicaStageScheduleEvent
+    ReplicaStageSchedule → predictor.predict_stage_execution_time(batch, ...)   ← §3-4 ④
+                            ├─ measurement_type 선택 (CUDA_EVENT vs KERNEL_ONLY)
+                            ├─ effective_tokens 계산 (3-layer padding)
+                            ├─ FOR op in batch:
+                            │     dict lookup: self._predictions[op][(token,)]
+                            ├─ cc_backend.predict_allreduce(...)
+                            └─ ExecutionTime(...) 반환
+                          → execution_time 합산해서 stage end 시간 계산
+                          → BatchStageEndEvent(time = current + execution_time) 발행
+    BatchStageEnd → 다음 stage 또는 ClusterBatchEndEvent
+    ClusterBatchEnd → GlobalBatchEndEvent
+    GlobalBatchEnd → request 완료 처리 + metric 기록 + 다음 ReplicaScheduleEvent
+       ↓
+  종료 후 _write_output():
+    outputs/{run_id}/e2e_latency.csv
+    outputs/{run_id}/ttft.csv
+    outputs/{run_id}/tpot.csv
+    outputs/{run_id}/throughput.csv
+    outputs/{run_id}/*.png  (plotly)</div>
+
+<h4>Request Generator 종류 (워크로드 input 측)</h4>
+<p class="ref">파일: <code>frontier/request_generator/</code> 17 files</p>
+<table>
+<tr><th>Generator</th><th>동작</th></tr>
+<tr><td><code>SyntheticRequestGenerator</code></td><td>(interval gen) + (length gen) 조합. 매 tick interval 만큼 대기 + length 만큼 token 생성</td></tr>
+<tr><td><code>TraceReplayRequestGenerator</code></td><td>CSV 한 줄 = 한 request. columns: arrived_at, num_prefill_tokens, num_decode_tokens, priority, session_id, block_hash_ids, cohort, thinking_depth, tool_call_latency, thinking_round_plans_json. <code>prefill_scale_factor</code>, <code>time_scale_factor</code> 같은 스케일 옵션</td></tr>
+</table>
+
+<h5>Interval generator 4 종</h5>
+<table>
+<tr><th>Type</th><th>식</th></tr>
+<tr><td>POISSON</td><td><code>-log(1-uniform()) / qps</code> (exponential interarrival), max 3σ cap</td></tr>
+<tr><td>GAMMA</td><td>Gamma 분포 → burstiness 조절</td></tr>
+<tr><td>STATIC</td><td>고정 interval (e.g. 100ms 마다 1개)</td></tr>
+<tr><td>TRACE</td><td>CSV 의 arrival_time delta 그대로</td></tr>
+</table>
+
+<h5>Length generator 4 종</h5>
+<table>
+<tr><th>Type</th><th>식</th></tr>
+<tr><td>FIXED</td><td>(prefill_tokens, decode_tokens) 상수</td></tr>
+<tr><td>UNIFORM</td><td>[min, max] 균등 분포</td></tr>
+<tr><td>ZIPF</td><td>long-tail 분포 (realistic chat workload)</td></tr>
+<tr><td>TRACE</td><td>CSV 그대로</td></tr>
+</table>
+
+<h5>Thinking Mode 워크로드 (stateful reasoning)</h5>
+<p class="ref">파일: <code>base_request_generator.py:81-112</code>, <code>trace_replay_request_generator.py:124-156</code></p>
+<p>Multi-round 요청 — request 안에 hidden round (planning, tool call) + final round (output) 의 token plan 들어감. trace CSV 의 <code>thinking_round_plans_json</code> column 에 round 별 (prefill, decode) plan 명시. Frontier 가 한 request 를 여러 batch 로 분해해서 round 별 처리.</p>
+
+<h4>Event 종류 11 개 + 책임</h4>
+<table>
+<tr><th>Event</th><th>발행 시점</th><th>주요 효과</th></tr>
+<tr><td>REQUEST_ARRIVAL</td><td>online mode 의 arrived_at</td><td>request → scheduler 큐. GlobalScheduleEvent 발행</td></tr>
+<tr><td>GLOBAL_SCHEDULE</td><td>REQUEST_ARRIVAL 또는 직접</td><td>cluster_type 별 ClusterScheduleEvent</td></tr>
+<tr><td>CLUSTER_SCHEDULE</td><td>GLOBAL_SCHEDULE 또는 BatchEnd 후</td><td>cluster_scheduler.schedule() 호출 → (replica, dp) assign</td></tr>
+<tr><td>REPLICA_SCHEDULE</td><td>CLUSTER_SCHEDULE</td><td>replica_scheduler.on_schedule() → vLLM 의 admission 로직 → Batch 생성</td></tr>
+<tr><td>BATCH_STAGE_ARRIVAL</td><td>REPLICA_SCHEDULE → 각 Batch 당</td><td>ReplicaStageScheduleEvent 발행 (pipeline stage 0)</td></tr>
+<tr><td>REPLICA_STAGE_SCHEDULE</td><td>BATCH_STAGE_ARRIVAL 또는 직전 STAGE_END</td><td>predictor.predict_stage_execution_time() 호출 → BatchStageEndEvent(t + exec_time)</td></tr>
+<tr><td>BATCH_STAGE_END</td><td>예측 시간 후</td><td>다음 stage 있으면 STAGE_ARRIVAL, 아니면 ClusterBatchEnd</td></tr>
+<tr><td>CLUSTER_BATCH_END</td><td>마지막 stage end</td><td>GlobalBatchEndEvent</td></tr>
+<tr><td>GLOBAL_BATCH_END</td><td>CLUSTER_BATCH_END</td><td>request 완료 + metric 기록 + 다음 ReplicaScheduleEvent</td></tr>
+<tr><td>PERIODIC_SCHEDULE</td><td>특정 cluster 만 (high-throughput)</td><td>고정 interval 마다 강제 schedule</td></tr>
+<tr><td>THINKING_ROUND_REQUEUE</td><td>thinking mode 의 round 사이</td><td>round 끝나면 다음 round 의 request 재큐</td></tr>
+</table>
+<p>min-heap 의 priority key 는 <code>(event_time, event_type, event_id)</code> — 같은 시간이면 type ID, 그 다음 id 로 정렬해서 결정적 순서.</p>
+
+<h4>왜 Discrete event 인가</h4>
+<ul>
+  <li>대안 1: time-step simulation (1μs 마다 update) — 90% 시간이 idle 인 LLM 워크로드엔 낭비</li>
+  <li>대안 2: pure analytical model (closed-form latency formula) — scheduling 결정의 path-dependency 표현 불가</li>
+  <li>Discrete event: 다음 변화 시점으로 jump → sparse event 효율 + scheduler decision sequence 정확 재현</li>
+</ul>
+
+<h4>E2E 검증 (tests/e2e/)</h4>
+<p class="ref">파일: <code>tests/e2e/test_colocation_examples_layout.py</code>, <code>test_colocation_examples_runtime.py</code></p>
+<p>2 test file 이 10 example script (5 offline + 5 online) 의 layout + runtime 검증.</p>
+<table>
+<tr><th>Test</th><th>검증</th></tr>
+<tr><td>layout 테스트</td><td>10 script 존재, simulation_mode 선언, CC_BACKEND default 설정, run_all.sh 에 모두 포함</td></tr>
+<tr><td>runtime 테스트</td><td>각 script 실행 → request_metrics.csv 의 ttft/e2e_time/num_tokens 검증 + system_metrics.json 의 total_requests/completed_requests/throughput &gt; 0</td></tr>
+</table>
+<p>Golden reference (실 GPU 측정값과 비교) 는 ship 안 됨 — 사용자 환경에 따라 다르니. 회귀 테스트는 smoke 수준 (crash 안 함 + 기본 metric 합리적).</p>
+</div>
+
+<!-- ======== 3-6 MODERN RUNTIME ======== -->
+<h3 id="sc6">3-6. Modern Runtime 모델링 — 6 영역 통합</h3>
+<div class="card">
+<p>vLLM 같은 production engine 의 modern optimization 을 sim 으로 표현하는 메커니즘.</p>
+
+<h4>① CUDA Graph 모델링</h4>
+<p>측정 시점에 두 dataset 분리 (CUDA_EVENT vs KERNEL_ONLY), sim 시점에 batch 가 CUDA graph 영역인지 판단해서 dataset 동적 swap. 자세한 건 §3-4 의 measurement type 선택.</p>
+<p><strong>약점</strong>: Capture 자체 cost (100-500μs per unique shape) 미모델. 다양한 batch shape 시 latency 변동 underestimate.</p>
+
+<h4>② Speculative Decoding — 8 method</h4>
+<p class="ref">파일: <code>frontier/spec_decode/runtime.py</code>, <code>mtp_runtime.py</code>, <code>mtp_registry.py</code>, <code>proposer_profile.py</code></p>
+
+<h5>2 family 분류</h5>
+<ul>
+  <li><strong>Draft-model family</strong> (별도 proposer): ngram / medusa / eagle / eagle3 / deepseek_mtp / ernie_mtp</li>
+  <li><strong>Target-embedded MTP family</strong> (target model 안에 MTP 내장): qwen3_moe_mtp / qwen3_next_mtp</li>
+</ul>
+
+<h5>SpecDecodeIterationOutcome — per iter outcome 모델링</h5>
+<pre><code>@dataclass(frozen=True)
+class SpecDecodeIterationOutcome:
+    planned_draft_tokens:  int       # K = draft 몇 개 만들 계획
+    verify_tokens:         int       # 1 + K = verifier 가 검증할 토큰 수
+    accepted_draft_tokens: int       # M ≤ K = 받아들인 draft 수
+    rejected_draft_tokens: int       # K - M = 거부된 draft 수
+    committed_tokens:      int       # 1 + M = 실 commit 된 token 수</code></pre>
+
+<h5>Acceptance trace 로딩</h5>
+<p>실제 acceptance 율 변화는 sim 으로 못 잡음 — 대신 외부 trace 파일 (JSON or CSV) 로 per-iter 결과 주입:</p>
+<table>
+<tr><th>Trace 형식</th><th>구조</th></tr>
+<tr><td>global (list[int])</td><td>모든 request 가 같은 acceptance pattern — iteration index 로 lookup</td></tr>
+<tr><td>per-request (dict)</td><td>request_id → list[int]. request 별 다른 acceptance</td></tr>
+</table>
+
+<h5>MTP Runtime Contract — per method 의 hw 요구사항</h5>
+<p class="ref">파일: <code>mtp_runtime.py:21-41, 112-157</code></p>
+<pre><code>@dataclass(frozen=True)
+class MTPRuntimeContract:
+    fusion_op_name: str              # e.g. "mtp_fusion_proj"
+    fusion_is_tp_sharded: bool       # tensor-parallel split?
+    fusion_requires_allgather: bool  # cross-device collective?
+    num_pre_fusion_norms: int        # fusion 직전 layernorm 개수
+    num_post_decoder_norms: int
+    embedding_requires_allreduce: bool
+    lm_head_op_name: str
+    lm_head_requires_allgather: bool
+
+# Qwen3-Next 의 contract:
+qwen3_next_mtp = MTPRuntimeContract(
+    fusion_is_tp_sharded=True,
+    fusion_requires_allgather=True,  ← cross-TP sync 필요
+    num_pre_fusion_norms=2,
+    num_post_decoder_norms=1,
+    ...
+)
+# DeepSeek 의 contract:
+deepseek_mtp = MTPRuntimeContract(
+    fusion_is_tp_sharded=False,
+    fusion_requires_allgather=False,  ← 다른 parallelization
+    ...
+)</code></pre>
+<p>같은 MTP family 라도 model 마다 layout 다름. Contract 가 그 차이를 명시 → predictor 가 method 별 다른 fusion latency / collective comm 모델링.</p>
+
+<h5>Proposer profile</h5>
+<pre><code># JSON 파일 형태:
+{
+  "entries": [
+    {
+      "method": "eagle",
+      "model_name": "Qwen3-Next-80B",
+      "attn_tp_size": 8,
+      "num_speculative_tokens": 5,
+      "spec_verify_request_count": 32,
+      "latency_ms": 12.5
+    }
+  ]
+}
+
+# Sim 시: get_decode_draft_proposer_latency_ms(method, model, tp, k, req_count) → 12.5
+# Draft generation 자체는 sim 안에서 실행 X — 단순 lookup</code></pre>
+
+<h4>③ Prefix Cache</h4>
+<p class="ref">파일: <code>frontier/kv_cache/base_kv_cache_manager.py</code></p>
+<pre><code># Hash-based block matching
+def get_computed_blocks(self, request: Request) -&gt; tuple[list[KVCacheBlock], int]:
+    block_hashes = self._get_request_block_hashes(request)
+    computed_blocks = []
+    for block_hash in block_hashes:
+        cached_block = self.block_pool.get_cached_block(block_hash)
+        if cached_block is None:
+            break  # contiguous prefix 만
+        computed_blocks.append(cached_block)
+    self.prefix_cache_stats.hits += len(computed_blocks)
+    return computed_blocks, len(computed_blocks) * self.block_size</code></pre>
+<p><strong>Block pool</strong>: LRU 기반 eviction (ref_cnt == 0 인 block 만 evict 가능). 새 request 가 들어오면 (1) 매칭되는 cached block 들 reserve (2) 부족하면 free block 으로 allocate (3) 메모리 부족하면 LRU evict.</p>
+<p><strong>약점</strong>: 의미 없는 hash 충돌 시 false-positive cache hit 가능 (낮은 확률). Realistic eviction (semantic block importance) 미모델.</p>
+
+<h4>④ MoE</h4>
+<table>
+<tr><th>요소</th><th>모델링</th></tr>
+<tr><td>Gating context</td><td><code>standalone_legacy</code> (default) vs <code>prefill_hot</code> (Qwen3 MoE — prefill 시 빠른 gating)</td></tr>
+<tr><td>Routing path</td><td><code>standard_fused_topk</code> (vLLM fused kernel) vs <code>uniform_topk</code> (deterministic — for ablation)</td></tr>
+<tr><td>Per-expert load</td><td>simulation (balanced / random / skewed / zipf) — actual 측정 X. 14 load-imbalance feature (cv, gini, entropy 등) 가 sklearn 모델에 들어감</td></tr>
+</table>
+
+<h4>⑤ Quantization</h4>
+<p>Implicit modeling: <code>bytes_per_element</code> 가 precision 별 (FP32=4, FP16=2, INT8=1, INT4=0.5) → communication data size 비례 감소. Profile CSV 도 <code>profiling_precision</code> column 으로 분리 → predictor 가 precision 별 다른 모델 학습.</p>
+<p><strong>약점</strong>: Quantization 자체 overhead (dequant/requant, 5-15%) 미모델. 처리율 이득 overestimate 가능.</p>
+
+<h4>⑥ Chunked Prefill</h4>
+<p>scheduler 측에서 처리 — <code>VllmV1SchedulerConfig.enable_chunked_prefill</code> flag. Token budget 부족 시 prefill 을 chunk 로 split → decode 와 interleave. 실 latency 영향은 predictor 가 작은 chunk size 의 attention 시간으로 자연 반영.</p>
+<p><strong>약점</strong>: Chunk boundary 의 context reuse overhead (KV cache reshape) 미모델.</p>
 </div>
 
 <!-- ======== 3-1 ======== -->
@@ -939,7 +1685,7 @@ utils.py</code></pre>
 
 </div>
 
-<h2 id="open">6. 결론 + 더 봐야 할 영역</h2>
+<h2 id="open">6. 결론</h2>
 <div class="card">
 
 <h3>6-1. 읽기 순서 추천 (in-repo)</h3>
@@ -955,17 +1701,8 @@ utils.py</code></pre>
 <h3>6-2. paper 와 코드 차이</h3>
 <p>arXiv 논문 (2605.21312) 은 4 가지 use case 시연 — Pareto frontier search, heterogeneous GPU allocation, stateful reasoning scheduler validation, dynamic reconfiguration for RL rollouts. 그 중 <strong>2 개 (Pareto, stateful reasoning) 는 현재 release 의 co-location 코드로 재현 가능</strong>. 나머지 2 개는 disaggregation release 기다려야.</p>
 
-<h3>6-3. 더 봐야 할 영역 (이 문서 미커버)</h3>
-<ul>
-  <li><code>frontier/training/</code> — sklearn 모델 학습 파이프라인 디테일</li>
-  <li><code>frontier/spec_decode/mtp_registry.py</code> + <code>mtp_runtime.py</code> — MTP 모델별 특수 처리</li>
-  <li><code>frontier/cc_backend/backends/collective_sim_cc_backend.py</code> + 외부 collective-sim 패키지 통합 디테일</li>
-  <li><code>frontier/request_generator/</code> — synthetic / trace-based / Poisson / Zipf 등 워크로드 생성</li>
-  <li><code>tests/e2e/</code> — Frontier 자체 end-to-end 검증 시나리오</li>
-</ul>
-
-<h3>6-4. 한 줄 평</h3>
-<p>Frontier 는 LLMServingSim 보다 <strong>훨씬 큰 코드베이스이고 (3x), modern runtime 모델링이 풍부하고 (CUDA graph / spec dec / MoE imbalance / 8 quant level), scheduler variant 가 많고 (9+ vs 1), 그 대가로 학습 곡선이 가파름</strong>. 현재 release 가 co-location only 라는 한계만 빼면 SLA-aware design space exploration 에 더 적합. Disaggregation release 나오면 그쪽도 강력해질 듯.</p>
+<h3>6-3. 한 줄 평</h3>
+<p>Frontier 는 LLMServingSim 보다 <strong>훨씬 큰 코드베이스이고 (3x), modern runtime 모델링이 풍부하고 (CUDA graph / 8 spec dec method / MoE imbalance / quantization), scheduler variant 가 많고 (9+ vs 1), 그 대가로 학습 곡선이 가파름</strong>. 현재 release 가 co-location only 라는 한계만 빼면 SLA-aware design space exploration 에 더 적합. Disaggregation release 나오면 그쪽도 강력해질 듯.</p>
 </div>
 
 <h2 id="usage">7. 어떻게 쓸 것인가 — Use case 매핑 + 운영 가이드</h2>
