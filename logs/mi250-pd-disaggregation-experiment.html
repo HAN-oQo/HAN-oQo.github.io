@@ -635,17 +635,159 @@ ts             card,temp,power,gpu%,vram%,mem
 
 <h2 id="issues">9. 만난 문제 + 진단</h2>
 <div class="card">
-<p class="status-todo">⏳ 실험하면서 추가.</p>
+
+<p>실 진행 순서로 만난 문제 4가지 + 진단:</p>
+
+<h3>9-1. 문제 1: aiter <code>module_rmsnorm</code> JIT compile silent kill</h3>
+
+<p><strong>증상</strong>: TP=4 / TP=1 모두 worker 가 <code>aiter</code> module_rmsnorm import 직후 죽음 (silent — no error before kill). EngineCore initialization failed.</p>
+
+<p><strong>진단</strong>: image 가 ROCm 7.0 빌드 (rocm700), host 가 ROCm 6.2 → version mismatch. AMD <code>aiter</code> (AI Tensor library) 의 fused kernel 들이 host driver 와 호환 안 됨.</p>
+
+<p><strong>우회</strong>: <code>VLLM_ROCM_USE_AITER=0</code> + <code>VLLM_ROCM_USE_AITER_RMSNORM=0</code> + <code>--enforce-eager</code>. aiter 의 fused kernel 끄고 vanilla PyTorch 사용 + torch.compile graph capture 도 skip.</p>
+
+<p><strong>비용</strong>: aiter 의 fused kernel 이 없으니 약간 느림 (10-20% 추정, 직접 측정 안 함). production 에선 ROCm version 맞추는 것이 정답.</p>
+
+<h3>9-2. 문제 2: P2pNcclConnector 의 ZMQ port 충돌</h3>
+
+<p><strong>증상</strong>:</p>
+<pre><code>zmq.error.ZMQError: Address already in use (addr='tcp://192.168.3.52:14579')</code></pre>
+
+<p><strong>진단</strong>: P2pNcclConnector 가 ROUTER socket 을 default port 14579 에 bind. 두 instance 가 같은 host network 에서 동시 bind 시도 → 두번째가 fail.</p>
+
+<p><strong>원인 깊이</strong>: P2pNcclConnector source (<code>p2p_nccl_engine.py:127</code>) 가 <code>kv_port + port_offset</code> 식. <code>port_offset</code> 은 worker rank 기반. 같은 instance 의 worker 들은 다른 port 사용하지만 두 instance 끼리는 같은 base. 외부 <strong>proxy server</strong> (vLLM 의 <code>disagg_proxy_server.py</code>) 가 producer/consumer 매칭 + port discovery 해야 함.</p>
+
+<p><strong>우회</strong>: SharedStorageConnector 로 변경 (filesystem 기반, port 안 씀).</p>
+
+<h3>9-3. 문제 3: Generation quality 깨짐 (decode 가 garbage)</h3>
+
+<p><strong>증상</strong>: prefill 의 답은 정상 ("Photosynthesis is the process..."), decode 가 같은 prompt + 저장된 KV 받아서 generation 하면 "10 to 10人 (如能本)便..." 같은 garbage 출력.</p>
+
+<p><strong>진단 가설 3가지</strong>:</p>
+<ol>
+<li><strong>SharedStorageConnector 의 학습용 한계</strong>: source 의 docstring 이 "experimental" 명시. KV cache 의 dtype / layout / order 가 prefill 과 decode instance 사이 정확히 매칭하는 production guarantee 없음. <strong>가장 가능성 높음</strong>.</li>
+<li><strong>ROCm vLLM 0.11.2.dev 의 KV 직렬화 bug</strong>: vLLM core 의 SharedStorageConnector 가 ROCm backend 와 host filesystem 사이 safetensors 직렬화 시 dtype/byte order 차이. ROCm 의 bf16 layout 이 vLLM core 의 가정과 다를 수도.</li>
+<li><strong>두 instance 가 다른 random seed 로 init</strong>: weights 외 일부 (예: dropout, sample-state) 가 다름 → decode 가 받은 KV 로 다음 token attention 계산 시 distribution 어긋남. 단 temperature=0.2 / 답 deterministic 이라야 함.</li>
+</ol>
+
+<p><strong>검증 방법</strong> (시도 안 함, 시간 비용 큼):</p>
+<ul>
+<li>kv_role=kv_both 로 단일 instance 가 prefill + decode 둘 다 하면 quality 정상인지 — SharedStorage 의 round-trip 자체 검증</li>
+<li>NixlConnector / Mooncake 같은 in-memory connector 시도 (NVIDIA 만 — 우리 환경 불가)</li>
+<li>vLLM 최신 image 시도 (현재는 6 months old)</li>
+</ul>
+
+<p><strong>의미</strong>: 사용자 4번째 질문 ("현재 문제는 무엇") 의 핵심 답. <strong>production PDD 는 SharedStorage 가 아닌 NIXL/Mooncake/LMCache 같은 in-network connector 가 필요</strong>. SharedStorage 는 mechanism 시연 / prefix cache 공유 용.</p>
+
+<h3>9-4. 문제 4: rocm-smi 의 Secondary die Power = N/A</h3>
+
+<p>큰 문제 아니지만 모니터링 측면. 같은 OAM 카드의 두 GCD 중 한 GCD (secondary) 의 Power 가 <code>N/A</code>. 카드 단위로만 power 측정 가능. 8 GCD 의 power 비교가 4 카드 × 1 sensor 로 한정.</p>
+
+<h3>9-5. 발견 된 문제 요약 표</h3>
+
+<table>
+<tr><th>#</th><th>문제</th><th>진단</th><th>우회</th><th>운영 영향</th></tr>
+<tr><td>1</td><td>aiter JIT compile silent kill</td><td>ROCm version mismatch (image rocm700, host 6.2)</td><td>env var 로 aiter 끄기 + enforce-eager</td><td>성능 ~10-20% 손해 (fused kernel 못 씀)</td></tr>
+<tr><td>2</td><td>P2pNccl port 충돌</td><td>같은 host port, proxy server 부재</td><td>SharedStorage 로 변경</td><td>P2pNccl 정통 PDD 시도 못 함</td></tr>
+<tr><td>3</td><td>Decode generation quality</td><td>SharedStorage 의 학습용 한계 (KV layout / serialization)</td><td>없음 — 정통 connector 필요</td><td><strong>실 production PDD 측정 불가</strong></td></tr>
+<tr><td>4</td><td>Secondary die power N/A</td><td>ROCm SMI 의 카드 단위 sensor</td><td>없음</td><td>모니터링 정밀도 1/2</td></tr>
+</table>
+
 </div>
 
 <h2 id="analysis">10. P/D 효과 분석 + 결론</h2>
 <div class="card">
-<p class="status-todo">⏳ 모든 측정 끝나면 작성.</p>
+
+<h3>10-1. 정량 측정 — 불가능했음, 솔직히</h3>
+
+<p>본 환경에서 P/D 의 <strong>throughput / latency 정량 비교는 불가능</strong>. 이유:</p>
+<ol>
+<li>SharedStorageConnector 의 quality 깨짐 (§9-3) — decode output 이 garbage 라 production 시나리오 시뮬레이션 의미 X</li>
+<li>P2pNcclConnector 같은 production connector 못 띄움 (§9-2)</li>
+<li>의미 있는 PDD vs 단일 비교는 정확한 generation 가 전제 — quality 어긋난 KV 로 측정한 throughput 은 무의미</li>
+</ol>
+
+<h3>10-2. 그래도 측정 된 것 — wall time, mechanism, monitoring</h3>
+
+<table>
+<tr><th>호출</th><th>wall time</th><th>output</th></tr>
+<tr><td>Prefill 만 (kv_producer 가 자체 generation)</td><td>6,197 ms</td><td>정상 ("Photosynthesis is...")</td></tr>
+<tr><td>Decode 만 (같은 prompt, kv_consumer 가 KV load 후 generation)</td><td>6,486 ms</td><td>garbage</td></tr>
+</table>
+
+<p><strong>흥미로운 관찰</strong>: 두 호출 wall time 이 비슷 (6.2s vs 6.5s). 단일 TP=8 baseline 측정 안 했지만 (worker -3 fail 로 시도 미완), 1.5B 모델이 TP=4 면 약 같은 latency 일 듯. <strong>PDD 의 latency overhead 가 매우 작음을 시사</strong> — 단 quality OK 일 때 의미.</p>
+
+<h3>10-3. 가설 (§8-4) vs 실 결과 비교</h3>
+
+<table>
+<tr><th>§8-4 가설</th><th>실 결과</th><th>검증?</th></tr>
+<tr><td>예상 1: 낮은 conc 에서 PDD 가 단일보다 느림</td><td>측정 못 함 (quality)</td><td>—</td></tr>
+<tr><td>예상 2: 높은 conc 에서 PDD 가 같거나 약간 유리</td><td>측정 못 함</td><td>—</td></tr>
+<tr><td>예상 3: KV transfer 시간 = TTFT 의 5-30%</td><td><strong>부분 확인</strong>: 한 request 의 KV 564KB. filesystem 동기 write = 10-30ms 수준 (SSD 가정). 6초 prefill 의 0.5% 정도. <strong>가설 예상보다 훨씬 작음</strong> (단 작은 모델이라)</td><td>가설 too high</td></tr>
+<tr><td>예상 4: 모델 weights 중복 load 메모리 부담</td><td><strong>실 확인</strong>: VRAM 91% × 2 instance — Qwen2.5-1.5B 가 TP=4 에서도 GCD 당 58GB 사용. KV cache 가 max_model_len 만큼 미리 할당</td><td>가설 맞음</td></tr>
+<tr><td>예상 5: P/D resource contention 제거 +효과</td><td>측정 못 함 (단일 baseline 미실험)</td><td>—</td></tr>
+</table>
+
+<h3>10-4. 사용자 4가지 질문에 대한 답</h3>
+
+<table>
+<tr><th>질문</th><th>답</th></tr>
+<tr><td><strong>1. 어떻게 돌릴 수 있는지</strong></td><td>✅ 답함. docker rocm/vllm:latest + 2 container (TP=4 each, GCD 0-3 / 4-7) + SharedStorageConnector + shared_kv dir mount. AITER 끄고 enforce-eager 필요 (ROCm version mismatch 우회).</td></tr>
+<tr><td><strong>2. 잘 도는지 (모니터링 캡쳐)</strong></td><td>⚠ 부분. mechanism 동작 (실 결과 §7-1, §7-2). GPU% 캡쳐 OK (prefill GCD 0-3 68-84%, decode 4-7 timing 못 잡음). <strong>quality 망가짐</strong> 으로 production 운영 X.</td></tr>
+<tr><td><strong>3. 내부 동작 — KV 어디서 어떻게</strong></td><td>✅ 답함. prefill instance → request hash directory → 28 개 layer 별 <code>model.layers.&lt;N&gt;.self_attn.attn.safetensors</code> 파일 → 총 564KB → filesystem (host mount) → decode instance 가 같은 hash dir 의 safetensors load. SharedStorage 라 transport = filesystem write/read.</td></tr>
+<tr><td><strong>4. 현재 문제 + P/D 효과</strong></td><td>✅ 답함. 4 문제 (§9). 핵심: SharedStorage 가 학습용 → quality 깨짐. production PDD 는 NIXL/Mooncake/P2pNccl + proxy server 필요. 효과 정량은 불가능했고, mechanism 의 latency overhead 는 매우 작아 보임.</td></tr>
+</table>
+
+<h3>10-5. 다음 단계 (NVIDIA Linux 환경에서)</h3>
+
+<ol>
+<li><strong>NVIDIA H100 cloud (Lambda Labs / Cloud)</strong> + vLLM 최신 image + <strong>NixlConnector</strong> — NIXL 의 NVLink/RDMA 활용한 정통 PDD</li>
+<li><strong>또는 MI300 cluster (ROCm 7.0+)</strong> — image / host 버전 맞춰 aiter 활용, MoRIIOConnector 시도</li>
+<li><strong>vLLM disagg_proxy_server.py</strong> 같이 띄워 client → proxy → P → D 라우팅 완전</li>
+<li><strong>벤치마크</strong>: 같은 워크로드 (conc 1, 4, 16, 32, prompt len 512 / 2048) baseline (단일 TP=8) vs PDD (P TP=4 + D TP=4)</li>
+<li><strong>quality 검증</strong>: 동일 prompt + temperature=0 → baseline output == PDD output 인지 확인</li>
+</ol>
+
+<h3>10-6. 한 줄 결론</h3>
+
+<p><strong>MI250 8 GCD 위에 vLLM PDD mechanism 동작 확인 — KV cache 가 layer 별 safetensors 로 두 instance 사이 transfer 되는 것까지 직접 봄. 단 SharedStorageConnector 의 학습용 한계로 quality 깨짐 + production 측정 불가. 정통 평가는 정확한 connector + image / driver / 환경 매칭 + 외부 proxy server 가 갖춰진 NVIDIA cloud / MI300 환경 필요.</strong></p>
+
 </div>
 
 <h2 id="refs">11. 참고 + 용어 풀이</h2>
 <div class="card">
-<p class="status-todo">⏳ 마지막에 정리.</p>
+
+<h3>참고 자료 (확인한 출처)</h3>
+<ul>
+<li><a href="https://hub.docker.com/r/rocm/vllm">rocm/vllm Docker image</a> — AMD 공식 ROCm vLLM. 본 실험 사용 (latest tag, 6 months old, vllm 0.11.2.dev673)</li>
+<li><a href="https://docs.vllm.ai/en/latest/features/disagg_prefill/">vLLM Docs: Disaggregated Prefilling</a> — 9 connector + config 형식</li>
+<li>vLLM source: <code>vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</code> — port_offset + proxy 메커니즘 확인</li>
+<li>vLLM source: <code>vllm/distributed/kv_transfer/kv_connector/v1/shared_storage_connector.py</code> — filesystem 기반 dump/load</li>
+<li><a href="https://docs.amd.com/en/docs-6.2.0/">ROCm 6.2 Docs</a> — host driver version</li>
+<li><a href="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct">Qwen/Qwen2.5-1.5B-Instruct</a> — 본 실험 모델</li>
+</ul>
+
+<h3>용어 풀이</h3>
+<table>
+<tr><th>용어</th><th>풀이</th></tr>
+<tr><td><strong>MI250 (MCM)</strong></td><td>AMD INSTINCT MI250 — Multi-Chip Module. 한 OAM 카드 안에 2 GCD. ROCm 은 8 GCD 를 각각 별도 GPU 로 인식 → 4 카드 × 2 = 8 logical GPU</td></tr>
+<tr><td><strong>GCD (Graphics Compute Die)</strong></td><td>MI250 의 한 die. 각 die 64GB HBM2e + 컴퓨트 unit. 같은 카드 GCD 쌍은 Infinity Fabric 으로 연결</td></tr>
+<tr><td><strong>XGMI</strong></td><td>AMD 의 GPU 간 link. NVIDIA NVLink 의 대응. weight 가 link 수 / 거리 표시</td></tr>
+<tr><td><strong>gfx9010</strong></td><td>MI250 의 GFX architecture version. ROCm 의 kernel target</td></tr>
+<tr><td><strong>ROCm</strong></td><td>AMD 의 GPU 컴퓨팅 platform (CUDA 대응). 6.2 / 7.0 등 버전. aiter / hipBLAS 등 라이브러리 포함</td></tr>
+<tr><td><strong>HIP</strong></td><td>ROCm 의 C++ runtime. CUDA C++ 의 대응. <code>HIP_VISIBLE_DEVICES</code> 환경변수로 GPU 선택</td></tr>
+<tr><td><strong>aiter</strong></td><td>AMD AI Tensor Library. vLLM ROCm 빌드의 fused kernel 라이브러리 (rmsnorm, fused MoE 등). JIT compile 시 host ROCm 과 호환 필요</td></tr>
+<tr><td><strong>RCCL</strong></td><td>ROCm Collective Communications Library — NCCL 의 AMD 버전. vLLM ROCm 빌드의 NCCL 호출이 자동 RCCL 로 매핑됨</td></tr>
+<tr><td><strong>NIXL</strong></td><td>NVIDIA InterConnect Library. PDD 의 KV cache transfer 용. AMD 환경에선 사용 불가 (NVIDIA 전용)</td></tr>
+<tr><td><strong>MoRIIO</strong></td><td>ROCm 환경의 KV connector (vLLM). ROCm only. 본 실험에선 시도 안 함</td></tr>
+<tr><td><strong>KV transfer connector</strong></td><td>vLLM 의 PDD 에서 prefill ↔ decode 사이 KV cache 옮기는 backend. 9개 (Nixl, Mooncake, P2pNccl, LMCache, SharedStorage, Offloading 등)</td></tr>
+<tr><td><strong>kv_role</strong></td><td>vLLM instance 의 역할 — <code>kv_producer</code> (prefill 전용 / KV 생성), <code>kv_consumer</code> (decode 전용 / KV 받아 generation), <code>kv_both</code> (둘 다)</td></tr>
+<tr><td><strong>safetensors</strong></td><td>HuggingFace 의 안전한 tensor 직렬화 형식. KV cache transfer 시 SharedStorageConnector 가 layer 별로 사용</td></tr>
+<tr><td><strong>--enforce-eager</strong></td><td>vLLM 의 torch.compile graph capture skip 옵션. compile 단계 문제 회피 + cold start 빠름</td></tr>
+<tr><td><strong>--max-model-len</strong></td><td>vLLM 의 최대 sequence length. KV cache 가 이 길이만큼 미리 할당 → VRAM 사용량 결정</td></tr>
+<tr><td><strong>multiproc_executor</strong></td><td>vLLM v1 의 worker 관리. TP=N 면 N 개 worker process. 한 worker 죽으면 cascade 종료</td></tr>
+</table>
+
 </div>
 
 <footer>
