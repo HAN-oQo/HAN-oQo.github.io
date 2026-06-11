@@ -253,6 +253,28 @@
 <tr><td>측정 mechanism</td><td>각 op 가 자기 안에 <code>CudaTimer</code> context 를 박아둠. <code>GPTModel.forward()</code> 한 번 호출 = 모든 op timer 가 순차 발화 → 모든 op 시간 한꺼번에 측정</td></tr>
 </table>
 
+<h4>"vLLM 실제 돌려서 op 결과 가져오는 거랑 동일한가" — 정확한 답</h4>
+<p>일부는 동일하고 일부는 다름. 차원별로:</p>
+<table>
+<tr><th>차원</th><th>vLLM 실 forward 와 동일한가</th></tr>
+<tr><td><strong>GPU kernel 자체</strong> (matmul, RMSNorm, RoPE 의 CUDA kernel call)</td><td>✅ <strong>동일</strong>. ColumnParallelLinear 같은 layer 가 호출하는 GPU kernel 은 vLLM 의 것과 똑같음 (Sarathi 가 mirror 한 nn.Linear subclass — 같은 kernel API)</td></tr>
+<tr><td><strong>Op 자체의 latency</strong></td><td>✅ <strong>거의 동일</strong>. 같은 kernel + 같은 input shape → 같은 GPU 시간. 단 GPU thermal throttling / boost clock 변동 같은 noise 는 매번 다름 (그래서 WARMUP=3 + ACTIVE=20 회 측정 후 median)</td></tr>
+<tr><td><strong>전체 model forward 시간</strong> (vLLM 의 LlamaForCausalLM.forward 1번 호출)</td><td>❌ <strong>다름</strong>. Frontier 는 op kernel 시간만 합산. vLLM 의 forward 는 그 외에 다음이 다 포함:
+  <ul style="margin: 4px 0;">
+    <li>Scheduler 호출 (어떤 request 를 이번 batch 에)</li>
+    <li>KV cache block 관리 (allocate, evict, swap)</li>
+    <li>Sampler (logit → token)</li>
+    <li>Token detokenization</li>
+    <li>Python dispatcher overhead (PyTorch eager mode 의 op dispatch)</li>
+    <li>NCCL collective comm (TP 시 cross-GPU)</li>
+  </ul>
+  실 vLLM forward = <code>op_kernel_time + 위 overhead 들</code>. Frontier 측정은 op_kernel_time 만.
+</td></tr>
+<tr><td><strong>Surrounding overhead 모델링</strong></td><td>별도 sweep 으로 처리. <code>cpu_overhead.csv</code> (scheduler/sampler/prepare_inputs/ray_comm 시간) + cc_backend (NCCL allreduce 시간). 그래서 sim 의 total predict time = <code>op_kernel + cpu_overhead + comm</code></td></tr>
+<tr><td><strong>Production batch 의 정확도</strong></td><td>op_kernel 만 정확. 보통 ±5-15% 오차 — surrounding overhead 가 cpu_overhead 측정 + cc_backend 예측으로 근사. Calibration scale 로 조정 (§3-4 참조)</td></tr>
+</table>
+<p><strong>정리</strong>: vLLM 실 forward 의 <strong>op kernel 시간만 정확히 같음</strong>. 그 외 모든 Python/scheduler/cache overhead 는 별도 측정한 다음 sim 안에서 합산. 그래서 sim 의 batch latency 가 production vLLM 의 batch latency 와 ~ 비슷하지만 정확히 같지는 않음 — 의도된 설계 (Sarathi 부터 이 방식).</p>
+
 <h4>측정 mechanism — 한 forward 안에서 모든 op 동시 측정</h4>
 <div class="diagram">  # frontier/profiling/linear_op/linear_op_impl.py 안의 op 들이
   # 자기 자체에 CudaTimer 를 갖고 있음:
@@ -1866,73 +1888,104 @@ def get_computed_blocks(self, request: Request) -&gt; tuple[list[KVCacheBlock], 
 <p>중요 구분: PDD/AFD 에서 <code>request_execution_time</code> (모든 cluster 의 sum) 이 <code>request_e2e_time</code> (wall-clock) 보다 클 수 있음 — parallel processing 때문.</p>
 </div>
 
-<h2 id="run">5. 실행 시도 — Install ✅ / Smoke run ❌ (공개 release 가 partial)</h2>
+<h2 id="run">5. 실행 시도 — 실패 → 디버깅 → 성공 → 결과 분석</h2>
 <div class="card">
 
-<h3>4-1. Install (성공)</h3>
-<pre><code># Python 3.10+ 필요 (pyproject.toml requires-python &gt;=3.10)
-# 최초 시도: Python 3.9.6 (macOS 시스템) → 실패
-# 해결: Python 3.12 (Homebrew)
-cd ~/Desktop/frontier-repo/Frontier
-python3.12 -m venv .venv
+<h3>5-1. 1차 시도 — 실패 (잘못된 진단)</h3>
+<pre><code># 시스템 Python 3.9.6 (macOS) 으로 install
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[test]'
+
+# → ERROR: pyproject.toml requires Python &gt;=3.10
+# pip 도 너무 오래된 버전 (21.2.4)
+# editable install 실패 ("setup.py not found")
+# 일부 파일만 install 되고 import path 꼬임</code></pre>
+
+<p>이 상태에서 smoke run 돌리니:</p>
+<pre><code>$ bash examples/architecture/co-location/offline/dense_model_basic.sh
+ImportError: cannot import name 'PrecisionType' from 'frontier.config.precision_type'
+Simulation failed (exit code: 1)</code></pre>
+
+<p>이 시점에 빠르게 "공개 release 가 partial 이다" 라고 결론 — <strong>잘못된 진단이었음</strong>. 실제론 Python 3.9 venv 의 broken install 잔재가 import path 꼬은 것. 모든 파일은 실제로 존재.</p>
+
+<h3>5-2. 2차 시도 — venv 깔끔히 재설치</h3>
+<pre><code>rm -rf .venv
+python3.12 -m venv .venv   # 3.10+ 필수 (pyproject.toml requires-python)
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e '.[test]'
-# → Install 성공, `import frontier` OK</code></pre>
+# → Install 성공
 
-<h3>4-2. Smoke run 시도 (실패)</h3>
-<pre><code>PYTHON_BIN="$(which python)" NUM_REQUESTS=4 \
-  bash examples/architecture/co-location/offline/dense_model_basic.sh
-...
-Traceback (most recent call last):
-  File "frontier/main.py", line 4, in &lt;module&gt;
-    from frontier.config import (
-  File "frontier/config/__init__.py", line 4, in &lt;module&gt;
-    from .precision_type import PrecisionType
-ImportError: cannot import name 'PrecisionType' from 'frontier.config.precision_type'
-  (file does not exist)
-Simulation failed (exit code: 1)</code></pre>
+python -c "from frontier.config import SimulationConfig; print('import OK')"
+# → import OK   ✓</code></pre>
 
-<h3>4-3. 원인 — 공개 release 가 partial</h3>
-<p><code>frontier/config/__init__.py</code> 가 import 하는 모듈들이 실제 디렉토리에 없음:</p>
-<pre><code># __init__.py 가 기대하는 파일들:
-from .precision_type import PrecisionType                # ❌ 없음
-from .quantization_manager import QuantizationManager   # ❌ 없음
-from . import global_vars                                 # ❌ 없음
-from .config import *                                     # ❌ 없음 (`config.py` 자체가 없음!)
+<p>파일 시스템 다시 확인하니 <code>config.py</code> (9410 LoC), <code>precision_type.py</code>, <code>quantization_manager.py</code>, <code>global_vars.py</code> 모두 정상 존재. 처음 <code>ls</code> 결과가 짧게 보였던 게 partial install 의 부작용이었음.</p>
 
-# 실제로 frontier/config/ 안에 있는 것:
-__init__.py
-__pycache__
-base_fixed_config.py
-base_poly_config.py
-utils.py</code></pre>
+<h3>5-3. Smoke run 성공 — 4 시나리오</h3>
+<pre><code>PYTHON_BIN=$(which python) NUM_REQUESTS=4 bash \
+  examples/architecture/co-location/offline/dense_model_basic.sh
+# ...
+# Simulation completed successfully.
 
-<p>레포는 README + docs + 9410 LoC config 모듈을 reference 하지만, <strong>NetX-lab 의 pre-release-v0.1 공개 시 일부 핵심 파일이 빠진 채 released</strong>. README 와 다른 코드가 reference 하는 <code>frontier/config/config.py</code> (9410 LoC), <code>precision_type.py</code>, <code>quantization_manager.py</code> 모두 git tree 에 부재.</p>
+# 같은 식으로 다른 3 시나리오:
+NUM_REQUESTS=4 bash .../moe_model_basic.sh
+NUM_REQUESTS=4 bash .../thinking_mode_basic.sh
+NUM_REQUESTS=4 bash .../moe_spec_dec.sh
+# → 모두 성공</code></pre>
 
-<div class="note"><strong>이 finding 자체가 의미 있음:</strong> 논문 (arXiv:2605.21312, 2026/06 발표) 과 공개 코드 사이 차이. 논문의 4 use case 중 "co-location 만 release" 라 했지만, 실제로는 그 co-location 도 동작하지 않음. Pre-release 라 표기되어 있긴 함.</p>
+<h3>5-4. 결과 — 4 scenario 비교 (dummy mode, NUM_REQUESTS=4)</h3>
+<table>
+<tr><th>시나리오</th><th>TTFT (ms)</th><th>TPOT (ms)</th><th>E2E (s)</th><th>tok/s</th><th>Accept ratio</th></tr>
+<tr><td>Dense (Llama-2-7b)</td><td>3,648</td><td>456</td><td>61.56</td><td>41.6</td><td>—</td></tr>
+<tr><td>MoE</td><td>1,944</td><td>390</td><td>26.52</td><td>48.3</td><td>—</td></tr>
+<tr><td>Thinking mode</td><td>1,369</td><td>456</td><td>1.82</td><td>21.9</td><td>—</td></tr>
+<tr><td>MoE + Spec Decode</td><td>1,944</td><td>198</td><td>14.43</td><td>88.7</td><td>0.50</td></tr>
+</table>
 
-<h3>4-4. 추정 — 어떤 파일이 빠졌나</h3>
-<p>코드에 남아있는 import 흔적으로부터 추정:</p>
-<ul>
-  <li><code>config.py</code> — SimulationConfig dataclass (9410 LoC 의 대부분)</li>
-  <li><code>precision_type.py</code> — FP16/BF16/INT8/INT4 enum + bytes_per_element</li>
-  <li><code>quantization_manager.py</code> — quantization 측정 metadata</li>
-  <li><code>global_vars.py</code> — runtime global state</li>
-</ul>
-<p>이건 추측. 빠진 파일들은 release artifact 누락일 가능성 높음 — 논문 reviewer 가 access 한 internal branch 에선 있을 듯.</p>
+<h3>5-5. 결과 분석</h3>
 
-<h3>4-5. 분석 자체는 여전히 valid</h3>
-<p>코드 트리에 있는 부분 (cluster_simulator, scheduler, profiling, execution_time_predictor, cc_backend, events, entities, etc.) 은 다 있음 → 5 시나리오 분석은 모두 실제 코드 기반. 다만 <strong>실행해서 결과 보기는 불가</strong> — config 모듈이 없어서 즉.</p>
+<h4>왜 dummy mode 인가</h4>
+<p>모든 example script default 가 <code>--random_forrest_execution_time_predictor_config_enable_dummy_mode</code> + <code>--..._dummy_execution_time_ms 1.0</code>. 즉 모든 op forward 가 1ms 로 가정. <strong>절대값은 의미 없음</strong>. 시나리오 간 상대 비교 + scheduler 행동 비교만 유의미. 실 latency 예측은 profile sweep 필요 (§3-2).</p>
 
-<h3>4-6. 대안 — 어떻게 실행해볼 수 있나</h3>
-<ul>
-  <li>NetX-lab 측에 issue 올려서 누락 파일 공개 요청</li>
-  <li>Conda env (<code>environment.yml</code>) 가 다른 frontier package 를 pip install 할 수도 있음 — 확인 필요</li>
-  <li>다음 release (post pre-release-v0.1) 기다리기</li>
-</ul>
+<h4>Dense vs MoE — MoE 가 빠른 이유</h4>
+<p>Dense Llama-2-7B 는 모든 layer 의 MLP 매 forward 계산. MoE 는 같은 batch 에 활성 expert 만 계산 (top-k routing). dummy mode 라도 MoE 의 layer 구성 (gating → top-k expert → grouped GEMM) 이 dense 의 모든 MLP forward 보다 적은 op call → TTFT 약 절반 (3648 → 1944 ms), E2E 도 절반. <strong>의도된 동작 — MoE 의 sparse activation 이 sim 의 op call 수로 정확히 반영됨</strong>.</p>
+
+<h4>Thinking mode — E2E 1.82s 인 이유</h4>
+<p>Thinking mode 는 multi-round 워크로드. 한 request 가 hidden round (planning) + final round (output) 들로 분해. NUM_REQUESTS=4 인데 default thinking workload 가 짧은 시퀀스 사용 → token 수 적음. E2E 짧은 게 정상.</p>
+
+<h4>Spec decode 효과 — TPOT 절반 (390ms → 198ms)</h4>
+<p>가장 흥미. MoE 의 spec decode (default 5 speculative tokens) 에서 acceptance ratio 0.5 — draft 의 50% accept. 한 verify iteration 당 평균 (1 + 0.5×5) = 3.5 token commit → 비-spec MoE 의 1 token/iter 보다 약 3.5× 효율. TPOT 가 198ms (vs 390ms) — 약 2× 빨라짐 (3.5× 의 효율이 verify 자체 overhead 로 일부 상쇄). <strong>이게 진짜 sim 의 가치</strong> — 실 GPU 없이 spec dec 의 acceptance 가설이 throughput 에 미치는 영향 검증.</p>
+
+<h4>처음 진단 실수의 교훈</h4>
+<p>"partial release" 라 빨리 결론 내리지 말고 환경부터 확인. 올바른 디버깅 순서:</p>
+<ol>
+  <li>Python 버전 (<code>pyproject.toml requires-python</code> 확인)</li>
+  <li>venv 깔끔히 재생성</li>
+  <li>pip 업그레이드</li>
+  <li>editable install + <code>import frontier</code> 테스트</li>
+  <li>smoke run</li>
+</ol>
+
+<h3>5-6. 산출 파일 구조</h3>
+<pre><code>outputs/examples/co-location/offline/{model}/offline_batch/{scenario}/
+├── request_metrics.csv          # 80 columns! per-request 모든 메트릭
+├── system_metrics.json          # ttft/tpot/e2e/throughput 통계 + spec_decode + preemption
+├── op_precision_metadata.csv    # 어떤 op 가 어떤 precision 으로 측정됐는지
+├── frontier_stage_batch_ledger.jsonl  # 각 batch stage 의 event log
+├── plots/                       # plotly PNG (store_plots=true 시)
+└── config.json                  # 이 run 의 모든 CLI option 저장</code></pre>
+
+<h3>5-7. 다음 단계 — 실 profile 로 진짜 sim</h3>
+<p>위 4 결과는 dummy mode 라 절대값 의미 X. 의미 있는 sim 하려면:</p>
+<ol>
+  <li>실 GPU 1대로 profile sweep (§4-2 참조) — Llama-2-7B / H100 / TP=1,2 약 1시간</li>
+  <li>profile CSV 경로를 example script 의 <code>EXECUTION_TIME_PREDICTOR_PROVIDER=random_forrest</code> 옵션과 함께 전달</li>
+  <li>다시 smoke run — sklearn 모델이 학습되어 실 latency 예측</li>
+  <li>실 GPU 측정과 비교 calibration (§8-4 참조)</li>
+</ol>
+<p>이 단계까지 가려면 GPU 자원 필요. 본 분석은 (1) framework 가 동작함, (2) 4 시나리오의 scheduler 차이가 sim 에서 잘 반영됨, (3) workflow 가 documented 대로 작동함 — 까지 검증.</p>
 </div>
-
 <h2 id="cmp">6. vs LLMServingSim — 직접 비교</h2>
 <div class="card">
 <table>
@@ -2312,7 +2365,7 @@ bash examples/architecture/co-location/offline/dense_model_basic.sh \
 
 <h3>8-5. 추천 적용 순서 (실용)</h3>
 <ol>
-  <li>먼저 install (Python 3.10+, conda 권장) — 만약 §4 처럼 release partial 이면 NetX-lab 이슈 트래커 확인</li>
+  <li>먼저 install (Python 3.10+ 필수, 시스템 3.9 면 venv 깨짐 — §5 finding)</li>
   <li>가장 단순한 dense 모델 (Llama-3-8B) + analytical cc_backend + dummy predictor 로 smoke run 통과</li>
   <li>해당 모델 profile sweep (1-2 GPU-hour)</li>
   <li>sklearn predictor 로 전환 → 실 sim 결과 확인</li>
@@ -2329,8 +2382,8 @@ bash examples/architecture/co-location/offline/dense_model_basic.sh \
 <table>
 <tr><th>한계</th><th>영향</th><th>우회</th></tr>
 <tr><td>Disaggregated (PDD/AFD) release guard</td><td>현재 paper의 use case 4 중 2 개 (Heterogeneous GPU, RL rollout) 실행 불가</td><td>main.py 의 release guard 제거 후 fork — 검증 안 된 path 라 자기 책임</td></tr>
-<tr><td>Config 모듈 일부 누락 (config.py, precision_type.py, etc.)</td><td>smoke run 자체 실패 — 본 문서 §4 finding</td><td>NetX-lab 이슈 또는 다음 release 대기</td></tr>
-<tr><td>vLLM tight coupling (~0.10.x API)</td><td>vLLM 0.5 같은 구버전 사용 클러스터에선 profile 호환 안 됨</td><td>vLLM 버전 통일 OR §3-2 의 version drift 절차 (smoke compare)</td></tr>
+<tr><td>Python 3.10+ 필요 (pyproject.toml)</td><td>시스템 Python 3.9 면 venv 가 partial install — 처음 진단을 "release partial" 로 오해할 수 있음 (§5 참조)</td><td>Homebrew Python 3.12 또는 conda env</td></tr>
+<tr><td>vLLM tight coupling (~0.10.x API)</td><td>vLLM 0.5 같은 구버전 사용 클러스터에선 profile 호환 안 됨</td><td>vLLM 버전 통일 OR §4-2 의 version drift 절차 (smoke compare)</td></tr>
 <tr><td>"NVIDIA only" (실제로는 일부)</td><td>AMD MI300 는 <code>rocm-smi</code> 패치 + vLLM ROCm 빌드로 가능. Apple Silicon (MPS) 은 <code>torch.cuda</code> 자체 안 됨 → fundamental</td><td>AMD: tooling 패치 1-2일. Apple: 우회 X</td></tr>
 <tr><td>Multimodal encoder (E in E/P/D) profile sweep 부족</td><td>VLM (Llama-4 Maverick 등) 정확도 ↓</td><td>vision encoder 따로 측정 + analytical 추가</td></tr>
 <tr><td>Profile sweep cost (4-5 GPU-hour per model)</td><td>새 모델 등장 빈도 (월 1-2개) 와 비례 비용</td><td>adaptive sampling / incremental profile 추가 — 현재 미구현</td></tr>
