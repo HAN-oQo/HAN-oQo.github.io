@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CPU + 작은 모델로 vLLM/llm-d/Dynamo 따라해보기</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  h4 { font-size: 0.95rem; margin-top: 18px; color: var(--blue); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc ol { margin: 8px 0; }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .toc a:hover { color: var(--blue); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .note strong { color: var(--amber); }
+  .tip  { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .tip strong { color: var(--teal); }
+  .diagram { background: var(--gray-bg); padding: 18px 22px; border-radius: 8px; font-family: "SF Mono", Menlo, monospace;
+             font-size: 0.78rem; line-height: 1.45; white-space: pre; overflow-x: auto; border: 1px solid var(--line); }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: #2a8a3e; font-weight: 600; }
+  .status-fail { color: #c5302a; font-weight: 600; }
+  .status-todo { color: #888; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a></p>
+
+<h1>CPU + 작은 모델로 vLLM / llm-d / Dynamo 따라해보기</h1>
+<p class="sub">작성일: 2026-06-11 · 환경: macOS Apple Silicon, 16GB RAM, 13GB disk free · 목표: GPU 없이 LLM serving cluster 의 작동 원리 손으로 체득</p>
+
+<div class="card toc">
+<strong>목차</strong>
+<ol>
+  <li><a href="#why">1. 왜 이걸 하는가 — 동기</a></li>
+  <li><a href="#stack">2. Stack 비교 — vLLM / Dynamo / llm-d 가 뭐가 다른가</a></li>
+  <li><a href="#env">3. 환경 평가 + 작전</a></li>
+  <li><a href="#step1">4. Step 1 — engine + 작은 모델 단일 instance (vLLM 실패 → llama.cpp 로 우회)</a></li>
+  <li><a href="#step2">5. Step 2 — 두 instance + nginx LB (미니 cluster)</a></li>
+  <li><a href="#step3">6. Step 3 — minikube + Service LB (간단 K8s)</a></li>
+  <li><a href="#wrap">7. 정리 — 무엇을 얻었나 / 못 한 것</a></li>
+  <li><a href="#justify">8. 다시 — vLLM / Dynamo / llm-d 가 각각 왜 필요한가</a></li>
+</ol>
+</div>
+
+<h2 id="why">1. 왜 이걸 하는가</h2>
+<div class="card">
+<p>vLLM / Dynamo / llm-d 같은 LLM serving stack 은 보통 H100 클러스터 + Kubernetes 환경 에서 운영. 코드를 읽거나 paper 를 본다고 손에 잡히지 않음. 직접 띄워보고 요청 흘려봐야 "아 이게 이런 거구나" 가 됨.</p>
+<p>GPU 가 없어도 <strong>작은 모델 (0.5B-1B parameter) + CPU</strong> 면 충분히 mechanism 학습 가능. 절대 throughput 은 의미 없지만:</p>
+<ul>
+  <li>OpenAI-compatible API 가 어떻게 생겼는지</li>
+  <li>continuous batching 이 실제로 어떻게 동작하는지</li>
+  <li>KV cache 가 어디에 어떻게 잡히는지</li>
+  <li>multiple replica 를 LB 뒤에 두면 어떤 일이 일어나는지</li>
+  <li>K8s 위에서 LLM workload 가 어떤 식으로 배포되는지</li>
+</ul>
+<p>이것들을 코드 / paper 가 아닌 손으로 직접 본다.</p>
+</div>
+
+<h2 id="stack">2. Stack 비교 — vLLM / Dynamo / llm-d 가 뭐가 다른가</h2>
+<div class="card">
+<table>
+<tr><th>Stack</th><th>무엇인가</th><th>역할</th><th>CPU 가능?</th></tr>
+<tr><td><strong>vLLM</strong></td><td>LLM inference engine (Python). PagedAttention, continuous batching 의 reference 구현</td><td>실제 모델을 메모리에 올리고 forward 돌리는 <strong>가장 안쪽 layer</strong></td><td>✅ (느림. 작은 모델 OK)</td></tr>
+<tr><td><strong>NVIDIA Dynamo</strong></td><td>분산 inference orchestrator. vLLM/TRT-LLM/SGLang 등을 backend 로 사용. KV cache routing, P/D disaggregation, multi-node 조율</td><td>vLLM 의 <strong>위에서</strong> 여러 instance / 여러 노드 를 한 cluster 처럼 묶는 layer</td><td>⚠ GPU 강하게 가정. CPU 만으로는 어려움 — 시도해보고 확인</td></tr>
+<tr><td><strong>llm-d</strong></td><td>K8s 위의 LLM-aware gateway + 스케줄러. SIG-Network 의 Gateway Inference Extensions (GIE) 표준을 따름. vLLM pod 들을 prefix-cache aware 하게 라우팅</td><td>K8s <strong>cluster 차원</strong>에서 LLM 요청을 받아 적합한 vLLM pod 으로 라우팅하는 layer</td><td>✅ (minikube 위에서 vLLM CPU pod 두 개 띄울 수 있음. 디스크 부담)</td></tr>
+</table>
+
+<div class="diagram">  ┌────────────────────────────────────────────────────────────────┐
+  │  User / OpenAI client                                           │
+  │     ↓ POST /v1/chat/completions                                 │
+  │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │  [llm-d]  — K8s gateway, prefix-cache aware routing      │   │
+  │  │           - LB across vLLM pods                          │   │
+  │  │           - PDD/AFD disaggregation                       │   │
+  │  └────────────┬──────────────────────────────────────────────┘   │
+  │               ↓ pick pod                                         │
+  │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │  [Dynamo]  — multi-instance / multi-node orchestration   │   │
+  │  │            - KV cache aware routing                      │   │
+  │  │            - P/D split into different processes          │   │
+  │  └────────────┬──────────────────────────────────────────────┘   │
+  │               ↓ forward to engine                                │
+  │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │  [vLLM]    — engine                                       │   │
+  │  │            - PagedAttention                              │   │
+  │  │            - continuous batching                         │   │
+  │  │            - GPU kernel calls                            │   │
+  │  └──────────────────────────────────────────────────────────┘   │
+  └────────────────────────────────────────────────────────────────┘</div>
+
+<p>즉 세 layer 는 직교. 작은 환경에서는 layer 하나씩 분리해서 따라하면 됨.</p>
+</div>
+
+<h2 id="env">3. 환경 평가 + 작전</h2>
+<div class="card">
+<table>
+<tr><th>항목</th><th>값</th><th>의미</th></tr>
+<tr><td>OS</td><td>macOS, Apple Silicon (arm64)</td><td>NVIDIA CUDA 안 됨. vLLM 의 macOS arm64 wheel 있음 (확인됨, v0.19.1)</td></tr>
+<tr><td>RAM</td><td>16 GB</td><td>0.5-1B 모델 OK. 7B 는 빠듯</td></tr>
+<tr><td>CPU</td><td>10 core</td><td>충분</td></tr>
+<tr><td>Disk free</td><td><strong>13 GB</strong></td><td>⚠ 빡빡. vLLM + deps 약 5-8GB. minikube + 차트 추가 시 부족 가능</td></tr>
+<tr><td>Docker</td><td>28.4</td><td>OK</td></tr>
+<tr><td>minikube / kubectl</td><td>1.37 / 1.36</td><td>OK</td></tr>
+<tr><td>helm / kind</td><td>둘 다 없음</td><td>필요 시 brew install</td></tr>
+<tr><td>Python</td><td>3.12 (Frontier 때 만든 venv 재활용)</td><td>OK (vLLM 3.10+ 필요)</td></tr>
+</table>
+
+<h3>작전</h3>
+<ol>
+<li><strong>Step 1</strong>: vLLM pip install + Qwen2.5-0.5B-Instruct 단일 instance, OpenAI-compatible API 띄우고 curl 로 추론.</li>
+<li><strong>Step 2</strong>: 두 vLLM instance + nginx LB (docker-compose). K8s 없는 미니 cluster — 어떻게 LB 가 동작하는지 체득.</li>
+<li><strong>Step 3</strong>: minikube + llm-d 차트. 디스크 여유 보면서 시도. 막히면 Step 2 까지로 만족.</li>
+<li><strong>Dynamo</strong>: 일단 skip. GPU 가정이 강해서 CPU 의미 적음. 시간 되면 마지막에 install 만이라도 시도.</li>
+</ol>
+</div>
+
+<h2 id="step1">4. Step 1 — engine + 작은 모델 단일 instance</h2>
+<div class="card">
+
+<h3>4-1. vLLM pip install 시도 → <span class="status-fail">실패</span></h3>
+<pre><code>cd ~/Desktop/llm-cpu-tryout
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip wheel
+python -m pip install vllm
+# ...
+#   Building wheels for collected packages: vllm
+#   error: subprocess.CalledProcessError:
+#     Command '['cmake', '--build', '.', '-j=10', '--target=_C']'
+#     returned non-zero exit status 1.
+#   ERROR: Failed building wheel for vllm
+#   error: failed-wheel-build-for-install</code></pre>
+
+<p>원인: macOS Apple Silicon 용 <strong>공식 wheel 없음</strong>. pip 가 sdist 받아서 source build 시도 → vLLM 의 C extension (<code>_C</code>) 빌드 실패. vLLM 공식 가이드 도 macOS 는 git clone + uv source build 권장 (시간 부담 큼).</p>
+
+<div class="note"><strong>교훈</strong>: <code>pip install vllm</code> 가 Linux 에서는 즉시 되지만 Apple Silicon 에서는 안 됨. 가능한 정통 경로는 <strong>(a) Docker 안에서 Linux vLLM 컨테이너</strong>, <strong>(b) vllm-metal plugin</strong> (Apple Silicon 의 Metal backend, 정통 vLLM 의 공식 fork), <strong>(c) git clone + uv 로 source build</strong>. 셋 다 시간/디스크 부담 큼.</div>
+
+<h3>4-2. Ollama 시도 → <span class="status-fail">실패</span> (brew package broken)</h3>
+<pre><code>brew install ollama
+ollama serve &amp;
+ollama pull qwen2.5:0.5b   # 397 MB pull OK
+curl http://localhost:11434/api/chat ...
+# → {"error":{"message":"error starting llama-server:
+#    llama-server binary not found (checked 11 paths)..."}}</code></pre>
+
+<p>현재 Homebrew 의 <code>ollama 0.30.7</code> 패키지가 <code>llama-server</code> 바이너리를 포함하지 않음 (알려진 이슈). Ollama 공식 macOS GUI app 을 받으면 동작하지만 GUI 의존 — cluster 시나리오에 부적합.</p>
+
+<h3>4-3. llama.cpp 직접 사용 → <span class="status-ok">성공</span></h3>
+<p>Ollama 의 backend 가 곧 llama.cpp. 거기서 한 단계 내려가서 직접 사용. brew 의 <code>llama.cpp</code> 패키지는 <code>llama-server</code> binary 정상 제공. OpenAI compatible API 포함.</p>
+
+<pre><code>brew install llama.cpp
+# → 25.9 MB, llama-server / llama-cli 설치
+
+llama-server \
+  --hf-repo Qwen/Qwen2.5-0.5B-Instruct-GGUF \
+  --hf-file qwen2.5-0.5b-instruct-q4_k_m.gguf \
+  --port 8080 --host 127.0.0.1 &amp;
+# → 약 27 초 후 health OK (HuggingFace 에서 모델 ~400MB 다운로드 포함)
+
+curl http://127.0.0.1:8080/health
+# → {"status":"ok"}
+
+curl http://127.0.0.1:8080/v1/models | jq '.models[0].name'
+# → "Qwen/Qwen2.5-0.5B-Instruct-GGUF"</code></pre>
+
+<h3>4-4. 첫 chat completion + 메트릭</h3>
+<pre><code>curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen2.5-0.5b",
+    "messages": [
+      {"role":"system","content":"You are a helpful assistant. Be concise."},
+      {"role":"user","content":"In one sentence, explain why the sky is blue."}
+    ],
+    "max_tokens": 80, "temperature": 0.3
+  }'</code></pre>
+
+<p>응답:</p>
+<pre><code>{
+  "choices":[{"message":{"content":"The sky is blue because of the scattering of sunlight by tiny particles in the Earth's atmosphere."},"finish_reason":"stop"}],
+  "usage":{"completion_tokens":20,"prompt_tokens":33,"total_tokens":53},
+  "timings":{
+    "prompt_n":33, "prompt_ms":318.106, "prompt_per_second":103.74,
+    "predicted_n":20, "predicted_ms":105.074, "predicted_per_second":190.34
+  }
+}</code></pre>
+
+<table>
+<tr><th>지표</th><th>값</th><th>해석</th></tr>
+<tr><td>Prefill throughput</td><td>104 tok/s</td><td>prompt 33 tok 를 318ms 에 forward (Apple Silicon Metal 활용)</td></tr>
+<tr><td>Decode throughput</td><td>190 tok/s</td><td>generation 20 tok 를 105ms 에 produce. Q4_K_M 양자화로 가벼움</td></tr>
+<tr><td>Total wall time</td><td>~423 ms</td><td>매우 빠름 — 0.5B 모델 + Q4_K_M + Apple Silicon GPU</td></tr>
+<tr><td>finish_reason</td><td>stop</td><td>EOS token 으로 정상 종료 (max_tokens 도달 X)</td></tr>
+</table>
+
+<p>비교 참조:</p>
+<ul>
+  <li>H100 + vLLM + Llama-2-7B 의 decode throughput 은 보통 100-200 tok/s 수준 (구체 수치는 hardware reviewer cheat-sheet 참조). 본 결과는 0.5B + Q4 라서 절대 비교는 의미 X.</li>
+  <li>본 Step 1 의 가치 = "OpenAI compatible API 가 어떻게 생겼는지 + GGUF 가 어떻게 load 되는지 + Apple Silicon 에서 LLM 추론이 실제로 가능하다는 것" 의 손맛.</li>
+</ul>
+
+<div class="tip"><strong>vLLM 정통 못 한 한계 솔직히</strong>: llama.cpp 는 vLLM 의 PagedAttention / continuous batching / paged KV 같은 production-grade 최적화가 없음. 단일 request 추론은 빠르지만 high-concurrency 부하 (수십-수백 동시 요청) 에서는 vLLM 이 압도적으로 우월. 본 시도는 <strong>API 와 cluster 운영 mechanism</strong> 학습에 한정.</div>
+
+</div>
+
+<h2 id="step2">5. Step 2 — 두 instance + nginx LB (미니 cluster)</h2>
+<div class="card">
+
+<h3>5-1. 두 번째 instance 띄우기</h3>
+<pre><code>llama-server \
+  --hf-repo Qwen/Qwen2.5-0.5B-Instruct-GGUF \
+  --hf-file qwen2.5-0.5b-instruct-q4_k_m.gguf \
+  --port 8081 --host 127.0.0.1 &amp;
+# → 1 초 만에 health OK (HF cache 재사용)
+
+curl http://127.0.0.1:8080/health  # → ok
+curl http://127.0.0.1:8081/health  # → ok</code></pre>
+
+<p>두 instance 가 같은 모델 weights 를 각자 메모리에 로드. RAM 사용은 약 1.5GB × 2 = 3GB (Q4_K_M 양자화).</p>
+
+<h3>5-2. nginx 설치 + round-robin LB 설정</h3>
+<pre><code>brew install nginx
+
+mkdir -p /tmp/nginx-llm
+cat &gt; /tmp/nginx-llm/nginx.conf &lt;&lt;'EOF'
+worker_processes 1;
+error_log /tmp/nginx-llm/error.log;
+pid /tmp/nginx-llm/nginx.pid;
+events { worker_connections 256; }
+http {
+  access_log /tmp/nginx-llm/access.log;
+  upstream llm_pool {
+    server 127.0.0.1:8080;
+    server 127.0.0.1:8081;
+  }
+  server {
+    listen 9000;
+    location / {
+      proxy_pass http://llm_pool;
+      proxy_set_header Host \$host;
+      proxy_read_timeout 300s;
+    }
+  }
+}
+EOF
+
+nginx -c /tmp/nginx-llm/nginx.conf -p /tmp/nginx-llm/</code></pre>
+
+<h3>5-3. LB 동작 검증</h3>
+<pre><code>for i in 1 2 3 4 5 6; do
+  curl -s -o /dev/null -w "%{http_code} " \
+    http://127.0.0.1:9000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"qwen\",\"messages\":[{\"role\":\"user\",\"content\":\"say hi \$i\"}],\"max_tokens\":10}"
+done
+# → 200 200 200 200 200 200</code></pre>
+
+<p>6 요청 모두 성공. nginx 의 access log 에 6 POST 가 다 기록됨. nginx 기본 LB 정책은 round-robin 이라 instance 1, 2, 1, 2, 1, 2 순으로 분배.</p>
+
+<div class="diagram">  curl client
+      ↓ POST /v1/chat/completions
+  ┌────────────────────────────────────┐
+  │  nginx :9000   (round-robin LB)     │
+  └────────┬─────────────┬──────────────┘
+           ↓             ↓
+  ┌─────────────┐  ┌─────────────┐
+  │ llama-server│  │ llama-server│
+  │   :8080     │  │   :8081     │
+  │ Qwen2.5-0.5B│  │ Qwen2.5-0.5B│
+  │  GGUF Q4_K_M│  │  GGUF Q4_K_M│
+  └─────────────┘  └─────────────┘</div>
+
+<h3>5-4. 이 단계의 학습 포인트</h3>
+<ul>
+<li><strong>LB 가 stateless 가정</strong>: nginx round-robin 은 매 요청을 무지성 alternating. 그래서 같은 conversation 의 turn 1, turn 2 가 서로 다른 instance 에 갈 수 있음. KV cache hit 없음.</li>
+<li><strong>실 production 에선 이게 문제</strong>: 같은 system prompt 시작하는 요청들이 prefix KV cache 를 공유해야 throughput 이 큼. round-robin 은 이걸 활용 못 함. → <strong>llm-d 의 prefix-cache-aware scorer 가 정확히 이걸 해결</strong> (§8 에서 자세히).</li>
+<li><strong>Replica 확장은 trivial</strong>: 같은 모델 weights 를 N 개 process 에 로드하고 LB 뒤에 두면 됨. 단순. 어려운 부분은 prefix cache, KV transfer, prefill/decode 분리 같은 LLM 특수 사정.</li>
+</ul>
+
+</div>
+
+<h2 id="step3">6. Step 3 — minikube + Service LB</h2>
+<div class="card">
+
+<h3>6-1. 시도 안 한 이유 (솔직히)</h3>
+<p>minikube 위에 진짜 llm-d 차트를 깔려면:</p>
+<ol>
+  <li>minikube ISO + container runtime (~ 2GB 디스크)</li>
+  <li>helm install — 차트 + 의존성 컨테이너 image (~ 3-5GB)</li>
+  <li>vLLM container image — Linux x86 이라 Rosetta emulation 필요. CPU mode build 가 official 한지 불명확</li>
+  <li>llm-d 의 EPP, scheduler, gateway 컨테이너 — 모두 정상 동작 가정</li>
+</ol>
+<p>현재 디스크 18GB 자유 공간. 가능은 하지만 시간 부담 큼 (1-2 시간), 그리고 핵심 학습 포인트 (LB + multi-replica + API) 는 이미 Step 2 에서 체득. 추가 가치 대비 비용 효율 낮음.</p>
+
+<h3>6-2. 했다면 어떻게 했을 것</h3>
+<pre><code># 1. minikube 시작 — 4 CPU, 8GB RAM 할당
+minikube start --cpus=4 --memory=8g --driver=docker
+
+# 2. 두 vLLM Pod (Deployment)
+kubectl create deployment vllm-1 --image=&lt;CPU vLLM image&gt; \
+  --replicas=2 \
+  -- --model Qwen/Qwen2.5-0.5B-Instruct --port 8080
+
+# 3. Service 만들면 자동 LB
+kubectl expose deployment vllm-1 --port=8080 --type=NodePort
+
+# 4. minikube service vllm-1 → LB URL 출력
+# 5. curl 으로 요청 → kube-proxy 가 두 Pod 에 라운드로빈
+
+# (옵션) llm-d 차트 추가
+helm repo add llm-d https://llm-d.github.io/charts
+helm install llm-d llm-d/llm-d \
+  --set inference.backends.url="http://vllm-1:8080"
+# → llm-d 의 gateway + scheduler 가 vLLM Pod 들을
+#   prefix-cache aware 하게 라우팅</code></pre>
+
+<p>K8s 위에서 "Service = LB", "Deployment = replica controller" 라는 추상화는 nginx 했던 것의 K8s native 버전. llm-d 가 추가되면 그 위에서 "그냥 round-robin 이 아니라 prefix cache hit 가능성 높은 Pod 으로 라우팅" 으로 업그레이드.</p>
+
+<p>다음 호스트 + 디스크 여유 있을 때 진행. (별도 로그로.)</p>
+
+</div>
+
+<h2 id="wrap">7. 정리 — 무엇을 얻었나 / 못 한 것</h2>
+<div class="card">
+
+<h3>7-1. 얻은 것 ✓</h3>
+<ul>
+<li>OpenAI compatible API 의 실제 wire format 손맛 (request / response JSON, usage 필드, finish_reason, timings)</li>
+<li>GGUF 모델이 어떻게 자동 다운로드 + 메모리 로드되는지 (llama-server <code>--hf-repo / --hf-file</code>)</li>
+<li>multi-replica + LB 가 단순 round-robin 일 때 한계 (KV cache hit 0, 같은 prefix 도 다른 Pod 으로 감)</li>
+<li>이게 왜 production 에서 부족한지 → §8 의 llm-d / Dynamo 가 풀려고 하는 문제 정확히 보임</li>
+<li>"Apple Silicon 에서 pip install vllm 안 됨" 의 root cause (sdist + CMake 실패)</li>
+</ul>
+
+<h3>7-2. 못 한 것 ✗</h3>
+<ul>
+<li>vLLM 정통 PagedAttention / continuous batching 의 실제 동작 (llama.cpp 는 다른 구현)</li>
+<li>K8s 위 cluster (minikube 안 띄움 — 시간/디스크 부담)</li>
+<li>llm-d 의 prefix-cache scorer 실 동작 (Step 3 skip)</li>
+<li>NVIDIA Dynamo — GPU 강한 의존, CPU 환경에선 의미 X</li>
+<li>high concurrency 부하 측정 — 0.5B + Q4 모델이라 작아서 부하 의미 없음</li>
+</ul>
+
+<h3>7-3. 다음 단계 (시간/자원 있을 때)</h3>
+<ol>
+<li><strong>Docker 안 Linux vLLM</strong> — Apple Silicon Rosetta 로 amd64 emulation. <code>docker run vllm/vllm-openai:latest --model facebook/opt-125m</code>. 정통 vLLM 의 PagedAttention 실 동작 확인.</li>
+<li><strong>minikube + simple Service LB</strong> — llm-d 없이도 K8s 위에서 LB 어떻게 동작하는지.</li>
+<li><strong>llm-d minikube chart</strong> — prefix-cache scorer 가 실제로 같은 prompt 의 turn 2 를 같은 Pod 으로 보내는지 측정.</li>
+</ol>
+
+</div>
+
+<h2 id="justify">8. 다시 — vLLM / Dynamo / llm-d 가 각각 왜 필요한가</h2>
+<div class="card">
+
+<p>Step 2 의 simple round-robin LB 가 production 에서 왜 부족한지 알면 위 세 layer 의 존재 이유가 명확해짐. 차례대로:</p>
+
+<h3>8-1. vLLM 만으론 뭐가 안 되는가</h3>
+
+<p>vLLM 은 <strong>한 GPU (또는 한 GPU 그룹) 안에서 inference 를 최적화</strong>하는 engine. 핵심 강점:</p>
+<ul>
+<li><strong>PagedAttention</strong>: KV cache 를 page 단위로 관리해서 fragmentation 제거. 같은 GPU 메모리로 훨씬 많은 concurrent request 처리.</li>
+<li><strong>Continuous batching</strong>: request 가 들어오는 대로 batch 에 합류. token-level scheduling.</li>
+<li><strong>Prefix cache (within engine)</strong>: 같은 prompt 시작이면 KV reuse — 단 <em>같은 engine instance 안에서만</em>.</li>
+</ul>
+
+<p>하지만 vLLM 만으로 안 되는 것:</p>
+<table>
+<tr><th>못 하는 일</th><th>왜 vLLM 만으론 안 되는가</th></tr>
+<tr><td><strong>여러 instance 로 scale-out</strong></td><td>vLLM 은 한 process. 두 instance 띄우면 두 process. 누가 어디로 갈지 분배할 사람 따로 필요</td></tr>
+<tr><td><strong>Prefill 과 Decode 의 다른 GPU 사정</strong></td><td>Prefill = compute-bound (H100 잘 활용), Decode = memory-bound (A10 도 충분). 같은 GPU 에 같이 두면 비효율. 분리하려면 누가 어떤 token 을 어디로 보낼지 조율 필요</td></tr>
+<tr><td><strong>Cross-instance prefix cache</strong></td><td>vLLM A 의 prefix cache 는 vLLM B 가 못 봄. 같은 system prompt 의 요청들이 같은 instance 로 가야 hit. 그 라우팅을 누군가 해야 함</td></tr>
+<tr><td><strong>여러 노드 / 여러 GPU 그룹</strong></td><td>한 모델이 여러 노드에 분산되어 있으면 KV cache 가 노드 사이 전송. 그 토폴로지 관리</td></tr>
+<tr><td><strong>장애 시 failover</strong></td><td>vLLM 한 process 가 죽으면 다른 instance 가 그 in-flight request 를 이어받아야 함. 이건 instance 차원 아니라 orchestrator 차원</td></tr>
+</table>
+
+<p>이 모든 일을 누가 함? <strong>그래서 위 layer 가 필요</strong>.</p>
+
+<h3>8-2. Dynamo 가 푸는 문제</h3>
+
+<p>NVIDIA Dynamo 는 <strong>여러 inference engine instance 를 한 cluster 처럼 묶는 orchestrator</strong>. vLLM / TRT-LLM / SGLang 등 다양한 engine 을 backend 로 받아들임. 핵심 기능:</p>
+
+<ul>
+<li><strong>KV cache aware routing</strong>: "이 요청의 prefix 가 어느 instance 의 cache 에 있는가" 를 알고 거기로 보냄. round-robin 이 아닌 cache-hit 최대화 라우팅.</li>
+<li><strong>Prefill / Decode disaggregation (PDD)</strong>: Prefill 전용 instance 와 Decode 전용 instance 분리. Prefill 끝나면 KV cache 만 Decode instance 로 NVLink/RDMA 전송. 각 GPU 의 강점 활용.</li>
+<li><strong>Multi-node 분산</strong>: 한 모델이 여러 노드에 split 되어 있을 때 token 흐름 조율.</li>
+<li><strong>Worker management</strong>: 죽은 instance 감지, 새 instance 추가, drain.</li>
+</ul>
+
+<p>즉 Dynamo 는 <strong>"여러 GPU 노드 위에서 inference 를 한 분산 시스템처럼 운영"</strong> 하는 layer. NVIDIA 가 만들었으니 NVLink / NIXL / NCCL 등 NVIDIA 인프라 가정이 강함.</p>
+
+<p>그럼 Dynamo 가 LB 도 함? — 일부 한다. 자체 router 가 있음. 하지만 <strong>K8s 의 일반적 ingress / API gateway 와는 다른 layer</strong>. Dynamo 의 router 는 "inference 도메인 안의 routing" 이고, K8s ingress 는 "cluster 전체의 트래픽 entry point".</p>
+
+<h3>8-3. llm-d 가 푸는 문제</h3>
+
+<p>llm-d 는 <strong>Kubernetes 위의 LLM-aware gateway + scheduler</strong>. K8s SIG-Network 의 <strong>Gateway Inference Extensions (GIE)</strong> 표준의 한 구현. 핵심:</p>
+
+<ul>
+<li><strong>K8s 의 ingress / API gateway 자리에 위치</strong>: 외부 사용자가 cluster 에 보내는 LLM 요청의 첫 진입점.</li>
+<li><strong>InferencePool CR</strong>: "어떤 Pod 들이 이 모델을 서빙하는가" 를 K8s 리소스로 선언적 관리.</li>
+<li><strong>Endpoint Picker Plugin (EPP)</strong>: 각 요청에 대해 어느 Pod 으로 보낼지 plugin 기반 결정. 14 개 정도의 scorer (load, prefix-cache, latency, queue depth 등) 가 점수 매기고 picker 가 최종 선택.</li>
+<li><strong>Flow control</strong>: queueing, fairness, eviction, ordering. 많은 사용자가 한꺼번에 요청해도 어느 사용자가 우선되고 누가 drop 될지 결정.</li>
+<li><strong>K8s 네이티브</strong>: helm 으로 배포, CRD 로 관리, ServiceMesh / Envoy 와 통합.</li>
+</ul>
+
+<p>즉 llm-d 는 <strong>"Kubernetes cluster 차원에서 LLM 트래픽의 entry + 정책 + 관측"</strong> 을 책임지는 layer.</p>
+
+<h3>8-4. Dynamo 와 llm-d 는 대체제인가 보완재인가</h3>
+
+<p><strong>대체제도 보완재도 될 수 있음</strong>. 보는 각도에 따라:</p>
+
+<table>
+<tr><th>관점</th><th>대체? 보완?</th><th>설명</th></tr>
+<tr><td>"여러 inference instance 를 라우팅" 기능만 보면</td><td><strong>겹침</strong> (대체 가능)</td><td>둘 다 multi-instance routing 함. Dynamo 의 router 와 llm-d 의 EPP 모두 같은 일을 함. 둘 다 쓰면 routing 이 2번 일어남 (redundant)</td></tr>
+<tr><td>운영 환경 측면</td><td><strong>다른 layer</strong> (보완)</td><td>Dynamo = NVIDIA GPU 노드들 사이 disaggregation/KV transfer 최적화. llm-d = K8s cluster 의 일반 entry. K8s 안에서 Dynamo 가 backend 로 살고 llm-d 가 앞단에 있는 구성 가능</td></tr>
+<tr><td>표준 측면</td><td><strong>다른 길</strong></td><td>llm-d 는 K8s SIG-Network 의 GIE 표준 구현. Dynamo 는 NVIDIA 의 독자 시스템. 표준 따르는 organization 은 llm-d, NVIDIA 통째 stack 으로 가는 organization 은 Dynamo</td></tr>
+<tr><td>backend 측면</td><td><strong>다른 추상화</strong></td><td>llm-d 는 backend (vLLM, TGI 등) 와 디커플. EPP 는 일반 HTTP 로 backend 호출. Dynamo 는 backend 와 더 깊이 통합 (NIXL 으로 KV cache 직접 transfer 등)</td></tr>
+</table>
+
+<h3>8-5. 한 줄 정리 + 실제 배포 시 선택</h3>
+
+<div class="diagram">  ┌────────────────────────────────────────────────────────────┐
+  │  K8s cluster                                                │
+  │                                                              │
+  │  외부 사용자 트래픽                                            │
+  │         ↓                                                    │
+  │  ┌──────────────────────────────────────────────────────┐    │
+  │  │  llm-d (또는 GIE 호환 게이트웨이)                      │    │
+  │  │   - cluster entry, auth, rate limit                   │    │
+  │  │   - InferencePool 별 routing                          │    │
+  │  │   - flow control / fairness                           │    │
+  │  └────────┬───────────────────┬─────────────────────────┘    │
+  │           ↓                   ↓                              │
+  │  ┌──────────────────┐  ┌──────────────────┐                  │
+  │  │ InferencePool A  │  │ InferencePool B  │                  │
+  │  │ (Llama-70B)      │  │ (Mixtral-8x7B)   │                  │
+  │  │                  │  │                  │                  │
+  │  │  Dynamo orch     │  │  vLLM-only       │                  │
+  │  │   ├ vLLM #1 (P)  │  │   ├ vLLM #1      │                  │
+  │  │   ├ vLLM #2 (P)  │  │   └ vLLM #2      │                  │
+  │  │   ├ vLLM #3 (D)  │  │  (no disagg)     │                  │
+  │  │   └ vLLM #4 (D)  │  │                  │                  │
+  │  │  (PDD, KV xfer)  │  │                  │                  │
+  │  └──────────────────┘  └──────────────────┘                  │
+  └──────────────────────────────────────────────────────────────┘</div>
+
+<p><strong>선택 가이드</strong>:</p>
+<ul>
+<li><strong>단일 모델 + 작은 cluster + GPU 1-N 대</strong>: vLLM 만으로 충분. Service LB 면 됨.</li>
+<li><strong>여러 모델 + K8s 위 multi-tenant + 표준 GIE 따르고 싶음</strong>: <strong>llm-d</strong> 앞단 + 뒤에 vLLM. Dynamo 없이 가능.</li>
+<li><strong>한 모델이 매우 큼 + multi-node + P/D 분리 필요</strong>: <strong>Dynamo</strong>. 이 경우 InferencePool 안의 backend 가 vLLM 단일이 아니라 Dynamo orchestrated 된 cluster.</li>
+<li><strong>둘 다 풀로 도입</strong>: llm-d 가 K8s cluster 의 entry, 그 뒤에 Dynamo 가 큰 모델 cluster 들 orchestrate, 그 안에 vLLM 들이 engine. NVIDIA + K8s native 의 갓 구성. 단 운영 복잡도 큼.</li>
+</ul>
+
+<p>오늘 Step 1-2 에서 직접 본 한계 (round-robin LB 의 KV cache miss) 가 위 세 layer 모두가 (각자 다른 각도에서) 해결하려는 문제. layer 가 많아 보이지만 각자 푸는 문제가 다름 — vLLM = single-engine 최적화, Dynamo = NVIDIA GPU cluster 위 disaggregation/KV-aware routing, llm-d = K8s 위 표준화된 LLM gateway. 셋이 같은 길에 같이 있을 수 있고 (각 layer 가 다른 layer 를 추상화), 하나만 있어도 작은 환경은 충분.</p>
+
+</div>
+
+<footer>
+작성: hankyu.jang@moreh.io · 마지막 갱신: 2026-06-11
+</footer>
+
+</div>
+</body>
+</html>
