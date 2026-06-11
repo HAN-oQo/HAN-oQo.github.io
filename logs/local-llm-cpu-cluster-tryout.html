@@ -76,6 +76,13 @@
     .stack-col.ops { flex-direction: row; flex-wrap: wrap; justify-content: center; }
     .ops-label { text-align: center; padding: 4px 8px; }
   }
+  /* orchestrator layer 안 "둘 중 하나 선택" 표현 */
+  .layer.choice { background: linear-gradient(135deg, #0d6efd, #198754); padding: 12px 14px; }
+  .choice-row { display: flex; gap: 10px; align-items: stretch; justify-content: center; margin-top: 6px; }
+  .choice-box { flex: 1; background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.35); border-radius: 7px; padding: 8px 10px; text-align: center; }
+  .choice-box .cb-name { font-weight: 600; font-size: 0.88rem; }
+  .choice-box .cb-detail { font-size: 0.7rem; opacity: 0.92; margin-top: 2px; }
+  .choice-or { align-self: center; color: rgba(255,255,255,0.8); font-size: 0.78rem; font-weight: 600; padding: 0 4px; }
 </style>
 </head>
 <body>
@@ -114,8 +121,7 @@
   <div class="stack-col ops">
     <div class="ops-label"><strong>운영 책임</strong>(누가 다루는 layer 인가)</div>
     <div class="ops-label"><strong>App / Client</strong>API consumer<br>OpenAI SDK</div>
-    <div class="ops-label"><strong>Platform team</strong>K8s 운영<br>helm install · CRD</div>
-    <div class="ops-label"><strong>Infra / GPU team</strong>NVIDIA stack<br>NVLink · NIXL</div>
+    <div class="ops-label"><strong>Platform team</strong>K8s 운영 + LLM orchestrator<br>(둘 중 하나 선택)</div>
     <div class="ops-label"><strong>Engine team</strong>모델 + 추론 process<br>per-GPU</div>
   </div>
   <div class="stack-flow">
@@ -129,33 +135,37 @@
       <div class="l-detail">POST /v1/chat/completions</div>
     </div>
     <div class="arrow"></div>
-    <div class="layer llmd">
-      <div class="l-name">llm-d Gateway</div>
-      <div class="l-detail">K8s entry · GIE 표준 · EPP 로 prefix-cache aware routing</div>
-    </div>
-    <div class="arrow"></div>
-    <div class="layer dynamo">
-      <div class="l-name">Dynamo Orchestrator</div>
-      <div class="l-detail">NVIDIA GPU cluster · P/D 분리 · KV cache transfer</div>
+    <div class="layer choice">
+      <div class="l-name">Orchestrator Layer — 둘 중 하나 선택</div>
+      <div class="choice-row">
+        <div class="choice-box">
+          <div class="cb-name">llm-d</div>
+          <div class="cb-detail">CNCF sandbox · K8s GIE 표준 · vendor-neutral · Red Hat / Google / IBM / CoreWeave / NVIDIA 공동</div>
+        </div>
+        <div class="choice-or">또는</div>
+        <div class="choice-box">
+          <div class="cb-name">NVIDIA Dynamo</div>
+          <div class="cb-detail">NVIDIA proprietary · NIXL (NVLink/RDMA) · NVIDIA 풀스택 vertical · 2026-03 GA</div>
+        </div>
+      </div>
     </div>
     <div class="arrow"></div>
     <div class="layer vllm">
-      <div class="l-name">vLLM Engine</div>
-      <div class="l-detail">single GPU/node · PagedAttention · continuous batching</div>
+      <div class="l-name">Engine Layer — vLLM (또는 TRT-LLM / SGLang)</div>
+      <div class="l-detail">PagedAttention · continuous batching · in-engine prefix cache</div>
     </div>
   </div>
 </div>
 
-<p><small style="color:var(--muted);">↑ 노란 점이 요청 packet — 4 초 cycle 로 stack 을 통과. 각 layer 운영 책임 (왼쪽) 가 <strong>다른 팀</strong>에 가는 게 핵심 — 한 사람이 모든 layer 를 직접 다루지 않음.</small></p>
+<p><small style="color:var(--muted);">↑ 노란 점이 요청 packet. <strong>Orchestrator layer 는 llm-d 와 Dynamo 가 같은 layer 의 경쟁 솔루션</strong> — 실무에선 보통 하나만 선택. 둘은 다른 layer 가 아님. NVIDIA 가 두 프로젝트 모두에 참여 중이라 component 차원에서 수렴 가능성 있음. (시장 시각 자세히는 §7-5 참조.)</small></p>
 
 <table>
 <tr><th>Layer</th><th>책임</th><th>없으면 무슨 일이 안 되나</th></tr>
-<tr><td><strong>llm-d</strong></td><td>K8s 의 모든 LLM 트래픽 entry. 인증 / rate limit / pool 선택 / EPP scorer 가 prefix-cache aware 분배</td><td>K8s 일반 LB 만 있어서 같은 prompt 의 turn 1, 2 가 다른 Pod 으로 감 → KV cache miss</td></tr>
-<tr><td><strong>Dynamo</strong></td><td>여러 GPU 노드 위 inference 의 분산 운영. Prefill ↔ Decode 분리, KV cache cross-node transfer (NIXL), worker 생사 관리</td><td>한 모델이 한 노드를 못 채우거나 P/D 가 같은 GPU 에서 경쟁. 큰 모델 latency / throughput 절충 안 됨</td></tr>
-<tr><td><strong>vLLM</strong></td><td>한 GPU (또는 TP group) 안의 inference 최적화. PagedAttention, continuous batching, in-engine prefix cache</td><td>한 GPU 안에서 concurrent request 처리가 안 됨. throughput 1/10</td></tr>
+<tr><td><strong>Orchestrator</strong><br>(llm-d <em>또는</em> Dynamo)</td><td>K8s cluster 안에서 LLM 트래픽 entry + 라우팅. KV-cache aware routing, P/D 분리, SLO autoscaling, multi-tenant. <br>llm-d 는 vendor-neutral GIE 표준, Dynamo 는 NVIDIA NIXL 풀스택 — 시각 다를 뿐 같은 일</td><td>K8s 일반 Service (round-robin) 만 있어서 같은 prompt 의 turn 2 가 다른 Pod 으로 → prefix cache miss. P/D 도 분리 못 함. multi-model multi-tenant 도 어려움</td></tr>
+<tr><td><strong>vLLM Engine</strong></td><td>한 GPU (또는 TP group) 안의 inference 최적화. PagedAttention, continuous batching, in-engine prefix cache</td><td>한 GPU 안에서 concurrent request 처리가 안 됨. throughput 1/10. 작은 cluster (단일 노드) 면 engine 만으로 충분</td></tr>
 </table>
 
-<p>즉 세 layer 는 직교. 작은 환경에서는 layer 하나씩 분리해서 따라하면 됨. 자세한 justify 는 §7 참조.</p>
+<p>두 layer 구조: <strong>orchestrator (선택) → engine</strong>. orchestrator 안에서 llm-d 와 Dynamo 는 같은 카테고리의 경쟁 솔루션. 어떤 시나리오에서 어느 쪽을 고르는지는 §7-5 의 선택 기준 표 참조.</p>
 </div>
 
 <h2 id="env">2. 환경 평가 + 작전</h2>
@@ -570,7 +580,7 @@ conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 1
 <h2 id="justify">7. 다시 — vLLM / Dynamo / llm-d 가 각각 왜 필요한가</h2>
 <div class="card">
 
-<p>Step 2 의 simple round-robin LB 가 production 에서 왜 부족한지 알면 위 세 layer 의 존재 이유가 명확해짐. 차례대로:</p>
+<p>Step 2 의 simple round-robin LB 가 production 에서 왜 부족한지 알면 위 컴포넌트들의 존재 이유가 명확해짐. <strong>주의</strong>: Dynamo 와 llm-d 는 같은 layer (orchestrator) 의 <strong>경쟁 솔루션</strong>이고 vLLM 은 그 아래 engine. 차례대로:</p>
 
 <h3>7-1. vLLM 만으론 뭐가 안 되는가</h3>
 
@@ -591,22 +601,21 @@ conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 1
 <tr><td><strong>장애 시 failover</strong></td><td>vLLM 한 process 가 죽으면 다른 instance 가 그 in-flight request 를 이어받아야 함. 이건 instance 차원 아니라 orchestrator 차원</td></tr>
 </table>
 
-<p>이 모든 일을 누가 함? <strong>그래서 위 layer 가 필요</strong>.</p>
+<p>이 모든 일을 누가 함? <strong>그래서 orchestrator layer 가 필요</strong>. orchestrator 의 두 후보 (Dynamo, llm-d) 를 차례대로:</p>
 
-<h3>7-2. Dynamo 가 푸는 문제</h3>
+<h3>7-2. Dynamo 가 푸는 문제 — orchestrator option #1</h3>
 
 <p>NVIDIA Dynamo 는 <strong>여러 inference engine instance 를 한 cluster 처럼 묶는 orchestrator</strong>. vLLM / TRT-LLM / SGLang 등 다양한 engine 을 backend 로 받아들임. 핵심 기능:</p>
 
 <ul>
-<li><strong>KV cache aware routing</strong>: "이 요청의 prefix 가 어느 instance 의 cache 에 있는가" 를 알고 거기로 보냄. round-robin 이 아닌 cache-hit 최대화 라우팅.</li>
-<li><strong>Prefill / Decode disaggregation (PDD)</strong>: Prefill 전용 instance 와 Decode 전용 instance 분리. Prefill 끝나면 KV cache 만 Decode instance 로 NVLink/RDMA 전송. 각 GPU 의 강점 활용.</li>
+<li><strong>KV cache aware routing</strong>: "이 요청의 prefix 가 어느 instance 의 cache 에 있는가" 를 알고 거기로 보냄. round-robin 이 아닌 cache-hit 최대화 라우팅. KV block 단위 granularity (16 token).</li>
+<li><strong>Prefill / Decode disaggregation (PDD)</strong>: Prefill 전용 instance 와 Decode 전용 instance 분리. Prefill 끝나면 KV cache 만 Decode instance 로 NIXL (NVLink/RDMA) 전송. 각 GPU 의 강점 활용.</li>
 <li><strong>Multi-node 분산</strong>: 한 모델이 여러 노드에 split 되어 있을 때 token 흐름 조율.</li>
+<li><strong>SLO-driven autoscaling</strong> (Dynamo Planner 컴포넌트): TTFT/TPOT 목표에 맞춰 worker 수 자동 조절.</li>
 <li><strong>Worker management</strong>: 죽은 instance 감지, 새 instance 추가, drain.</li>
 </ul>
 
-<p>즉 Dynamo 는 <strong>"여러 GPU 노드 위에서 inference 를 한 분산 시스템처럼 운영"</strong> 하는 layer. NVIDIA 가 만들었으니 NVLink / NIXL / NCCL 등 NVIDIA 인프라 가정이 강함.</p>
-
-<p>그럼 Dynamo 가 LB 도 함? — 일부 한다. 자체 router 가 있음. 하지만 <strong>K8s 의 일반적 ingress / API gateway 와는 다른 layer</strong>. Dynamo 의 router 는 "inference 도메인 안의 routing" 이고, K8s ingress 는 "cluster 전체의 트래픽 entry point".</p>
+<p>즉 Dynamo 는 <strong>"여러 GPU 노드 위에서 inference 를 한 분산 시스템처럼 운영"</strong> 하는 orchestrator. NVIDIA 가 만들었으니 NVLink / NIXL / NCCL 등 NVIDIA 인프라 가정이 강함. 시장 포지션: NVIDIA proprietary, vertical performance 강조 ("7x throughput on NVIDIA GPUs").</p>
 
 <h3>7-3. llm-d 가 푸는 문제</h3>
 
@@ -615,24 +624,26 @@ conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 1
 <ul>
 <li><strong>K8s 의 ingress / API gateway 자리에 위치</strong>: 외부 사용자가 cluster 에 보내는 LLM 요청의 첫 진입점.</li>
 <li><strong>InferencePool CR</strong>: "어떤 Pod 들이 이 모델을 서빙하는가" 를 K8s 리소스로 선언적 관리.</li>
-<li><strong>Endpoint Picker Plugin (EPP)</strong>: 각 요청에 대해 어느 Pod 으로 보낼지 plugin 기반 결정. 14 개 정도의 scorer (load, prefix-cache, latency, queue depth 등) 가 점수 매기고 picker 가 최종 선택.</li>
+<li><strong>Endpoint Picker Plugin (EPP)</strong>: 각 요청에 대해 어느 Pod 으로 보낼지 plugin 기반 결정. 14 개 정도의 scorer (load, prefix-cache, latency, queue depth 등) 가 점수 매기고 picker 가 최종 선택. Prefix-cache 는 Pod 단위 (KV block 단위 X).</li>
 <li><strong>Flow control</strong>: queueing, fairness, eviction, ordering. 많은 사용자가 한꺼번에 요청해도 어느 사용자가 우선되고 누가 drop 될지 결정.</li>
-<li><strong>K8s 네이티브</strong>: helm 으로 배포, CRD 로 관리, ServiceMesh / Envoy 와 통합.</li>
+<li><strong>K8s 네이티브</strong>: helm 으로 배포, CRD 로 관리, ServiceMesh / Envoy 와 통합. CNCF sandbox 표준.</li>
 </ul>
 
-<p>즉 llm-d 는 <strong>"Kubernetes cluster 차원에서 LLM 트래픽의 entry + 정책 + 관측"</strong> 을 책임지는 layer.</p>
+<p>즉 llm-d 는 Dynamo 와 <strong>같은 카테고리</strong> (K8s 위 LLM serving orchestrator). 시장 포지션: CNCF sandbox + vendor-neutral + GIE 표준 + Red Hat / Google / IBM / CoreWeave / NVIDIA 공동 founder. NVIDIA 가 Dynamo Planner / KV Cache Manager 를 llm-d 에 통합 발표 (2026).</p>
 
-<h3>7-4. Dynamo 와 llm-d 는 대체제인가 보완재인가</h3>
+<h3>7-4. Dynamo 와 llm-d 는 대체제다 (한 번에 정리)</h3>
 
-<p><strong>대체제도 보완재도 될 수 있음</strong>. 보는 각도에 따라:</p>
+<p><strong>결론: 대체제</strong>. 실무에선 둘 중 하나만 선택. "보완" 으로 보이려면 NVIDIA 가 Dynamo 의 component (Planner, KV Cache Manager) 를 llm-d 에 integration 하는 양다리 시각에서만 성립. 일반 organization 시각에서는 같은 카테고리 — 같은 문제 (K8s 위 LLM serving 의 routing + P/D 분리 + autoscaling) 를 다른 방식으로 푸는 경쟁 솔루션.</p>
 
 <table>
-<tr><th>관점</th><th>대체? 보완?</th><th>설명</th></tr>
-<tr><td>"여러 inference instance 를 라우팅" 기능만 보면</td><td><strong>겹침</strong> (대체 가능)</td><td>둘 다 multi-instance routing 함. Dynamo 의 router 와 llm-d 의 EPP 모두 같은 일을 함. 둘 다 쓰면 routing 이 2번 일어남 (redundant)</td></tr>
-<tr><td>운영 환경 측면</td><td><strong>다른 layer</strong> (보완)</td><td>Dynamo = NVIDIA GPU 노드들 사이 disaggregation/KV transfer 최적화. llm-d = K8s cluster 의 일반 entry. K8s 안에서 Dynamo 가 backend 로 살고 llm-d 가 앞단에 있는 구성 가능</td></tr>
-<tr><td>표준 측면</td><td><strong>다른 길</strong></td><td>llm-d 는 K8s SIG-Network 의 GIE 표준 구현. Dynamo 는 NVIDIA 의 독자 시스템. 표준 따르는 organization 은 llm-d, NVIDIA 통째 stack 으로 가는 organization 은 Dynamo</td></tr>
-<tr><td>backend 측면</td><td><strong>다른 추상화</strong></td><td>llm-d 는 backend (vLLM, TGI 등) 와 디커플. EPP 는 일반 HTTP 로 backend 호출. Dynamo 는 backend 와 더 깊이 통합 (NIXL 으로 KV cache 직접 transfer 등)</td></tr>
+<tr><th>차원</th><th>llm-d 와 Dynamo 의 관계</th></tr>
+<tr><td><strong>기능 카테고리</strong></td><td>같음 — 둘 다 orchestrator. KV-cache aware routing, P/D 분리, multi-node, autoscaling</td></tr>
+<tr><td><strong>구현 차원</strong></td><td>다름 — llm-d 는 Pod 단위 routing + HTTP backend, Dynamo 는 KV block 단위 + NIXL 통합 (§7-6 참조)</td></tr>
+<tr><td><strong>표준 / 거버넌스</strong></td><td>다름 — llm-d 는 CNCF sandbox + GIE 표준, Dynamo 는 NVIDIA proprietary</td></tr>
+<tr><td><strong>둘 다 같이 deploy 가능?</strong></td><td>기술적으론 가능하지만 routing 이 2번 일어남 (redundant). 권장 X. component 차원에서 NVIDIA 가 통합 작업 중</td></tr>
 </table>
+
+<p>실무 선택 기준은 §7-5 에서 자세히.</p>
 
 <h3>7-5. 실무 / 시장 시각 — 둘은 경쟁 솔루션인가</h3>
 
@@ -724,40 +735,60 @@ conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 1
 
 <h3>7-7. 한 줄 정리 + 실제 배포 시 선택</h3>
 
-<div class="diagram">  ┌────────────────────────────────────────────────────────────┐
+<p>실제 배포 시나리오 두 가지 — orchestrator 를 어느 쪽으로 가느냐:</p>
+
+<div class="diagram">  Path A: llm-d 선택 (CNCF/vendor-neutral)
+  ┌────────────────────────────────────────────────────────────┐
   │  K8s cluster                                                │
-  │                                                              │
   │  외부 사용자 트래픽                                            │
   │         ↓                                                    │
   │  ┌──────────────────────────────────────────────────────┐    │
-  │  │  llm-d (또는 GIE 호환 게이트웨이)                      │    │
-  │  │   - cluster entry, auth, rate limit                   │    │
-  │  │   - InferencePool 별 routing                          │    │
+  │  │  llm-d Gateway + EPP                                  │    │
+  │  │   - GIE 표준                                          │    │
+  │  │   - InferencePool 별 prefix-cache aware routing      │    │
   │  │   - flow control / fairness                           │    │
   │  └────────┬───────────────────┬─────────────────────────┘    │
   │           ↓                   ↓                              │
   │  ┌──────────────────┐  ┌──────────────────┐                  │
   │  │ InferencePool A  │  │ InferencePool B  │                  │
   │  │ (Llama-70B)      │  │ (Mixtral-8x7B)   │                  │
-  │  │                  │  │                  │                  │
-  │  │  Dynamo orch     │  │  vLLM-only       │                  │
-  │  │   ├ vLLM #1 (P)  │  │   ├ vLLM #1      │                  │
-  │  │   ├ vLLM #2 (P)  │  │   └ vLLM #2      │                  │
-  │  │   ├ vLLM #3 (D)  │  │  (no disagg)     │                  │
-  │  │   └ vLLM #4 (D)  │  │                  │                  │
-  │  │  (PDD, KV xfer)  │  │                  │                  │
+  │  │  ├ vLLM #1       │  │  ├ vLLM #1       │                  │
+  │  │  └ vLLM #2       │  │  └ vLLM #2       │                  │
   │  └──────────────────┘  └──────────────────┘                  │
+  └──────────────────────────────────────────────────────────────┘
+
+  Path B: Dynamo 선택 (NVIDIA 풀스택)
+  ┌────────────────────────────────────────────────────────────┐
+  │  NVIDIA GPU cluster (K8s 위에 deploy 가능하지만 NVIDIA 가정)   │
+  │  외부 사용자 트래픽                                            │
+  │         ↓                                                    │
+  │  ┌──────────────────────────────────────────────────────┐    │
+  │  │  Dynamo (router + Planner)                            │    │
+  │  │   - KV block 단위 cache-aware routing                 │    │
+  │  │   - SLO-driven autoscaling                            │    │
+  │  │   - P/D disaggregation                                │    │
+  │  └────────┬─────────────────────────────────────────────┘    │
+  │           ↓                                                  │
+  │  ┌────────────────────────────────────────────────────┐      │
+  │  │  Worker pool (NIXL/NVLink/RDMA 로 KV block 공유)     │      │
+  │  │   ├ vLLM #1 (Prefill)   ─── KV block transfer       │      │
+  │  │   ├ vLLM #2 (Prefill)        ↕                       │      │
+  │  │   ├ vLLM #3 (Decode)         ↕                       │      │
+  │  │   └ vLLM #4 (Decode)                                  │      │
+  │  └────────────────────────────────────────────────────┘      │
   └──────────────────────────────────────────────────────────────┘</div>
 
-<p><strong>선택 가이드</strong>:</p>
+<p><strong>선택 가이드</strong> (§7-5 의 표를 한 번 더):</p>
 <ul>
-<li><strong>단일 모델 + 작은 cluster + GPU 1-N 대</strong>: vLLM 만으로 충분. Service LB 면 됨.</li>
-<li><strong>여러 모델 + K8s 위 multi-tenant + 표준 GIE 따르고 싶음</strong>: <strong>llm-d</strong> 앞단 + 뒤에 vLLM. Dynamo 없이 가능.</li>
-<li><strong>한 모델이 매우 큼 + multi-node + P/D 분리 필요</strong>: <strong>Dynamo</strong>. 이 경우 InferencePool 안의 backend 가 vLLM 단일이 아니라 Dynamo orchestrated 된 cluster.</li>
-<li><strong>둘 다 풀로 도입</strong>: llm-d 가 K8s cluster 의 entry, 그 뒤에 Dynamo 가 큰 모델 cluster 들 orchestrate, 그 안에 vLLM 들이 engine. NVIDIA + K8s native 의 갓 구성. 단 운영 복잡도 큼.</li>
+<li><strong>단일 모델 + 작은 cluster + GPU 1-N 대</strong>: vLLM 만으로 충분. orchestrator 없이 K8s Service LB 만으로 시작 가능.</li>
+<li><strong>K8s 위 multi-tenant + 여러 모델 + vendor-neutral / 표준 추구</strong>: <strong>llm-d</strong> 선택. CNCF sandbox + GIE 표준.</li>
+<li><strong>NVIDIA H100/H200 풀스택 + NVLink/InfiniBand 인프라 + 큰 모델</strong>: <strong>Dynamo</strong> 선택. NIXL 의 KV block transfer 활용 가능.</li>
+<li><strong>OpenShift / Red Hat / IBM 환경</strong>: <strong>llm-d</strong> (founder 라 first-party 통합).</li>
+<li><strong>이미 Triton / NeMo 운영 중</strong>: <strong>Dynamo</strong> (NVIDIA stack 연속성).</li>
+<li><strong>둘 다 같이 deploy</strong>: NVIDIA 가 component 차원에서 통합 작업 중. 현재로선 권장 X (routing 2번).</li>
 </ul>
 
-<p>오늘 Step 1-2 에서 직접 본 한계 (round-robin LB 의 KV cache miss) 가 위 세 layer 모두가 (각자 다른 각도에서) 해결하려는 문제. layer 가 많아 보이지만 각자 푸는 문제가 다름 — vLLM = single-engine 최적화, Dynamo = NVIDIA GPU cluster 위 disaggregation/KV-aware routing, llm-d = K8s 위 표준화된 LLM gateway. 셋이 같은 길에 같이 있을 수 있고 (각 layer 가 다른 layer 를 추상화), 하나만 있어도 작은 환경은 충분.</p>
+<p>오늘 Step 1-2 에서 직접 본 한계 (round-robin LB 의 KV cache miss) 가 두 orchestrator 모두가 해결하려는 문제. vLLM = engine 최적화 (PagedAttention 등), Dynamo / llm-d = engine 들을 cluster 차원으로 묶는 orchestrator (둘 중 하나 선택). 작은 환경은 vLLM 만으로도 충분.</p>
 
 </div>
 
