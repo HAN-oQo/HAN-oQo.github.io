@@ -54,9 +54,10 @@
   <li><a href="#stack">4. Stack 선택 — vLLM + KV connector (MoRIIO / P2pNccl)</a></li>
   <li><a href="#monitoring">5. 모니터링 setup (rocm-smi / latency / KV transfer)</a></li>
   <li><a href="#deploy">6. Deploy — single baseline + P/D</a></li>
-  <li><a href="#bench">7. 벤치마크 + 모니터링 캡쳐</a></li>
+  <li><a href="#success">7-bis. <strong>🎉 정통 PDD 성공 — P2pNccl + proxy (11번 시도)</strong></a></li>
+  <li><a href="#bench">7. PDD deploy 시도 + 모니터링 (initial)</a></li>
   <li><a href="#kv-trace">8. KV cache 가 실제로 어디서 어떻게 전송되는가</a></li>
-  <li><a href="#issues">9. 만난 문제 + 진단</a></li>
+  <li><a href="#issues">9. 만난 문제 + 진단 (11 attempts 전체)</a></li>
   <li><a href="#analysis">10. P/D 효과 분석 + 결론</a></li>
   <li><a href="#refs">11. 참고 + 용어 풀이</a></li>
 </ol>
@@ -400,6 +401,139 @@ ts            device,temp,power,gpu%,vram%,mem_act
 </ul>
 
 <div class="note"><strong>다음</strong>: 부하 더 큰 워크로드 (concurrent 호출 + 긴 prompt) 로 GPU% 변동 캡쳐. 그 다음 PDD 두 instance 시도 (TP=4 + AITER 비활성화 조합).</div>
+
+</div>
+
+<h2 id="success">7-bis. 🎉 정통 PDD 성공 — P2pNccl + 공식 proxy (TEST 11, 11번 시도 끝에)</h2>
+<div class="card">
+
+<div class="tip"><strong>핵심 finding</strong>: SharedStorageConnector 는 source comment 가 "debug implementation" 명시 + cross-instance quality 깨짐. <strong>정통 PDD 는 P2pNccl + 공식 proxy server</strong> + 정확한 kv_port / proxy_port / http_port config 필요. 11 번 시도 끝에 동작.</div>
+
+<h3>7-bis-1. 정확한 명령 (vLLM 공식 예제 from <code>disaggregated_serving_p2p_nccl_xpyd/</code>)</h3>
+<pre><code># Prefill instance: GCD 0, http port 20003, ZMQ port 20001
+docker run -d --name vllm-prefill \
+  --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
+  --ipc=host --shm-size=16g <strong>--network host</strong> \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HIP_VISIBLE_DEVICES=0 -e <strong>NCCL_DEBUG=INFO</strong> \
+  -e VLLM_ROCM_USE_AITER=0 -e VLLM_ROCM_USE_AITER_RMSNORM=0 \
+  rocm/vllm:latest \
+  vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --enforce-eager --host 0.0.0.0 --port 20003 --tensor-parallel-size 1 \
+    --seed 1024 <strong>--dtype float16</strong> --max-model-len 4096 \
+    --max-num-batched-tokens 4096 --max-num-seqs 64 --trust-remote-code \
+    --gpu-memory-utilization 0.9 \
+    --kv-transfer-config '{
+      "kv_connector":"P2pNcclConnector",
+      "kv_role":"kv_producer",
+      <strong>"kv_buffer_size":"1e1",</strong>           <!-- 작은 producer buffer -->
+      <strong>"kv_port":"20001",</strong>               <!-- unique ZMQ port -->
+      "kv_connector_extra_config":{
+        <strong>"proxy_ip":"0.0.0.0",</strong>
+        <strong>"proxy_port":"30001",</strong>
+        <strong>"http_port":"20003",</strong>           <!-- vLLM API port -->
+        "send_type":"PUT_ASYNC",
+        "nccl_num_channels":"16"
+      }
+    }'
+
+# Decode instance: GCD 4, http port 20005, ZMQ port 22001
+docker run -d --name vllm-decode \
+  ... -e HIP_VISIBLE_DEVICES=4 ... \
+  vllm serve ... --port 20005 --gpu-memory-utilization 0.7 \
+    --kv-transfer-config '{
+      "kv_connector":"P2pNcclConnector",
+      "kv_role":"kv_consumer",
+      <strong>"kv_buffer_size":"8e9",</strong>           <!-- 큰 consumer buffer (8GB) -->
+      <strong>"kv_port":"22001",</strong>               <!-- 다른 ZMQ port -->
+      "kv_connector_extra_config":{
+        "proxy_ip":"0.0.0.0", "proxy_port":"30001",
+        <strong>"http_port":"20005",</strong>
+        "send_type":"PUT_ASYNC", "nccl_num_channels":"16"
+      }
+    }'</code></pre>
+
+<h3>7-bis-2. Proxy server 직접 build + 실행 (간단 구현)</h3>
+
+<p>공식 proxy script (<code>disagg_proxy_p2p_nccl_xpyd.py</code>) 가 <code>quart</code> 의존성 필요 — image 에 없음. 간단 Dockerfile:</p>
+
+<pre><code># ~/pd-experiment/proxy/Dockerfile
+FROM rocm/vllm:latest
+RUN pip install --no-cache-dir --ignore-installed blinker quart httpx</code></pre>
+
+<pre><code>$ docker build -t vllm-proxy:latest ~/pd-experiment/proxy/
+
+$ docker run -d --name vllm-proxy --network host vllm-proxy:latest \
+    python3 /app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py \
+      --model Qwen/Qwen2.5-1.5B-Instruct \
+      --prefill 0.0.0.0:20003 --decode 0.0.0.0:20005 --port 30001
+
+# Proxy 가 두 port listen:
+# - 30001: prefill / decode 가 ping 보내는 service discovery
+# - 10001: client 가 호출하는 OpenAI-compatible endpoint (hardcoded)</code></pre>
+
+<h3>7-bis-3. NCCL handshake 성공 — 실 log</h3>
+
+<pre><code>[EngineCore_DP0] 💯P2pNcclEngine init, rank:0, local_rank:0,
+  http_address:192.168.3.52:20003, zmq_address:192.168.3.52:20001,
+  proxy_address:0.0.0.0:30001, send_type:PUT_ASYNC,
+  buffer_size_threshold:10.00, nccl_num_channels:16
+
+# decode 에서 동일 init.
+
+# 첫 chat request 들어오면 P → D 의 NCCL handshake:
+mi250-052:304:553 [0] NCCL INFO Channel 00/16 : 0 1
+mi250-052:304:553 [0] NCCL INFO Channel 01/16 : 0 1
+...
+mi250-052:304:553 [0] NCCL INFO Channel 15/16 : 0 1
+mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
+🤝ncclCommInitRank Success, 192.168.3.52:20001👉192.168.3.52:22001, MyRank:0</code></pre>
+
+<p><strong>16 NCCL channels</strong> 가 두 GCD 사이 RCCL 으로 wired. ROCm 의 NCCL = RCCL 자동 매핑.</p>
+
+<h3>7-bis-4. 실 chat — 3 calls 정상 답</h3>
+
+<pre><code>$ curl -s -m 30 http://127.0.0.1:<strong>10001</strong>/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
+       "prompt":"Question 1: What is photosynthesis?","max_tokens":40}'
+
+{
+  "id": "cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_2a229150c5934404a3ba4bed4068ced2",
+  "choices":[{"text":" Photosynthesis is the process by which plants use sunlight to convert carbon dioxide and water into glucose and oxygen.",
+              "finish_reason":"stop"}]
+}</code></pre>
+
+<table>
+<tr><th>Call</th><th>wall time</th><th>output</th></tr>
+<tr><td>1</td><td>574ms</td><td>"How does it work? Question 2: What are the different types of photosynthesis..."</td></tr>
+<tr><td>2</td><td>566ms</td><td>"How does it work? Photosynthesis is a process by which plants, algae, and some bacteria convert li..."</td></tr>
+<tr><td>3</td><td>567ms</td><td>"Photosynthesis is the process by which plants, algae, and some bacteria use sunlight to convert car..."</td></tr>
+</table>
+
+<p>모든 호출 정상 답 (40 token). wall ~570ms 매번 — P/D 분담 + KV 직접 RCCL transfer + decode 가 작은 모델 (1.5B) 의 40 token generation. <strong>request_id 에 prefill_addr + decode_addr 명시</strong>.</p>
+
+<h3>7-bis-5. Monitoring (rocm-smi CSV) — P/D 분담 명확 캡쳐</h3>
+
+<pre><code>ts            device,temp,power, gpu%, vram%, mem
+# === idle ===
+1781197805167, card0, 35.0, 121.0,  0,  91,  0  ← Prefill GCD (idle)
+1781197805167, card4, 31.0, 125.0,  0,  71,  0  ← Decode GCD (idle, buffer 작음)
+
+# === chat request 도착 ===
+1781197806261, card0, 36.0, 121.0,  0,  91,  0  ← Prefill: monitoring polling 못 잡음 (짧음)
+1781197806261, card4, 31.0, <strong>127.0</strong>, <strong>71</strong>, 71, 11  ← <strong>Decode 시작</strong>
+
+1781197807359, card0, 35.0, 122.0,  0,  91,  0
+1781197807359, card4, 31.0, <strong>141.0</strong>, <strong>71</strong>, 71, 15  ← <strong>Decode peak — Power 141W</strong></code></pre>
+
+<p><strong>분석</strong>:</p>
+<ul>
+<li>card4 (Decode) 의 GPU% 71% / Power 125 → 141W — 명확한 부하 증가</li>
+<li>card0 (Prefill) 의 변동 못 잡음 — prefill 시간이 polling (1s) 보다 짧음 (40 token 의 prompt = 약 30 token forward = ~100ms 추정)</li>
+<li>VRAM: card0 91% (gpu-memory-utilization 0.9), card4 71% (gpu-memory-utilization 0.7) — config 그대로 반영</li>
+<li>generation 의 대부분 시간이 <strong>decode GCD</strong> 에서 — PDD 의 본질</li>
+</ul>
 
 </div>
 
