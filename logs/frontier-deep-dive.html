@@ -1189,6 +1189,160 @@ bash examples/architecture/co-location/offline/dense_model_basic.sh \
 <div class="card">
 <p>유저가 실제로 Frontier 쓰려고 명령어 치면, 그게 어떤 파일을 호출하고, 그 파일이 어떤 함수를 호출하고, 결과 파일이 어떻게 만들어져서, 다음 명령어가 그 파일을 어떻게 읽고 사용하는지 — 명령어 chain 으로 풀어씀.</p>
 
+<h3>10-0. 한 화면 high-level 그림</h3>
+<div class="diagram">  ┌────────────────────────────────────────────────────────────────────────────┐
+  │                            PROFILE 단계 (GPU 필요)                          │
+  │                                                                            │
+  │   사용자                                                                    │
+  │     ↓ "python -m frontier.profiling.linear_op.main --models ... --device h100 --max_tokens 4096"
+  │   ┌───────────────────────────────────────┐                                │
+  │   │ frontier/profiling/linear_op/main.py  │                                │
+  │   │   main()                              │                                │
+  │   │     ├─ argparse                       │                                │
+  │   │     ├─ get_num_tokens_to_profile()   │  ← grid [1,2,4,...,4096] 250점  │
+  │   │     └─ ProcessPoolExecutor (N GPU)   │                                │
+  │   └────────────────┬──────────────────────┘                                │
+  │                    │ for each (model, num_tokens, TP):                     │
+  │                    ▼                                                       │
+  │   ┌───────────────────────────────────────┐                                │
+  │   │ LinearOpWrapper.profile(num_tokens)   │                                │
+  │   │   ├─ GPTModel(model_config, TP)       │ ← frontier 자체 model class    │
+  │   │   ├─ WARMUP=3, ACTIVE=20 회 forward   │                                │
+  │   │   └─ stats = TimerStatsStore.get()    │ ← 모든 CudaTimer 결과 모음     │
+  │   └────────────────┬──────────────────────┘                                │
+  │                    ▼                                                       │
+  │   ┌───────────────────────────────────────┐                                │
+  │   │ pd.DataFrame(rows) → pd.json_normalize│ ← time_stats 컬럼 flatten     │
+  │   │   → df.to_csv(output_path)            │                                │
+  │   └────────────────┬──────────────────────┘                                │
+  │                    ▼                                                       │
+  │   ┌────────────────────────────────────────────────────────────────────┐  │
+  │   │ data/profiling/                                                    │  │
+  │   │   ├─ compute/h100/meta-llama/Llama-2-7b-hf/                       │  │
+  │   │   │     ├─ linear_op.csv                  ← Workflow A1 산출      │  │
+  │   │   │     ├─ linear_op_kernel_only.csv      ← (--profile_method 별)│  │
+  │   │   │     ├─ attention.csv                  ← Workflow A2          │  │
+  │   │   │     └─ moe.csv                        ← Workflow A3          │  │
+  │   │   └─ network/h100/                                                │  │
+  │   │         ├─ all_reduce.csv                 ← Workflow A4          │  │
+  │   │         └─ send_recv.csv                                          │  │
+  │   └─────────────────────┬──────────────────────────────────────────────┘  │
+  │                         │ Profile CSV 들 (이걸 CLI 옵션으로 sim 에 전달)│
+  └─────────────────────────┼─────────────────────────────────────────────────┘
+                            │
+                            ▼
+  ┌─────────────────────────┴─────────────────────────────────────────────────┐
+  │                        SIMULATION 단계 (CPU 만 — GPU 없어도 OK)            │
+  │                                                                            │
+  │   사용자                                                                    │
+  │     ↓ "python -m frontier.main --model_name ... --..._compute_input_file PATH ..."
+  │   ┌───────────────────────────────────────┐                                │
+  │   │ frontier/main.py:main()               │                                │
+  │   │   ├─ SimulationConfig.from_cli_args() │                                │
+  │   │   └─ Simulator(config).run()          │                                │
+  │   └────────────────┬──────────────────────┘                                │
+  │                    ▼                                                       │
+  │   ┌───────────────────────────────────────────────────────────────────┐  │
+  │   │ Simulator.__init__()  — 모든 컴포넌트 wiring (그 중 가장 중요):    │  │
+  │   │                                                                    │  │
+  │   │   SklearnExecutionTimePredictor(...)                              │  │
+  │   │     ├─ pd.read_csv(linear_op.csv)  ◄────┐                         │  │
+  │   │     ├─ pd.read_csv(attention.csv)  ◄────┤  Profile CSV 들 여기서  │  │
+  │   │     ├─ pd.read_csv(moe.csv)        ◄────┤  읽음. CLI 의 --..._input_file 옵션 경로  │
+  │   │     ├─ pd.read_csv(all_reduce.csv) ◄────┘                         │  │
+  │   │     │                                                              │  │
+  │   │     ├─ GridSearchCV.fit(...) 으로 op 마다 sklearn 모델 학습       │  │
+  │   │     │     (RandomForestRegressor / PolynomialRegression)         │  │
+  │   │     │                                                              │  │
+  │   │     └─ for n in 1..max_tokens:                                    │  │
+  │   │           self._predictions[op][(n,)] = model.predict([[n]])      │  │
+  │   │           ← 모든 정수 token count 미리 계산해서 dict 캐시          │  │
+  │   └────────────────┬──────────────────────────────────────────────────┘  │
+  │                    ▼                                                       │
+  │   ┌───────────────────────────────────────────────────────────────────┐  │
+  │   │ Simulator.run() — event loop                                       │  │
+  │   │                                                                    │  │
+  │   │   while not done:                                                  │  │
+  │   │     event = heapq.heappop(event_queue)                            │  │
+  │   │     new_events = event.handle_event(scheduler, metric_store)      │  │
+  │   │                                                                    │  │
+  │   │   매 REPLICA_STAGE_SCHEDULE event 에서:                            │  │
+  │   │     execution_time = predictor.predict_stage_execution_time(...)  │  │
+  │   │       → self._predictions["mlp_up_proj"][(token_count,)]           │  │
+  │   │         ← O(1) dict lookup, profile 측정값에서 학습된 곡선         │  │
+  │   └────────────────┬──────────────────────────────────────────────────┘  │
+  │                    ▼                                                       │
+  │   ┌───────────────────────────────────────────────────────────────────┐  │
+  │   │ _write_output()                                                    │  │
+  │   │   metric_store.plot() →                                           │  │
+  │   │     outputs/{run_id}/e2e_latency.csv   ← 산출물                   │  │
+  │   │     outputs/{run_id}/ttft.csv                                     │  │
+  │   │     outputs/{run_id}/tpot.csv                                     │  │
+  │   │     outputs/{run_id}/throughput.csv                               │  │
+  │   │     outputs/{run_id}/*.png  (plot)                                │  │
+  │   └───────────────────────────────────────────────────────────────────┘  │
+  └────────────────────────────────────────────────────────────────────────────┘</div>
+
+<h3>10-0-b. "vLLM 의 GPTModel 가져와서 forward 하는 거 맞지?" 에 대한 정확한 답</h3>
+<p>부분적으로 맞고 부분적으로 다름. 정확히:</p>
+<table>
+<tr><th>구성 요소</th><th>실제로 어디서 옴</th></tr>
+<tr><td><code>GPTModel</code> 클래스 자체</td><td><strong>Frontier 자체 구현</strong> (<code>frontier/profiling/linear_op/linear_op_impl.py</code>). vLLM 의 <code>LlamaForCausalLM</code> 같은 클래스 직접 import 안 함</td></tr>
+<tr><td>안에 들어가는 layer (Linear/Norm/Rotary/Activation)</td><td><strong>Frontier 자체 layer</strong> (<code>frontier/profiling/common/layers/</code>): <code>SiluAndMul</code>, <code>RMSNorm</code>, <code>GemmaRMSNorm</code>, <code>get_rope</code>, <code>ColumnParallelLinear</code>, <code>RowParallelLinear</code>, <code>VocabParallelEmbedding</code>. 이게 vLLM 의 같은 이름 layer 와 <strong>알고리즘/kernel 호환</strong> 되도록 작성 (mirror)</td></tr>
+<tr><td>Attention kernel</td><td><strong>vLLM 의 attention backend 직접</strong> — FlashInfer 의 <code>get_kv_cache_layout</code> 등 호출</td></tr>
+<tr><td>MoE kernel</td><td><strong>vLLM 의 fused MoE 직접</strong> — <code>vllm.model_executor.layers.fused_moe.fused_moe_kernel</code></td></tr>
+<tr><td>측정 mechanism</td><td>각 op 가 자기 안에 <code>CudaTimer</code> context 를 박아둠. <code>GPTModel.forward()</code> 한 번 호출 = 모든 op timer 가 순차 발화 → 모든 op 시간 한꺼번에 측정</td></tr>
+</table>
+
+<h4>측정 mechanism — 한 forward 안에서 모든 op 동시 측정</h4>
+<div class="diagram">  # frontier/profiling/linear_op/linear_op_impl.py 안의 op 들이
+  # 자기 자체에 CudaTimer 를 갖고 있음:
+
+  class Attention(nn.Module):
+      def __init__(self, ...):
+          self._attn_pre_proj_timer = CudaTimer("attn_pre_proj")
+          self._attn_rope_timer     = CudaTimer("attn_rope")
+          ...
+          self.qkv_proj = ColumnParallelLinear(...)  ← frontier 자체
+          self.rotary_emb = get_rope(...)             ← frontier 자체
+
+      def forward(self, hidden_states, positions):
+          with self._attn_pre_proj_timer:                ← Timer ENTER (cuda Event)
+              qkv = self.qkv_proj(hidden_states)
+                                                           ← Timer EXIT  (cuda Event)
+          q, k, v = qkv.chunk(3, dim=-1)
+          with self._attn_rope_timer:                    ← Timer ENTER
+              q, k = self.rotary_emb(q, k, positions)
+                                                           ← Timer EXIT
+          ...
+
+  class MLP(nn.Module):
+      def __init__(self, ...):
+          self._mlp_up_proj_timer   = CudaTimer("mlp_up_proj")
+          self._mlp_down_proj_timer = CudaTimer("mlp_down_proj")
+          self._mlp_act_timer       = CudaTimer("mlp_act")
+          ...
+      def forward(self, hidden_states):
+          with self._mlp_up_proj_timer:
+              h = self.up_proj(hidden_states)
+          with self._mlp_act_timer:
+              h = self.act_fn(h)
+          with self._mlp_down_proj_timer:
+              out = self.down_proj(h)
+          ...
+
+  # 그래서 한 GPTModel.forward(batch) 호출 시:
+  # - attention.forward → attn_pre_proj_timer, attn_rope_timer 각각 발화
+  # - mlp.forward      → mlp_up_proj_timer, mlp_act_timer, mlp_down_proj_timer 발화
+  # → TimerStatsStore 가 모든 timer 결과를 layer 별로 모음
+  # → 1 forward = 모든 op 의 latency 한 번에 측정 완료
+  #
+  # ACTIVE_STEPS=20 회 forward 반복 → op 별 min/max/mean/median/std 계산</div>
+
+<h4>왜 vLLM 의 LlamaForCausalLM 직접 import 안 하나</h4>
+<p>vLLM 의 model class 는 <strong>scheduler / KV cache manager / sampler / 전체 inference engine</strong> 과 묶여서 동작. 그래서 직접 import 해서 forward 하려면 vLLM 엔진 전체 띄워야 함 (init 시간 30초+). 그리고 그러면 측정값에 vLLM Python 오버헤드까지 다 들어가서 "순수 op 시간" 분리가 어려움.</p>
+<p>Frontier 는 <strong>layer 만 mirror</strong> 해서 wrap — vLLM 의 <code>nn.Linear</code> subclass 들 (ColumnParallelLinear 등) 과 같은 kernel 을 호출하지만 Python class wrapper 만 자체 구현. 결과적으로 vLLM 띄우는 시간 없이 빠른 측정 + Python 오버헤드 측정값에 안 들어감. 단점은 vLLM 의 production forward path 의 다른 overhead (cache 관리, scheduler 등) 가 빠짐 — 그래서 calibration 필요할 수도.</p>
+
 <h3>10-A. Workflow A: Profile DB 만들기</h3>
 
 <h4>전체 흐름 (한눈에)</h4>
