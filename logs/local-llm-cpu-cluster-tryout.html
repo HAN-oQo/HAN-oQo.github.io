@@ -622,7 +622,42 @@ conc=8 에서야 B 가 19.7 로 의미 있게 높음 (A 의 일반화 추정 ~ 1
 <tr><td>backend 측면</td><td><strong>다른 추상화</strong></td><td>llm-d 는 backend (vLLM, TGI 등) 와 디커플. EPP 는 일반 HTTP 로 backend 호출. Dynamo 는 backend 와 더 깊이 통합 (NIXL 으로 KV cache 직접 transfer 등)</td></tr>
 </table>
 
-<h3>7-5. 한 줄 정리 + 실제 배포 시 선택</h3>
+<h3>7-5. llm-d 의 prefix-cache routing 과 Dynamo 의 KV-aware routing 의 차이</h3>
+
+<p>둘 다 "cache aware routing" 이라고 묶여서 같은 일 같은데 <strong>layer 가 완전히 다름</strong>. 헷갈리기 쉬워서 정리:</p>
+
+<table>
+<tr><th>차원</th><th>llm-d 의 prefix-cache routing</th><th>Dynamo 의 KV-cache aware routing</th></tr>
+<tr><td><strong>Layer 위치</strong></td><td>K8s gateway 차원 (HTTP request routing)</td><td>inference engine backend 차원 (worker 선택 + KV block transfer)</td></tr>
+<tr><td><strong>Granularity (단위)</strong></td><td>Pod 단위. "이 prefix 는 Pod A 에 cache 있을 가능성 높음 → Pod A 로"</td><td><strong>KV block 단위</strong> (보통 16 token). "block 1,2,3 은 worker A 에, block 4 는 worker B 에 있음"</td></tr>
+<tr><td><strong>Cache miss 시 대응</strong></td><td>그 Pod 이 그냥 새로 계산. Pod 끼리 격리되어 있어 다른 Pod 의 cache 활용 X</td><td><strong>다른 worker 의 cache block 을 NIXL (NVLink/RDMA) 로 가져옴</strong> — 재계산 안 하고 transfer</td></tr>
+<tr><td><strong>메타데이터</strong></td><td>Pod 의 metrics endpoint 에서 pull (Prometheus 식). 약간 stale 가능</td><td>KV block index 가 worker 간 실시간 sync (NCCL/NIXL 채널)</td></tr>
+<tr><td><strong>Backend 결합</strong></td><td>HTTP/gRPC 만으로 통신. vLLM/TRT-LLM/SGLang 모두 가능</td><td>backend engine 에 KV connector hook 필요 (vLLM 의 KVConnector 등 source 차원 통합)</td></tr>
+<tr><td><strong>표준</strong></td><td>K8s SIG-Network 의 GIE 표준</td><td>NVIDIA 의 독자 시스템 (NIXL 라이브러리 가정)</td></tr>
+</table>
+
+<h4>비유로</h4>
+<ul>
+<li><strong>llm-d</strong> = 택시 호출 앱이 "가장 가까운 차" 매칭. 차들끼리 손님 안 바꿈. dispatcher (EPP) 가 누가 어디 있는지만 알고 최선 매칭.</li>
+<li><strong>Dynamo</strong> = 여러 가게가 <strong>같은 창고를 공유</strong>. 어느 가게든 창고에서 꺼내옴. 가게 사이 재고 (KV block) 이동 자유로움 (NIXL).</li>
+</ul>
+
+<h4>그래서 대체제가 아닌 이유 (다시)</h4>
+<ul>
+<li><strong>llm-d 만</strong> 쓰면 Pod 끼리 cache 격리 → 같은 prefix 가 두 번째 Pod 에 가면 prefix cache miss. routing 만 똑똑할 뿐 KV 자체는 안 옮김.</li>
+<li><strong>Dynamo 만</strong> 쓰면 K8s 다중-사용자 / 다중-모델 entry 가 없음. NVIDIA cluster 안의 worker 들만 효율적으로 묶음.</li>
+<li><strong>큰 cluster 면 둘 다</strong>: llm-d 가 "어느 InferencePool 로 보낼지" 결정 → 그 안의 Dynamo workers 가 KV block 차원 최적화. routing 이 2 단계로 일어나지만 각자 다른 문제 풀이라 redundant 아님.</li>
+</ul>
+
+<div class="tip"><strong>요약</strong>: 같은 단어 "cache aware" 인데 <strong>llm-d 는 Pod 차원의 매칭</strong>, <strong>Dynamo 는 KV block 차원의 transfer + 매칭</strong>. cache miss 시 무엇이 일어나느냐 (재계산 vs RDMA transfer) 가 가장 큰 차이.</div>
+
+<p>출처:</p>
+<ul>
+<li>llm-d EPP scorer 구조: <a href="https://github.com/llm-d-incubation/llm-d-modelservice">llm-d-modelservice repo</a> 의 <code>values.yaml</code> 의 <code>routing</code> section, <a href="https://gateway-api.sigs.k8s.io/concepts/api-overview/">K8s Gateway API 표준</a></li>
+<li>Dynamo KV aware routing + NIXL: <a href="https://github.com/ai-dynamo/dynamo">NVIDIA Dynamo repo</a></li>
+</ul>
+
+<h3>7-6. 한 줄 정리 + 실제 배포 시 선택</h3>
 
 <div class="diagram">  ┌────────────────────────────────────────────────────────────┐
   │  K8s cluster                                                │
