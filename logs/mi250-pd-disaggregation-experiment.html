@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MI250 8 GPU 에서 P/D Disaggregation 실험</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  h4 { font-size: 0.95rem; margin-top: 18px; color: var(--blue); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc ol { margin: 8px 0; }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .diagram { background: var(--gray-bg); padding: 18px 22px; border-radius: 8px; font-family: "SF Mono", Menlo, monospace;
+             font-size: 0.78rem; line-height: 1.45; white-space: pre; overflow-x: auto; border: 1px solid var(--line); }
+  .status-ok { color: #2a8a3e; font-weight: 600; }
+  .status-fail { color: #c5302a; font-weight: 600; }
+  .status-todo { color: #888; }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 관련: <a href="pd-disaggregation-metal-tryout.html">Apple Silicon vLLM PD Disaggregation 시도</a></p>
+
+<h1>MI250 8 GPU 에서 P/D Disaggregation 실험</h1>
+<p class="sub">작성일: 2026-06-11 · 환경: <code>mi250-052</code> (AMD INSTINCT MI250 OAM × 4 카드 = 8 GPU die, ROCm 6.2) · 작은 모델로 P/D 분리 운영 + 모니터링 + 내부 동작 분석</p>
+
+<div class="card toc">
+<strong>목차</strong>
+<ol>
+  <li><a href="#goal">1. 실험 목표 (사용자 4 가지 질문)</a></li>
+  <li><a href="#env">2. 환경 점검 — mi250-052 노드</a></li>
+  <li><a href="#design">3. 실험 설계 — 4 GPU P / 4 GPU D</a></li>
+  <li><a href="#stack">4. Stack 선택 — vLLM + KV connector (MoRIIO / P2pNccl)</a></li>
+  <li><a href="#monitoring">5. 모니터링 setup (rocm-smi / latency / KV transfer)</a></li>
+  <li><a href="#deploy">6. Deploy — single baseline + P/D</a></li>
+  <li><a href="#bench">7. 벤치마크 + 모니터링 캡쳐</a></li>
+  <li><a href="#kv-trace">8. KV cache 가 실제로 어디서 어떻게 전송되는가</a></li>
+  <li><a href="#issues">9. 만난 문제 + 진단</a></li>
+  <li><a href="#analysis">10. P/D 효과 분석 + 결론</a></li>
+  <li><a href="#refs">11. 참고 + 용어 풀이</a></li>
+</ol>
+</div>
+
+<h2 id="goal">1. 실험 목표</h2>
+<div class="card">
+<p>사용자가 명시한 4가지 질문에 답하기 위한 실험:</p>
+<ol>
+<li><strong>어떻게 돌릴 수 있는지</strong> — 명령어 / config / 두 instance 띄우는 절차 전부 기록</li>
+<li><strong>잘 도는지</strong> — 모니터링 로그 캡쳐 (rocm-smi, GPU util/memory/inter-GCD bandwidth, vLLM 메트릭)</li>
+<li><strong>내부 동작</strong> — 실 call 한 번 보내면 KV cache 가 어디서 (어느 GPU) 어떻게 (어떤 transport — RCCL/HIP IPC/CPU bounce) 어디로 (decode 의 어느 GPU) 전송되는지 추적. 현재 stack 의 문제도</li>
+<li><strong>P/D 효과</strong> — 단일 vLLM 8 GPU vs P/D (P 4 GPU + D 4 GPU) 비교. TTFT / TPOT / throughput / GPU util 차이</li>
+</ol>
+
+<div class="tip"><strong>기록 원칙</strong> (사용자 요청): 모든 명령어 / 실패 / 우회 / 성공 / 결과 그대로 기록. Apple Silicon vLLM PDD 시도 글 (<a href="pd-disaggregation-metal-tryout.html">참조</a>) 처럼 솔직히.</div>
+</div>
+
+<h2 id="env">2. 환경 점검 — mi250-052 노드</h2>
+<div class="card">
+
+<h3>2-1. SSH 접근 + 하드웨어</h3>
+<pre><code>ssh mi250-052
+# → user: herom, Ubuntu 5.15.0-25-generic x86_64
+# → reachable, no jump host needed</code></pre>
+
+<table>
+<tr><th>항목</th><th>값</th></tr>
+<tr><td>OS</td><td>Ubuntu (kernel 5.15.0-25)</td></tr>
+<tr><td>GPU</td><td><strong>AMD INSTINCT MI250 (MCM) OAM × 4 카드 = 8 GPU die</strong> (GFX Version: gfx9010)</td></tr>
+<tr><td>GPU VRAM</td><td>각 die 64 GB HBM2e → <strong>총 512 GB GPU memory</strong></td></tr>
+<tr><td>ROCm</td><td><strong>6.2.0-66</strong> (vLLM ROCm 빌드 호환)</td></tr>
+<tr><td>Python</td><td>3.10.12 (/usr/bin/python3)</td></tr>
+<tr><td>HIP</td><td><code>/usr/bin/hipcc</code> 있음</td></tr>
+<tr><td>RAM</td><td>503 GB total, 437 GB free</td></tr>
+<tr><td>Disk free</td><td>287 GB on /</td></tr>
+<tr><td>현재 GPU 점유</td><td>각 die VRAM 10.5 MB 만 사용 (사실상 idle)</td></tr>
+</table>
+
+<div class="note"><strong>MI250 의 MCM 구조 이해</strong>: MI250 은 <strong>Multi-Chip Module</strong> — 한 OAM 카드 안에 2 개의 GCD (Graphics Compute Die) 가 들어감. ROCm 은 두 GCD 를 각각 별도 GPU 로 인식 → 4 카드 × 2 GCD = <strong>8 logical GPU</strong>. 같은 카드 안의 두 GCD 는 <strong>Infinity Fabric</strong> 로 ~ 400 GB/s, 다른 카드의 GCD 와는 ~ 100 GB/s 의 inter-GCD link 가짐. 이게 KV transfer 시 매우 중요한 토폴로지.</div>
+
+<h3>2-2. vLLM / 모델 / network 점검</h3>
+<table>
+<tr><th>항목</th><th>값</th></tr>
+<tr><td>vLLM (host pip)</td><td><strong>설치 X</strong> (<code>ModuleNotFoundError: No module named 'vllm'</code>)</td></tr>
+<tr><td>conda envs</td><td>없음 (system Python only)</td></tr>
+<tr><td>HuggingFace cache</td><td><code>~/.cache/huggingface/</code> 없음 (첫 시도)</td></tr>
+<tr><td>HF token</td><td>없음 — public 모델 위주로 가야 함</td></tr>
+<tr><td>Docker</td><td>✓ <code>/usr/bin/docker</code> 정상</td></tr>
+<tr><td>workspace</td><td>생성: <code>~/pd-experiment/</code></td></tr>
+<tr><td>network (huggingface.co)</td><td>✓ HTTP 200 — model pull 가능</td></tr>
+</table>
+
+<div class="note"><strong>운영 결정 (사용자 요청)</strong>: <code>pip install vllm</code> 안 함. <strong>Docker 로만 vLLM 띄움</strong> — 공유 노드에서 system Python 더럽히지 않기 위해 + ROCm vLLM 의 build 호환을 image 가 보장.</div>
+
+</div>
+
+<h2 id="design">3. 실험 설계 — 4 GPU P / 4 GPU D</h2>
+<div class="card">
+
+<h3>3-1. 설계 결정</h3>
+<table>
+<tr><th>결정</th><th>값</th><th>이유</th></tr>
+<tr><td>Prefill GPU</td><td>GCD 0-3 (카드 0, 1)</td><td>같은 OAM 카드 안 GCD 쌍 (0+1 / 2+3) 은 Infinity Fabric 400 GB/s — TP=4 시 fastest path</td></tr>
+<tr><td>Decode GPU</td><td>GCD 4-7 (카드 2, 3)</td><td>Prefill 그룹과 다른 카드 → KV transfer 가 카드 간 (100 GB/s) 발생, real PDD 시뮬레이션</td></tr>
+<tr><td>TP / PP</td><td>TP=4 (각 instance)</td><td>한 instance 가 4 GPU 사용 — 작은 모델이라 TP=4 면 거의 여유</td></tr>
+<tr><td>모델 선택</td><td>Qwen2.5-7B-Instruct (또는 1.5B 작은)</td><td>4 × 64GB = 256GB 면 70B 도 가능. 7B 로 부하 시나리오 / 1.5B 로 작은 시작. 후보 둘 다 시도</td></tr>
+<tr><td>KV connector</td><td>PyNcclConnector 또는 MoRIIOConnector</td><td>AMD ROCm 환경 — NCCL → RCCL 자동 매핑. MoRIIO 는 ROCm only 명시</td></tr>
+<tr><td>비교 baseline</td><td>vLLM 단일 (TP=8 또는 TP=4 + replica 2)</td><td>같은 자원에서 PDD vs no-PDD throughput 측정</td></tr>
+</table>
+
+<h3>3-2. 토폴로지 다이어그램</h3>
+<div class="diagram">  ┌─────────────────────────────────────────────────────────────┐
+  │  mi250-052 노드                                               │
+  │                                                                │
+  │  ┌──── OAM 카드 0 ────┐    ┌──── OAM 카드 1 ────┐               │
+  │  │  GCD 0 ↔ GCD 1     │    │  GCD 2 ↔ GCD 3     │               │
+  │  │  Infinity 400 GB/s │    │  Infinity 400 GB/s │               │
+  │  └────────┬───────────┘    └────────┬───────────┘               │
+  │           │                          │                          │
+  │           └──── inter-card ~ 100 GB/s ────┐                    │
+  │                                            │                    │
+  │  ┌─────────────────────────────────────────┴──────────────┐    │
+  │  │  Prefill instance (vLLM TP=4)                          │    │
+  │  │   - GCD 0, 1, 2, 3                                     │    │
+  │  │   - prompt forward → KV cache 생성                     │    │
+  │  └────────────────┬───────────────────────────────────────┘    │
+  │                   │ KV transfer (RCCL / NIXL-like / CPU)        │
+  │                   ↓                                              │
+  │  ┌─────────────────────────────────────────┬──────────────┐    │
+  │  │  Decode instance (vLLM TP=4)            │              │    │
+  │  │   - GCD 4, 5, 6, 7                      │              │    │
+  │  │   - 받은 KV 로 generation 이어감         │              │    │
+  │  └─────────────────────────────────────────┴──────────────┘    │
+  │                                                                  │
+  │  ┌──── OAM 카드 2 ────┐    ┌──── OAM 카드 3 ────┐                │
+  │  │  GCD 4 ↔ GCD 5     │    │  GCD 6 ↔ GCD 7     │                │
+  │  └────────────────────┘    └────────────────────┘                │
+  └─────────────────────────────────────────────────────────────────┘</div>
+
+<h3>3-3. 실행 단계 plan</h3>
+<ol>
+<li><strong>Step 1</strong> — 환경 검증: vLLM ROCm 빌드 install 또는 build, 모델 download</li>
+<li><strong>Step 2</strong> — baseline: 단일 vLLM TP=8 띄움. 실 call + 모니터링 캡쳐. 기준점.</li>
+<li><strong>Step 3</strong> — P/D deploy: prefill instance (TP=4, GCD 0-3) + decode instance (TP=4, GCD 4-7). proxy script (vLLM 공식 disagg_prefill_proxy_server) 으로 client → prefill → decode.</li>
+<li><strong>Step 4</strong> — 모니터링: 두 시나리오 모두 <code>rocm-smi -d &lt;gpu&gt; --json</code> 1초 단위 캡쳐 (util, mem, inter-GCD link bw). 기록.</li>
+<li><strong>Step 5</strong> — KV transfer trace: <code>RCCL_DEBUG=INFO</code> + vLLM <code>--log-stats</code> 로 KV transfer 시간 / 크기 / source GCD → target GCD 확인.</li>
+<li><strong>Step 6</strong> — 벤치마크: 동일 워크로드 (conc 1/4/16/32, prompt 길이 512/2048) baseline vs PDD. TTFT / TPOT / throughput / GPU util.</li>
+<li><strong>Step 7</strong> — 분석: 효과 정량화 + 만난 문제 + production 적용 시 고려사항.</li>
+</ol>
+
+</div>
+
+<h2 id="stack">4. Stack 선택 — vLLM + KV connector</h2>
+<div class="card">
+
+<h3>4-1. vLLM Docker image (pip X)</h3>
+<p>AMD 가 공식 ROCm vLLM image 제공: <code>rocm/vllm:latest</code>. 빌드된 wheel 포함 — pull 만 하면 즉시 사용 가능.</p>
+<pre><code>docker pull rocm/vllm:latest
+# → 약 15-20 GB image. 5-15분 download.
+
+# 실행 시
+docker run -d --rm \
+  --name vllm-prefill \
+  --device=/dev/kfd --device=/dev/dri \
+  --security-opt seccomp=unconfined --group-add video \
+  --ipc=host --shm-size=16g \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HIP_VISIBLE_DEVICES=0,1,2,3 \
+  -p 8100:8000 \
+  rocm/vllm:latest \
+  vllm serve &lt;model&gt; --tensor-parallel-size 4 --port 8000 \
+    --kv-transfer-config '...'</code></pre>
+
+<h3>4-2. KV connector 후보</h3>
+<table>
+<tr><th>Connector</th><th>AMD MI250 가능성</th></tr>
+<tr><td><code>NixlConnector</code></td><td>✗ NVIDIA NIXL 전용</td></tr>
+<tr><td><code>MoRIIOConnector</code></td><td>✓ <strong>ROCm only 명시 — 1순위 후보</strong></td></tr>
+<tr><td><code>P2pNcclConnector</code></td><td>⚠ vLLM 의 NCCL 호출이 ROCm 빌드에서 RCCL 로 매핑됨 — 시도</td></tr>
+<tr><td><code>LMCacheConnectorV1</code></td><td>⚠ CPU mode fallback 가능</td></tr>
+<tr><td><code>ExampleConnector</code></td><td>✓ filesystem 기반 (가장 가벼움) — mechanism 확인 용</td></tr>
+</table>
+<p>전략: <strong>MoRIIO 우선 시도 → 실패 시 P2pNccl → 마지막 fallback ExampleConnector</strong>.</p>
+
+</div>
+
+<h2 id="monitoring">5. 모니터링 setup</h2>
+<div class="card">
+<p class="status-todo">⏳ Deploy 후 작성.</p>
+</div>
+
+<h2 id="deploy">6. Deploy</h2>
+<div class="card">
+<p class="status-todo">⏳ 진행 중.</p>
+</div>
+
+<h2 id="bench">7. 벤치마크 + 모니터링 캡쳐</h2>
+<div class="card">
+<p class="status-todo">⏳ 진행 중.</p>
+</div>
+
+<h2 id="kv-trace">8. KV cache 가 실제로 어디서 어떻게 전송되는가</h2>
+<div class="card">
+<p class="status-todo">⏳ 진행 중.</p>
+</div>
+
+<h2 id="issues">9. 만난 문제 + 진단</h2>
+<div class="card">
+<p class="status-todo">⏳ 실험하면서 추가.</p>
+</div>
+
+<h2 id="analysis">10. P/D 효과 분석 + 결론</h2>
+<div class="card">
+<p class="status-todo">⏳ 모든 측정 끝나면 작성.</p>
+</div>
+
+<h2 id="refs">11. 참고 + 용어 풀이</h2>
+<div class="card">
+<p class="status-todo">⏳ 마지막에 정리.</p>
+</div>
+
+<footer>
+작성: hankyu.jang@moreh.io · 마지막 갱신: 2026-06-11
+</footer>
+
+</div>
+</body>
+</html>
