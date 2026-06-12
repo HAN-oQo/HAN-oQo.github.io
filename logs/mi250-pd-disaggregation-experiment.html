@@ -710,18 +710,6 @@ docker run -d --name vllm-decode \
 FROM rocm/vllm:latest
 RUN pip install --no-cache-dir --ignore-installed blinker quart httpx</code></pre>
 
-<h4>Quart 가 하는 역할</h4>
-
-<table>
-<tr><th>항목</th><th>설명</th></tr>
-<tr><td><strong>Quart</strong></td><td><strong>Flask 의 async 버전</strong>. Python async web framework. <a href="https://quart.palletsprojects.com/">quart.palletsprojects.com</a></td></tr>
-<tr><td>ASGI vs WSGI</td><td>Flask = WSGI (synchronous). Quart = <strong>ASGI</strong> (async). uvicorn 같은 ASGI server 위에 동작</td></tr>
-<tr><td>API</td><td>Flask 와 거의 동일 — <code>@app.route</code>, <code>request</code>, <code>response</code> 같은 그대로. 차이는 <code>async def</code> + <code>await</code> 지원</td></tr>
-<tr><td><strong>왜 proxy 에 필요</strong></td><td>Proxy 가 client 요청 받으면 prefill 에 HTTP 호출 → 응답 기다림 → decode 에 HTTP 호출 → stream 응답. <strong>각 호출이 sync 면 한 client 처리하는 동안 다른 client 못 받음</strong>. async (await) 으로 IO 기다리는 동안 다른 request 처리 가능. concurrent client 지원의 필수</td></tr>
-<tr><td>httpx</td><td>같이 install 한 것 — async HTTP client. <code>requests</code> 의 async 버전. proxy 가 prefill/decode 에 호출할 때 사용</td></tr>
-<tr><td>blinker</td><td>quart 의 signal/event 시스템 의존성. 본 image 의 system blinker 1.4 가 distutils install 이라 uninstall 안 됨 → <code>--ignore-installed</code> 추가</td></tr>
-</table>
-
 <pre><code>$ docker build -t vllm-proxy:latest ~/pd-experiment/proxy/
 
 $ docker run -d --name vllm-proxy --network host vllm-proxy:latest \
@@ -1421,6 +1409,20 @@ import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'de
 <p>즉 <strong>"PDD = decode 가 KV 받음" 은 결과 기준</strong>. <strong>"누가 trigger" 는 옵션 결정 사항</strong>. PR #18242 의 측정에서 <strong>PUT_ASYNC 이 가장 빠름</strong> 이라고 명시 (PUT_ASYNC > GET > PUT).</p>
 
 <p>4 종류 channel 다 살아있어야 PDD 동작. 어느 하나 broken (예: ZMQ port 충돌 / NCCL handshake fail / HTTP 못 받음) 면 garbage 또는 hang.</p>
+
+
+
+<h3>7-5. Quart 가 하는 역할 (proxy 의 의존성)</h3>
+
+<table>
+<tr><th>항목</th><th>설명</th></tr>
+<tr><td><strong>Quart</strong></td><td><strong>Flask 의 async 버전</strong>. Python async web framework. <a href="https://quart.palletsprojects.com/">quart.palletsprojects.com</a></td></tr>
+<tr><td>ASGI vs WSGI</td><td>Flask = WSGI (synchronous). Quart = <strong>ASGI</strong> (async). uvicorn 같은 ASGI server 위에 동작</td></tr>
+<tr><td>API</td><td>Flask 와 거의 동일 — <code>@app.route</code>, <code>request</code>, <code>response</code> 같은 그대로. 차이는 <code>async def</code> + <code>await</code> 지원</td></tr>
+<tr><td><strong>왜 proxy 에 필요</strong></td><td>Proxy 가 client 요청 받으면 prefill 에 HTTP 호출 → 응답 기다림 → decode 에 HTTP 호출 → stream 응답. <strong>각 호출이 sync 면 한 client 처리하는 동안 다른 client 못 받음</strong>. async (await) 으로 IO 기다리는 동안 다른 request 처리 가능. concurrent client 지원의 필수</td></tr>
+<tr><td>httpx</td><td>같이 install 한 것 — async HTTP client. <code>requests</code> 의 async 버전. proxy 가 prefill/decode 에 호출할 때 사용</td></tr>
+<tr><td>blinker</td><td>quart 의 signal/event 시스템 의존성. 본 image 의 system blinker 1.4 가 distutils install 이라 uninstall 안 됨 → <code>--ignore-installed</code> 추가</td></tr>
+</table>
 
 
 
