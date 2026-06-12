@@ -42,70 +42,70 @@
 <body>
 <div class="wrap">
 
-<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 이전: <a href="mi250-pd-disaggregation-experiment.html">MI250 PDD 1차 실험 (TP=1+1, mechanism 검증)</a></p>
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <span class="en">Previous:</span><span class="ko">이전:</span> <a href="mi250-pd-disaggregation-experiment.html"><span class="en">MI250 PDD 1st experiment (TP=1+1, mechanism verification)</span><span class="ko">MI250 PDD 1차 실험 (TP=1+1, mechanism 검증)</span></a></p>
 
-<h1>MI250 P/D Disaggregation 2차 — TP=4+4 실 실험</h1>
-<p class="sub">작성일: 2026-06-12 · 환경: <code>mi250-052</code> (AMD MI250 OAM × 4 = 8 GCD, ROCm) · vLLM <strong>0.11.2.dev673+g839868462</strong> (rocm/vllm:latest, 최신 dev build) · 1차 실험 (v0.10.0 가정) 의 다음 단계로 TP=4+4 P/D + bidirectional 가능 여부 검증.</p>
+<h1><span class="en">MI250 P/D Disaggregation 2nd — TP=4+4 real experiment</span><span class="ko">MI250 P/D Disaggregation 2차 — TP=4+4 실 실험</span></h1>
+<p class="sub"><span class="en">Written: 2026-06-12 · Environment: <code>mi250-052</code> (AMD MI250 OAM × 4 = 8 GCD, ROCm) · vLLM <strong>0.11.2.dev673+g839868462</strong> (rocm/vllm:latest, latest dev build) · As the next step after the 1st experiment (assumed v0.10.0), verifying whether TP=4+4 P/D + bidirectional is feasible.</span><span class="ko">작성일: 2026-06-12 · 환경: <code>mi250-052</code> (AMD MI250 OAM × 4 = 8 GCD, ROCm) · vLLM <strong>0.11.2.dev673+g839868462</strong> (rocm/vllm:latest, 최신 dev build) · 1차 실험 (v0.10.0 가정) 의 다음 단계로 TP=4+4 P/D + bidirectional 가능 여부 검증.</span></p>
 
-<div class="danger" style="margin: 16px 0;"><strong>실험 한줄 답</strong>: TP=4+4 P/D <span class="status-ok">동작 성공</span>. 단 KV 흐름은 <strong>P → D 한 방향만</strong>. <strong>Bidirectional (한 instance 동시 P+D) 은 ROCm + MI250 환경에서 현재 vLLM 으로 불가능</strong>. P2pNccl 코드 자체가 막음. 유일하게 kv_both 지원하는 Mooncake connector 는 CUDA 12 전용 (<code>libcudart.so.12</code>) 라 ROCm 사용 불가. 자세한 증명: <a href="#diff">§10</a></div>
+<div class="danger" style="margin: 16px 0;"><strong><span class="en">One-line answer</span><span class="ko">실험 한줄 답</span></strong><span class="en">: TP=4+4 P/D </span><span class="ko">: TP=4+4 P/D </span><span class="status-ok"><span class="en">working</span><span class="ko">동작 성공</span></span><span class="en">. But KV flow is <strong>P → D one direction only</strong>. <strong>Bidirectional (one instance acting as P+D simultaneously) is currently not possible on ROCm + MI250 with vLLM</strong>. The P2pNccl code itself blocks it. The only kv_both-supporting Mooncake connector is CUDA 12 only (<code>libcudart.so.12</code>), unusable on ROCm. Detailed proof: </span><span class="ko">. 단 KV 흐름은 <strong>P → D 한 방향만</strong>. <strong>Bidirectional (한 instance 동시 P+D) 은 ROCm + MI250 환경에서 현재 vLLM 으로 불가능</strong>. P2pNccl 코드 자체가 막음. 유일하게 kv_both 지원하는 Mooncake connector 는 CUDA 12 전용 (<code>libcudart.so.12</code>) 라 ROCm 사용 불가. 자세한 증명: </span><a href="#diff">§10</a></div>
 
 <div class="card toc">
-<strong>목차</strong>
+<strong><span class="en">Contents</span><span class="ko">목차</span></strong>
 <ul style="list-style: none; padding-left: 0; margin: 8px 0;">
-  <li><a href="#goal">1. 실험 목표</a></li>
-  <li><a href="#bidir">2. "Bidirectional" 의 실 의미 + 진행 방식</a></li>
-  <li><a href="#env">3. 환경 점검 + 이전 컨테이너 정리</a></li>
-  <li><a href="#attempts">4. 시도 history (8 회) — 디버깅 기록</a></li>
-  <li><a href="#success">5. 성공 구성 — TP=4+4 P/D cmd + 결과</a></li>
-  <li><a href="#handshake">6. NCCL handshake — 4 쌍 NCCL Comm 동시 init 확인</a></li>
-  <li><a href="#chat">7. chat call + concurrent + long prompt 측정</a></li>
-  <li><a href="#monitoring">8. rocm-smi monitoring — P/D phase 분리 캡쳐</a></li>
-  <li><a href="#flow">9. KV transfer 코드 흐름 + request_id 인코딩</a></li>
-  <li><a href="#diff">10. 일방 (PUT_ASYNC) 통신 의 실 동작</a></li>
-  <li><a href="#conclusion">11. 결론 + 다음 실험</a></li>
+  <li><a href="#goal"><span class="en">1. Experiment goal</span><span class="ko">1. 실험 목표</span></a></li>
+  <li><a href="#bidir"><span class="en">2. Real meaning of "Bidirectional" + approach</span><span class="ko">2. "Bidirectional" 의 실 의미 + 진행 방식</span></a></li>
+  <li><a href="#env"><span class="en">3. Environment check + cleanup of previous containers</span><span class="ko">3. 환경 점검 + 이전 컨테이너 정리</span></a></li>
+  <li><a href="#attempts"><span class="en">4. Attempt history (8 tries) — debugging log</span><span class="ko">4. 시도 history (8 회) — 디버깅 기록</span></a></li>
+  <li><a href="#success"><span class="en">5. Success config — TP=4+4 P/D cmd + result</span><span class="ko">5. 성공 구성 — TP=4+4 P/D cmd + 결과</span></a></li>
+  <li><a href="#handshake"><span class="en">6. NCCL handshake — confirming 4 pairs of NCCL Comm init simultaneously</span><span class="ko">6. NCCL handshake — 4 쌍 NCCL Comm 동시 init 확인</span></a></li>
+  <li><a href="#chat"><span class="en">7. chat call + concurrent + long prompt measurements</span><span class="ko">7. chat call + concurrent + long prompt 측정</span></a></li>
+  <li><a href="#monitoring"><span class="en">8. rocm-smi monitoring — capturing P/D phase separation</span><span class="ko">8. rocm-smi monitoring — P/D phase 분리 캡쳐</span></a></li>
+  <li><a href="#flow"><span class="en">9. KV transfer code flow + request_id encoding</span><span class="ko">9. KV transfer 코드 흐름 + request_id 인코딩</span></a></li>
+  <li><a href="#diff"><span class="en">10. Real behavior of one-way (PUT_ASYNC) communication</span><span class="ko">10. 일방 (PUT_ASYNC) 통신 의 실 동작</span></a></li>
+  <li><a href="#conclusion"><span class="en">11. Conclusion + next experiments</span><span class="ko">11. 결론 + 다음 실험</span></a></li>
 </ul>
 </div>
 
-<h2 id="goal">1. 실험 목표</h2>
+<h2 id="goal"><span class="en">1. Experiment goal</span><span class="ko">1. 실험 목표</span></h2>
 <div class="card">
 
-<p><a href="mi250-pd-disaggregation-experiment.html#analysis">1차 실험 §10</a> 의 결론에서 다음 단계로 "<strong>TP=4+4 + bidirectional 통신</strong>" 을 잡았었음. 본 실험에서 그걸 실 GPU 위에서 끝까지 진행.</p>
+<p><span class="en">In the conclusion of </span><span class="ko"></span><a href="mi250-pd-disaggregation-experiment.html#analysis"><span class="en">1st experiment §10</span><span class="ko">1차 실험 §10</span></a><span class="en">, the next step was set as "<strong>TP=4+4 + bidirectional communication</strong>". This experiment carries that through to the end on real GPUs.</span><span class="ko"> 의 결론에서 다음 단계로 "<strong>TP=4+4 + bidirectional 통신</strong>" 을 잡았었음. 본 실험에서 그걸 실 GPU 위에서 끝까지 진행.</span></p>
 
 <table>
-<tr><th>질문</th><th>답</th></tr>
-<tr><td>TP=4+4 P/D 가 실 mi250-052 위에서 동작하는가?</td><td><span class="status-ok">동작</span> — 8 회 시도 후 성공. §5</td></tr>
-<tr><td>4 쌍 NCCL Comm 동시 init 가 deadlock 없이 되는가?</td><td><span class="status-ok">동작</span> — 4 쌍 모두 <code>🤝ncclCommInitRank Success</code> 동시. §6</td></tr>
-<tr><td>"Bidirectional" 의 실 의미 + 본 실험의 통신 방향?</td><td>vLLM P2pNccl 은 단방향 (P → D push) — 단 4 NCCL Comm 으로 4 channel 병렬 송신. §2</td></tr>
-<tr><td>TP=4+4 의 P/D 모니터링 — phase 분리가 실제로 보이는가?</td><td><span class="status-ok">확인</span> — concurrent load 중 P GCD 0% / D GCD 70-99%. §8</td></tr>
+<tr><th><span class="en">Question</span><span class="ko">질문</span></th><th><span class="en">Answer</span><span class="ko">답</span></th></tr>
+<tr><td><span class="en">Does TP=4+4 P/D work on real mi250-052?</span><span class="ko">TP=4+4 P/D 가 실 mi250-052 위에서 동작하는가?</span></td><td><span class="status-ok"><span class="en">Working</span><span class="ko">동작</span></span> <span class="en">— success after 8 attempts. §5</span><span class="ko">— 8 회 시도 후 성공. §5</span></td></tr>
+<tr><td><span class="en">Does simultaneous init of 4 NCCL Comm pairs work without deadlock?</span><span class="ko">4 쌍 NCCL Comm 동시 init 가 deadlock 없이 되는가?</span></td><td><span class="status-ok"><span class="en">Working</span><span class="ko">동작</span></span> <span class="en">— all 4 pairs <code>🤝ncclCommInitRank Success</code> simultaneously. §6</span><span class="ko">— 4 쌍 모두 <code>🤝ncclCommInitRank Success</code> 동시. §6</span></td></tr>
+<tr><td><span class="en">Real meaning of "Bidirectional" + direction of communication in this experiment?</span><span class="ko">"Bidirectional" 의 실 의미 + 본 실험의 통신 방향?</span></td><td><span class="en">vLLM P2pNccl is one-way (P → D push) — but with 4 NCCL Comm sending in parallel over 4 channels. §2</span><span class="ko">vLLM P2pNccl 은 단방향 (P → D push) — 단 4 NCCL Comm 으로 4 channel 병렬 송신. §2</span></td></tr>
+<tr><td><span class="en">TP=4+4 P/D monitoring — is phase separation actually visible?</span><span class="ko">TP=4+4 의 P/D 모니터링 — phase 분리가 실제로 보이는가?</span></td><td><span class="status-ok"><span class="en">Confirmed</span><span class="ko">확인</span></span> <span class="en">— under concurrent load, P GCD 0% / D GCD 70-99%. §8</span><span class="ko">— concurrent load 중 P GCD 0% / D GCD 70-99%. §8</span></td></tr>
 </table>
 
-<div class="tip"><strong>이 글의 진행 방식</strong>: 모든 cmd / log / 결과 그대로. 시도 #1-#8 의 실패 / 우회 / 성공 그대로 기록. 같은 host 의 같은 model 로 1차 실험의 후속.</div>
+<div class="tip"><strong><span class="en">How this writeup proceeds</span><span class="ko">이 글의 진행 방식</span></strong><span class="en">: all cmd / log / result as-is. Attempts #1-#8 with failures / workarounds / successes recorded faithfully. Same host, same model as 1st experiment — follow-up.</span><span class="ko">: 모든 cmd / log / 결과 그대로. 시도 #1-#8 의 실패 / 우회 / 성공 그대로 기록. 같은 host 의 같은 model 로 1차 실험의 후속.</span></div>
 
 </div>
 
-<h2 id="bidir">2. "Bidirectional" 의 실 의미 + 진행 방식</h2>
+<h2 id="bidir"><span class="en">2. Real meaning of "Bidirectional" + approach</span><span class="ko">2. "Bidirectional" 의 실 의미 + 진행 방식</span></h2>
 <div class="card">
 
-<p>vLLM P2pNcclConnector 의 KV 전송은 <strong>본질적으로 단방향</strong> — 한 instance 의 <code>kv_role</code> 이 평생 <code>kv_producer</code> 또는 <code>kv_consumer</code> 중 하나로 고정. config 옵션의 이름도 "producer / consumer" 라 양방향성이 없음.</p>
+<p><span class="en">KV transfer of vLLM P2pNcclConnector is <strong>fundamentally one-way</strong> — an instance's <code>kv_role</code> is fixed for its lifetime to either <code>kv_producer</code> or <code>kv_consumer</code>. The config option names are also "producer / consumer" — no bidirectionality.</span><span class="ko">vLLM P2pNcclConnector 의 KV 전송은 <strong>본질적으로 단방향</strong> — 한 instance 의 <code>kv_role</code> 이 평생 <code>kv_producer</code> 또는 <code>kv_consumer</code> 중 하나로 고정. config 옵션의 이름도 "producer / consumer" 라 양방향성이 없음.</span></p>
 
-<p>그렇다면 본 실험의 "bidirectional" 의 실 의미는?</p>
+<p><span class="en">So what is the real meaning of "bidirectional" in this experiment?</span><span class="ko">그렇다면 본 실험의 "bidirectional" 의 실 의미는?</span></p>
 
 <table>
-<tr><th>해석</th><th>실 의미</th><th>본 실험에서?</th></tr>
-<tr><td>해석 A — 한 instance 가 동시 P + D</td><td>X. vLLM 의 KVConnector framework 가 instance role 고정.</td><td><span class="status-fail">불가</span></td></tr>
-<tr><td>해석 B — XpYd (여러 P + 여러 D mesh)</td><td>proxy 가 N P + M D 등록 후 routing. PR #18242 가 지원.</td><td>가능, 단 8 GCD 라 TP=2+2+2+2 같이 작아져야</td></tr>
-<tr><td>해석 C — Dual-instance (한 host 에 P + D 컨테이너 따로)</td><td>모델 weights 중복 load. TP=4+4 가 이것.</td><td><span class="status-ok">본 실험 노선</span></td></tr>
-<tr><td>해석 D — 통신 방향 (P→D) 의 multi-channel parallel</td><td>TP=4 라 rank 4 개가 동시 송신 — "양방향" 은 아니나 "병렬 4 채널"</td><td><span class="status-ok">본 실험 확인</span></td></tr>
+<tr><th><span class="en">Interpretation</span><span class="ko">해석</span></th><th><span class="en">Real meaning</span><span class="ko">실 의미</span></th><th><span class="en">In this experiment?</span><span class="ko">본 실험에서?</span></th></tr>
+<tr><td><span class="en">Interpretation A — one instance simultaneously P + D</span><span class="ko">해석 A — 한 instance 가 동시 P + D</span></td><td><span class="en">No. vLLM's KVConnector framework fixes instance role.</span><span class="ko">X. vLLM 의 KVConnector framework 가 instance role 고정.</span></td><td><span class="status-fail"><span class="en">Not possible</span><span class="ko">불가</span></span></td></tr>
+<tr><td><span class="en">Interpretation B — XpYd (multiple P + multiple D mesh)</span><span class="ko">해석 B — XpYd (여러 P + 여러 D mesh)</span></td><td><span class="en">After proxy registers N P + M D, it routes. Supported by PR #18242.</span><span class="ko">proxy 가 N P + M D 등록 후 routing. PR #18242 가 지원.</span></td><td><span class="en">Possible, but with 8 GCD must shrink to e.g. TP=2+2+2+2</span><span class="ko">가능, 단 8 GCD 라 TP=2+2+2+2 같이 작아져야</span></td></tr>
+<tr><td><span class="en">Interpretation C — Dual-instance (separate P + D containers on one host)</span><span class="ko">해석 C — Dual-instance (한 host 에 P + D 컨테이너 따로)</span></td><td><span class="en">Model weights duplicated. TP=4+4 is this.</span><span class="ko">모델 weights 중복 load. TP=4+4 가 이것.</span></td><td><span class="status-ok"><span class="en">This experiment's path</span><span class="ko">본 실험 노선</span></span></td></tr>
+<tr><td><span class="en">Interpretation D — multi-channel parallelism of one direction (P→D)</span><span class="ko">해석 D — 통신 방향 (P→D) 의 multi-channel parallel</span></td><td><span class="en">With TP=4, 4 ranks send simultaneously — not "bidirectional" but "4 parallel channels"</span><span class="ko">TP=4 라 rank 4 개가 동시 송신 — "양방향" 은 아니나 "병렬 4 채널"</span></td><td><span class="status-ok"><span class="en">Confirmed in this experiment</span><span class="ko">본 실험 확인</span></span></td></tr>
 </table>
 
-<p>본 실험은 <strong>해석 C + 해석 D 의 조합</strong>: 같은 host (mi250-052) 에 P container (TP=4, GCD 0-3) + D container (TP=4, GCD 4-7), 4 NCCL Comm 으로 KV 4 채널 병렬 전송. 진정한 "양방향" (해석 A) 은 vLLM 코드 자체가 막아서 본 글에서 다루지 않음.</p>
+<p><span class="en">This experiment is the <strong>combination of Interpretation C + Interpretation D</strong>: on the same host (mi250-052), P container (TP=4, GCD 0-3) + D container (TP=4, GCD 4-7), with 4 NCCL Comm transferring KV in parallel over 4 channels. True "bidirectional" (Interpretation A) is blocked by vLLM code itself and is out of scope here.</span><span class="ko">본 실험은 <strong>해석 C + 해석 D 의 조합</strong>: 같은 host (mi250-052) 에 P container (TP=4, GCD 0-3) + D container (TP=4, GCD 4-7), 4 NCCL Comm 으로 KV 4 채널 병렬 전송. 진정한 "양방향" (해석 A) 은 vLLM 코드 자체가 막아서 본 글에서 다루지 않음.</span></p>
 
 </div>
 
-<h2 id="env">3. 환경 점검 + 이전 컨테이너 정리</h2>
+<h2 id="env"><span class="en">3. Environment check + cleanup of previous containers</span><span class="ko">3. 환경 점검 + 이전 컨테이너 정리</span></h2>
 <div class="card">
 
-<h3>3-1. SSH + 노드 reachable</h3>
+<h3><span class="en">3-1. SSH + node reachable</span><span class="ko">3-1. SSH + 노드 reachable</span></h3>
 
 <pre><code>$ ssh mi250-052 'hostname; uptime'
 mi250-052
@@ -117,9 +117,9 @@ GPU[1]: GPU use (%): 0
 GPU[2]: GPU use (%): 0
 GPU[3]: GPU use (%): 0</code></pre>
 
-<h3>3-2. 이전 컨테이너 정리 (bench hygiene)</h3>
+<h3><span class="en">3-2. Previous container cleanup (bench hygiene)</span><span class="ko">3-2. 이전 컨테이너 정리 (bench hygiene)</span></h3>
 
-<p>1차 실험 후 컨테이너 4 개가 살아 있어 즉시 정리.</p>
+<p><span class="en">After the 1st experiment, 4 containers were still alive — cleaned up immediately.</span><span class="ko">1차 실험 후 컨테이너 4 개가 살아 있어 즉시 정리.</span></p>
 
 <pre><code>$ ssh mi250-052 'docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}"'
 vllm-proxy      vllm-proxy:latest       Up 11 hours
@@ -133,27 +133,27 @@ $ ssh mi250-052 'docker stop vllm-proxy vllm-decode vllm-prefill vigilant_davinc
 
 </div>
 
-<h2 id="attempts">4. 시도 history (8 회) — 디버깅 기록</h2>
+<h2 id="attempts"><span class="en">4. Attempt history (8 tries) — debugging log</span><span class="ko">4. 시도 history (8 회) — 디버깅 기록</span></h2>
 <div class="card">
 
-<p>실 mi250-052 위에서 TP=4+4 PDD 띄우기까지 8 회 시도. 각 시도의 정확한 명령 + 실패 메시지 + 진단 + 다음 시도.</p>
+<p><span class="en">8 attempts until TP=4+4 PDD came up on real mi250-052. Each attempt's exact command + failure message + diagnosis + next attempt.</span><span class="ko">실 mi250-052 위에서 TP=4+4 PDD 띄우기까지 8 회 시도. 각 시도의 정확한 명령 + 실패 메시지 + 진단 + 다음 시도.</span></p>
 
-<div class="attempt"><span class="attempt-id">#1</span> <strong>P container 첫 시도</strong> — config 의 <code>"proxy_port":30001</code> (int).
+<div class="attempt"><span class="attempt-id">#1</span> <strong><span class="en">P container first attempt</span><span class="ko">P container 첫 시도</span></strong> <span class="en">— config's <code>"proxy_port":30001</code> (int).</span><span class="ko">— config 의 <code>"proxy_port":30001</code> (int).</span>
 <pre><code>TypeError: can only concatenate str (not "int") to str
   File "vllm/.../p2p_nccl_engine.py", line 108
   self.proxy_address = proxy_ip + ":" + proxy_port
                        ~~~~~~~~~~~~~~~^~~~~~~~~~~~</code></pre>
-<strong>진단</strong>: vLLM 의 source 가 <code>proxy_ip + ":" + proxy_port</code> 식으로 string concat. proxy_port 가 int 면 fail. <strong>해결</strong>: JSON 의 <code>"proxy_port":"30001"</code> 로 quoting (string). <span class="status-fail">FAIL</span> → fix</div>
+<strong><span class="en">Diagnosis</span><span class="ko">진단</span></strong><span class="en">: vLLM source does <code>proxy_ip + ":" + proxy_port</code> string concat. If proxy_port is int → fail. <strong>Fix</strong>: quote it as <code>"proxy_port":"30001"</code> (string) in JSON. </span><span class="ko">: vLLM 의 source 가 <code>proxy_ip + ":" + proxy_port</code> 식으로 string concat. proxy_port 가 int 면 fail. <strong>해결</strong>: JSON 의 <code>"proxy_port":"30001"</code> 로 quoting (string). </span><span class="status-fail">FAIL</span><span class="en"> → fix</span><span class="ko"> → fix</span></div>
 
-<div class="attempt"><span class="attempt-id">#2</span> <strong>P container — string port 로 재시도</strong>. 정상 startup. <code>Application startup complete</code> 도달.
+<div class="attempt"><span class="attempt-id">#2</span> <strong><span class="en">P container — retry with string port</span><span class="ko">P container — string port 로 재시도</span></strong><span class="en">. Startup normal. Reached <code>Application startup complete</code>.</span><span class="ko">. 정상 startup. <code>Application startup complete</code> 도달.</span>
 <pre><code>💯P2pNcclEngine init, rank:0, http_address:192.168.3.52:8100,
   zmq_address:192.168.3.52:14579, proxy_address:192.168.3.52:30001
 💯P2pNcclEngine init, rank:1, zmq_address:192.168.3.52:14580
 💯P2pNcclEngine init, rank:2, zmq_address:192.168.3.52:14581
 💯P2pNcclEngine init, rank:3, zmq_address:192.168.3.52:14582</code></pre>
-<strong>관찰</strong>: P 의 ZMQ port 가 의도한 20001 이 아닌 default 14579 부터 시작 (14579-14582). <strong>왜?</strong> 다음 시도에서 source 확인. <span class="status-ok">OK</span> 단 port 가 의도와 다름</div>
+<strong><span class="en">Observation</span><span class="ko">관찰</span></strong><span class="en">: P's ZMQ ports start at the default 14579 (14579-14582), not the intended 20001. <strong>Why?</strong> Confirmed in next attempt by reading source. </span><span class="ko">: P 의 ZMQ port 가 의도한 20001 이 아닌 default 14579 부터 시작 (14579-14582). <strong>왜?</strong> 다음 시도에서 source 확인. </span><span class="status-ok">OK</span><span class="en"> but port differs from intent</span><span class="ko"> 단 port 가 의도와 다름</span></div>
 
-<div class="attempt"><span class="attempt-id">#3</span> <strong>Proxy container 띄우기</strong>. image 안의 <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py</code> 추출 후 mount.
+<div class="attempt"><span class="attempt-id">#3</span> <strong><span class="en">Bring up proxy container</span><span class="ko">Proxy container 띄우기</span></strong><span class="en">. Extracted image's <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py</code> and mounted.</span><span class="ko">. image 안의 <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py</code> 추출 후 mount.</span>
 <pre><code>$ docker run -d --name vllm-proxy-tp4 --network host \
     -v /tmp/disagg_proxy.py:/proxy.py vllm-proxy:latest python /proxy.py
 
@@ -161,21 +161,21 @@ $ ssh mi250-052 'docker stop vllm-proxy vllm-decode vllm-prefill vigilant_davinc
 # port 10001 (client) + 30001 (P/D register) 모두 LISTEN</code></pre>
 <span class="status-ok">OK</span></div>
 
-<div class="attempt"><span class="attempt-id">#4</span> <strong>D container 시도</strong>. 같은 config 의 mirror (kv_role=kv_consumer, http_port=8200, zmq_addr=22001).
+<div class="attempt"><span class="attempt-id">#4</span> <strong><span class="en">D container attempt</span><span class="ko">D container 시도</span></strong><span class="en">. Mirror of same config (kv_role=kv_consumer, http_port=8200, zmq_addr=22001).</span><span class="ko">. 같은 config 의 mirror (kv_role=kv_consumer, http_port=8200, zmq_addr=22001).</span>
 <pre><code>ERROR p2p_nccl_engine.py:127
   self.router_socket.bind(f"tcp://{self.zmq_address}")
 zmq.error.ZMQError: Address already in use (addr='tcp://192.168.3.52:14579')</code></pre>
-<strong>진단</strong>: D 도 같은 default <code>kv_port=14579</code> bind 시도 → P 와 충돌. <code>"zmq_addr"</code> extra_config 이 무시됨. <span class="status-fail">FAIL</span> → source 확인</div>
+<strong><span class="en">Diagnosis</span><span class="ko">진단</span></strong><span class="en">: D also tries to bind the same default <code>kv_port=14579</code> → collides with P. The <code>"zmq_addr"</code> extra_config is ignored. </span><span class="ko">: D 도 같은 default <code>kv_port=14579</code> bind 시도 → P 와 충돌. <code>"zmq_addr"</code> extra_config 이 무시됨. </span><span class="status-fail">FAIL</span><span class="en"> → check source</span><span class="ko"> → source 확인</span></div>
 
-<div class="attempt"><span class="attempt-id">#5</span> <strong>vLLM source 확인 — ZMQ port 정확한 derivation</strong>.
+<div class="attempt"><span class="attempt-id">#5</span> <strong><span class="en">Reading vLLM source — exact ZMQ port derivation</span><span class="ko">vLLM source 확인 — ZMQ port 정확한 derivation</span></strong>.
 <pre><code># vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py L85-92
 port = int(self.config.kv_port) + port_offset
 self._hostname = hostname
 self._port = port
 self.zmq_address = f"{self._hostname}:{self._port}"</code></pre>
-<strong>핵심 발견</strong>: ZMQ port = <code>kv_port + rank</code>. <strong><code>zmq_addr</code> extra_config 은 실 ZMQ bind 와 무관</strong> — 그건 P/D 가 proxy 에 register 보낼 때만 표시용. 진짜 source 는 KVTransferConfig 의 top-level <code>kv_port</code>. <strong>해결</strong>: JSON 의 top-level 에 <code>"kv_port":20001</code> (P) / <code>"kv_port":22001</code> (D). <span class="status-ok">진단 OK</span></div>
+<strong><span class="en">Key finding</span><span class="ko">핵심 발견</span></strong><span class="en">: ZMQ port = <code>kv_port + rank</code>. <strong>The <code>zmq_addr</code> extra_config is unrelated to the actual ZMQ bind</strong> — it is only display info when P/D send register messages to the proxy. The real source is the top-level <code>kv_port</code> in KVTransferConfig. <strong>Fix</strong>: in JSON top-level, <code>"kv_port":20001</code> (P) / <code>"kv_port":22001</code> (D). </span><span class="ko">: ZMQ port = <code>kv_port + rank</code>. <strong><code>zmq_addr</code> extra_config 은 실 ZMQ bind 와 무관</strong> — 그건 P/D 가 proxy 에 register 보낼 때만 표시용. 진짜 source 는 KVTransferConfig 의 top-level <code>kv_port</code>. <strong>해결</strong>: JSON 의 top-level 에 <code>"kv_port":20001</code> (P) / <code>"kv_port":22001</code> (D). </span><span class="status-ok"><span class="en">diagnosis OK</span><span class="ko">진단 OK</span></span></div>
 
-<div class="attempt"><span class="attempt-id">#6</span> <strong>P + D 동시 재시작 — kv_port 분리</strong>.
+<div class="attempt"><span class="attempt-id">#6</span> <strong><span class="en">Restart P + D together — kv_port separated</span><span class="ko">P + D 동시 재시작 — kv_port 분리</span></strong>.
 <pre><code># P (kv_port=20001 → rank 0..3 = 20001-20004)
 docker run -d --name vllm-p-tp4 ... HIP_VISIBLE_DEVICES=0,1,2,3 \
   vllm serve ... --tensor-parallel-size 4 --port 8100 \
@@ -188,16 +188,16 @@ docker run -d --name vllm-d-tp4 ... HIP_VISIBLE_DEVICES=4,5,6,7 \
   --kv-transfer-config '{"kv_connector":"P2pNcclConnector",
     "kv_role":"kv_consumer","kv_port":22001,...}'</code></pre>
 
-<strong>결과</strong>: 양쪽 P + D 모두 정상 startup. ZMQ port 8 개 (20001-20004, 22001-22004) 모두 LISTEN.
+<strong><span class="en">Result</span><span class="ko">결과</span></strong><span class="en">: Both P + D start normally. All 8 ZMQ ports (20001-20004, 22001-22004) LISTEN.</span><span class="ko">: 양쪽 P + D 모두 정상 startup. ZMQ port 8 개 (20001-20004, 22001-22004) 모두 LISTEN.</span>
 <pre><code>=== ZMQ ports ===
 LISTEN  192.168.3.52:20001    LISTEN  192.168.3.52:22001
 LISTEN  192.168.3.52:20002    LISTEN  192.168.3.52:22002
 LISTEN  192.168.3.52:20003    LISTEN  192.168.3.52:22003
 LISTEN  192.168.3.52:20004    LISTEN  192.168.3.52:22004
 LISTEN          *:8100         LISTEN          *:8200</code></pre>
-<span class="status-ok">OK — P + D + proxy 3 컴포넌트 모두 운영</span></div>
+<span class="status-ok"><span class="en">OK — P + D + proxy, all 3 components running</span><span class="ko">OK — P + D + proxy 3 컴포넌트 모두 운영</span></span></div>
 
-<div class="attempt"><span class="attempt-id">#7</span> <strong>NCCL handshake + 첫 chat call</strong>.
+<div class="attempt"><span class="attempt-id">#7</span> <strong><span class="en">NCCL handshake + first chat call</span><span class="ko">NCCL handshake + 첫 chat call</span></strong>.
 <pre><code>$ curl http://localhost:10001/v1/completions -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
     "prompt":"Explain MI250 XGMI topology in 1 paragraph.","max_tokens":120}'
 
@@ -205,9 +205,9 @@ LISTEN          *:8100         LISTEN          *:8200</code></pre>
  "text":" The MI250 XGMI topology is a high-speed, multi-protocol network...",
  "finish_reason":"stop", "usage":{"prompt_tokens":15,"completion_tokens":100}}
 real    0m5.640s</code></pre>
-<strong>5.6s wall time, 100 token, finish_reason=stop</strong>. P/D 가 의도대로 동작. <span class="status-ok">SUCCESS</span></div>
+<strong><span class="en">5.6s wall time, 100 tokens, finish_reason=stop</span><span class="ko">5.6s wall time, 100 token, finish_reason=stop</span></strong><span class="en">. P/D works as intended. </span><span class="ko">. P/D 가 의도대로 동작. </span><span class="status-ok">SUCCESS</span></div>
 
-<div class="attempt"><span class="attempt-id">#8</span> <strong>NCCL handshake 4 쌍 확인 (P + D 양쪽 로그)</strong>.
+<div class="attempt"><span class="attempt-id">#8</span> <strong><span class="en">Verifying 4-pair NCCL handshake (both P + D logs)</span><span class="ko">NCCL handshake 4 쌍 확인 (P + D 양쪽 로그)</span></strong>.
 <pre><code># P 로그
 🤝ncclCommInitRank Success, 192.168.3.52:20001👉192.168.3.52:22001, MyRank:0
 🤝ncclCommInitRank Success, 192.168.3.52:20002👉192.168.3.52:22002, MyRank:0
@@ -219,14 +219,14 @@ real    0m5.640s</code></pre>
 🤝ncclCommInitRank Success, 192.168.3.52:22002👈192.168.3.52:20002, MyRank:1
 🤝ncclCommInitRank Success, 192.168.3.52:22003👈192.168.3.52:20003, MyRank:1
 🤝ncclCommInitRank Success, 192.168.3.52:22004👈192.168.3.52:20004, MyRank:1</code></pre>
-<strong>4 쌍 NCCL Comm (size=2 각각) 동시 init 성공</strong>. P 의 rank i ↔ D 의 rank i 매칭. P 가 MyRank:0 (sender), D 가 MyRank:1 (receiver). <span class="status-ok">SUCCESS</span></div>
+<strong><span class="en">4 pairs of NCCL Comm (each size=2) init succeeded simultaneously</span><span class="ko">4 쌍 NCCL Comm (size=2 각각) 동시 init 성공</span></strong><span class="en">. P rank i ↔ D rank i matching. P is MyRank:0 (sender), D is MyRank:1 (receiver). </span><span class="ko">. P 의 rank i ↔ D 의 rank i 매칭. P 가 MyRank:0 (sender), D 가 MyRank:1 (receiver). </span><span class="status-ok">SUCCESS</span></div>
 
 </div>
 
-<h2 id="success">5. 성공 구성 — TP=4+4 P/D cmd + 결과</h2>
+<h2 id="success"><span class="en">5. Success config — TP=4+4 P/D cmd + result</span><span class="ko">5. 성공 구성 — TP=4+4 P/D cmd + 결과</span></h2>
 <div class="card">
 
-<h3>5-1. 토폴로지</h3>
+<h3><span class="en">5-1. Topology</span><span class="ko">5-1. 토폴로지</span></h3>
 
 <div class="diagram">┌─ mi250-052 노드 (--network host, single host) ────────────────────────┐
 │                                                                       │
@@ -255,7 +255,7 @@ real    0m5.640s</code></pre>
 ④ ZMQ ROUTER/DEALER — NCCL unique_id 교환 (control plane)
 ⑤ NCCL Send/Recv — 실 KV tensor 4 channel 병렬 (data plane, RCCL ring 16 channels)</div>
 
-<h3>5-2. P container — TP=4, GCD 0-3</h3>
+<h3><span class="en">5-2. P container — TP=4, GCD 0-3</span><span class="ko">5-2. P container — TP=4, GCD 0-3</span></h3>
 
 <pre><code>docker run -d --name vllm-p-tp4 \
   --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
@@ -281,7 +281,7 @@ real    0m5.640s</code></pre>
       }
     }'</code></pre>
 
-<h3>5-3. D container — TP=4, GCD 4-7</h3>
+<h3><span class="en">5-3. D container — TP=4, GCD 4-7</span><span class="ko">5-3. D container — TP=4, GCD 4-7</span></h3>
 
 <pre><code>docker run -d --name vllm-d-tp4 \
   --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
@@ -307,7 +307,7 @@ real    0m5.640s</code></pre>
       }
     }'</code></pre>
 
-<h3>5-4. Proxy container</h3>
+<h3><span class="en">5-4. Proxy container</span><span class="ko">5-4. Proxy container</span></h3>
 
 <pre><code># image 에서 disagg_proxy_p2p_nccl_xpyd.py 추출
 docker run --rm vllm-proxy:latest cat \
@@ -322,28 +322,28 @@ docker run -d --name vllm-proxy-tp4 \
   python /proxy.py
 # → :10001 (client) + :30001 (register) 둘 다 LISTEN</code></pre>
 
-<h3>5-5. 각 config 옵션 의미 — TP=4+4 특이 사항</h3>
+<h3><span class="en">5-5. Meaning of each config option — TP=4+4 specifics</span><span class="ko">5-5. 각 config 옵션 의미 — TP=4+4 특이 사항</span></h3>
 
 <table>
-<tr><th>config</th><th>값</th><th>의미 — TP=4+4 에서</th></tr>
-<tr><td><code>--tensor-parallel-size 4</code></td><td>4</td><td>각 instance 내부 4 worker process. NCCL world size=4 (TP allreduce 용).</td></tr>
-<tr><td><code>HIP_VISIBLE_DEVICES</code></td><td>P=0,1,2,3 / D=4,5,6,7</td><td>P 는 OAM1+2 의 4 GCD, D 는 OAM3+4 의 4 GCD. 같은 host 라도 OAM 분리.</td></tr>
-<tr><td><code>--shm-size=32g</code></td><td>32 GB</td><td>NCCL shared memory. TP=1 때 16g 였음 — TP=4 라 worker 4 개 → 2 배</td></tr>
-<tr><td><code>kv_port</code> (top-level)</td><td>P=20001 / D=22001</td><td><strong>ZMQ port 의 base</strong>. rank i 의 실 ZMQ = <code>kv_port + i</code>. P=20001-20004, D=22001-22004.</td></tr>
-<tr><td><code>zmq_addr</code> in extra_config</td><td>(쓰지 말 것)</td><td><strong>v0.10.0 image 에선 무시됨</strong>. 실 ZMQ 는 <code>kv_port</code> 가 결정. 시도 #4 의 충돌 원인.</td></tr>
-<tr><td><code>kv_buffer_size</code></td><td>P=1e1 / D=8e9</td><td>P 의 PUT_ASYNC queue depth 작게 (PR #18242 권장). D 는 미수신 KV pile-up 허용 크게.</td></tr>
-<tr><td><code>send_type</code></td><td>PUT_ASYNC</td><td>P 가 fire-and-forget. P 가 send 후 즉시 다음 prefill 시작.</td></tr>
-<tr><td><code>nccl_num_channels</code></td><td>16</td><td>RCCL ring channel. MI250 OAM 간 XGMI 4-link 위에서 16 channel 다중화 (oversubscribed but RCCL 이 scheduling).</td></tr>
-<tr><td><code>--enforce-eager</code></td><td>flag</td><td>host ROCm 6.2 / image ROCm 7.0 mismatch 우회 (1차 실험에서 확정).</td></tr>
-<tr><td><code>proxy_port / http_port</code></td><td>모두 string</td><td>vLLM source 가 string concat 하므로 int 면 시도 #1 의 TypeError. JSON 에 quoted 로.</td></tr>
+<tr><th>config</th><th><span class="en">Value</span><span class="ko">값</span></th><th><span class="en">Meaning — under TP=4+4</span><span class="ko">의미 — TP=4+4 에서</span></th></tr>
+<tr><td><code>--tensor-parallel-size 4</code></td><td>4</td><td><span class="en">4 worker processes inside each instance. NCCL world size=4 (for TP allreduce).</span><span class="ko">각 instance 내부 4 worker process. NCCL world size=4 (TP allreduce 용).</span></td></tr>
+<tr><td><code>HIP_VISIBLE_DEVICES</code></td><td>P=0,1,2,3 / D=4,5,6,7</td><td><span class="en">P uses 4 GCDs of OAM1+2, D uses 4 GCDs of OAM3+4. Even on the same host, OAMs are partitioned.</span><span class="ko">P 는 OAM1+2 의 4 GCD, D 는 OAM3+4 의 4 GCD. 같은 host 라도 OAM 분리.</span></td></tr>
+<tr><td><code>--shm-size=32g</code></td><td>32 GB</td><td><span class="en">NCCL shared memory. Was 16g when TP=1 — TP=4 has 4 workers → 2x.</span><span class="ko">NCCL shared memory. TP=1 때 16g 였음 — TP=4 라 worker 4 개 → 2 배</span></td></tr>
+<tr><td><code>kv_port</code> (top-level)</td><td>P=20001 / D=22001</td><td><strong><span class="en">Base of ZMQ port</span><span class="ko">ZMQ port 의 base</span></strong><span class="en">. Actual ZMQ for rank i = <code>kv_port + i</code>. P=20001-20004, D=22001-22004.</span><span class="ko">. rank i 의 실 ZMQ = <code>kv_port + i</code>. P=20001-20004, D=22001-22004.</span></td></tr>
+<tr><td><code>zmq_addr</code> in extra_config</td><td><span class="en">(don't use)</span><span class="ko">(쓰지 말 것)</span></td><td><strong><span class="en">Ignored in v0.10.0 image</span><span class="ko">v0.10.0 image 에선 무시됨</span></strong><span class="en">. Actual ZMQ is determined by <code>kv_port</code>. Root cause of conflict in attempt #4.</span><span class="ko">. 실 ZMQ 는 <code>kv_port</code> 가 결정. 시도 #4 의 충돌 원인.</span></td></tr>
+<tr><td><code>kv_buffer_size</code></td><td>P=1e1 / D=8e9</td><td><span class="en">Keep P's PUT_ASYNC queue depth small (PR #18242 recommendation). Allow D's unreceived KV pile-up to be large.</span><span class="ko">P 의 PUT_ASYNC queue depth 작게 (PR #18242 권장). D 는 미수신 KV pile-up 허용 크게.</span></td></tr>
+<tr><td><code>send_type</code></td><td>PUT_ASYNC</td><td><span class="en">P fires-and-forgets. After P sends, the next prefill starts immediately.</span><span class="ko">P 가 fire-and-forget. P 가 send 후 즉시 다음 prefill 시작.</span></td></tr>
+<tr><td><code>nccl_num_channels</code></td><td>16</td><td><span class="en">RCCL ring channels. Multiplexed over 16 channels on top of the 4-link XGMI between MI250 OAMs (oversubscribed but scheduled by RCCL).</span><span class="ko">RCCL ring channel. MI250 OAM 간 XGMI 4-link 위에서 16 channel 다중화 (oversubscribed but RCCL 이 scheduling).</span></td></tr>
+<tr><td><code>--enforce-eager</code></td><td>flag</td><td><span class="en">Workaround for host ROCm 6.2 / image ROCm 7.0 mismatch (confirmed in 1st experiment).</span><span class="ko">host ROCm 6.2 / image ROCm 7.0 mismatch 우회 (1차 실험에서 확정).</span></td></tr>
+<tr><td><code>proxy_port / http_port</code></td><td><span class="en">all strings</span><span class="ko">모두 string</span></td><td><span class="en">vLLM source does string concat, so int → TypeError of attempt #1. Use quoted in JSON.</span><span class="ko">vLLM source 가 string concat 하므로 int 면 시도 #1 의 TypeError. JSON 에 quoted 로.</span></td></tr>
 </table>
 
 </div>
 
-<h2 id="handshake">6. NCCL handshake — 4 쌍 NCCL Comm 동시 init 확인</h2>
+<h2 id="handshake"><span class="en">6. NCCL handshake — confirming 4 pairs of NCCL Comm init simultaneously</span><span class="ko">6. NCCL handshake — 4 쌍 NCCL Comm 동시 init 확인</span></h2>
 <div class="card">
 
-<h3>6-1. P 측 로그 (👉 sender)</h3>
+<h3><span class="en">6-1. P-side log (👉 sender)</span><span class="ko">6-1. P 측 로그 (👉 sender)</span></h3>
 
 <pre><code>$ docker logs vllm-p-tp4 | grep "ncclCommInitRank Success"
 
@@ -352,7 +352,7 @@ docker run -d --name vllm-proxy-tp4 \
 🤝ncclCommInitRank Success, 192.168.3.52:20003👉192.168.3.52:22003, MyRank:0
 🤝ncclCommInitRank Success, 192.168.3.52:20004👉192.168.3.52:22004, MyRank:0</code></pre>
 
-<h3>6-2. D 측 로그 (👈 receiver)</h3>
+<h3><span class="en">6-2. D-side log (👈 receiver)</span><span class="ko">6-2. D 측 로그 (👈 receiver)</span></h3>
 
 <pre><code>$ docker logs vllm-d-tp4 | grep "ncclCommInitRank Success"
 
@@ -361,22 +361,22 @@ docker run -d --name vllm-proxy-tp4 \
 🤝ncclCommInitRank Success, 192.168.3.52:22003👈192.168.3.52:20003, MyRank:1
 🤝ncclCommInitRank Success, 192.168.3.52:22004👈192.168.3.52:20004, MyRank:1</code></pre>
 
-<h3>6-3. 분석</h3>
+<h3><span class="en">6-3. Analysis</span><span class="ko">6-3. 분석</span></h3>
 
 <table>
-<tr><th>관찰</th><th>의미</th></tr>
-<tr><td>4 쌍 NCCL Comm 이 동시 (같은 timestamp) init 완료</td><td><strong>Deadlock 없음</strong> — 4 쌍 핸드셰이크가 ZMQ 위에서 동시에 진행되어도 race 없음</td></tr>
-<tr><td>P 의 모든 rank 가 <code>MyRank:0</code></td><td>각 NCCL Comm 안에서 P 가 rank=0 (sender), D 가 rank=1 (receiver). size=2 NCCL Comm.</td></tr>
-<tr><td>P rank i ↔ D rank i 1:1 매칭</td><td><code>port + self._rank</code> 코드 (<a href="https://github.com/vllm-project/vllm/blob/v0.10.0/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_connector.py#L245">connector.py L245</a>) 가 보장. 같은 rank 끼리.</td></tr>
-<tr><td>총 NCCL Comm 수 = 4 (P-D 쌍) + 1 (P 내부 TP) + 1 (D 내부 TP) = <strong>6 개</strong></td><td>vLLM 의 TP world 와 KV transfer Comm 이 다른 group. 충돌 없음 (다른 unique_id)</td></tr>
+<tr><th><span class="en">Observation</span><span class="ko">관찰</span></th><th><span class="en">Meaning</span><span class="ko">의미</span></th></tr>
+<tr><td><span class="en">4 NCCL Comm pairs finish init simultaneously (same timestamp)</span><span class="ko">4 쌍 NCCL Comm 이 동시 (같은 timestamp) init 완료</span></td><td><strong><span class="en">No deadlock</span><span class="ko">Deadlock 없음</span></strong> <span class="en">— 4 pairs of handshakes over ZMQ proceed in parallel without races</span><span class="ko">— 4 쌍 핸드셰이크가 ZMQ 위에서 동시에 진행되어도 race 없음</span></td></tr>
+<tr><td><span class="en">All P ranks are </span><span class="ko">P 의 모든 rank 가 </span><code>MyRank:0</code></td><td><span class="en">Inside each NCCL Comm, P is rank=0 (sender), D is rank=1 (receiver). size=2 NCCL Comm.</span><span class="ko">각 NCCL Comm 안에서 P 가 rank=0 (sender), D 가 rank=1 (receiver). size=2 NCCL Comm.</span></td></tr>
+<tr><td><span class="en">P rank i ↔ D rank i 1:1 matching</span><span class="ko">P rank i ↔ D rank i 1:1 매칭</span></td><td><span class="en">Guaranteed by the <code>port + self._rank</code> code (</span><span class="ko"><code>port + self._rank</code> 코드 (</span><a href="https://github.com/vllm-project/vllm/blob/v0.10.0/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_connector.py#L245">connector.py L245</a><span class="en">). Matched by rank.</span><span class="ko">) 가 보장. 같은 rank 끼리.</span></td></tr>
+<tr><td><span class="en">Total NCCL Comm count = 4 (P-D pairs) + 1 (P internal TP) + 1 (D internal TP) = </span><span class="ko">총 NCCL Comm 수 = 4 (P-D 쌍) + 1 (P 내부 TP) + 1 (D 내부 TP) = </span><strong><span class="en">6</span><span class="ko">6 개</span></strong></td><td><span class="en">vLLM's TP world and KV transfer Comm are different groups. No collision (different unique_id)</span><span class="ko">vLLM 의 TP world 와 KV transfer Comm 이 다른 group. 충돌 없음 (다른 unique_id)</span></td></tr>
 </table>
 
 </div>
 
-<h2 id="chat">7. chat call + concurrent + long prompt 측정</h2>
+<h2 id="chat"><span class="en">7. chat call + concurrent + long prompt measurements</span><span class="ko">7. chat call + concurrent + long prompt 측정</span></h2>
 <div class="card">
 
-<h3>7-1. 단순 chat (1st cold + 2nd warm)</h3>
+<h3><span class="en">7-1. Simple chat (1st cold + 2nd warm)</span><span class="ko">7-1. 단순 chat (1st cold + 2nd warm)</span></h3>
 
 <pre><code>$ time curl -sS http://localhost:10001/v1/completions \
   -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
@@ -393,9 +393,9 @@ $ time curl -sS .../v1/completions -d '{...,"prompt":"What is 2+2?","max_tokens"
 {"text":" - Answers\nMath and Arithmetic..."}
 real    0m0.838s     ← warm (NCCL Comm reuse)</code></pre>
 
-<p>2nd 가 0.8s 인 이유는 NCCL Comm 한 번 init 후 reuse + 짧은 prompt + 50 token. 답 자체는 nonsense (Qwen2.5-1.5B 가 작아서) — generation 메커니즘 검증 목적.</p>
+<p><span class="en">The 2nd call takes 0.8s because NCCL Comm is reused after first init, plus a short prompt and 50 tokens. The answer itself is nonsense (Qwen2.5-1.5B is small) — the purpose here is to verify the generation mechanism.</span><span class="ko">2nd 가 0.8s 인 이유는 NCCL Comm 한 번 init 후 reuse + 짧은 prompt + 50 token. 답 자체는 nonsense (Qwen2.5-1.5B 가 작아서) — generation 메커니즘 검증 목적.</span></p>
 
-<h3>7-2. Concurrent 3 parallel</h3>
+<h3><span class="en">7-2. Concurrent 3 parallel</span><span class="ko">7-2. Concurrent 3 parallel</span></h3>
 
 <pre><code>$ for i in 1 2 3; do
     (time curl -sS .../v1/completions -d "{...,\"prompt\":\"Tell me about test ${i}\",\"max_tokens\":100}") &
@@ -405,9 +405,9 @@ real    0m1.508s
 real    0m1.648s
 real    0m1.680s</code></pre>
 
-<p>3 parallel 모두 <strong>1.5-1.7s</strong> 안에 끝남. P 가 3 requests 의 prefill 을 concurrent 처리 → D 가 3 KV 동시 받아 generation.</p>
+<p><span class="en">All 3 parallel finish within <strong>1.5-1.7s</strong>. P concurrently processes prefill of 3 requests → D receives 3 KV simultaneously and generates.</span><span class="ko">3 parallel 모두 <strong>1.5-1.7s</strong> 안에 끝남. P 가 3 requests 의 prefill 을 concurrent 처리 → D 가 3 KV 동시 받아 generation.</span></p>
 
-<h3>7-3. Long prompt (606 token)</h3>
+<h3><span class="en">7-3. Long prompt (606 tokens)</span><span class="ko">7-3. Long prompt (606 token)</span></h3>
 
 <pre><code>PROMPT=$(python3 -c 'print("The MI250 GPU has multiple OAM cards, each with 2 GCD die. " * 30)')
 
@@ -419,28 +419,28 @@ text: " The given information describes a network or system where
        there are multiple OAM (Optical Add-Drop Multiplexer) cards..."
 real    0m1.306s</code></pre>
 
-<p>606 token prompt + 80 generation, <strong>1.3s</strong>. KV transfer 가 fast — 28 layer × KV/rank 가 4 channel 병렬 송신.</p>
+<p><span class="en">606-token prompt + 80 generation, <strong>1.3s</strong>. KV transfer is fast — 28 layers × KV/rank sent in parallel over 4 channels.</span><span class="ko">606 token prompt + 80 generation, <strong>1.3s</strong>. KV transfer 가 fast — 28 layer × KV/rank 가 4 channel 병렬 송신.</span></p>
 
-<h3>7-4. request_id 인코딩 — proxy 가 P 와 D address 가 어떻게 넣나</h3>
+<h3><span class="en">7-4. request_id encoding — how proxy embeds P and D addresses</span><span class="ko">7-4. request_id 인코딩 — proxy 가 P 와 D address 가 어떻게 넣나</span></h3>
 
 <pre><code>id: cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_4a47fb1e...</code></pre>
 
 <table>
-<tr><th>부분</th><th>의미</th></tr>
-<tr><td><code>cmpl-</code></td><td>OpenAI completion 의 prefix</td></tr>
-<tr><td><code>___prefill_addr_192.168.3.52:20001</code></td><td>proxy 가 prefill instance 의 ZMQ rank 0 address 박음. <strong>D 가 ZMQ 의 어느 endpoint 로 KV recv 했는지 routing</strong>.</td></tr>
-<tr><td><code>___decode_addr_192.168.3.52:22001</code></td><td>같은 식으로 decode 의 ZMQ rank 0 address. proxy 가 D 에 forward 한 routing 기록.</td></tr>
-<tr><td><code>_4a47fb1e...</code></td><td>random uuid hex (16 byte)</td></tr>
+<tr><th><span class="en">Part</span><span class="ko">부분</span></th><th><span class="en">Meaning</span><span class="ko">의미</span></th></tr>
+<tr><td><code>cmpl-</code></td><td><span class="en">OpenAI completion prefix</span><span class="ko">OpenAI completion 의 prefix</span></td></tr>
+<tr><td><code>___prefill_addr_192.168.3.52:20001</code></td><td><span class="en">Proxy embeds the ZMQ rank 0 address of the prefill instance. </span><span class="ko">proxy 가 prefill instance 의 ZMQ rank 0 address 박음. </span><strong><span class="en">Routes which ZMQ endpoint D should recv KV from</span><span class="ko">D 가 ZMQ 의 어느 endpoint 로 KV recv 했는지 routing</span></strong>.</td></tr>
+<tr><td><code>___decode_addr_192.168.3.52:22001</code></td><td><span class="en">Likewise, decode's ZMQ rank 0 address. A record of the proxy's forwarding routing to D.</span><span class="ko">같은 식으로 decode 의 ZMQ rank 0 address. proxy 가 D 에 forward 한 routing 기록.</span></td></tr>
+<tr><td><code>_4a47fb1e...</code></td><td><span class="en">random uuid hex (16 bytes)</span><span class="ko">random uuid hex (16 byte)</span></td></tr>
 </table>
 
-<p>P/D 양쪽이 request_id 를 보고 "이 KV 는 어디서 / 어디로 가는지" 매칭. ZMQ rank 0 만 표기 — rank 1,2,3 는 <code>port + rank</code> 계산으로 자동 derivation. 즉 proxy 가 한 endpoint 만 알면 충분.</p>
+<p><span class="en">Both P/D look up request_id to match "which KV is from where / to where". Only ZMQ rank 0 is encoded — ranks 1,2,3 are derived by <code>port + rank</code>. The proxy only needs to know one endpoint.</span><span class="ko">P/D 양쪽이 request_id 를 보고 "이 KV 는 어디서 / 어디로 가는지" 매칭. ZMQ rank 0 만 표기 — rank 1,2,3 는 <code>port + rank</code> 계산으로 자동 derivation. 즉 proxy 가 한 endpoint 만 알면 충분.</span></p>
 
 </div>
 
-<h2 id="monitoring">8. rocm-smi monitoring — P/D phase 분리 캡쳐</h2>
+<h2 id="monitoring"><span class="en">8. rocm-smi monitoring — capturing P/D phase separation</span><span class="ko">8. rocm-smi monitoring — P/D phase 분리 캡쳐</span></h2>
 <div class="card">
 
-<p>8 parallel chat call (max_tokens=200) 발사 중 rocm-smi 1초 간격 3 snapshot 캡쳐.</p>
+<p><span class="en">During 8 parallel chat calls (max_tokens=200), captured 3 rocm-smi snapshots at 1s intervals.</span><span class="ko">8 parallel chat call (max_tokens=200) 발사 중 rocm-smi 1초 간격 3 snapshot 캡쳐.</span></p>
 
 <pre><code>$ ( for i in $(seq 1 8); do
       curl -sS .../v1/completions \
@@ -463,11 +463,11 @@ card5, 99               card5, 75             card5, 93
 card6, 72               card6, 73             card6, 74
 card7, 74               card7, 71             card7, 73</code></pre>
 
-<h3>8-1. 핵심 관찰 — Phase 분리</h3>
+<h3><span class="en">8-1. Key observation — phase separation</span><span class="ko">8-1. 핵심 관찰 — Phase 분리</span></h3>
 
-<div class="tip"><strong>P GCD 0-3 = 0%, D GCD 4-7 = 70-99% 동시</strong>. 이게 <strong>PDD 가 의도한 phase 분리의 결정적 증거</strong>. Prefill 은 매 request 마다 짧게 일하고 끝남 (1.5B 모델 + short prompt → 100ms 이내) — polling 시점에 항상 idle. Decode 는 token 별 sequential 이라 200 token 출력에 1.5s 걸려 polling 캡쳐.</div>
+<div class="tip"><strong><span class="en">P GCD 0-3 = 0%, D GCD 4-7 = 70-99% simultaneously</span><span class="ko">P GCD 0-3 = 0%, D GCD 4-7 = 70-99% 동시</span></strong><span class="en">. This is the <strong>decisive evidence of the phase separation PDD intends</strong>. Prefill works briefly per request and finishes (1.5B model + short prompt → within 100ms) — always idle at the polling moment. Decode is sequential per token, so 200-token output takes 1.5s and gets captured by polling.</span><span class="ko">. 이게 <strong>PDD 가 의도한 phase 분리의 결정적 증거</strong>. Prefill 은 매 request 마다 짧게 일하고 끝남 (1.5B 모델 + short prompt → 100ms 이내) — polling 시점에 항상 idle. Decode 는 token 별 sequential 이라 200 token 출력에 1.5s 걸려 polling 캡쳐.</span></div>
 
-<h3>8-2. 8 GCD VRAM</h3>
+<h3><span class="en">8-2. VRAM across 8 GCDs</span><span class="ko">8-2. 8 GCD VRAM</span></h3>
 
 <pre><code>$ rocm-smi --showmeminfo vram --csv
 
@@ -481,24 +481,24 @@ card5,  68.7 GB,   63.1 GB
 card6,  68.7 GB,   63.2 GB
 card7,  68.7 GB,   63.1 GB</code></pre>
 
-<p>8 GCD 모두 VRAM 91-92%. 1.5B fp16 weights × TP=4 = 약 750 MB/GCD + KV cache pool (max_model_len=4096 × 4 batch 까지 예약) 의 합계. P 와 D 가 같은 모델 weights 중복 보유 → host 의 VRAM total (8 × 64 GB = 512 GB) 의 90% 이상 점유.</p>
+<p><span class="en">All 8 GCDs at 91-92% VRAM. Sum of 1.5B fp16 weights × TP=4 ≈ 750 MB/GCD + KV cache pool (reserved up to max_model_len=4096 × 4 batches). P and D hold duplicate model weights → over 90% of the host's total VRAM (8 × 64 GB = 512 GB) occupied.</span><span class="ko">8 GCD 모두 VRAM 91-92%. 1.5B fp16 weights × TP=4 = 약 750 MB/GCD + KV cache pool (max_model_len=4096 × 4 batch 까지 예약) 의 합계. P 와 D 가 같은 모델 weights 중복 보유 → host 의 VRAM total (8 × 64 GB = 512 GB) 의 90% 이상 점유.</span></p>
 
-<h3>8-3. P/D phase 분리의 의미</h3>
+<h3><span class="en">8-3. Meaning of P/D phase separation</span><span class="ko">8-3. P/D phase 분리의 의미</span></h3>
 
 <table>
-<tr><th>시나리오</th><th>P GCD %</th><th>D GCD %</th><th>의미</th></tr>
-<tr><td>단일 vLLM (P+D 통합)</td><td>—</td><td>—</td><td>모든 GCD 가 prefill+decode 동시 — phase 경합. 본 host 에선 비교용 baseline 못 띄움 (VRAM 부족)</td></tr>
-<tr><td>본 실험 — TP=4+4 P/D, 8 conc</td><td>0% (idle)</td><td>70-99% (busy)</td><td><strong>완전 분리</strong>. Prefill 이 끝난 후 idle, Decode 가 generation 만</td></tr>
+<tr><th><span class="en">Scenario</span><span class="ko">시나리오</span></th><th>P GCD %</th><th>D GCD %</th><th><span class="en">Meaning</span><span class="ko">의미</span></th></tr>
+<tr><td><span class="en">Single vLLM (P+D combined)</span><span class="ko">단일 vLLM (P+D 통합)</span></td><td>—</td><td>—</td><td><span class="en">All GCDs do prefill+decode simultaneously — phase contention. Can't bring up baseline on this host (VRAM insufficient)</span><span class="ko">모든 GCD 가 prefill+decode 동시 — phase 경합. 본 host 에선 비교용 baseline 못 띄움 (VRAM 부족)</span></td></tr>
+<tr><td><span class="en">This experiment — TP=4+4 P/D, 8 conc</span><span class="ko">본 실험 — TP=4+4 P/D, 8 conc</span></td><td>0% (idle)</td><td>70-99% (busy)</td><td><strong><span class="en">Complete separation</span><span class="ko">완전 분리</span></strong><span class="en">. Idle after prefill ends, Decode does only generation</span><span class="ko">. Prefill 이 끝난 후 idle, Decode 가 generation 만</span></td></tr>
 </table>
 
-<p>1.5B 모델 + max_tokens=200 라 decode 가 prefill 대비 시간 비율이 크다. 더 긴 prompt + 큰 모델일수록 P 의 비중 ↑.</p>
+<p><span class="en">With 1.5B model + max_tokens=200, decode-to-prefill time ratio is large. Longer prompts + bigger models → P share ↑.</span><span class="ko">1.5B 모델 + max_tokens=200 라 decode 가 prefill 대비 시간 비율이 크다. 더 긴 prompt + 큰 모델일수록 P 의 비중 ↑.</span></p>
 
 </div>
 
-<h2 id="flow">9. KV transfer 코드 흐름 + request_id 인코딩</h2>
+<h2 id="flow"><span class="en">9. KV transfer code flow + request_id encoding</span><span class="ko">9. KV transfer 코드 흐름 + request_id 인코딩</span></h2>
 <div class="card">
 
-<h3>9-1. 한 chat call 의 흐름</h3>
+<h3><span class="en">9-1. Flow of one chat call</span><span class="ko">9-1. 한 chat call 의 흐름</span></h3>
 
 <div class="diagram">  Client                                       proxy            P container          D container
    │                                            │                 │                    │
@@ -541,77 +541,77 @@ card7,  68.7 GB,   63.1 GB</code></pre>
    │                                            │ ⑨ stream tokens │                    │
    │ ◄──────────────────────────────────────── ◄─────────────────────────────────────│</div>
 
-<h3>9-2. ZMQ vs NCCL 채널 분리</h3>
+<h3><span class="en">9-2. ZMQ vs NCCL channel separation</span><span class="ko">9-2. ZMQ vs NCCL 채널 분리</span></h3>
 
 <table>
-<tr><th>Channel</th><th>전송</th><th>본 실험에서</th></tr>
-<tr><td><strong>ZMQ</strong> 8 port (20001-20004 + 22001-22004)</td><td>NCCL unique_id 교환 (handshake metadata) + "어느 request 의 KV" routing 정보. 작은 message</td><td>P/D 의 4 NCCL Comm init 시 unique_id 4 개 ZMQ 로 교환. handshake 후엔 거의 idle.</td></tr>
-<tr><td><strong>NCCL/RCCL</strong> (16 channel × 4 Comm)</td><td>실 KV tensor — layer 별 [2, num_blocks, page_size, num_heads/TP, head_dim] fp16</td><td>한 request 의 KV 가 28 layer 별 4 rank 동시 송신. XGMI 가 transport (같은 host).</td></tr>
+<tr><th>Channel</th><th><span class="en">Carries</span><span class="ko">전송</span></th><th><span class="en">In this experiment</span><span class="ko">본 실험에서</span></th></tr>
+<tr><td><strong>ZMQ</strong> <span class="en">8 ports (20001-20004 + 22001-22004)</span><span class="ko">8 port (20001-20004 + 22001-22004)</span></td><td><span class="en">NCCL unique_id exchange (handshake metadata) + routing info "which request's KV". Small messages</span><span class="ko">NCCL unique_id 교환 (handshake metadata) + "어느 request 의 KV" routing 정보. 작은 message</span></td><td><span class="en">During P/D 4-NCCL-Comm init, 4 unique_ids exchanged over ZMQ. After handshake, mostly idle.</span><span class="ko">P/D 의 4 NCCL Comm init 시 unique_id 4 개 ZMQ 로 교환. handshake 후엔 거의 idle.</span></td></tr>
+<tr><td><strong>NCCL/RCCL</strong> <span class="en">(16 channels × 4 Comm)</span><span class="ko">(16 channel × 4 Comm)</span></td><td><span class="en">Actual KV tensors — per-layer [2, num_blocks, page_size, num_heads/TP, head_dim] fp16</span><span class="ko">실 KV tensor — layer 별 [2, num_blocks, page_size, num_heads/TP, head_dim] fp16</span></td><td><span class="en">For one request's KV, 28 layers × 4 ranks send simultaneously. XGMI is the transport (same host).</span><span class="ko">한 request 의 KV 가 28 layer 별 4 rank 동시 송신. XGMI 가 transport (같은 host).</span></td></tr>
 </table>
 
-<h3>9-3. P/D rank 매칭 — 코드 라인 직접 인용</h3>
+<h3><span class="en">9-3. P/D rank matching — direct code citation</span><span class="ko">9-3. P/D rank 매칭 — 코드 라인 직접 인용</span></h3>
 
 <pre><code># vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_connector.py L245
 remote_address = ip + ":" + str(port + self._rank)
 self.p2p_nccl_engine.send_tensor(
     request_id + "#" + layer_name, kv_layer, remote_address, ...)</code></pre>
 
-<p>P 의 rank 0 worker 가 request_id 의 <code>decode_addr_192.168.3.52:22001</code> 에서 base port 22001 추출 → <code>remote_address = 192.168.3.52:22001+0 = 192.168.3.52:22001</code>. P rank 1 → D rank 1 (22002), ... 4 쌍 1:1 매칭.</p>
+<p><span class="en">P's rank 0 worker extracts base port 22001 from request_id's <code>decode_addr_192.168.3.52:22001</code> → <code>remote_address = 192.168.3.52:22001+0 = 192.168.3.52:22001</code>. P rank 1 → D rank 1 (22002), ... 4 pairs in 1:1 matching.</span><span class="ko">P 의 rank 0 worker 가 request_id 의 <code>decode_addr_192.168.3.52:22001</code> 에서 base port 22001 추출 → <code>remote_address = 192.168.3.52:22001+0 = 192.168.3.52:22001</code>. P rank 1 → D rank 1 (22002), ... 4 쌍 1:1 매칭.</span></p>
 
 </div>
 
-<h2 id="diff">10. 일방 (PUT_ASYNC) 통신 의 실 동작 — Bidirectional 됐는가에 대한 답</h2>
+<h2 id="diff"><span class="en">10. Real behavior of one-way (PUT_ASYNC) communication — answer to "was it bidirectional?"</span><span class="ko">10. 일방 (PUT_ASYNC) 통신 의 실 동작 — Bidirectional 됐는가에 대한 답</span></h2>
 <div class="card">
 
-<div class="danger"><strong>본 실험 = Bidirectional 아닙니다. P → D 한 방향만 흘렀습니다.</strong> 글 제목에 "Bidirectional" 이 들어갔지만, vLLM v0.10.0 의 P2pNccl 자체가 한 instance 의 role 을 평생 고정하므로 진정한 양방향 (한 instance 가 동시에 P + D) 은 본질적으로 불가능. 본 글의 §2 표 도 그걸 admit. TP=4+4 가 한 것은 "<strong>4 channel 병렬 한 방향 송신 + phase 분리</strong>" 임.</div>
+<div class="danger"><strong><span class="en">This experiment = not Bidirectional. KV only flowed P → D one direction.</span><span class="ko">본 실험 = Bidirectional 아닙니다. P → D 한 방향만 흘렀습니다.</span></strong> <span class="en">Although "Bidirectional" is in the title, vLLM v0.10.0's P2pNccl fixes an instance's role for its lifetime, so true bidirectional (one instance acting as P + D simultaneously) is fundamentally impossible. The §2 table also admits this. What TP=4+4 achieved is "<strong>4-channel parallel one-way send + phase separation</strong>".</span><span class="ko">글 제목에 "Bidirectional" 이 들어갔지만, vLLM v0.10.0 의 P2pNccl 자체가 한 instance 의 role 을 평생 고정하므로 진정한 양방향 (한 instance 가 동시에 P + D) 은 본질적으로 불가능. 본 글의 §2 표 도 그걸 admit. TP=4+4 가 한 것은 "<strong>4 channel 병렬 한 방향 송신 + phase 분리</strong>" 임.</span></div>
 
-<h3>10-1. "되지 않았다" 의 3 가지 증명</h3>
+<h3><span class="en">10-1. Three proofs of "it didn't happen"</span><span class="ko">10-1. "되지 않았다" 의 3 가지 증명</span></h3>
 
 <table>
-<tr><th>증명</th><th>로그 / 코드</th></tr>
-<tr><td><strong>(A) NCCL handshake log 의 방향 화살표</strong></td><td>
-P 측 4 rank: <code>🤝 ...👉192.168.3.52:22001~22004 (P sends)</code><br>
-D 측 4 rank: <code>🤝 ...👈192.168.3.52:20001~20004 (D receives)</code><br>
-양쪽 log 가 한 방향만. 만약 양방향이면 P 쪽에도 <code>👈</code>, D 쪽에도 <code>👉</code> 가 같이 나와야.
+<tr><th><span class="en">Proof</span><span class="ko">증명</span></th><th><span class="en">Log / code</span><span class="ko">로그 / 코드</span></th></tr>
+<tr><td><strong><span class="en">(A) Direction arrows in NCCL handshake log</span><span class="ko">(A) NCCL handshake log 의 방향 화살표</span></strong></td><td>
+<span class="en">P-side 4 ranks: </span><span class="ko">P 측 4 rank: </span><code>🤝 ...👉192.168.3.52:22001~22004 (P sends)</code><br>
+<span class="en">D-side 4 ranks: </span><span class="ko">D 측 4 rank: </span><code>🤝 ...👈192.168.3.52:20001~20004 (D receives)</code><br>
+<span class="en">Both sides' logs are one direction only. If bidirectional, P would also show </span><span class="ko">양쪽 log 가 한 방향만. 만약 양방향이면 P 쪽에도 </span><code>👈</code><span class="en">, and D would also show </span><span class="ko">, D 쪽에도 </span><code>👉</code><span class="en"> together.</span><span class="ko"> 가 같이 나와야.</span>
 </td></tr>
-<tr><td><strong>(B) P container 와 D container 의 함수 호출 분리</strong></td><td>
-P container 의 ncclSend log 수 = 다수 / ncclRecv log 수 = 0<br>
-D container 의 ncclRecv log 수 = 다수 / ncclSend log 수 = 0<br>
-한 host 의 두 container 가 정확히 sender / receiver 로 분리.
+<tr><td><strong><span class="en">(B) Function-call separation between P and D containers</span><span class="ko">(B) P container 와 D container 의 함수 호출 분리</span></strong></td><td>
+<span class="en">P container ncclSend log count = many / ncclRecv log count = 0</span><span class="ko">P container 의 ncclSend log 수 = 다수 / ncclRecv log 수 = 0</span><br>
+<span class="en">D container ncclRecv log count = many / ncclSend log count = 0</span><span class="ko">D container 의 ncclRecv log 수 = 다수 / ncclSend log 수 = 0</span><br>
+<span class="en">The two containers on the same host split cleanly into sender / receiver.</span><span class="ko">한 host 의 두 container 가 정확히 sender / receiver 로 분리.</span>
 </td></tr>
-<tr><td><strong>(C) vLLM source 의 instance role 고정 분기</strong></td><td>
-<code>p2p_nccl_connector.py L116</code> <code>if self.is_producer: return</code> — producer 는 외부 KV load 안 함<br>
-<code>p2p_nccl_connector.py L235</code> <code>if not self.is_producer: return</code> — consumer 는 외부 KV save 안 함<br>
-<code>self.is_producer</code> 는 instance 생성 시 1 회 set, immutable. 즉 한 process 가 send + recv 동시 불가.
+<tr><td><strong><span class="en">(C) Instance role fixed branching in vLLM source</span><span class="ko">(C) vLLM source 의 instance role 고정 분기</span></strong></td><td>
+<code>p2p_nccl_connector.py L116</code> <code>if self.is_producer: return</code> <span class="en">— producer doesn't load external KV</span><span class="ko">— producer 는 외부 KV load 안 함</span><br>
+<code>p2p_nccl_connector.py L235</code> <code>if not self.is_producer: return</code> <span class="en">— consumer doesn't save external KV</span><span class="ko">— consumer 는 외부 KV save 안 함</span><br>
+<code>self.is_producer</code> <span class="en">is set once on instance creation, immutable. One process can't simultaneously send + recv.</span><span class="ko">는 instance 생성 시 1 회 set, immutable. 즉 한 process 가 send + recv 동시 불가.</span>
 </td></tr>
 </table>
 
-<h3>10-2. "Bidirectional" 의 가장 가까운 시뮬 — vLLM 에서 가능한 한도</h3>
+<h3><span class="en">10-2. Closest simulation of "Bidirectional" — limit of what vLLM allows</span><span class="ko">10-2. "Bidirectional" 의 가장 가까운 시뮬 — vLLM 에서 가능한 한도</span></h3>
 
-<p>한 instance 가 양방향 = 불가. 단 <strong>시스템 차원의 양방향 (request 별로 어느 instance 가 P 인지 다름)</strong> 은 가능. proxy 의 XpYd routing 으로 구현. 본 실험은 1 P + 1 D 라 system 차원도 단방향.</p>
-
-<table>
-<tr><th>구성</th><th>각 instance role</th><th>system 차원 KV 흐름</th><th>본 실험?</th></tr>
-<tr><td>1 P + 1 D (본 실험)</td><td>고정 (P, D)</td><td>P → D 만</td><td><span class="status-ok">현재</span></td></tr>
-<tr><td>2 P + 2 D (XpYd)</td><td>각 고정 (P 2 개, D 2 개)</td><td>한 conv 마다 P i → D j routing</td><td>미시도 (다음 실험)</td></tr>
-<tr><td>한 host 가 P + 또 D (4 container, TP=2 씩)</td><td>각 고정</td><td>system 차원에서 양쪽으로 KV 흐름 가능 단 instance 자체는 단방향</td><td>미시도</td></tr>
-<tr><td>한 instance 가 P + D 동시</td><td>변동 (양쪽)</td><td>진정한 양방향</td><td><span class="status-fail">vLLM 미지원 (ROCm)</span></td></tr>
-</table>
-
-<h3>10-3. 최신 vLLM (0.11.2.dev) 의 kv_both 지원 connector 검증</h3>
-
-<div class="note"><strong>최신 vLLM 으로 재검증 — 사용자 지적에 따라</strong>: 1차 글에서 v0.10.0 으로 정적 분석 했지만 image (<code>rocm/vllm:latest</code>) 가 사실 0.11.2.dev673+g839868462 (사실상 main 의 dev build) 였음. v0.11.2 dev 의 connector 들의 kv_both 지원 여부를 코드 + 실 시도로 검증.</div>
+<p><span class="en">One instance doing bidirectional = not possible. But <strong>system-level bidirectional (which instance is P differs per request)</strong> is possible — implemented via the proxy's XpYd routing. This experiment is 1 P + 1 D, so it is one-way at the system level too.</span><span class="ko">한 instance 가 양방향 = 불가. 단 <strong>시스템 차원의 양방향 (request 별로 어느 instance 가 P 인지 다름)</strong> 은 가능. proxy 의 XpYd routing 으로 구현. 본 실험은 1 P + 1 D 라 system 차원도 단방향.</span></p>
 
 <table>
-<tr><th>Connector (v0.11.2.dev)</th><th>kv_both 지원?</th><th>ROCm/MI250 운영 가능?</th><th>코드 / 실 시도 근거</th></tr>
-<tr><td><strong>P2pNcclConnector</strong></td><td><span class="status-fail">아니오</span></td><td>가능</td><td>L88 <code>self.is_producer = ...is_kv_producer</code> + L125/L261/L310 분기. v0.10.0 와 동일 — bool 1 회 set, 평생 고정.</td></tr>
-<tr><td><strong>MooncakeConnector</strong></td><td><span class="status-ok">예</span> (L442 주석 "For kv_both, we will act both prefiller and decoder")</td><td><span class="status-fail">불가</span></td><td>코드 OK, 단 mooncake-transfer-engine wheel 이 <code>libcudart.so.12</code> 의존 (CUDA 12). ROCm 에 그 lib 없음 — <strong>실 import 시 ImportError</strong>.</td></tr>
-<tr><td><strong>NixlConnector</strong></td><td>코드는 kv_role 분기 없음 (가능성 ↑)</td><td><span class="status-fail">불가</span></td><td>image 안 <code>NIXL is not available</code> — NIXL library 미포함. NVIDIA 전용 dependency.</td></tr>
-<tr><td><strong>LMCacheConnector / lmcache_mp</strong></td><td>코드 kv_role 분기 없음</td><td><span class="status-fail">불가</span></td><td>LMCache server 의존성 미설치.</td></tr>
-<tr><td><strong>OffloadingConnector</strong></td><td>kv_role 분기 없음 (의미상 양방향 아님 — CPU offload)</td><td>가능</td><td>그러나 host CPU 로 offload — P/D 분리와 무관.</td></tr>
+<tr><th><span class="en">Config</span><span class="ko">구성</span></th><th><span class="en">Each instance's role</span><span class="ko">각 instance role</span></th><th><span class="en">System-level KV flow</span><span class="ko">system 차원 KV 흐름</span></th><th><span class="en">In this experiment?</span><span class="ko">본 실험?</span></th></tr>
+<tr><td><span class="en">1 P + 1 D (this experiment)</span><span class="ko">1 P + 1 D (본 실험)</span></td><td><span class="en">Fixed (P, D)</span><span class="ko">고정 (P, D)</span></td><td><span class="en">P → D only</span><span class="ko">P → D 만</span></td><td><span class="status-ok"><span class="en">Current</span><span class="ko">현재</span></span></td></tr>
+<tr><td><span class="en">2 P + 2 D (XpYd)</span><span class="ko">2 P + 2 D (XpYd)</span></td><td><span class="en">Fixed each (2 P, 2 D)</span><span class="ko">각 고정 (P 2 개, D 2 개)</span></td><td><span class="en">Per-conv routing P i → D j</span><span class="ko">한 conv 마다 P i → D j routing</span></td><td><span class="en">Not yet tried (next experiment)</span><span class="ko">미시도 (다음 실험)</span></td></tr>
+<tr><td><span class="en">One host with P + also D (4 containers, TP=2 each)</span><span class="ko">한 host 가 P + 또 D (4 container, TP=2 씩)</span></td><td><span class="en">Fixed each</span><span class="ko">각 고정</span></td><td><span class="en">System-level KV flow possible both ways, but each instance is one-way</span><span class="ko">system 차원에서 양쪽으로 KV 흐름 가능 단 instance 자체는 단방향</span></td><td><span class="en">Not yet tried</span><span class="ko">미시도</span></td></tr>
+<tr><td><span class="en">One instance simultaneously P + D</span><span class="ko">한 instance 가 P + D 동시</span></td><td><span class="en">Variable (both)</span><span class="ko">변동 (양쪽)</span></td><td><span class="en">True bidirectional</span><span class="ko">진정한 양방향</span></td><td><span class="status-fail"><span class="en">vLLM unsupported (ROCm)</span><span class="ko">vLLM 미지원 (ROCm)</span></span></td></tr>
 </table>
 
-<h4>10-3-1. Mooncake 실 빌드 시도 — failed</h4>
+<h3><span class="en">10-3. Verifying kv_both connector support in latest vLLM (0.11.2.dev)</span><span class="ko">10-3. 최신 vLLM (0.11.2.dev) 의 kv_both 지원 connector 검증</span></h3>
+
+<div class="note"><strong><span class="en">Re-verification with latest vLLM — per user feedback</span><span class="ko">최신 vLLM 으로 재검증 — 사용자 지적에 따라</span></strong><span class="en">: The 1st writeup statically analyzed v0.10.0, but the image (<code>rocm/vllm:latest</code>) was actually 0.11.2.dev673+g839868462 (essentially a dev build of main). Verifying kv_both support of v0.11.2 dev connectors via code + actual attempts.</span><span class="ko">: 1차 글에서 v0.10.0 으로 정적 분석 했지만 image (<code>rocm/vllm:latest</code>) 가 사실 0.11.2.dev673+g839868462 (사실상 main 의 dev build) 였음. v0.11.2 dev 의 connector 들의 kv_both 지원 여부를 코드 + 실 시도로 검증.</span></div>
+
+<table>
+<tr><th><span class="en">Connector (v0.11.2.dev)</span><span class="ko">Connector (v0.11.2.dev)</span></th><th><span class="en">kv_both support?</span><span class="ko">kv_both 지원?</span></th><th><span class="en">ROCm/MI250 usable?</span><span class="ko">ROCm/MI250 운영 가능?</span></th><th><span class="en">Code / experimental evidence</span><span class="ko">코드 / 실 시도 근거</span></th></tr>
+<tr><td><strong>P2pNcclConnector</strong></td><td><span class="status-fail"><span class="en">No</span><span class="ko">아니오</span></span></td><td><span class="en">Yes</span><span class="ko">가능</span></td><td><span class="en">L88 <code>self.is_producer = ...is_kv_producer</code> + L125/L261/L310 branches. Same as v0.10.0 — bool set once, fixed for life.</span><span class="ko">L88 <code>self.is_producer = ...is_kv_producer</code> + L125/L261/L310 분기. v0.10.0 와 동일 — bool 1 회 set, 평생 고정.</span></td></tr>
+<tr><td><strong>MooncakeConnector</strong></td><td><span class="status-ok"><span class="en">Yes</span><span class="ko">예</span></span> <span class="en">(L442 comment "For kv_both, we will act both prefiller and decoder")</span><span class="ko">(L442 주석 "For kv_both, we will act both prefiller and decoder")</span></td><td><span class="status-fail"><span class="en">No</span><span class="ko">불가</span></span></td><td><span class="en">Code OK, but mooncake-transfer-engine wheel depends on <code>libcudart.so.12</code> (CUDA 12). That lib is absent on ROCm — <strong>ImportError on actual import</strong>.</span><span class="ko">코드 OK, 단 mooncake-transfer-engine wheel 이 <code>libcudart.so.12</code> 의존 (CUDA 12). ROCm 에 그 lib 없음 — <strong>실 import 시 ImportError</strong>.</span></td></tr>
+<tr><td><strong>NixlConnector</strong></td><td><span class="en">No kv_role branching in code (likely supports both)</span><span class="ko">코드는 kv_role 분기 없음 (가능성 ↑)</span></td><td><span class="status-fail"><span class="en">No</span><span class="ko">불가</span></span></td><td><span class="en">Inside image: <code>NIXL is not available</code> — NIXL library not included. NVIDIA-only dependency.</span><span class="ko">image 안 <code>NIXL is not available</code> — NIXL library 미포함. NVIDIA 전용 dependency.</span></td></tr>
+<tr><td><strong>LMCacheConnector / lmcache_mp</strong></td><td><span class="en">No kv_role branching in code</span><span class="ko">코드 kv_role 분기 없음</span></td><td><span class="status-fail"><span class="en">No</span><span class="ko">불가</span></span></td><td><span class="en">LMCache server dependency not installed.</span><span class="ko">LMCache server 의존성 미설치.</span></td></tr>
+<tr><td><strong>OffloadingConnector</strong></td><td><span class="en">No kv_role branching (semantically not bidirectional — CPU offload)</span><span class="ko">kv_role 분기 없음 (의미상 양방향 아님 — CPU offload)</span></td><td><span class="en">Yes</span><span class="ko">가능</span></td><td><span class="en">But offloads to host CPU — unrelated to P/D separation.</span><span class="ko">그러나 host CPU 로 offload — P/D 분리와 무관.</span></td></tr>
+</table>
+
+<h4><span class="en">10-3-1. Mooncake actual build attempt — failed</span><span class="ko">10-3-1. Mooncake 실 빌드 시도 — failed</span></h4>
 
 <pre><code># Dockerfile 안 pip — host pip X
 FROM rocm/vllm:latest
@@ -625,11 +625,11 @@ $ docker run --rm vllm-mooncake:latest python -c \
 ImportError: libcudart.so.12: cannot open shared object file: No such file or directory
 # → Mooncake wheel 이 CUDA 12 runtime 에 link 됨. ROCm 환경에선 사용 불가.</code></pre>
 
-<h4>10-3-2. vLLM 0.22.1 (PyPI 의 진짜 최신) 시도 + 끝까지 디버그</h4>
+<h4><span class="en">10-3-2. vLLM 0.22.1 (PyPI's truly latest) attempt + debugged to the end</span><span class="ko">10-3-2. vLLM 0.22.1 (PyPI 의 진짜 최신) 시도 + 끝까지 디버그</span></h4>
 
-<p>사용자 지적: "최신 vLLM 은 0.22.1 이다". 본 실험은 <code>rocm/vllm:latest</code> image (vllm 0.11.2.dev) 로 진행했지만, 최신 v0.22.1 을 ROCm/MI250 에서 끝까지 시도.</p>
+<p><span class="en">User feedback: "the latest vLLM is 0.22.1". This experiment used the <code>rocm/vllm:latest</code> image (vllm 0.11.2.dev), but the latest v0.22.1 was tried on ROCm/MI250 through to the end.</span><span class="ko">사용자 지적: "최신 vLLM 은 0.22.1 이다". 본 실험은 <code>rocm/vllm:latest</code> image (vllm 0.11.2.dev) 로 진행했지만, 최신 v0.22.1 을 ROCm/MI250 에서 끝까지 시도.</span></p>
 
-<h5>시도 1 — pip 으로 image 안 vllm 만 upgrade</h5>
+<h5><span class="en">Attempt 1 — upgrade vllm inside image via pip</span><span class="ko">시도 1 — pip 으로 image 안 vllm 만 upgrade</span></h5>
 
 <pre><code># Dockerfile
 FROM rocm/vllm:latest
@@ -641,7 +641,7 @@ $ python -c "import torch; print(torch.version.hip, torch.cuda.is_available())"
 None False
 # → GPU 접근 불가. PyPI wheel 이 CUDA 전용.</code></pre>
 
-<h5>시도 2 — vLLM source v0.22.1 + ROCm 빌드 (gfx90a)</h5>
+<h5><span class="en">Attempt 2 — vLLM source v0.22.1 + ROCm build (gfx90a)</span><span class="ko">시도 2 — vLLM source v0.22.1 + ROCm 빌드 (gfx90a)</span></h5>
 
 <pre><code># vllm/CMakeLists.txt 의 HIP_SUPPORTED_ARCHS 에 gfx90a 있음 확인
 $ git clone --depth 1 --branch v0.22.1 https://github.com/vllm-project/vllm.git
@@ -651,7 +651,7 @@ $ docker build --build-arg ARG_PYTORCH_ROCM_ARCH=gfx90a \
 # → 24 분 빌드, 30.9 GB image, vllm 0.22.1 + torch 2.10.0+git8514f05 (ROCm) + hip 7.2.53211
 # → device count: 8 인식, GPU 접근 정상</code></pre>
 
-<h5>시도 3 — P/D 띄움 + chat call (channels=16)</h5>
+<h5><span class="en">Attempt 3 — bring up P/D + chat call (channels=16)</span><span class="ko">시도 3 — P/D 띄움 + chat call (channels=16)</span></h5>
 
 <pre><code>$ docker run vllm-022-rocm:latest Qwen/Qwen2.5-1.5B-Instruct \
     --tensor-parallel-size 4 --enforce-eager \
@@ -668,7 +668,7 @@ mi250-052:698:1047 [0] [FATAL ERROR]: HIP failure: 'invalid device context'
   rccl/hipify/src/transport/p2p.cc:375
   RuntimeError: NCCL error: unhandled cuda error</code></pre>
 
-<p>NCCL_DEBUG=INFO 켜고 확인 — RCCL handshake 가 <strong>channel 11 까지 OK</strong>:</p>
+<p><span class="en">Turned NCCL_DEBUG=INFO on — RCCL handshake is OK <strong>through channel 11</strong>:</span><span class="ko">NCCL_DEBUG=INFO 켜고 확인 — RCCL handshake 가 <strong>channel 11 까지 OK</strong>:</span></p>
 
 <pre><code>NCCL INFO Channel 05/0 : 0[29000] -> 1[ad000] via P2P/IPC comm 0x7fc1d800b900 nRanks 02
 NCCL INFO Channel 06/0 : 0[29000] -> 1[ad000] via P2P/IPC comm ...
@@ -676,41 +676,41 @@ NCCL INFO Channel 06/0 : 0[29000] -> 1[ad000] via P2P/IPC comm ...
 NCCL INFO Channel 11/0 : 0[29000] -> 1[ad000] via P2P/IPC comm ...
 [FATAL ERROR]: HIP failure: 'invalid device context'   ← channel 12 init 시점에 fatal</code></pre>
 
-<h5>시도 4 — channels=4 로 줄여 재시도</h5>
+<h5><span class="en">Attempt 4 — retry with channels=4</span><span class="ko">시도 4 — channels=4 로 줄여 재시도</span></h5>
 
 <pre><code>$ docker run ... --kv-transfer-config '{...,"nccl_num_channels":"4"}'
 # → 같은 fatal. channel 수 무관.
 mi250-052:698:1052 [0] [FATAL ERROR]: HIP failure: 'invalid device context'</code></pre>
 
-<div class="danger"><strong>결정적 결론 — vllm 0.22.1 + MI250 (gfx90a) + 본 RCCL 환경에서 PDD 동작 불가</strong>:
+<div class="danger"><strong><span class="en">Decisive conclusion — vllm 0.22.1 + MI250 (gfx90a) + this RCCL environment cannot run PDD</span><span class="ko">결정적 결론 — vllm 0.22.1 + MI250 (gfx90a) + 본 RCCL 환경에서 PDD 동작 불가</span></strong>:
 <ul style="margin-top: 8px;">
-<li><strong>vllm 0.22.1 source build 가능 + startup 정상 + ZMQ + proxy register 모두 OK</strong></li>
-<li>그러나 <strong>첫 NCCL Comm init 시 RCCL P2P/IPC transport 가 HIP 'invalid device context' fatal</strong> — channel 수 무관</li>
-<li>같은 cmd 가 vllm 0.11.2.dev (rocm/vllm:latest, MI250 호환 최신 공식 image) 에서는 완벽 동작 — §5-§9 의 결과</li>
-<li>즉 <strong>vllm 0.22.1 의 새 NCCL/RCCL binding 코드가 ROCm 7.2 + gfx90a 의 RCCL 라이브러리와 mismatch</strong>. AMD 가 gfx90a 용 vllm 0.22.1 image 공식 release 안 한 이유도 추정 동일.</li>
+<li><strong><span class="en">vllm 0.22.1 source build possible + startup normal + ZMQ + proxy register all OK</span><span class="ko">vllm 0.22.1 source build 가능 + startup 정상 + ZMQ + proxy register 모두 OK</span></strong></li>
+<li><span class="en">But </span><span class="ko">그러나 </span><strong><span class="en">on first NCCL Comm init, RCCL P2P/IPC transport hits HIP 'invalid device context' fatal</span><span class="ko">첫 NCCL Comm init 시 RCCL P2P/IPC transport 가 HIP 'invalid device context' fatal</span></strong> <span class="en">— channel count doesn't matter</span><span class="ko">— channel 수 무관</span></li>
+<li><span class="en">The same cmd works perfectly on vllm 0.11.2.dev (rocm/vllm:latest, latest MI250-compatible official image) — results in §5-§9</span><span class="ko">같은 cmd 가 vllm 0.11.2.dev (rocm/vllm:latest, MI250 호환 최신 공식 image) 에서는 완벽 동작 — §5-§9 의 결과</span></li>
+<li><span class="en">i.e. </span><span class="ko">즉 </span><strong><span class="en">the new NCCL/RCCL binding code in vllm 0.22.1 mismatches the RCCL library on ROCm 7.2 + gfx90a</span><span class="ko">vllm 0.22.1 의 새 NCCL/RCCL binding 코드가 ROCm 7.2 + gfx90a 의 RCCL 라이브러리와 mismatch</span></strong><span class="en">. Presumably the same reason AMD hasn't officially released a gfx90a vllm 0.22.1 image.</span><span class="ko">. AMD 가 gfx90a 용 vllm 0.22.1 image 공식 release 안 한 이유도 추정 동일.</span></li>
 </ul></div>
 
-<div class="note"><strong>MI250 환경에서 안정 동작 vllm 버전</strong>: <code>rocm/vllm:latest</code> = vllm 0.11.2.dev673+g839868462. 이게 AMD 가 공식 build 한 gfx90a 호환 최신. 본 글 §5-§9 의 실 실험이 이것 기반. v0.22.1 을 강제로 source build 해도 RCCL 호환성 문제로 PDD 안 됨.</div>
+<div class="note"><strong><span class="en">Stable vllm version on MI250</span><span class="ko">MI250 환경에서 안정 동작 vllm 버전</span></strong><span class="en">: <code>rocm/vllm:latest</code> = vllm 0.11.2.dev673+g839868462. The latest gfx90a-compatible build officially produced by AMD. The real experiments in §5-§9 of this writeup are based on it. Even force-source-building v0.22.1 won't get PDD working due to RCCL compatibility.</span><span class="ko">: <code>rocm/vllm:latest</code> = vllm 0.11.2.dev673+g839868462. 이게 AMD 가 공식 build 한 gfx90a 호환 최신. 본 글 §5-§9 의 실 실험이 이것 기반. v0.22.1 을 강제로 source build 해도 RCCL 호환성 문제로 PDD 안 됨.</span></div>
 
-<div class="tip"><strong>Bidirectional 결론은 vllm 버전 무관</strong>: P2pNccl 의 <code>is_producer</code> instance 평생 고정 분기는 v0.11.2.dev 와 v0.22.1 모두 동일. 본 글의 §10-1 의 "Bidirectional 안 됐다" 결론은 vllm 어느 버전을 써도 같음. Mooncake (kv_both 지원) 만이 길이지만 그건 CUDA 전용 (libcudart.so.12).</div>
+<div class="tip"><strong><span class="en">Bidirectional conclusion is version-independent</span><span class="ko">Bidirectional 결론은 vllm 버전 무관</span></strong><span class="en">: P2pNccl's <code>is_producer</code> lifetime-fixed instance branching is the same in both v0.11.2.dev and v0.22.1. The "not bidirectional" conclusion in §10-1 holds for any vllm version. Mooncake (kv_both support) is the only path — but it's CUDA-only (libcudart.so.12).</span><span class="ko">: P2pNccl 의 <code>is_producer</code> instance 평생 고정 분기는 v0.11.2.dev 와 v0.22.1 모두 동일. 본 글의 §10-1 의 "Bidirectional 안 됐다" 결론은 vllm 어느 버전을 써도 같음. Mooncake (kv_both 지원) 만이 길이지만 그건 CUDA 전용 (libcudart.so.12).</span></div>
 
-<div class="note"><strong>1차 실험 글의 정정</strong>: <a href="mi250-pd-disaggregation-experiment.html">1차 글</a> 의 "PR #18242 의 P2pNccl 가 main 에서 사라짐 (404)" 노트는 부정확. v0.11.2.dev + v0.22.1 모두 source 에 살아있음.</div>
+<div class="note"><strong><span class="en">Correction to the 1st experiment writeup</span><span class="ko">1차 실험 글의 정정</span></strong><span class="en">: The </span><span class="ko">: </span><a href="mi250-pd-disaggregation-experiment.html"><span class="en">1st writeup</span><span class="ko">1차 글</span></a><span class="en"> note "PR #18242's P2pNccl disappeared from main (404)" is inaccurate. Source is alive in both v0.11.2.dev and v0.22.1.</span><span class="ko"> 의 "PR #18242 의 P2pNccl 가 main 에서 사라짐 (404)" 노트는 부정확. v0.11.2.dev + v0.22.1 모두 source 에 살아있음.</span></div>
 
-<h3>10-3. 본 실험의 KV 통신 방향 — P → D 한 방향만</h3>
+<h3><span class="en">10-3. KV communication direction in this experiment — only P → D</span><span class="ko">10-3. 본 실험의 KV 통신 방향 — P → D 한 방향만</span></h3>
 
-<p>P 측 로그의 화살표 <strong>👉</strong> 와 D 측의 <strong>👈</strong> 가 정확히 일치 — vLLM source 의 emoji 가 "from sender's perspective" 와 "from receiver's perspective" 로 다름. 한 방향만 흐름.</p>
+<p><span class="en">P-side arrow <strong>👉</strong> and D-side <strong>👈</strong> match exactly — the emoji in vLLM source differ between "from sender's perspective" and "from receiver's perspective". One direction only.</span><span class="ko">P 측 로그의 화살표 <strong>👉</strong> 와 D 측의 <strong>👈</strong> 가 정확히 일치 — vLLM source 의 emoji 가 "from sender's perspective" 와 "from receiver's perspective" 로 다름. 한 방향만 흐름.</span></p>
 
 <table>
-<tr><th>side</th><th>활성 함수</th><th>비활성 함수</th></tr>
-<tr><td>P (kv_producer)</td><td><code>save_kv_layer()</code> → <code>send_tensor()</code> → NCCL ncclSend</td><td><code>start_load_kv()</code> 첫 줄 <code>if self.is_producer: return</code></td></tr>
-<tr><td>D (kv_consumer)</td><td><code>start_load_kv()</code> → <code>recv_tensor()</code> → NCCL ncclRecv → <code>inject_kv_into_layer()</code></td><td><code>save_kv_layer()</code> 첫 줄 <code>if not self.is_producer: return</code></td></tr>
+<tr><th>side</th><th><span class="en">Active function</span><span class="ko">활성 함수</span></th><th><span class="en">Inactive function</span><span class="ko">비활성 함수</span></th></tr>
+<tr><td>P (kv_producer)</td><td><code>save_kv_layer()</code> → <code>send_tensor()</code> → NCCL ncclSend</td><td><code>start_load_kv()</code> <span class="en">first line </span><span class="ko">첫 줄 </span><code>if self.is_producer: return</code></td></tr>
+<tr><td>D (kv_consumer)</td><td><code>start_load_kv()</code> → <code>recv_tensor()</code> → NCCL ncclRecv → <code>inject_kv_into_layer()</code></td><td><code>save_kv_layer()</code> <span class="en">first line </span><span class="ko">첫 줄 </span><code>if not self.is_producer: return</code></td></tr>
 </table>
 
-<p>본 실험에서 P 가 send_tensor 4 channel 병렬, D 가 recv_tensor 4 channel 병렬 — <strong>"양방향" 아니고 "한 방향 + 4 channel"</strong>.</p>
+<p><span class="en">In this experiment P does send_tensor 4-channel parallel, D does recv_tensor 4-channel parallel — <strong>not "bidirectional" but "one-way + 4 channels"</strong>.</span><span class="ko">본 실험에서 P 가 send_tensor 4 channel 병렬, D 가 recv_tensor 4 channel 병렬 — <strong>"양방향" 아니고 "한 방향 + 4 channel"</strong>.</span></p>
 
-<h3>10-2. PUT_ASYNC 의 fire-and-forget — 5.6s vs 0.8s 의 의미</h3>
+<h3><span class="en">10-2. PUT_ASYNC fire-and-forget — meaning of 5.6s vs 0.8s</span><span class="ko">10-2. PUT_ASYNC 의 fire-and-forget — 5.6s vs 0.8s 의 의미</span></h3>
 
-<p>2nd chat 이 0.8s 인 이유 — PUT_ASYNC 라 P 가 send 후 즉시 next prefill 시작 (queue 에 던지고 return). NCCL Comm reuse 까지 합쳐 latency 압축.</p>
+<p><span class="en">2nd chat is 0.8s — under PUT_ASYNC, P starts the next prefill immediately after sending (throws to queue and returns). Combined with NCCL Comm reuse, latency is compressed.</span><span class="ko">2nd chat 이 0.8s 인 이유 — PUT_ASYNC 라 P 가 send 후 즉시 next prefill 시작 (queue 에 던지고 return). NCCL Comm reuse 까지 합쳐 latency 압축.</span></p>
 
 <pre><code># engine.py L420 — PUT_ASYNC path
 if self.send_type == "PUT_ASYNC":
@@ -723,69 +723,69 @@ while True:
     self.nccl.ncclSend(tensor, peer_rank, comm)
     # 이게 wall clock 의 critical path 와 분리</code></pre>
 
-<h3>10-3. 만약 PUT (sync) 였다면?</h3>
+<h3><span class="en">10-3. What if PUT (sync)?</span><span class="ko">10-3. 만약 PUT (sync) 였다면?</span></h3>
 
-<p>P 가 send 끝까지 block. concurrent 시나리오에서 한 prefill 이 끝날 때까지 다음 prefill 시작 못 함. 본 실험의 3 parallel (1.5s) 이 5-6s 수준으로 느려질 가능성.</p>
+<p><span class="en">P would block until send completes. In concurrent scenarios, the next prefill can't start until the previous one finishes. The 3-parallel run of this experiment (1.5s) could degrade to 5-6s.</span><span class="ko">P 가 send 끝까지 block. concurrent 시나리오에서 한 prefill 이 끝날 때까지 다음 prefill 시작 못 함. 본 실험의 3 parallel (1.5s) 이 5-6s 수준으로 느려질 가능성.</span></p>
 
-<p>PR #18242 가 PUT_ASYNC 를 default 로 설정한 이유 — concurrent throughput 위해. 단 PUT_ASYNC 는 queue overflow 가능성 (queue 가 P 의 producer 속도보다 느린 NCCL transfer 따라잡지 못하면).</p>
+<p><span class="en">The reason PR #18242 set PUT_ASYNC as the default is for concurrent throughput. But PUT_ASYNC may overflow the queue (if P's producer rate outpaces the slower NCCL transfer).</span><span class="ko">PR #18242 가 PUT_ASYNC 를 default 로 설정한 이유 — concurrent throughput 위해. 단 PUT_ASYNC 는 queue overflow 가능성 (queue 가 P 의 producer 속도보다 느린 NCCL transfer 따라잡지 못하면).</span></p>
 
-<h3>10-4. "Bidirectional" 의 가능성 — 본 실험에서 시도하지 않은 이유</h3>
+<h3><span class="en">10-4. "Bidirectional" possibilities — why not attempted</span><span class="ko">10-4. "Bidirectional" 의 가능성 — 본 실험에서 시도하지 않은 이유</span></h3>
 
 <table>
-<tr><th>의미</th><th>본 실험 시도 여부</th><th>왜</th></tr>
-<tr><td>한 instance 동시 P+D (해석 A)</td><td><span class="status-fail">시도 X</span></td><td>vLLM 의 KVConnector framework 가 instance role 고정. 시도해도 코드 자체가 block.</td></tr>
-<tr><td>XpYd mesh (해석 B)</td><td><span class="status-todo">미진행</span></td><td>8 GCD 라 TP=4+4 이상 분할 불가능. 2P+2D (TP=2+2+2+2) 가 가능하지만 모델 1.5B 라 TP=2 의 NCCL overhead 가 compute 보다 큼. 큰 모델 (8B+) 로 의의.</td></tr>
-<tr><td>Dual-instance per host (해석 C)</td><td><span class="status-ok">본 실험</span></td><td>본 글 §5-§9 가 정확히 이것.</td></tr>
-<tr><td>P→D + D→P 양방향 KV exchange</td><td><span class="status-fail">vLLM 미지원</span></td><td>D 가 P 에 KV 보내는 path 없음. multi-turn KV reuse 는 D 내부 cache 로 — 또는 proxy 가 cache hit detection 후 P skip.</td></tr>
+<tr><th><span class="en">Meaning</span><span class="ko">의미</span></th><th><span class="en">Attempted?</span><span class="ko">본 실험 시도 여부</span></th><th><span class="en">Why</span><span class="ko">왜</span></th></tr>
+<tr><td><span class="en">One instance simultaneous P+D (Interpretation A)</span><span class="ko">한 instance 동시 P+D (해석 A)</span></td><td><span class="status-fail"><span class="en">Not attempted</span><span class="ko">시도 X</span></span></td><td><span class="en">vLLM's KVConnector framework fixes instance role. Even if attempted, the code blocks it.</span><span class="ko">vLLM 의 KVConnector framework 가 instance role 고정. 시도해도 코드 자체가 block.</span></td></tr>
+<tr><td><span class="en">XpYd mesh (Interpretation B)</span><span class="ko">XpYd mesh (해석 B)</span></td><td><span class="status-todo"><span class="en">Not done</span><span class="ko">미진행</span></span></td><td><span class="en">With 8 GCDs, can't split above TP=4+4. 2P+2D (TP=2+2+2+2) is possible but with a 1.5B model the NCCL overhead of TP=2 exceeds compute. Bigger models (8B+) would be meaningful.</span><span class="ko">8 GCD 라 TP=4+4 이상 분할 불가능. 2P+2D (TP=2+2+2+2) 가 가능하지만 모델 1.5B 라 TP=2 의 NCCL overhead 가 compute 보다 큼. 큰 모델 (8B+) 로 의의.</span></td></tr>
+<tr><td><span class="en">Dual-instance per host (Interpretation C)</span><span class="ko">Dual-instance per host (해석 C)</span></td><td><span class="status-ok"><span class="en">This experiment</span><span class="ko">본 실험</span></span></td><td><span class="en">§5-§9 of this writeup is exactly this.</span><span class="ko">본 글 §5-§9 가 정확히 이것.</span></td></tr>
+<tr><td><span class="en">P→D + D→P bidirectional KV exchange</span><span class="ko">P→D + D→P 양방향 KV exchange</span></td><td><span class="status-fail"><span class="en">vLLM unsupported</span><span class="ko">vLLM 미지원</span></span></td><td><span class="en">No path for D to send KV back to P. Multi-turn KV reuse is via D's internal cache — or the proxy skips P upon cache hit detection.</span><span class="ko">D 가 P 에 KV 보내는 path 없음. multi-turn KV reuse 는 D 내부 cache 로 — 또는 proxy 가 cache hit detection 후 P skip.</span></td></tr>
 </table>
 
 </div>
 
-<h2 id="conclusion">11. 결론 + 다음 실험</h2>
+<h2 id="conclusion"><span class="en">11. Conclusion + next experiments</span><span class="ko">11. 결론 + 다음 실험</span></h2>
 <div class="card">
 
-<h3>11-1. 결론</h3>
+<h3><span class="en">11-1. Conclusion</span><span class="ko">11-1. 결론</span></h3>
 
 <ul>
-<li><strong>TP=4+4 P/D 가 실 mi250-052 위에서 동작</strong>. 8 회 시도 후 성공. 핵심 디버깅은 (1) JSON port int → string, (2) <code>zmq_addr</code> extra_config 무시 + <code>kv_port</code> top-level 사용.</li>
-<li><strong>4 쌍 NCCL Comm 동시 init</strong> 이 deadlock 없이 됨. P rank i ↔ D rank i 1:1 매칭. KV transfer 가 4 channel 병렬.</li>
-<li><strong>P/D phase 분리가 monitoring 으로 확정</strong>. 8 parallel load 중 P GCD 0% / D GCD 70-99%.</li>
-<li><strong>Bidirectional = 안 됐음</strong>. KV 가 P → D 한 방향만 흐름. 3 가지 증명 (handshake 화살표, send/recv 함수 분리, instance role 고정 코드) — 자세히는 <a href="#diff">§10-1</a>.</li>
-<li><strong>최신 vLLM (0.11.2.dev673) 으로 재검증</strong> 해도 결과 동일. <strong>Mooncake 가 코드상 kv_both 지원하지만 CUDA 12 전용 (libcudart.so.12)</strong> 라 ROCm/MI250 사용 불가. NIXL / LMCache 도 의존성 미포함.</li>
-<li><strong>"Bidirectional" 의 본 실험에서의 실 의미 = "한 host 에 P+D 분리 + KV 4 채널 병렬 전송"</strong>. 진정한 양방향은 NVIDIA + Mooncake 환경이라야 시도 가능.</li>
-<li><strong>PUT_ASYNC 가 concurrent throughput 의 핵심</strong>. 5.6s (cold) → 0.8s (warm reuse) → 1.5s (3 parallel) 의 패턴 확인.</li>
+<li><strong><span class="en">TP=4+4 P/D works on real mi250-052</span><span class="ko">TP=4+4 P/D 가 실 mi250-052 위에서 동작</span></strong><span class="en">. Succeeded after 8 attempts. Key debugging: (1) JSON port int → string, (2) <code>zmq_addr</code> extra_config is ignored + use top-level <code>kv_port</code>.</span><span class="ko">. 8 회 시도 후 성공. 핵심 디버깅은 (1) JSON port int → string, (2) <code>zmq_addr</code> extra_config 무시 + <code>kv_port</code> top-level 사용.</span></li>
+<li><strong><span class="en">4 NCCL Comm pairs init simultaneously</span><span class="ko">4 쌍 NCCL Comm 동시 init</span></strong> <span class="en">without deadlock. P rank i ↔ D rank i 1:1 matching. KV transfer over 4 parallel channels.</span><span class="ko">이 deadlock 없이 됨. P rank i ↔ D rank i 1:1 매칭. KV transfer 가 4 channel 병렬.</span></li>
+<li><strong><span class="en">P/D phase separation confirmed by monitoring</span><span class="ko">P/D phase 분리가 monitoring 으로 확정</span></strong><span class="en">. Under 8 parallel load, P GCD 0% / D GCD 70-99%.</span><span class="ko">. 8 parallel load 중 P GCD 0% / D GCD 70-99%.</span></li>
+<li><strong><span class="en">Bidirectional = didn't happen</span><span class="ko">Bidirectional = 안 됐음</span></strong><span class="en">. KV flowed P → D only. 3 proofs (handshake arrows, send/recv function separation, instance role fixed code) — details at </span><span class="ko">. KV 가 P → D 한 방향만 흐름. 3 가지 증명 (handshake 화살표, send/recv 함수 분리, instance role 고정 코드) — 자세히는 </span><a href="#diff">§10-1</a>.</li>
+<li><strong><span class="en">Re-verified with latest vLLM (0.11.2.dev673)</span><span class="ko">최신 vLLM (0.11.2.dev673) 으로 재검증</span></strong> <span class="en">— result the same. </span><span class="ko">해도 결과 동일. </span><strong><span class="en">Mooncake supports kv_both in code but is CUDA 12 only (libcudart.so.12)</span><span class="ko">Mooncake 가 코드상 kv_both 지원하지만 CUDA 12 전용 (libcudart.so.12)</span></strong><span class="en"> — unusable on ROCm/MI250. NIXL / LMCache also lack dependencies.</span><span class="ko"> 라 ROCm/MI250 사용 불가. NIXL / LMCache 도 의존성 미포함.</span></li>
+<li><strong><span class="en">Real meaning of "Bidirectional" in this experiment = "P+D separated on one host + KV over 4 parallel channels"</span><span class="ko">"Bidirectional" 의 본 실험에서의 실 의미 = "한 host 에 P+D 분리 + KV 4 채널 병렬 전송"</span></strong><span class="en">. True bidirectional requires an NVIDIA + Mooncake environment.</span><span class="ko">. 진정한 양방향은 NVIDIA + Mooncake 환경이라야 시도 가능.</span></li>
+<li><strong><span class="en">PUT_ASYNC is the key to concurrent throughput</span><span class="ko">PUT_ASYNC 가 concurrent throughput 의 핵심</span></strong><span class="en">. Confirmed pattern: 5.6s (cold) → 0.8s (warm reuse) → 1.5s (3 parallel).</span><span class="ko">. 5.6s (cold) → 0.8s (warm reuse) → 1.5s (3 parallel) 의 패턴 확인.</span></li>
 </ul>
 
-<h3>11-2. 1차 실험 (TP=1+1) 대비 차이</h3>
+<h3><span class="en">11-2. Differences vs 1st experiment (TP=1+1)</span><span class="ko">11-2. 1차 실험 (TP=1+1) 대비 차이</span></h3>
 
 <table>
-<tr><th>측면</th><th>1차 (TP=1+1)</th><th>2차 (TP=4+4) — 본 실험</th></tr>
-<tr><td>NCCL Comm 수 (KV transfer 용)</td><td>1 (P rank 0 ↔ D rank 0)</td><td>4 (P rank i ↔ D rank i, i=0..3)</td></tr>
-<tr><td>ZMQ port</td><td>2 (P=20001, D=22001)</td><td>8 (P=20001-20004, D=22001-22004)</td></tr>
-<tr><td>각 rank 의 KV size (Qwen2.5-1.5B 1 token)</td><td>full KV ≈ 18 KB</td><td>1/4 of full ≈ 4.5 KB per rank, but 4 channel parallel</td></tr>
-<tr><td>모델 head 분할</td><td>1 rank 12 head</td><td>4 rank × 3 head</td></tr>
-<tr><td>VRAM 사용</td><td>1 GCD/instance × 2 instance = 2 GCD</td><td>4 GCD/instance × 2 = 8 GCD (전체)</td></tr>
-<tr><td>cold-start chat 시간</td><td>(1차에선 SharedStorage 실패) — P2pNccl 까지 11 시도</td><td>P2pNccl 첫 시도부터 5.6s</td></tr>
-<tr><td>concurrent 처리</td><td>queue 1 channel</td><td>queue 4 channel parallel — throughput ↑</td></tr>
+<tr><th><span class="en">Aspect</span><span class="ko">측면</span></th><th><span class="en">1st (TP=1+1)</span><span class="ko">1차 (TP=1+1)</span></th><th><span class="en">2nd (TP=4+4) — this experiment</span><span class="ko">2차 (TP=4+4) — 본 실험</span></th></tr>
+<tr><td><span class="en">NCCL Comm count (for KV transfer)</span><span class="ko">NCCL Comm 수 (KV transfer 용)</span></td><td><span class="en">1 (P rank 0 ↔ D rank 0)</span><span class="ko">1 (P rank 0 ↔ D rank 0)</span></td><td><span class="en">4 (P rank i ↔ D rank i, i=0..3)</span><span class="ko">4 (P rank i ↔ D rank i, i=0..3)</span></td></tr>
+<tr><td><span class="en">ZMQ ports</span><span class="ko">ZMQ port</span></td><td><span class="en">2 (P=20001, D=22001)</span><span class="ko">2 (P=20001, D=22001)</span></td><td><span class="en">8 (P=20001-20004, D=22001-22004)</span><span class="ko">8 (P=20001-20004, D=22001-22004)</span></td></tr>
+<tr><td><span class="en">Per-rank KV size (Qwen2.5-1.5B 1 token)</span><span class="ko">각 rank 의 KV size (Qwen2.5-1.5B 1 token)</span></td><td><span class="en">full KV ≈ 18 KB</span><span class="ko">full KV ≈ 18 KB</span></td><td><span class="en">1/4 of full ≈ 4.5 KB per rank, but 4 channels in parallel</span><span class="ko">1/4 of full ≈ 4.5 KB per rank, but 4 channel parallel</span></td></tr>
+<tr><td><span class="en">Model head split</span><span class="ko">모델 head 분할</span></td><td><span class="en">1 rank 12 heads</span><span class="ko">1 rank 12 head</span></td><td><span class="en">4 ranks × 3 heads</span><span class="ko">4 rank × 3 head</span></td></tr>
+<tr><td><span class="en">VRAM usage</span><span class="ko">VRAM 사용</span></td><td><span class="en">1 GCD/instance × 2 instances = 2 GCDs</span><span class="ko">1 GCD/instance × 2 instance = 2 GCD</span></td><td><span class="en">4 GCD/instance × 2 = 8 GCDs (entire host)</span><span class="ko">4 GCD/instance × 2 = 8 GCD (전체)</span></td></tr>
+<tr><td><span class="en">cold-start chat time</span><span class="ko">cold-start chat 시간</span></td><td><span class="en">(SharedStorage failed in 1st) — 11 attempts to reach P2pNccl</span><span class="ko">(1차에선 SharedStorage 실패) — P2pNccl 까지 11 시도</span></td><td><span class="en">5.6s from very first P2pNccl attempt</span><span class="ko">P2pNccl 첫 시도부터 5.6s</span></td></tr>
+<tr><td><span class="en">Concurrent handling</span><span class="ko">concurrent 처리</span></td><td><span class="en">queue 1 channel</span><span class="ko">queue 1 channel</span></td><td><span class="en">queue 4 channels parallel — throughput ↑</span><span class="ko">queue 4 channel parallel — throughput ↑</span></td></tr>
 </table>
 
-<h3>11-3. 다음 실험 (남은 과제)</h3>
+<h3><span class="en">11-3. Next experiments (remaining tasks)</span><span class="ko">11-3. 다음 실험 (남은 과제)</span></h3>
 
 <ol>
-<li><strong>큰 모델 (8B+) 로 TP=4+4 다시</strong> — 1.5B 는 TP=4 의 NCCL overhead 가 compute 보다 클 수 있어 TP=4 의 효과가 small. 8B / 13B 로 비교 의미 ↑</li>
-<li><strong>Throughput 정량 — single TP=8 baseline vs PDD TP=4+4</strong> — 같은 host 에 동시 띄울 VRAM 부족. host 2 개 (mi250-052 + mi250-053) 로 분리 + 같은 워크로드 (conc 1/4/16/32, prompt len 512/2048).</li>
-<li><strong>send_type 비교 — PUT_ASYNC vs PUT (sync) vs GET</strong> — 같은 워크로드에서 latency / throughput 측정. PR #18242 의 default PUT_ASYNC 가 항상 우수한지.</li>
-<li><strong>nccl_num_channels 4 vs 16 vs 32</strong> — MI250 OAM 간 XGMI 4 link 위에서 채널 수 효과. small KV 일수록 4 가 충분, large 일수록 16 이 유리할 가설 검증.</li>
-<li><strong>multi-turn KV reuse</strong> — 같은 conversation 의 2nd turn 에 P skip + D cache hit. proxy 가 cache hit detection 하는지 검증 (현재는 안 함).</li>
-<li><strong>P 와 D 를 다른 host 로 분리</strong> — mi250-052 (P, TP=8) + mi250-053 (D, TP=8). cross-host NCCL bandwidth 측정. 본 실험은 same-host XGMI.</li>
-<li><strong>XpYd (2 P + 2 D)</strong> — 4 instance 가 같은 host 에. TP=2 씩. proxy 의 routing 분산 동작 확인.</li>
-<li><strong>SharedStorage / NixlConnector / Mooncake 와의 성능 비교</strong> — connector 별 KV transfer overhead.</li>
+<li><strong><span class="en">Redo TP=4+4 with bigger models (8B+)</span><span class="ko">큰 모델 (8B+) 로 TP=4+4 다시</span></strong> <span class="en">— 1.5B may have NCCL overhead exceeding compute under TP=4, so TP=4's effect is small. 8B / 13B for more meaningful comparison.</span><span class="ko">— 1.5B 는 TP=4 의 NCCL overhead 가 compute 보다 클 수 있어 TP=4 의 효과가 small. 8B / 13B 로 비교 의미 ↑</span></li>
+<li><strong><span class="en">Quantify throughput — single TP=8 baseline vs PDD TP=4+4</span><span class="ko">Throughput 정량 — single TP=8 baseline vs PDD TP=4+4</span></strong> <span class="en">— same host has insufficient VRAM to run both. Use 2 hosts (mi250-052 + mi250-053) separately with the same workload (conc 1/4/16/32, prompt len 512/2048).</span><span class="ko">— 같은 host 에 동시 띄울 VRAM 부족. host 2 개 (mi250-052 + mi250-053) 로 분리 + 같은 워크로드 (conc 1/4/16/32, prompt len 512/2048).</span></li>
+<li><strong><span class="en">Compare send_type — PUT_ASYNC vs PUT (sync) vs GET</span><span class="ko">send_type 비교 — PUT_ASYNC vs PUT (sync) vs GET</span></strong> <span class="en">— measure latency / throughput on the same workload. Whether PR #18242's default PUT_ASYNC is always best.</span><span class="ko">— 같은 워크로드에서 latency / throughput 측정. PR #18242 의 default PUT_ASYNC 가 항상 우수한지.</span></li>
+<li><strong><span class="en">nccl_num_channels 4 vs 16 vs 32</span><span class="ko">nccl_num_channels 4 vs 16 vs 32</span></strong> <span class="en">— effect of channel count on XGMI 4-link between MI250 OAMs. Hypothesis: smaller KV → 4 enough, larger → 16 better.</span><span class="ko">— MI250 OAM 간 XGMI 4 link 위에서 채널 수 효과. small KV 일수록 4 가 충분, large 일수록 16 이 유리할 가설 검증.</span></li>
+<li><strong><span class="en">multi-turn KV reuse</span><span class="ko">multi-turn KV reuse</span></strong> <span class="en">— skip P on 2nd turn of same conversation + D cache hit. Verify whether proxy does cache hit detection (currently doesn't).</span><span class="ko">— 같은 conversation 의 2nd turn 에 P skip + D cache hit. proxy 가 cache hit detection 하는지 검증 (현재는 안 함).</span></li>
+<li><strong><span class="en">Separate P and D to different hosts</span><span class="ko">P 와 D 를 다른 host 로 분리</span></strong> <span class="en">— mi250-052 (P, TP=8) + mi250-053 (D, TP=8). Measure cross-host NCCL bandwidth. This experiment uses same-host XGMI.</span><span class="ko">— mi250-052 (P, TP=8) + mi250-053 (D, TP=8). cross-host NCCL bandwidth 측정. 본 실험은 same-host XGMI.</span></li>
+<li><strong><span class="en">XpYd (2 P + 2 D)</span><span class="ko">XpYd (2 P + 2 D)</span></strong> <span class="en">— 4 instances on same host. TP=2 each. Verify proxy's routing distribution.</span><span class="ko">— 4 instance 가 같은 host 에. TP=2 씩. proxy 의 routing 분산 동작 확인.</span></li>
+<li><strong><span class="en">Performance comparison with SharedStorage / NixlConnector / Mooncake</span><span class="ko">SharedStorage / NixlConnector / Mooncake 와의 성능 비교</span></strong> <span class="en">— per-connector KV transfer overhead.</span><span class="ko">— connector 별 KV transfer overhead.</span></li>
 </ol>
 
 </div>
 
 <footer>
-MI250 P/D Disaggregation 2차 — TP=4+4 실 실험. 1차: <a href="mi250-pd-disaggregation-experiment.html">TP=1+1 (mechanism 검증)</a>. vLLM P2pNccl PR: <a href="https://github.com/vllm-project/vllm/pull/18242">#18242</a>.
+<span class="en">MI250 P/D Disaggregation 2nd — TP=4+4 real experiment. 1st: </span><span class="ko">MI250 P/D Disaggregation 2차 — TP=4+4 실 실험. 1차: </span><a href="mi250-pd-disaggregation-experiment.html"><span class="en">TP=1+1 (mechanism verification)</span><span class="ko">TP=1+1 (mechanism 검증)</span></a><span class="en">. vLLM P2pNccl PR: </span><span class="ko">. vLLM P2pNccl PR: </span><a href="https://github.com/vllm-project/vllm/pull/18242">#18242</a>.
 </footer>
 
 </div>
