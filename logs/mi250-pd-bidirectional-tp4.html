@@ -623,26 +623,76 @@ $ docker run --rm vllm-mooncake:latest python -c \
 ImportError: libcudart.so.12: cannot open shared object file: No such file or directory
 # → Mooncake wheel 이 CUDA 12 runtime 에 link 됨. ROCm 환경에선 사용 불가.</code></pre>
 
-<h4>10-3-2. vLLM 0.22.1 (PyPI 의 진짜 최신) 시도</h4>
+<h4>10-3-2. vLLM 0.22.1 (PyPI 의 진짜 최신) 시도 + 끝까지 디버그</h4>
 
-<p>사용자 지적: "최신 vLLM 은 0.22.1 이다". 단 PyPI 의 wheel = CUDA 전용. ROCm/gfx90a 의 공식 image 는 vLLM 0.11.2.dev673 가 사실상 최신 (다른 ROCm/vllm tag 들은 모두 gfx94X/gfx95X = MI300/MI400 용).</p>
+<p>사용자 지적: "최신 vLLM 은 0.22.1 이다". 본 실험은 <code>rocm/vllm:latest</code> image (vllm 0.11.2.dev) 로 진행했지만, 최신 v0.22.1 을 ROCm/MI250 에서 끝까지 시도.</p>
 
-<table>
-<tr><th>방법</th><th>결과</th></tr>
-<tr><td>Dockerfile FROM rocm/vllm:latest + RUN pip install vllm==0.22.1</td><td>설치 자체는 OK 단 의존성으로 <code>torch==2.11.0+cu130</code> 가 ROCm PyTorch 덮어씌움. <code>torch.cuda.is_available() = False</code>, <code>hip = None</code> — <strong>GPU 접근 불가</strong>.</td></tr>
-<tr><td>Docker Hub <code>rocm/vllm:rocm7.13_gfx94X_vllm_0.19.1</code></td><td>gfx94X (MI300) 용. MI250 (gfx90a) 호환 안 됨.</td></tr>
-<tr><td>vLLM source v0.22.1 + ROCm 빌드 (<code>docker build --build-arg ARG_PYTORCH_ROCM_ARCH=gfx90a -f docker/Dockerfile.rocm</code>)</td><td><strong>본 실험에서 시도 중 (background, ~30 분)</strong> — base image <code>rocm/vllm-dev:base</code> (2026-06 latest) 위에 빌드. v0.22.1 의 <code>CMakeLists.txt</code> 에 <code>gfx90a</code> 포함된 것 확인.</td></tr>
-</table>
+<h5>시도 1 — pip 으로 image 안 vllm 만 upgrade</h5>
 
-<pre><code># 실 시도 cmd
+<pre><code># Dockerfile
+FROM rocm/vllm:latest
+RUN pip install --no-cache-dir --upgrade vllm==0.22.1
+
+# build → vllm 0.22.1 설치 OK
+# 그러나 의존성 torch==2.11.0+cu130 가 ROCm PyTorch 덮어씌움
+$ python -c "import torch; print(torch.version.hip, torch.cuda.is_available())"
+None False
+# → GPU 접근 불가. PyPI wheel 이 CUDA 전용.</code></pre>
+
+<h5>시도 2 — vLLM source v0.22.1 + ROCm 빌드 (gfx90a)</h5>
+
+<pre><code># vllm/CMakeLists.txt 의 HIP_SUPPORTED_ARCHS 에 gfx90a 있음 확인
 $ git clone --depth 1 --branch v0.22.1 https://github.com/vllm-project/vllm.git
 $ docker build --build-arg ARG_PYTORCH_ROCM_ARCH=gfx90a \
-    -t vllm-022-rocm:latest \
-    -f docker/Dockerfile.rocm .</code></pre>
+    -t vllm-022-rocm:latest -f docker/Dockerfile.rocm .
 
-<div class="danger"><strong>결정적 결론</strong>: <strong>ROCm + MI250 의 vLLM 최신 (현재 image 기준 0.11.2.dev) 으로도 진정한 bidirectional 운영 불가능</strong>. P2pNccl 만 동작하고 그건 단방향. Mooncake/NIXL/LMCache 의 bidirectional 지원은 모두 NVIDIA CUDA stack 에 묶여 있음. <strong>v0.22.1 source build 가 성공해도 P2pNccl 의 단방향성은 동일</strong> (코드의 <code>is_producer</code> 분기는 v0.22.1 도 그대로).</div>
+# → 24 분 빌드, 30.9 GB image, vllm 0.22.1 + torch 2.10.0+git8514f05 (ROCm) + hip 7.2.53211
+# → device count: 8 인식, GPU 접근 정상</code></pre>
 
-<div class="note"><strong>1차 실험 글의 정정</strong>: <a href="mi250-pd-disaggregation-experiment.html">1차 글</a> 의 "PR #18242 의 P2pNccl 가 main 에서 사라짐 (404)" 노트는 부정확. <code>rocm/vllm:latest</code> image 가 vllm 0.11.2.dev673 (사실상 main dev) 이고 P2pNccl 가 존재. v0.22.1 (PyPI 최신) 의 source 에도 <code>vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</code> 그대로. 1차 시점에 main 의 다른 path 를 확인했거나 검색 실패.</div>
+<h5>시도 3 — P/D 띄움 + chat call (channels=16)</h5>
+
+<pre><code>$ docker run vllm-022-rocm:latest Qwen/Qwen2.5-1.5B-Instruct \
+    --tensor-parallel-size 4 --enforce-eager \
+    --kv-transfer-config '{"kv_connector":"P2pNcclConnector",..., "nccl_num_channels":"16"}'
+# → P + D 모두 Application startup complete
+# → ZMQ port 20001-20004, 22001-22004 LISTEN
+# → proxy 에 P/D register OK
+
+$ curl http://localhost:10001/v1/completions -d '{...}'
+# → 10 분 timeout, response 비어 있음
+
+$ docker logs vllm-p-tp4 | grep -i error
+mi250-052:698:1047 [0] [FATAL ERROR]: HIP failure: 'invalid device context'
+  rccl/hipify/src/transport/p2p.cc:375
+  RuntimeError: NCCL error: unhandled cuda error</code></pre>
+
+<p>NCCL_DEBUG=INFO 켜고 확인 — RCCL handshake 가 <strong>channel 11 까지 OK</strong>:</p>
+
+<pre><code>NCCL INFO Channel 05/0 : 0[29000] -> 1[ad000] via P2P/IPC comm 0x7fc1d800b900 nRanks 02
+NCCL INFO Channel 06/0 : 0[29000] -> 1[ad000] via P2P/IPC comm ...
+...
+NCCL INFO Channel 11/0 : 0[29000] -> 1[ad000] via P2P/IPC comm ...
+[FATAL ERROR]: HIP failure: 'invalid device context'   ← channel 12 init 시점에 fatal</code></pre>
+
+<h5>시도 4 — channels=4 로 줄여 재시도</h5>
+
+<pre><code>$ docker run ... --kv-transfer-config '{...,"nccl_num_channels":"4"}'
+# → 같은 fatal. channel 수 무관.
+mi250-052:698:1052 [0] [FATAL ERROR]: HIP failure: 'invalid device context'</code></pre>
+
+<div class="danger"><strong>결정적 결론 — vllm 0.22.1 + MI250 (gfx90a) + 본 RCCL 환경에서 PDD 동작 불가</strong>:
+<ul style="margin-top: 8px;">
+<li><strong>vllm 0.22.1 source build 가능 + startup 정상 + ZMQ + proxy register 모두 OK</strong></li>
+<li>그러나 <strong>첫 NCCL Comm init 시 RCCL P2P/IPC transport 가 HIP 'invalid device context' fatal</strong> — channel 수 무관</li>
+<li>같은 cmd 가 vllm 0.11.2.dev (rocm/vllm:latest, MI250 호환 최신 공식 image) 에서는 완벽 동작 — §5-§9 의 결과</li>
+<li>즉 <strong>vllm 0.22.1 의 새 NCCL/RCCL binding 코드가 ROCm 7.2 + gfx90a 의 RCCL 라이브러리와 mismatch</strong>. AMD 가 gfx90a 용 vllm 0.22.1 image 공식 release 안 한 이유도 추정 동일.</li>
+</ul></div>
+
+<div class="note"><strong>MI250 환경에서 안정 동작 vllm 버전</strong>: <code>rocm/vllm:latest</code> = vllm 0.11.2.dev673+g839868462. 이게 AMD 가 공식 build 한 gfx90a 호환 최신. 본 글 §5-§9 의 실 실험이 이것 기반. v0.22.1 을 강제로 source build 해도 RCCL 호환성 문제로 PDD 안 됨.</div>
+
+<div class="tip"><strong>Bidirectional 결론은 vllm 버전 무관</strong>: P2pNccl 의 <code>is_producer</code> instance 평생 고정 분기는 v0.11.2.dev 와 v0.22.1 모두 동일. 본 글의 §10-1 의 "Bidirectional 안 됐다" 결론은 vllm 어느 버전을 써도 같음. Mooncake (kv_both 지원) 만이 길이지만 그건 CUDA 전용 (libcudart.so.12).</div>
+
+<div class="note"><strong>1차 실험 글의 정정</strong>: <a href="mi250-pd-disaggregation-experiment.html">1차 글</a> 의 "PR #18242 의 P2pNccl 가 main 에서 사라짐 (404)" 노트는 부정확. v0.11.2.dev + v0.22.1 모두 source 에 살아있음.</div>
 
 <h3>10-3. 본 실험의 KV 통신 방향 — P → D 한 방향만</h3>
 
