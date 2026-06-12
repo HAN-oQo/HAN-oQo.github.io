@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArgoCD 실습 Phase 5 후속 — Docker vLLM-ROCm + ArgoCD 외부 Service (GPU under GitOps)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.8rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.3rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 26px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  mark { background: var(--amber-bg); color: var(--amber-ink); padding: 0 3px; border-radius: 3px; }
+  .good { background: var(--green-bg); color: var(--green-ink); padding: 0 3px; border-radius: 3px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.87rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 16px; }
+  .diagram { background: var(--gray-bg); padding: 16px 20px; border-radius: 8px; font-family: "SF Mono", Menlo, monospace; font-size: 0.73rem; line-height: 1.5; white-space: pre; overflow-x: auto; border: 1px solid var(--line); }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .seriesnav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 22px 0; padding: 12px 16px;
+               background: var(--gray-bg); border: 1px solid var(--line); border-radius: 10px; font-size: 0.85rem; }
+  .seriesnav a { text-decoration: none; color: var(--blue-ink); font-weight: 600; }
+  .seriesnav a:hover { text-decoration: underline; }
+  .seriesnav .mid { color: var(--muted); font-weight: 400; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; padding:0 .7em; height:1.7em; border-radius:999px; background:var(--green-ink); color:#fff; font-size:0.78rem; font-weight:700; margin-right:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="argocd-llm-d-gitops.html"><span class="en">Argo CD series</span><span class="ko">ArgoCD 시리즈</span></a> · <span class="en">Phase 5 follow-up</span><span class="ko">Phase 5 후속</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase5-gpu.html">← <span class="en">Phase 5: GPU passthrough (blocked)</span><span class="ko">Phase 5: GPU passthrough (막힘)</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview</span><span class="ko">개요</span></a>
+  <a href="argocd-phase6-prodops.html"><span class="en">Phase 6: prod-ops &amp; DR</span><span class="ko">Phase 6: 실운영 &amp; DR</span> →</a>
+</div>
+
+<h1><span class="pchip">5b</span><span class="en">Follow-up — Docker vLLM-ROCm + Argo CD external Service. Does it work?</span><span class="ko">후속 — Docker vLLM-ROCm + ArgoCD 외부 Service. 되나?</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 (AMD MI250) · Status: <b class="status-ok">✓ YES — it works, end to end</b> · the documented Phase-5 fallback A, executed live</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 (AMD MI250) · 상태: <b class="status-ok">✓ 된다 — end to end 작동</b> · Phase 5의 문서화된 폴백 A, 실제 실행</span></p>
+
+<div class="tip"><strong><span class="en">The question</span><span class="ko">질문</span></strong><br>
+<span class="en">Phase 5 showed GPU passthrough <i>into a kind node</i> fails, but plain <code>docker run --device</code> exposes the MI250 fine. So: run vLLM-ROCm in Docker (GPU there), and have Argo CD manage an in-cluster Service that fronts it — is a "GPU model server under GitOps" actually reachable from the cluster? <b>Answer: yes.</b> Below is every step, including two real gotchas.</span>
+<span class="ko">Phase 5는 GPU passthrough가 <i>kind 노드로는</i> 안 되지만 평범한 <code>docker run --device</code>는 MI250를 잘 노출함을 보였다. 그래서: vLLM-ROCm을 Docker로(거기서 GPU) 띄우고 ArgoCD가 그걸 front하는 클러스터 내부 Service를 관리하면 — "GitOps 아래 GPU 모델서버"가 정말 클러스터에서 닿나? <b>답: 된다.</b> 아래는 함정 둘 포함 전 과정.</span></p>
+
+<div class="diagram">[ kind cluster: gitops-lab ]                                  [ host: mi250-052 ]
+  pod ──curl──► Service gpu-vllm ──► nginx proxy pod ──► 172.18.0.1:8001 ──► docker vLLM-ROCm ──► MI250 GCD0
+                (Argo CD-managed)    (Argo CD-managed)    (kind gateway=host)  (--device /dev/kfd…)  (Qwen2.5-1.5B)
+                └──────── declared in Git, reconciled ────────┘                └── docker run, device passthrough ──┘</div>
+<span class="cap"><span class="en">Fig — the full request path. Left of the gateway is GitOps-managed Kubernetes; right of it is a Docker GPU process.</span><span class="ko">그림 — 전체 요청 경로. 게이트웨이 왼쪽은 GitOps 관리 Kubernetes, 오른쪽은 Docker GPU 프로세스.</span></span>
+
+<h2><span class="en">Step 1 — vLLM-ROCm on the host (the GPU half)</span><span class="ko">1단계 — 호스트에서 vLLM-ROCm (GPU 쪽)</span></h2>
+<pre><code>docker run -d --name gpu-vllm \
+  --device /dev/kfd --device /dev/dri --group-add video --group-add render \
+  --ipc=host --security-opt seccomp=unconfined \
+  -e HIP_VISIBLE_DEVICES=0 -e <mark>VLLM_ROCM_USE_AITER=0</mark> \
+  -v ~/.cache/huggingface:/root/.cache/huggingface -p 8001:8000 \
+  rocm/vllm:latest \
+  vllm serve Qwen/Qwen2.5-1.5B-Instruct --port 8000 --max-model-len 4096 \
+       --gpu-memory-utilization 0.5 --enforce-eager</code></pre>
+<p><span class="en">The <code>rocm/vllm:latest</code> image (30.7 GB) and the Qwen2.5-1.5B weights were already cached on the node, so no big pull. One GCD via <code>HIP_VISIBLE_DEVICES=0</code>.</span>
+<span class="ko"><code>rocm/vllm:latest</code> 이미지(30.7GB)와 Qwen2.5-1.5B 가중치가 노드에 이미 캐시돼 있어 큰 pull 없음. <code>HIP_VISIBLE_DEVICES=0</code>로 GCD 1개.</span></p>
+
+<div class="note"><strong><span class="en">Gotcha 1 — the engine crashed on AMD's <code>aiter</code> kernels</span><span class="ko">함정 1 — AMD <code>aiter</code> 커널에서 엔진 크래시</span></strong><br>
+<span class="en">First run: the model loaded onto the GPU fine (3.04 GiB, ROCm attention backend), then the EngineCore died right after importing <code>aiter/module_rmsnorm.so</code> → <code>RuntimeError: Engine core initialization failed</code>. AMD's <code>aiter</code> JIT kernels didn't play nice on this gfx90a. Fix: <b><code>VLLM_ROCM_USE_AITER=0</code></b> → the KV-cache profiling then succeeded (GPU KV cache 1,017,488 tokens, 248× concurrency) and the API server came up.</span>
+<span class="ko">첫 실행: 모델은 GPU에 잘 로드(3.04 GiB, ROCm attention backend), 그 직후 <code>aiter/module_rmsnorm.so</code> import 하자 EngineCore가 죽음 → <code>RuntimeError: Engine core initialization failed</code>. AMD <code>aiter</code> JIT 커널이 이 gfx90a에서 말썽. 해결: <b><code>VLLM_ROCM_USE_AITER=0</code></b> → KV-cache profiling 성공(GPU KV cache 1,017,488 tokens, 248× 동시성)하고 API 서버 기동.</span></div>
+
+<pre><code># host check — vLLM serving on the MI250:
+$ curl localhost:8001/v1/models            → ["Qwen/Qwen2.5-1.5B-Instruct"]
+$ curl localhost:8001/v1/chat/completions  → "MI250 online ..."   # real GPU completion</code></pre>
+
+<h2><span class="en">Step 2 — bridge the host into the cluster (the GitOps half)</span><span class="ko">2단계 — 호스트를 클러스터에 연결 (GitOps 쪽)</span></h2>
+<p><span class="en">A pod reaches the host via the kind Docker network's gateway — <code>docker network inspect kind</code> → <code>172.18.0.1</code>. The first instinct is a no-selector <code>Service</code> + a manual <code>Endpoints</code> pointing at <code>172.18.0.1:8001</code>. It routes correctly... but:</span>
+<span class="ko">파드는 kind Docker 네트워크 게이트웨이로 호스트에 닿는다 — <code>docker network inspect kind</code> → <code>172.18.0.1</code>. 첫 직감은 selector 없는 <code>Service</code> + <code>172.18.0.1:8001</code>을 가리키는 수동 <code>Endpoints</code>. 라우팅은 맞는데... 그런데:</span></p>
+
+<div class="note"><strong><span class="en">Gotcha 2 — Argo CD ignores <code>Endpoints</code> by default</span><span class="ko">함정 2 — ArgoCD는 <code>Endpoints</code>를 기본 무시</span></strong><br>
+<span class="en">The Application went <code>Synced/Healthy</code> but managed <b>only the Service</b> — the <code>Endpoints</code> object was never applied. Cause: Argo CD v3's default <code>resource.exclusions</code> includes <code>Endpoints</code> / <code>EndpointSlice</code> (they're high-churn, k8s-managed). Applied by hand it works, but it isn't GitOps-managed and won't self-heal. Two ways out: (a) un-exclude Endpoints in <code>argocd-cm</code>, or (b) front the host with a tiny proxy <code>Deployment</code> — normal resources Argo CD <i>does</i> manage. Took (b).</span>
+<span class="ko">Application은 <code>Synced/Healthy</code>인데 <b>Service만</b> 관리하고 <code>Endpoints</code>는 적용 안 됨. 원인: ArgoCD v3 기본 <code>resource.exclusions</code>에 <code>Endpoints</code> / <code>EndpointSlice</code> 포함(고-churn, k8s 관리). 손으로 적용하면 되지만 GitOps 관리가 아니고 self-heal도 안 됨. 탈출구 둘: (a) <code>argocd-cm</code>에서 Endpoints 제외 해제, 또는 (b) 작은 프록시 <code>Deployment</code>로 호스트를 front — ArgoCD가 <i>관리하는</i> 일반 리소스. (b) 선택.</span></div>
+
+<p><span class="en">So the GitOps-managed unit is a 3-object slice — all normal, non-excluded resources:</span>
+<span class="ko">그래서 GitOps 관리 단위는 3-객체 — 전부 일반(비제외) 리소스:</span></p>
+<pre><code># manifests/phase5-gpu-external/  (Argo CD app: phase5-gpu-external)
+ConfigMap  gpu-vllm-proxy-conf   # nginx.conf:  proxy_pass http://172.18.0.1:8001;  (buffering off → stream)
+Deployment gpu-vllm-proxy        # nginx:1.27-alpine shim → the host GPU server
+Service    gpu-vllm              # selector app=gpu-vllm-proxy, port 8000</code></pre>
+
+<h2><span class="en">Step 3 — call the GPU from inside the cluster</span><span class="ko">3단계 — 클러스터 안에서 GPU 호출</span></h2>
+<pre><code>$ kubectl -n argocd get application phase5-gpu-external -o ...
+ConfigMap/gpu-vllm-proxy-conf  Synced
+Service/gpu-vllm               Synced
+Deployment/gpu-vllm-proxy      Synced       # app = Synced/Healthy, proxy 1/1 ready
+
+# from a throwaway pod in the cluster:
+$ curl http://gpu-vllm.serving.svc.cluster.local:8000/v1/models
+{"data":[{"id":"Qwen/Qwen2.5-1.5B-Instruct","owned_by":"vllm","max_model_len":4096}]}
+
+$ curl .../v1/chat/completions -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
+    "messages":[{"role":"user","content":"Reply with exactly: served by MI250 via ArgoCD"}]}'
+{"choices":[{"message":{"content":<mark>"Served by MI250 through ArgoCD"</mark>}}],
+ "model":"Qwen/Qwen2.5-1.5B-Instruct","usage":{"completion_tokens":12,"total_tokens":55}}</code></pre>
+<p class="cap"><span class="en">That reply was generated by the MI250, reached from a pod inside the kind cluster, through the Argo CD-managed Service → nginx proxy → host Docker vLLM-ROCm. The whole left side is reconstructable from Git.</span><span class="ko">이 응답은 MI250가 생성했고, kind 클러스터 내부 파드에서 ArgoCD 관리 Service → nginx 프록시 → 호스트 Docker vLLM-ROCm을 거쳐 도달. 왼쪽 전체는 Git에서 재구성 가능.</span></p>
+
+<h2><span class="en">Verdict</span><span class="ko">결론</span></h2>
+<table>
+<tr><th><span class="en">Question</span><span class="ko">질문</span></th><th><span class="en">Answer</span><span class="ko">답</span></th></tr>
+<tr><td><span class="en">Does Docker vLLM-ROCm + Argo CD external Service work?</span><span class="ko">Docker vLLM-ROCm + ArgoCD 외부 Service, 되나?</span></td><td><b class="status-ok"><span class="en">Yes</span><span class="ko">된다</span></b> — <span class="en">cluster pod → MI250, proven.</span><span class="ko">클러스터 파드 → MI250, 증명.</span></td></tr>
+<tr><td><span class="en">Is the GPU process k8s-scheduled?</span><span class="ko">GPU 프로세스가 k8s 스케줄?</span></td><td><span class="en">No — it runs in Docker, outside k8s. The Service/proxy is the GitOps-managed bridge.</span><span class="ko">아니오 — Docker에서, k8s 밖. Service/프록시가 GitOps 관리 다리.</span></td></tr>
+<tr><td><span class="en">Right pattern for production?</span><span class="ko">프로덕션 정석?</span></td><td><span class="en">For a real fleet, prefer real K8s + AMD device plugin (Phase 5 Option B). This fallback shines when GPU lives outside the cluster.</span><span class="ko">실 fleet엔 진짜 K8s + AMD device plugin(Phase 5 선택지 B)이 낫다. 이 폴백은 GPU가 클러스터 밖일 때 빛난다.</span></td></tr>
+</table>
+
+<div class="tip"><strong><span class="en">Bench hygiene</span><span class="ko">벤치 위생</span></strong><br>
+<span class="en">After the demo the <code>gpu-vllm</code> Docker container was stopped to free GCD 0 on the shared node (<code>docker start gpu-vllm</code> to resume). The Argo CD-managed proxy/Service/ConfigMap stay in Git — cheap, CPU-only, and they reconnect the moment the GPU server is back.</span>
+<span class="ko">데모 후 공유 노드 GCD 0 반납을 위해 <code>gpu-vllm</code> 컨테이너 중지(<code>docker start gpu-vllm</code>으로 재개). ArgoCD 관리 프록시/Service/ConfigMap은 Git에 유지 — 싸고 CPU-only, GPU 서버 복귀 즉시 재연결.</span></p></div>
+
+<h2><span class="en">Reproduce</span><span class="ko">재현</span></h2>
+<pre><code># host (GPU): the docker run above (note VLLM_ROCM_USE_AITER=0)
+# cluster (GitOps): register the proxy slice
+kubectl apply -f https://raw.githubusercontent.com/hanq-moreh/argocd-gitops-lab/main/apps/phase5-gpu-external.yaml
+# test:
+kubectl -n serving run c --image=curlimages/curl --rm -i --restart=Never -- \
+  curl -s http://gpu-vllm.serving.svc.cluster.local:8000/v1/models</code></pre>
+
+<div class="seriesnav">
+  <a href="argocd-phase5-gpu.html">← <span class="en">Phase 5: GPU passthrough (blocked)</span><span class="ko">Phase 5: GPU passthrough (막힘)</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview</span><span class="ko">개요</span></a>
+  <a href="argocd-phase6-prodops.html"><span class="en">Phase 6: prod-ops &amp; DR</span><span class="ko">Phase 6: 실운영 &amp; DR</span> →</a>
+</div>
+
+<footer><span class="en">Argo CD lab series · Phase 5 follow-up · 2026-06-12 · mi250-052 · GitOps repo: github.com/hanq-moreh/argocd-gitops-lab</span><span class="ko">ArgoCD 실습 시리즈 · Phase 5 후속 · 2026-06-12 · mi250-052 · GitOps 저장소: github.com/hanq-moreh/argocd-gitops-lab</span></footer>
+
+</div>
+</body>
+</html>
