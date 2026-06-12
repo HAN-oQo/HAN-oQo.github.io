@@ -1351,9 +1351,77 @@ ts             card,temp,power,gpu%,vram%,mem
 <li><strong>quality 검증</strong>: 동일 prompt + temperature=0 → baseline output == PDD output 인지 확인</li>
 </ol>
 
-<h3>10-6. 한 줄 결론</h3>
+<h3>10-6. 다음 실험 — Multi-turn Bidirectional KV Transfer (PDD 의 확장)</h3>
 
-<p><strong>MI250 8 GCD 위에 vLLM PDD mechanism 동작 확인 — KV cache 가 layer 별 safetensors 로 두 instance 사이 transfer 되는 것까지 직접 봄. 단 SharedStorageConnector 의 학습용 한계로 quality 깨짐 + production 측정 불가. 정통 평가는 정확한 connector + image / driver / 환경 매칭 + 외부 proxy server 가 갖춰진 NVIDIA cloud / MI300 환경 필요.</strong></p>
+<p>본 실험은 <strong>single-turn 1P1D</strong> (1 prefill + 1 decode, 한 round 의 chat). 그러나 production 의 LLM chatbot 은 <strong>multi-turn 대화</strong> (Q1 → A1 → Q2 → A2 → ...). 단순 PDD 는 multi-turn 에 비효율 — 이걸 해결하는 게 <a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_multiturn.py">disagg_proxy_multiturn.py</a>.</p>
+
+<h4>해결하려는 문제 — single-turn PDD 의 multi-turn 비효율</h4>
+
+<table>
+<tr><th>시나리오 (Turn 2)</th><th>일반 1P1D PDD</th><th>문제</th></tr>
+<tr><td>User Q2 가 도착 (history: Q1+A1+Q2)</td><td>Prefill 가 전체 (Q1+A1+Q2) 처음부터 forward → KV 생성 → Decode 로 send → Decode 가 A2 생성</td><td><strong>Q1+A1 의 KV 는 이미 Decode 에 있음</strong> (turn 1 의 결과). 그러나 Prefill 가 그걸 모르고 처음부터 다시 compute. <strong>중복 compute + KV 가 한 방향 (P→D) 만 흐름</strong></td></tr>
+</table>
+
+<h4>해결책 — Bidirectional KV Transfer</h4>
+
+<p>docstring 인용 (<a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_multiturn.py">PR + source</a>):</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+"<strong>Disaggregated Prefill/Decode Proxy with Bidirectional KV Transfer</strong> ... routing multi-turn chat requests so that <strong>each turn reuses KV cache blocks from the previous turn's Decode node</strong> via bidirectional KV transfer."<br><br>
+Mechanism:<br>
+"D finish ──► proxy caches │ next turn ──► proxy sends │ cached D blocks to P ──► P reads D blocks (bidir)"<br><br>
+Config flags: <code>"do_remote_decode": True</code> + <code>"do_remote_prefill": False</code> — explicitly enable prefill to read from decode's remote blocks in subsequent turns.
+</blockquote>
+
+<div class="diagram">  Turn 1 (initial):
+    User: "What is photosynthesis?"
+    ① Proxy → Prefill (Q1) → KV(Q1) → ② P→D transfer (단방향, 기존 PDD)
+    ③ Decode (KV(Q1)) → A1
+    ④ Decode 가 자기 KV(Q1+A1) 들고 있음. Proxy 가 conversation_id 로 KV block 정보 cache.
+
+  Turn 2 (multi-turn, bidirectional):
+    User: "How does it work in plants specifically?"
+    ① Proxy 가 conversation_id 매칭 → "이 conv 의 Q1+A1 KV 는 Decode 에 있음"
+    ② Proxy → Decode 에게 "KV(Q1+A1) 를 P 로 보내라" (D→P, 역방향)  ← 이게 bidirectional
+    ③ Decode → KV(Q1+A1) 를 NCCL 으로 P 에 send
+    ④ Proxy → Prefill (Q1+A1+Q2 full context)
+       Prefill 가 forward 시작 — Q1+A1 부분은 KV 가 D 에서 받은 거 활용 (reuse, 새로 compute X) →
+       새로 추가된 Q2 부분만 compute → KV(Q2) 생성
+    ⑤ Prefill → Decode 로 KV(Q2) send (P→D, 정방향)
+    ⑥ Decode → A2 generation</div>
+
+<h4>기대 효과 (다음 실험에서 측정하고 싶은 것)</h4>
+
+<table>
+<tr><th>지표</th><th>일반 PDD</th><th>Multiturn Bidirectional</th><th>예상 향상</th></tr>
+<tr><td><strong>TTFT (turn 2+)</strong></td><td>Q1+A1+Q2 전체 prefill</td><td>Q2 만 prefill (나머지 KV reuse)</td><td><strong>2-10× 개선</strong> — turn 길수록 큼</td></tr>
+<tr><td>Compute 절약</td><td>매 turn 누적 token 다 forward</td><td>새 token 만 forward</td><td>긴 conversation 일수록 절약 큼</td></tr>
+<tr><td>KV cache locality</td><td>Decode 의 KV 사용 후 버림</td><td>Decode 의 KV 가 다음 turn 의 Prefill 의 input</td><td>VRAM 효율</td></tr>
+<tr><td>전체 throughput (긴 대화 시)</td><td>매 turn cost ∝ context 길이</td><td>매 turn cost ∝ 새 token 만</td><td>1.5-3×</td></tr>
+</table>
+
+<h4>다음 실험 설계 (Multiturn 비교 측정)</h4>
+
+<ol>
+<li><strong>2 시나리오</strong>: (A) 일반 disagg_proxy_demo.py + 1P1D PDD, (B) disagg_proxy_multiturn.py + 1P1D bidirectional</li>
+<li><strong>워크로드</strong>: 같은 conversation 의 5-turn dialog. 각 turn 의 prompt 누적되도록 (Q1 → Q1+A1+Q2 → Q1+A1+Q2+A2+Q3 → ...)</li>
+<li><strong>측정</strong>: turn 마다 TTFT (첫 token 까지), TPOT, 전체 response time, Prefill GPU% / Decode GPU%, KV transfer 방향 (P↔D NCCL channel bytes 측정)</li>
+<li><strong>비교 차원</strong>:
+  <ul>
+  <li>turn N 의 TTFT 가 어떻게 N 에 따라 변하는지 (A: linear↑ vs B: constant)</li>
+  <li>P/D 의 GPU 사용 패턴 — bidirectional 시 D→P transfer 가 추가로 일어남</li>
+  <li>같은 conversation 5 turn 의 total compute time</li>
+  </ul></li>
+<li><strong>가설</strong>:
+  <ul>
+  <li>Multiturn proxy 가 turn 2 부터 큰 효과. context 짧을 때 (turn 1) 차이 없거나 약간 손해 (handshake overhead)</li>
+  <li>D→P transfer 추가로 NCCL 양방향 traffic — RCCL bandwidth 가 bottleneck 가능</li>
+  </ul></li>
+</ol>
+
+<h3>10-7. 한 줄 결론</h3>
+
+<p><strong>MI250 8 GCD 위에 vLLM PDD mechanism 동작 확인 — KV cache 가 layer 별 safetensors 로 두 instance 사이 transfer 되는 것까지 직접 봄. 단 SharedStorageConnector 의 학습용 한계로 quality 깨짐 + production 측정 불가. 정통 평가는 P2pNcclConnector + 외부 proxy server (§7-bis) 으로 11번 시도 끝에 성공. 다음 실험은 multi-turn bidirectional (§10-6) 으로 KV reuse 효과 정량화.</strong></p>
 
 </div>
 
