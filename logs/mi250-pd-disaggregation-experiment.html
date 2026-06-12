@@ -791,19 +791,19 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
 <div class="card">
 <p>실험 진행 중 자연스럽게 생긴 모든 질문에 대한 답을 한 곳에 모음. 위 §6 의 실험 결과 + 아래 §8 의 KV cache 전송 동작 과 cross-reference. 각 질문의 정답은 vLLM PR #18242, source code, 공식 docs 직접 인용으로 검증함.</p>
 
-<p><strong>주요 질문들 (이 section 안에서 모두 답)</strong>:</p>
-<ul>
-<li>Architecture — prefill / decode / proxy 가 어떻게 떠 있나? — §7-A</li>
-<li>Proxy 가 왜 필요한가? "예쁘게" 하려는 거? — §7-B</li>
-<li>Proxy 가 만드는 2 request 의 정확한 형식 + 흐름 — §7-C</li>
-<li>send_type (PUT / PUT_ASYNC / GET) 의 차이 + 우리가 PUT_ASYNC 선택한 이유 — §7-D</li>
-<li>kv_buffer_size — PUT_ASYNC 라 작은 거? PUT 으로 바꾸면? — §7-E</li>
-<li>nccl_num_channels — 키우면 빨라져? 한계? — §7-F</li>
-<li>ZMQ 가 뭐야? P2pNccl 안에서 어떤 역할? — §7-G</li>
-<li>이전 글 (NixlConnector READ-based, D pull) 과 본 실험 (PUT_ASYNC P push) 의 방향성 차이? — §7-H</li>
-</ul>
-
-<p>(아래 본문 — 옛 §6 의 sub-section 들 + §7 (옛 PDD deploy) 의 monitoring 결과 모두 포함)</p>
+<p><strong>실험 중 생긴 질문 → 답이 있는 sub-section</strong>:</p>
+<table>
+<tr><th>질문</th><th>답</th></tr>
+<tr><td>Proxy 가 왜 필요? "예쁘게" 하려는 거? Proxy 없이 prefill 만 직접 호출하면?</td><td><a href="#qa">§7-1</a></td></tr>
+<tr><td>Proxy 가 만드는 2 request (prefill, decode) 의 정확한 형식 + 흐름</td><td><a href="#qa">§7-1</a></td></tr>
+<tr><td>ZMQ 가 뭐야? P2pNccl 안에서 어떤 역할?</td><td><a href="#qa">§7-1</a></td></tr>
+<tr><td>send_type (PUT / PUT_ASYNC / GET) 차이 + 왜 PUT_ASYNC?</td><td><a href="#qa">§7-2</a></td></tr>
+<tr><td>kv_buffer_size — PUT_ASYNC 라 작은 거? PUT 이면 어떻게 키워야?</td><td><a href="#qa">§7-2</a></td></tr>
+<tr><td>nccl_num_channels — 키우면 빨라져? HW 한계 어디?</td><td><a href="#qa">§7-2</a></td></tr>
+<tr><td>NIXL (D pull, READ) vs P2pNccl PUT_ASYNC (P push) — 방향성이 왜 다른가?</td><td><a href="#qa">§7-3</a></td></tr>
+<tr><td>일반 PDD 설명의 "decode 가 받아옴" vs PUT_ASYNC 의 "prefill 이 보냄" — 모순?</td><td><a href="#qa">§7-4</a></td></tr>
+<tr><td>Quart 가 proxy 에서 하는 역할? 왜 Flask 가 아니라 Quart?</td><td><a href="#qa">§7-5</a></td></tr>
+</table>
 </div>
 
 <h3>7-1. Proxy 가 왜 필요한가 + 만드는 request 형식</h3>
@@ -1021,41 +1021,14 @@ sock.send(msgpack.dumps(data))                          # ← ZMQ 로 보냄
 # 그 후 NCCL Comm init — 실 KV 는 ncclSend/Recv 로
 comm = self.nccl.ncclCommInitRank(2, unique_id, rank)</code></pre>
 
-<h4>ZMQ 가 뭐야?</h4>
 
-<p><strong>ZMQ (ZeroMQ)</strong> = 고성능 비동기 messaging 라이브러리. TCP socket 위에 <strong>message queue + addressing</strong> layer 자동 처리. 단순 socket 보다 high-level abstraction.</p>
-
-<table>
-<tr><th>특징</th><th>설명</th></tr>
-<tr><td>Message 단위</td><td>byte stream 아닌 message 단위 (자동 framing). 보낸 message 1개 = 받는 message 1개</td></tr>
-<tr><td>자동 reconnect</td><td>peer 가 잠시 죽었다가 다시 떠도 자동 재연결</td></tr>
-<tr><td>Pattern 다양</td><td>ROUTER/DEALER (req/rep multi-peer), PUB/SUB (broadcast), PUSH/PULL (load balance) 등</td></tr>
-<tr><td>비유</td><td>"socket 위의 <strong>우체국 layer</strong>" — 누가 어디로 보낼지만 신경 쓰면 됨, queueing/buffering/reconnect 자동</td></tr>
-</table>
-
-<h5>vLLM P2pNccl 의 ZMQ 사용</h5>
-<pre><code># 각 vLLM instance 가:
-self.router_socket = self.context.socket(zmq.ROUTER)
-self.router_socket.bind(f"tcp://{self.zmq_address}")  # 예: 0.0.0.0:20001
-
-# peer (다른 instance) 가 :
-sock = self.context.socket(zmq.DEALER)
-sock.connect(f"tcp://192.168.3.52:22001")             # 상대 ROUTER 로 connect
-
-# 이 ZMQ channel 위로 교환되는 것:
-# - NCCL unique_id (handshake 시작 시)
-# - KV tensor metadata (어느 layer 의 KV 보낼지)
-# - 실 KV bytes (PUT mode 면 ZMQ 로, NCCL P2P 면 따로 RCCL 로)</code></pre>
-
-<p>즉 ZMQ 는 <strong>control plane</strong> (handshake 메타 정보), 큰 KV byte 는 <strong>NCCL/RCCL data plane</strong> 으로. 둘이 분리.</p>
-
+<p><strong>요약 — ZMQ vs NCCL/RCCL 의 역할 분담</strong>:</p>
 <table>
 <tr><th>Channel</th><th>전송하는 것</th><th>왜 분리</th></tr>
-<tr><td><strong>ZMQ</strong> (port 20001/22001)</td><td>handshake metadata, NCCL unique_id, "어느 request 의 KV 입니다" 같은 routing 정보</td><td>TCP 기반, small message 빠르게. CPU memory 만</td></tr>
-<tr><td><strong>NCCL/RCCL</strong> (16 channels)</td><td>실 KV tensor (큰 bytes)</td><td>GPU-GPU 직접 transfer. ZMQ 보다 훨씬 빠름 (NVLink/XGMI 활용)</td></tr>
+<tr><td><strong>ZMQ</strong> (port 20001/22001)</td><td>handshake metadata, NCCL unique_id, "어느 request 의 KV" routing 정보</td><td>TCP 기반, small message. CPU memory 만 사용</td></tr>
+<tr><td><strong>NCCL/RCCL</strong> (16 channels)</td><td>실 KV tensor (큰 bytes)</td><td>GPU-GPU 직접 transfer (NVLink/XGMI). ZMQ 보다 훨씬 빠름</td></tr>
 </table>
-
-
+<p>ZMQ = <strong>"socket 위의 우체국 layer"</strong>. byte stream 아닌 message 단위 (자동 framing), peer 가 잠시 죽었다가 다시 떠도 자동 재연결, ROUTER/DEALER 같은 multi-peer pattern 자동 처리. P2pNccl 의 control plane 이 ZMQ 인 이유 = 작은 메시지 + 안정적 재연결 + multi-peer.</p>
 
 <h3>7-2. send_type 옵션 (PUT / PUT_ASYNC / GET) + 왜 PUT_ASYNC?</h3>
 
@@ -1803,63 +1776,68 @@ RuntimeError: Engine core initialization failed. See root cause above. Failed co
 </table>
 
 </div>
+</details>
 
-<h2 id="analysis">10. 결론 — 고려 인자 + 이론적 P/D 효과 + 구현 문제점</h2>
+<h2 id="analysis">10. 결론 — 고려 인자 + 주의사항 + 이론 효과 + 구현 문제점</h2>
 <div class="card">
 
-<h3>10-1. 정량 측정 — 불가능했음, 솔직히</h3>
+<h3>10-1. P/D 돌릴 때 실제 성능에 영향을 주는 인자들 (고려해야 할 것)</h3>
 
-<p>본 환경에서 P/D 의 <strong>throughput / latency 정량 비교는 불가능</strong>. 이유:</p>
-<ol>
-<li>SharedStorageConnector 의 quality 깨짐 (§9-3) — decode output 이 garbage 라 production 시나리오 시뮬레이션 의미 X</li>
-<li>P2pNcclConnector 같은 production connector 못 띄움 (§9-2)</li>
-<li>의미 있는 PDD vs 단일 비교는 정확한 generation 가 전제 — quality 어긋난 KV 로 측정한 throughput 은 무의미</li>
-</ol>
-
-<h3>10-2. 그래도 측정 된 것 — wall time, mechanism, monitoring</h3>
+<p>정량 벤치마크는 본 환경에서 못 끝냈지만 (§9 의 quality 문제 + 단일 baseline 미실험), 이번 실험에서 직접 만져 보며 알게 된 <strong>실 성능에 직접 영향 가는 인자들</strong>:</p>
 
 <table>
-<tr><th>호출</th><th>wall time</th><th>output</th></tr>
-<tr><td>Prefill 만 (kv_producer 가 자체 generation)</td><td>6,197 ms</td><td>정상 ("Photosynthesis is...")</td></tr>
-<tr><td>Decode 만 (같은 prompt, kv_consumer 가 KV load 후 generation)</td><td>6,486 ms</td><td>garbage</td></tr>
+<tr><th>인자</th><th>영향 방향</th><th>본 실험에서의 값 / 관찰</th></tr>
+<tr><td><strong>kv_buffer_size (producer / consumer)</strong></td><td>PUT_ASYNC 의 send queue depth. producer 작게 / consumer 크게. 작으면 P 가 send 늦으면 block. 크면 D side 에서 미수신 KV 의 pile-up 허용</td><td>P=1e1 / D=8e9 (PR #18242 권장)</td></tr>
+<tr><td><strong>nccl_num_channels</strong></td><td>RCCL ring channel 수. 키우면 throughput ↑ 단 HW link (XGMI/NVLink) 수가 한계. MI250 OAM 간 XGMI = 4 link, GCD 내부는 50 GB/s</td><td>16 (PR #18242 default). 키우면 더 빨라지지만 link 포화에서 saturate</td></tr>
+<tr><td><strong>send_type (PUT / PUT_ASYNC / GET)</strong></td><td>PUT = sync, P block. PUT_ASYNC = P 가 fire-and-forget, queue 에 쌓고 다음 prefill 시작. GET = D 가 pull. concurrent 환경에선 PUT_ASYNC 가 P 의 idle 줄임</td><td>PUT_ASYNC 사용 — concurrent 시나리오 가정</td></tr>
+<tr><td><strong>proxy 의 max_tokens 강제 = 1</strong></td><td>prefill 이 1 token 만 출력 + KV 보내고 종료. 0 으로 하면 prefill 이 generation step 안 돌아 KV 가 안 만들어짐. 너무 크게 하면 prefill 이 decode 일을 침범 (split point 의미 X)</td><td>1 (proxy 가 강제). prefill 의 의미가 "KV 만들고 끝"</td></tr>
+<tr><td><strong>topology — P 와 D 가 XGMI 같은 OAM 인지 다른 OAM 인지</strong></td><td>같은 OAM 안 2 GCD = 200 GB/s. 다른 OAM 의 2 GCD = 4 link × 50 = 200 GB/s 같아 보이지만 hop / contention 영향. cross-node 면 더 느림</td><td>본 실험: 같은 host (mi250-052), 같은 OAM 의 2 GCD. KV transfer 가 XGMI 로 빠르게 흐름</td></tr>
+<tr><td><strong>model TP / kv_role 매칭</strong></td><td>P 의 TP 와 D 의 TP 같아야 KV layout 호환 (head 분할 같아야). 다르면 reshape 비용. 1.5B 처럼 작은 모델이면 TP=1+1 도 가능, 큰 모델은 TP 키우면 모델 weights 도 같이 split</td><td>TP=1 + TP=1 (Qwen2.5-1.5B). production 큰 모델은 TP=4+4 이상 권장</td></tr>
+<tr><td><strong>max_model_len</strong></td><td>KV cache 가 max_model_len 만큼 미리 할당. 큰 값이면 VRAM 차고 P / D 양쪽이 같이 차지</td><td>4096 (양쪽). 1.5B 도 TP=1 / max_model_len=4096 에서 VRAM 91% 사용</td></tr>
+<tr><td><strong>image / host ROCm 버전 매칭</strong></td><td>host = ROCm 6.2 / image = ROCm 7.0 mismatch 면 aiter 같은 ROCm 7+ 기능이 segfault. <code>VLLM_ROCM_USE_AITER=0</code> + <code>--enforce-eager</code> 로 우회 가능 단 성능 ↓</td><td>본 실험: host 6.2 / image 7.0 mismatch — aiter 끄고 eager mode 로 우회</td></tr>
 </table>
 
-<p><strong>흥미로운 관찰</strong>: 두 호출 wall time 이 비슷 (6.2s vs 6.5s). 단일 TP=8 baseline 측정 안 했지만 (worker -3 fail 로 시도 미완), 1.5B 모델이 TP=4 면 약 같은 latency 일 듯. <strong>PDD 의 latency overhead 가 매우 작음을 시사</strong> — 단 quality OK 일 때 의미.</p>
-
-<h3>10-3. 가설 (§8-4) vs 실 결과 비교</h3>
+<h3>10-2. 주의사항 — 돌릴 때 빠뜨리지 말 것</h3>
 
 <table>
-<tr><th>§8-4 가설</th><th>실 결과</th><th>검증?</th></tr>
-<tr><td>예상 1: 낮은 conc 에서 PDD 가 단일보다 느림</td><td>측정 못 함 (quality)</td><td>—</td></tr>
-<tr><td>예상 2: 높은 conc 에서 PDD 가 같거나 약간 유리</td><td>측정 못 함</td><td>—</td></tr>
-<tr><td>예상 3: KV transfer 시간 = TTFT 의 5-30%</td><td><strong>부분 확인</strong>: 한 request 의 KV 564KB. filesystem 동기 write = 10-30ms 수준 (SSD 가정). 6초 prefill 의 0.5% 정도. <strong>가설 예상보다 훨씬 작음</strong> (단 작은 모델이라)</td><td>가설 too high</td></tr>
-<tr><td>예상 4: 모델 weights 중복 load 메모리 부담</td><td><strong>실 확인</strong>: VRAM 91% × 2 instance — Qwen2.5-1.5B 가 TP=4 에서도 GCD 당 58GB 사용. KV cache 가 max_model_len 만큼 미리 할당</td><td>가설 맞음</td></tr>
-<tr><td>예상 5: P/D resource contention 제거 +효과</td><td>측정 못 함 (단일 baseline 미실험)</td><td>—</td></tr>
+<tr><th>주의사항</th><th>왜 / 안 하면?</th></tr>
+<tr><td>P 와 D 의 <strong>model / tokenizer / TP / max_model_len 동일</strong></td><td>다르면 KV shape 안 맞아 decode 가 받아도 못 씀. silent quality 깨짐</td></tr>
+<tr><td>Proxy 의 <strong>request_id 인코딩</strong> 확인 — <code>cmpl-___prefill_addr_HOST:PORT___decode_addr_HOST:PORT___uuid</code> 형식이어야 P2pNccl 의 ZMQ side 가 routing key 매칭</td><td>request_id 가 형식 안 맞으면 D 가 받은 KV 가 어느 request 의 것인지 모르고 hang</td></tr>
+<tr><td>proxy 의 <strong>max_tokens=1 강제</strong> 반드시 prefill 호출에 적용</td><td>안 하면 prefill 이 stream 끝까지 generation → KV 가 매 step 마다 보내짐 → 의도 깨짐</td></tr>
+<tr><td>P/D <strong>VRAM 합계</strong> 가 host total 안에 들어오는지</td><td>모델 weights 가 양쪽에 중복 load. 1.5B 라도 양쪽 합치면 2x. 큰 모델은 메모리 부족 frequent</td></tr>
+<tr><td>실험 끝나면 <strong>두 container 모두 즉시 kill</strong></td><td>VRAM 91% 양쪽이 그대로 점유 → 다음 실험 띄울 때 OOM. 다음 실험은 깨끗한 idle 에서 시작</td></tr>
+<tr><td>벤치마크 시 <strong>같은 conc / prompt len / temperature</strong></td><td>apple-to-apple 비교 안 되면 PDD vs single 차이가 conc 차이로 오인됨</td></tr>
+<tr><td>같은 prompt + <strong>temperature=0</strong> 로 quality regression test</td><td>PDD output == single output 이어야 connector 가 정확히 KV 전달. 다르면 KV layout 버그</td></tr>
 </table>
 
-<h3>10-4. 사용자 4가지 질문에 대한 답</h3>
+<h3>10-3. 이론적으로 P/D 가 만드는 효과 — 예상 비교</h3>
 
 <table>
-<tr><th>질문</th><th>답</th></tr>
-<tr><td><strong>1. 어떻게 돌릴 수 있는지</strong></td><td>✅ 답함. docker rocm/vllm:latest + 2 container (TP=4 each, GCD 0-3 / 4-7) + SharedStorageConnector + shared_kv dir mount. AITER 끄고 enforce-eager 필요 (ROCm version mismatch 우회).</td></tr>
-<tr><td><strong>2. 잘 도는지 (모니터링 캡쳐)</strong></td><td>⚠ 부분. mechanism 동작 (실 결과 §7-1, §7-2). GPU% 캡쳐 OK (prefill GCD 0-3 68-84%, decode 4-7 timing 못 잡음). <strong>quality 망가짐</strong> 으로 production 운영 X.</td></tr>
-<tr><td><strong>3. 내부 동작 — KV 어디서 어떻게</strong></td><td>✅ 답함. prefill instance → request hash directory → 28 개 layer 별 <code>model.layers.&lt;N&gt;.self_attn.attn.safetensors</code> 파일 → 총 564KB → filesystem (host mount) → decode instance 가 같은 hash dir 의 safetensors load. SharedStorage 라 transport = filesystem write/read.</td></tr>
-<tr><td><strong>4. 현재 문제 + P/D 효과</strong></td><td>✅ 답함. 4 문제 (§9). 핵심: SharedStorage 가 학습용 → quality 깨짐. production PDD 는 NIXL/Mooncake/P2pNccl + proxy server 필요. 효과 정량은 불가능했고, mechanism 의 latency overhead 는 매우 작아 보임.</td></tr>
+<tr><th>워크로드 / 상황</th><th>단일 baseline</th><th>P/D 분리</th><th>예상 우열</th></tr>
+<tr><td>낮은 conc (1-4), short prompt</td><td>한 GPU 가 prefill + decode 모두 처리, idle 적음</td><td>P 가 가끔만 일하고 idle. KV transfer overhead 만 추가</td><td><strong>단일 우위</strong> — overhead 만 손해</td></tr>
+<tr><td>중간 conc (16-32), 평균 prompt</td><td>prefill (compute-bound) 과 decode (memory-bound) 가 같은 GPU 에서 경쟁. 두 phase 의 SM / HBM 활용 패턴이 달라 interference</td><td>P 는 prefill 전용 (compute 풀가동), D 는 decode 전용 (HBM bw 풀가동). interference 없음</td><td><strong>P/D 우위</strong> — phase 분리의 이상적 시나리오</td></tr>
+<tr><td>높은 conc (64+), long prompt</td><td>prefill 이 queue 에 쌓이며 TTFT 폭증. decode 가 prefill 끝나기 기다림</td><td>P 가 prefill 큐 전용 처리 + D 는 decode 안정. TTFT 일정 / TPOT 안정</td><td><strong>P/D 강한 우위</strong> — SLA 보장에 핵심</td></tr>
+<tr><td>multi-turn (KV reuse 가능)</td><td>같은 GPU 가 KV 들고 있어 자연스럽게 hit</td><td>D 가 KV cache pool 유지, P 는 새 prefill 만. proxy 가 cache hit 시 P skip → 이론상 lowest latency</td><td><strong>P/D 우위 (단 proxy 가 hit detection 정확해야)</strong></td></tr>
+<tr><td>긴 prompt + 짧은 generation</td><td>prefill 시간이 전체의 90%+. decode GPU idle 길게</td><td>P 가 일하는 동안 D 는 다음 request 의 decode 처리 가능 (pipelining)</td><td><strong>P/D 우위</strong> — overlap 이득 큼</td></tr>
+<tr><td>짧은 prompt + 긴 generation</td><td>decode 시간이 지배적. prefill 거의 안 들어감</td><td>P 는 거의 idle, 단순 routing 만</td><td><strong>단일 우위 또는 비슷</strong> — P 의 리소스 낭비</td></tr>
+<tr><td>모델 크기 큼 (70B+), HBM 부족</td><td>한 GPU set 에 weights + KV cache 모두 들어가야 — VRAM 빠듯</td><td>P / D 가 각각 weights 들고 있지만 KV cache 는 D 쪽만 쌓음. D 의 KV pool 을 더 크게 할당 가능</td><td><strong>P/D 우위</strong> — long-context 서비스에 유리</td></tr>
 </table>
 
-<h3>10-5. 다음 단계 (NVIDIA Linux 환경에서)</h3>
+<p><strong>한 줄 요약</strong>: P/D 의 효과는 <strong>(a) 워크로드의 prefill / decode 비율</strong>, <strong>(b) 동시성</strong>, <strong>(c) interconnect 대역폭</strong> 의 함수. 낮은 conc 단순 호출엔 손해, 중-고 conc + multi-turn + long-context 엔 명확한 이득.</p>
 
-<ol>
-<li><strong>NVIDIA H100 cloud (Lambda Labs / Cloud)</strong> + vLLM 최신 image + <strong>NixlConnector</strong> — NIXL 의 NVLink/RDMA 활용한 정통 PDD</li>
-<li><strong>또는 MI300 cluster (ROCm 7.0+)</strong> — image / host 버전 맞춰 aiter 활용, MoRIIOConnector 시도</li>
-<li><strong>vLLM disagg_proxy_server.py</strong> 같이 띄워 client → proxy → P → D 라우팅 완전</li>
-<li><strong>벤치마크</strong>: 같은 워크로드 (conc 1, 4, 16, 32, prompt len 512 / 2048) baseline (단일 TP=8) vs PDD (P TP=4 + D TP=4)</li>
-<li><strong>quality 검증</strong>: 동일 prompt + temperature=0 → baseline output == PDD output 인지 확인</li>
-</ol>
+<h3>10-4. 지금 구현의 문제점 (내가 만져 본 한도 안에서)</h3>
 
-<h3>10-6. 한 줄 결론</h3>
-
-<p><strong>MI250 8 GCD 위에 vLLM PDD mechanism 동작 확인 — KV cache 가 layer 별 safetensors 로 두 instance 사이 transfer 되는 것까지 직접 봄. 단 SharedStorageConnector 의 학습용 한계로 quality 깨짐 + production 측정 불가. 정통 평가는 P2pNcclConnector + 외부 proxy server (§6) 으로 11번 시도 끝에 성공. 다음 실험은 multi-turn bidirectional (§10-6) 으로 KV reuse 효과 정량화.</strong></p>
+<ul>
+<li><strong>main branch 에서 P2pNccl source 사라짐</strong> — PR #18242 로 추가됐던 <code>vllm/distributed/kv_transfer/kv_connector/v1/p2p/</code> 디렉토리가 2026-06 기준 main 에 없음 (404). 즉 새 image (rocm/vllm:latest) 도 이 connector 가 빠질 가능성. <strong>image version 을 pinning</strong> 안 하면 다음 실험 때 깨짐. 출처 인용은 PR file diff URL (영구) 로만 가능.</li>
+<li><strong>Proxy 가 single-point-of-failure</strong> — vLLM 공식 <code>disagg_proxy_p2p_nccl_xpyd.py</code> 가 단일 Quart 서버. proxy 죽으면 routing 전부 정지. 본 실험은 1 proxy 로 끝났지만 production 은 HA 가 필요 — 그런데 reference impl 에 없음.</li>
+<li><strong>request_id 인코딩이 in-band</strong> — proxy 가 <code>cmpl-___prefill_addr_..._decode_addr_..._uuid</code> 형식으로 string 안에 routing 정보 넣음. 우아하지 않고 디버깅 어려움. 사용자 client 가 자기 request_id 쓰면 깨짐.</li>
+<li><strong>kv_buffer_size 의 "올바른 값" 찾는 식이 없음</strong> — PR 권장값 (P=1e1, D=8e9) 이 magic number. 모델 크기 / max_model_len / conc 에 따라 동적으로 정해야 하지만 vLLM 에 가이드 없음.</li>
+<li><strong>ROCm aiter 의존성과 image 호환 문제</strong> — host ROCm 6.2 / image ROCm 7.0 mismatch 시 aiter 가 segfault. <code>VLLM_ROCM_USE_AITER=0 + --enforce-eager</code> 로 우회 가능하지만 성능 저하. 정상 production 은 host upgrade 필수.</li>
+<li><strong>NCCL handshake 가 ZMQ in-band</strong> — control plane 과 unique_id 가 같은 ZMQ ROUTER 위에. NCCL bootstrap 의 보안 / namespace 가 ZMQ 의 신뢰에 위임. cross-tenant 환경에선 위험.</li>
+<li><strong>fault tolerance 가 transparent 하지 않음</strong> — D 가 죽으면 P 가 보낸 KV 어디로? proxy 가 알아? 현재 reference 는 graceful retry 안 함 — D 가 사라지면 P 가 NCCL send 에서 block / timeout.</li>
+<li><strong>모니터링 hook 부재</strong> — vLLM 의 <code>/metrics</code> 가 P / D 별 KV transfer 통계 (몇 KV/s, 평균 transfer time) 안 노출. <code>rocm-smi</code> / <code>nvidia-smi</code> 의 GPU% 으로 간접 확인만 가능.</li>
+<li><strong>multi-turn 의 KV cache hit 가 proxy 인식 X</strong> — 같은 prompt 재요청도 proxy 가 prefill 다시 보냄. D side cache hit 는 D 내부에서만 처리. cross-request hit 의 latency 이득 측정 어려움.</li>
+</ul>
 
 </div>
 
