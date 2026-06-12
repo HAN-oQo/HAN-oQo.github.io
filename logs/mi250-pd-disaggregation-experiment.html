@@ -567,6 +567,70 @@ ts            device,temp,power,gpu%,vram%,mem_act
 
 <p>즉 proxy = <strong>(a) client API gateway + (b) prefill/decode 매칭 + (c) request-ID 기반 KV routing key + (d) service discovery</strong>. 4 in 1.</p>
 
+<h4>Proxy 없이 prefill 만 직접 호출하면?</h4>
+
+<p>"proxy 가 예쁘게 만들기 위한 거 아니냐" — <strong>아님, PDD 본질이 깨짐</strong>. 이유:</p>
+
+<p>P2pNcclConnector source (<code>p2p_nccl_engine.py</code>) 의 핵심 부분:</p>
+
+<pre><code>def create_connect(self, remote_address: str | None = None):
+    <strong>assert remote_address is not None</strong>   # 반드시 받아야 함
+    ...
+    sock.connect(f"tcp://{remote_address}")
+    unique_id = self.nccl.ncclGetUniqueId()   # NCCL handshake</code></pre>
+
+<p>producer 가 KV 보낼 때 <strong><code>remote_address</code> (= decode 의 ZMQ 주소)</strong> 를 알아야 함. 이 주소는 어디서 옴? — <strong>proxy 가 request_id 에 인코딩</strong> 해서 prefill 에 보냄:</p>
+
+<pre><code># proxy 가 만드는 request_id 형식
+"cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001___&lt;uuid&gt;"
+                       ┗━━━━━━━━━━━━━━━━━━━━━━┛  ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+                       이 request 의 prefill ZMQ   이 request 의 decode ZMQ
+                       (kv_port 와 일치)           (peer 가 KV 받을 곳)</code></pre>
+
+<p>prefill 의 P2pNcclConnector 가 request_id 의 이 부분을 <strong>parse</strong> 해서 decode 주소 발견 → 그 주소로 ZMQ connect + NCCL handshake.</p>
+
+<table>
+<tr><th>시나리오</th><th>request_id</th><th>결과</th></tr>
+<tr><td>Proxy 거쳐서 prefill 호출</td><td><code>___prefill_addr_X___decode_addr_Y___uuid</code></td><td>✓ prefill 가 Y 알아서 KV 보냄 → 정통 PDD 동작</td></tr>
+<tr><td><strong>Proxy 안 거치고 prefill 에 직접 curl</strong></td><td><code>cmpl-abc123...</code> 표준 UUID</td><td>⚠ prefill 가 <strong>remote_address 못 알아냄</strong>. 두 가지 행동 중 하나:<ol style="margin:4px 0;"><li><strong>KV transfer skip</strong> → prefill 이 자체 generation → 단일 vLLM 같이 동작. <strong>Decode 의 4 GCD 가 놀음 = PDD 의미 X</strong></li><li>또는 hang / error</li></ol></td></tr>
+</table>
+
+<div class="note"><strong>요약</strong>: Proxy 는 "예쁨" 이 아니라 <strong>PDD 의 본질이 동작하려면 필수</strong>. Proxy 없으면 그냥 단일 vLLM + 다른 GPU 자원 낭비. <strong>공식 예제</strong> (<code>disaggregated_serving_p2p_nccl_xpyd/disagg_example_p2p_nccl_xpyd.sh</code>) 가 proxy 와 함께 demo 하는 이유.</div>
+
+<h4>ZMQ 가 뭐야?</h4>
+
+<p><strong>ZMQ (ZeroMQ)</strong> = 고성능 비동기 messaging 라이브러리. TCP socket 위에 <strong>message queue + addressing</strong> layer 자동 처리. 단순 socket 보다 high-level abstraction.</p>
+
+<table>
+<tr><th>특징</th><th>설명</th></tr>
+<tr><td>Message 단위</td><td>byte stream 아닌 message 단위 (자동 framing). 보낸 message 1개 = 받는 message 1개</td></tr>
+<tr><td>자동 reconnect</td><td>peer 가 잠시 죽었다가 다시 떠도 자동 재연결</td></tr>
+<tr><td>Pattern 다양</td><td>ROUTER/DEALER (req/rep multi-peer), PUB/SUB (broadcast), PUSH/PULL (load balance) 등</td></tr>
+<tr><td>비유</td><td>"socket 위의 <strong>우체국 layer</strong>" — 누가 어디로 보낼지만 신경 쓰면 됨, queueing/buffering/reconnect 자동</td></tr>
+</table>
+
+<h5>vLLM P2pNccl 의 ZMQ 사용</h5>
+<pre><code># 각 vLLM instance 가:
+self.router_socket = self.context.socket(zmq.ROUTER)
+self.router_socket.bind(f"tcp://{self.zmq_address}")  # 예: 0.0.0.0:20001
+
+# peer (다른 instance) 가 :
+sock = self.context.socket(zmq.DEALER)
+sock.connect(f"tcp://192.168.3.52:22001")             # 상대 ROUTER 로 connect
+
+# 이 ZMQ channel 위로 교환되는 것:
+# - NCCL unique_id (handshake 시작 시)
+# - KV tensor metadata (어느 layer 의 KV 보낼지)
+# - 실 KV bytes (PUT mode 면 ZMQ 로, NCCL P2P 면 따로 RCCL 로)</code></pre>
+
+<p>즉 ZMQ 는 <strong>control plane</strong> (handshake 메타 정보), 큰 KV byte 는 <strong>NCCL/RCCL data plane</strong> 으로. 둘이 분리.</p>
+
+<table>
+<tr><th>Channel</th><th>전송하는 것</th><th>왜 분리</th></tr>
+<tr><td><strong>ZMQ</strong> (port 20001/22001)</td><td>handshake metadata, NCCL unique_id, "어느 request 의 KV 입니다" 같은 routing 정보</td><td>TCP 기반, small message 빠르게. CPU memory 만</td></tr>
+<tr><td><strong>NCCL/RCCL</strong> (16 channels)</td><td>실 KV tensor (큰 bytes)</td><td>GPU-GPU 직접 transfer. ZMQ 보다 훨씬 빠름 (NVLink/XGMI 활용)</td></tr>
+</table>
+
 <h3>7-bis-1. 정확한 명령 — 양 instance 모두 (생략 없이)</h3>
 <pre><code># Prefill instance: GCD 0, http port 20003, ZMQ port 20001
 docker run -d --name vllm-prefill \
