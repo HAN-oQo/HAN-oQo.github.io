@@ -299,15 +299,15 @@ docker run -d --rm \
 <tr><td><code>ExampleConnector</code></td><td>SharedStorageConnector 와 비슷한 학습용. 별도 글 (<a href="pd-disaggregation-metal-tryout.html">Apple Silicon PDD 시도</a>) 에서 사용</td><td>본 image 의 0.11.2 에는 SharedStorage 가 대응</td></tr>
 </table>
 
-<h4>전략 결정 (실험 시작 시 — 사전 가설)</h4>
-<ol>
-<li><strong>1순위 — MoRIIOConnector</strong> (ROCm 전용): 없음 → skip</li>
-<li><strong>2순위 — P2pNcclConnector</strong> (NCCL→RCCL): 시도</li>
-<li><strong>3순위 fallback — SharedStorageConnector</strong></li>
-<li><strong>4순위 — LMCache</strong>: image 에 없으면 빌드</li>
-</ol>
+<h4>실험 시작 시점의 후보 4개</h4>
+<ul>
+<li><strong>MoRIIOConnector</strong> (ROCm 전용): image 에 없음 → skip</li>
+<li><strong>P2pNcclConnector</strong> (NCCL→RCCL 자동 매핑)</li>
+<li><strong>SharedStorageConnector</strong> (filesystem 기반)</li>
+<li><strong>LMCacheConnectorV1</strong>: image 에 없음 → 별도 빌드 필요</li>
+</ul>
 
-<div class="note"><strong>⚠ 전략과 실 진행이 어긋난 점 — 솔직히</strong>: 위 plan 은 "P2pNccl 우선 → SharedStorage fallback" 이었으나 <strong>실제로는 거의 반대로 진행</strong>됨:
+<div class="note"><strong>⚠ 실 진행 — P2pNccl 첫 시도 막힘 + SharedStorage 함정</strong>:
 
 <ul>
 <li><strong>어제 (§6 history)</strong>: P2pNccl 정확한 config 없이 첫 시도 → ZMQ port 14579 충돌 (둘 다 default port 사용, proxy / unique kv_port 없이 시도) → 막힘</li>
@@ -577,6 +577,83 @@ ts            device,temp,power,gpu%,vram%,mem_act
 </table>
 
 <p>즉 proxy = <strong>(a) client API gateway + (b) prefill/decode 매칭 + (c) request-ID 기반 KV routing key + (d) service discovery</strong>. 4 in 1.</p>
+
+<h4>Proxy 가 만드는 2 request 의 정확한 형식 + 흐름</h4>
+
+<p>Client 가 한 번 호출 → proxy 가 <strong>sequential 로 2 request</strong> 만듬. 동작 순서:</p>
+
+<div class="diagram">  ① Client
+       ↓ POST :10001/v1/completions
+         body = {"prompt": "Why is the sky blue?", "max_tokens": 30, ...}
+       ↓
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  Proxy (disagg_proxy_demo.py)                                    │
+  │                                                                   │
+  │  ② request_id 생성 (prefill/decode address 인코딩):              │
+  │     request_id = "cmpl-___prefill_addr_192.168.3.52:20001"        │
+  │                  "___decode_addr_192.168.3.52:22001___&lt;uuid&gt;"      │
+  │                                                                   │
+  │  ③ prefill 용 body 작성 (max_tokens 만 1 로 강제):                │
+  │     prefill_body = {**original_body, "max_tokens": 1}            │
+  │                                                                   │
+  │  ④ ─── HTTP POST → prefill instance ───                          │
+  │       POST http://192.168.3.52:20003/v1/completions             │
+  │       X-Request-Id: ___prefill_addr_...___decode_addr_...___uuid │
+  │       body = prefill_body                                         │
+  │       ↓                                                            │
+  │       (prefill 가 prompt forward + KV 생성 + ⑤ KV 를 RCCL 로      │
+  │        decode 에 PUT_ASYNC send. send 가 비동기 시작)             │
+  │       ↓                                                            │
+  │       prefill 가 max_tokens=1 짜리 response 반환 ← 의미 없음      │
+  │       └────── async for _ in prefill_response: continue           │
+  │              (proxy 가 prefill response 소비 + 버림)              │
+  │                                                                   │
+  │  ⑥ ─── HTTP POST → decode instance ───  (prefill 완료 후)        │
+  │       POST http://192.168.3.52:20005/v1/completions             │
+  │       X-Request-Id: 같은 request_id (decode 가 KV 매칭에 사용)   │
+  │       body = original_body  (max_tokens=30 원본)                  │
+  │       ↓                                                            │
+  │       (decode 가 받은 KV 활용 + generation. 이 때 ⑤ 의 KV transfer│
+  │        가 거의 완료된 상태. async 라 보통 충분히 빨리 도착)       │
+  │       ↓                                                            │
+  │       decode 가 stream response                                   │
+  │                                                                   │
+  │  ⑦ stream response 를 client 에 forward                          │
+  └─────────────────────────────────────────────────────────────────┘
+       ↓
+  Client (받은 답 = decode 가 생성한 token stream)</div>
+
+<p><strong>핵심</strong>: <strong>Sequential</strong>. 즉 "prefill 완료 콜 없이 decode 한테 같이 보내는 거" 아님. <strong>prefill HTTP 끝나야 decode HTTP 호출</strong>. 단:</p>
+
+<table>
+<tr><th>관점</th><th>설명</th></tr>
+<tr><td>Proxy 의 HTTP 호출 순서</td><td><strong>Sequential</strong>: prefill HTTP 완료 (response 소비) → decode HTTP 호출. <code>async for _ in forward(prefill...): continue</code> 로 prefill response 다 소비 후 진행</td></tr>
+<tr><td>실 KV transfer</td><td><strong>Async background</strong>. <code>send_type=PUT_ASYNC</code> 라 prefill 가 KV 만들자마자 RCCL 로 즉시 send (HTTP response 와 무관). prefill HTTP 가 끝날 때쯤 KV 가 decode 에 거의 도착</td></tr>
+<tr><td>왜 prefill HTTP 가 필요한가</td><td>prefill 의 KV 생성을 트리거하기 위한 "신호". <code>max_tokens=1</code> 이라 첫 token 까지만 forward — 그게 prefill 단계의 일. 진짜 token generation 은 decode 가 함. prefill 의 1 token response 는 <strong>proxy 가 그대로 버림</strong></td></tr>
+<tr><td>왜 같은 request_id?</td><td>decode 가 받은 KV 가 어느 request 의 것인지 매칭하려면 same key. prefill 가 send 할 때도 같은 ID 로 tag. decode 가 자기 ZMQ 로 받은 KV 의 ID 와 자기 HTTP request 의 ID 매칭</td></tr>
+</table>
+
+<p>출처: <a href="https://github.com/vllm-project/vllm/blob/main/examples/online_serving/disaggregated_serving/disagg_proxy_demo.py">vLLM disagg_proxy_demo.py</a> — 이 패턴 직접 구현. 아래 source 핵심:</p>
+
+<pre><code>prefill_request["max_tokens"] = 1            # max_tokens 강제 1
+
+request_id = (
+    f"___prefill_addr_{prefill_zmq_addr}___decode_addr_"
+    f"{decode_zmq_addr}_{random_uuid()}"
+)
+
+# finish prefill
+async for _ in forward_request(
+    f"http://{prefill_addr}{request.path}", prefill_request, request_id
+):
+    continue                                  # prefill response 소비 + 버림
+
+# return decode
+generator = forward_request(
+    f"http://{decode_addr}{request.path}", original_request_data, request_id
+)
+response = await make_response(generator)
+return response                               # decode 의 stream 반환</code></pre>
 
 <h4>Proxy 없이 prefill 만 직접 호출하면?</h4>
 
