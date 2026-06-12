@@ -104,6 +104,53 @@ A 와 같되 `<html lang="ko">`, i18n 링크/스크립트와 en/ko span 없이 �
    salt 는 `.staticrypt.json` 에 고정돼 있어 결과가 일관된다.
 3. `*.unencrypted.html` 은 **절대 커밋 금지** (.gitignore 처리됨, 검사기도 차단)
 
+## 논문 정리 (paper note) 규약
+
+사용자가 논문 링크(arXiv 등)를 주고 정리를 요청하면 **반드시 이 규약대로** 만든다.
+기준 예시: `study/llm-serving-software-aging.html` (이 파일을 복사해서 시작할 것).
+
+### 준비 — 전문을 끝까지 읽는다
+
+1. 전문 확보: `curl -sL https://arxiv.org/html/<id> -o /tmp/paper.html` 후
+   `textutil -convert txt -stdout /tmp/paper.html > /tmp/paper.txt` (macOS) 등으로 텍스트화.
+2. **초록과 결론만 보고 쓰지 않는다.** 본문 전체를 단락 단위로 읽고, 모든 소절
+   (배경·방법·결과 소절·threats/limitations 포함)이 노트에 반영돼야 한다. 단락 누락 금지.
+
+### 파일과 구조
+
+- 파일: `study/<영문-슬러그>.html`, 페이지 타입 A (EN/KO 이중언어).
+- 구성: hero(제목 + lede + badge: arXiv abs 링크·HTML 전문 링크·분야와 게재일·저자)
+  → TOC → "한 줄 요약" callout → 본문 4개 섹션 → footer(논문 링크 + 작성일).
+- 본문은 **고정 4단 구조** (h2 + 번호 칩, 이 순서 그대로):
+  1. **문제 정의** — 기존 연구의 빈자리/한계, 이해에 필요한 배경 지식, 관련 연구와의 차별점
+  2. **해결 방법** — 설계 목표, 방법론 전부 (실험/시스템 구성표를 HTML 표로 재구성)
+  3. **결과** — 결과 소절 전부 + 핵심 수치 표 재구성 + 타당성 위협(threats)/한계
+  4. **시사점** — 논문의 결론, 저자들이 지목한 후속 과제, 그리고 "우리 관점" callout
+- "우리 관점"(레포 주제와의 연결, 실무 함의)은 `c-purple` callout 에 **"편집자 주 —
+  논문의 주장 아님"** 을 명시해 논문 내용과 분명히 구분한다.
+
+### 인용 규칙 (필수)
+
+- **핵심 주장·수치마다** 원문 영어 문장을 verbatim 으로 `blockquote.q` 에 담고,
+  `<cite>` 에 §섹션(·문단) 표기 + arXiv HTML 앵커 링크를 단다 — 독자가 원문 해당
+  위치로 바로 이동할 수 있어야 한다.
+  ```html
+  <blockquote class="q">
+    <p>"원문 문장 그대로…"</p>
+    <cite>— §IV-C, ¶2 · <a href="https://arxiv.org/html/<id>v1#S4.SS3">원문 보기 (§IV-C)</a></cite>
+  </blockquote>
+  ```
+  (arXiv HTML 앵커: §I → `#S1`, §II-A → `#S2.SS1`, §IV-C → `#S4.SS3` 식.)
+- 인용문은 번역하지 않고 원문 그대로 둔다 (en/ko 공통 노출). 해설 문단만 EN/KO 이중화.
+- 논문의 표를 재구성하면 출처를 표기한다: 예) "Table IV (§IV-C) 재구성".
+- `blockquote.q` 스타일은 기준 예시 페이지의 `<style>` 블록에 있다 — 그대로 복사.
+
+### 마무리
+
+- `study/index.html` 에 카드 추가 — tag 는 `t-blue` "Paper note / 논문 정리",
+  `post-meta` 에 작성일.
+- `python3 tools/check_theme.py` 통과 확인 후 커밋.
+
 ## 새 페이지 체크리스트
 
 1. 위 타입 중 하나의 골격으로 작성 (기존 같은 섹션 페이지를 베이스로 복사 권장)
