@@ -149,19 +149,27 @@ GPU0..GPU7 모두 XGMI 로 직접 연결 (1 hop)</code></pre>
 <tr><td><strong>45</strong></td><td>1 XGMI link</td><td>다른 OAM 의 먼 GCD 쌍 (가장 narrow)</td></tr>
 </table>
 
-<h4>P/D GCD 선택 재검토</h4>
-<p>기존 plan: P=GCD 0-3, D=GCD 4-7. P↔D weight 평균 계산:</p>
-<pre><code>P (0,1,2,3) → D (4,5,6,7) 의 16 쌍 weight:
+<h4>본 실험의 P/D GCD 선택 — GCD 0 + GCD 4</h4>
+<p>본 실험은 TP=1+TP=1 이라 P 1 GCD + D 1 GCD 만 선택. <strong>GCD 0 (P) ↔ GCD 4 (D)</strong> 사용. 이 쌍의 link weight = 15 (4 link), 실 측정 bandwidth 100 Gbps (<a href="#monitoring">§4-7</a>):</p>
+<ul>
+<li>두 GCD 가 <strong>다른 OAM 카드</strong> (카드 0 vs 카드 2) — KV transfer 가 카드 간 XGMI 통과 (real PDD 시뮬레이션)</li>
+<li>weight 15 = 다른 OAM 쌍 중 가장 wide. weight 30/45 쌍 (예: GCD 0↔7) 보다 transfer bandwidth 큼</li>
+<li>같은 OAM 안 GCD 쌍 (예: 0↔1) 은 weight 15 + Infinity Fabric 200 Gbps 로 가장 빠르지만 — 같은 OAM 안에 P/D 다 두면 multi-node 시뮬레이션 X</li>
+</ul>
+
+<p>다음 실험 (TP=4+4, <a href="#next">§11</a>) 에서는 P=GCD 0-3 (카드 0+1) + D=GCD 4-7 (카드 2+3) plan. 이 경우 P↔D 16 쌍 weight 평균 27.5 — 다음 실험 시 자세히.</p>
+
+<p style="display:none"><!-- 이전 4+4 계산 보존 (다음 실험 reference 용)
+P (0,1,2,3) → D (4,5,6,7) 의 16 쌍 weight:
   0→4=15  0→5=30  0→6=15  0→7=30
   1→4=30  1→5=45  1→6=30  1→7=15
   2→4=15  2→5=30  2→6=15  2→7=30
   3→4=30  3→5=15  3→6=30  3→7=45
-  평균 = 27.5  (중간 정도)</code></pre>
-
-<p>대안 (best): GCD 짝수 (0,2,4,6) = P, 홀수 (1,3,5,7) = D — 단 같은 카드의 두 GCD 가 P/D 로 분리되어 카드 안 Infinity Fabric 활용 못 함.</p>
-
-<p><strong>결정 유지</strong>: P=GCD 0-3 (카드 0+1), D=GCD 4-7 (카드 2+3). 이유:</p>
-<ul>
+  평균 = 27.5
+같은 instance 의 TP 통신 (P 안의 4 GCD 사이) 이 가장 자주 — Infinity Fabric (카드 안) 활용 best
+P↔D transfer 는 매 request 마다 한 번 — TP 통신보다 빈도 낮음. weight 27.5 면 acceptable
+한 카드 안에 P 와 D 가 섞이면 TP 통신이 oversubscribe 됨 -->
+<ul style="display:none">
 <li>같은 instance 의 TP 통신 (P 안의 4 GCD 사이) 이 가장 자주 — Infinity Fabric (카드 안) 활용 best</li>
 <li>P↔D transfer 는 매 request 마다 한 번 (각 layer 의 KV 전송) — TP 통신보다 빈도 낮음. weight 27.5 면 acceptable</li>
 <li>한 카드 안에 P 와 D 가 섞이면 TP 통신이 oversubscribe 됨</li>
@@ -935,7 +943,7 @@ docker run -d --name vllm-decode \
 <tr><th>옵션</th><th>역할</th><th>본 실험 설정</th></tr>
 <tr><td><code>--enforce-eager</code></td><td>torch.compile graph capture 끄기 (eager mode)</td><td>capture 단계 ROCm 호환 문제 우회 + cold start 빠름. 단 ~10-20% 손해</td></tr>
 <tr><td><code>--host 0.0.0.0 --port &lt;N&gt;</code></td><td>vLLM 의 HTTP API listen address</td><td>prefill=20003, decode=20005. proxy 가 이 port 로 forward</td></tr>
-<tr><td><code>--tensor-parallel-size 1</code></td><td>한 instance 의 TP 크기</td><td>TP=1 로 단순화 (각 1 GCD). 사용자 4+4 GCD 원래 plan 은 TP=4 였지만 TP=1 부터 검증</td></tr>
+<tr><td><code>--tensor-parallel-size 1</code></td><td>한 instance 의 TP 크기</td><td>TP=1 (각 instance 1 GCD). 본 실험 = mechanism 검증. TP=4+4 (8 GCD 활용) 은 <a href="#next">§11</a> 다음 실험</td></tr>
 <tr><td><code>--seed 1024</code></td><td>random seed</td><td>두 instance 가 같은 seed → 같은 init. 결과 reproducibility</td></tr>
 <tr><td><code>--dtype float16</code></td><td>모델 weight + KV cache 의 dtype</td><td>bf16 default 인데 P2pNccl 의 NCCL 통신이 fp16 에서 더 안정. 공식 예제도 fp16</td></tr>
 <tr><td><code>--max-model-len 4096</code></td><td>최대 sequence length</td><td>KV cache 가 이만큼 미리 할당. 작게 하면 KV 작아져 빠르지만 긴 prompt 불가</td></tr>
