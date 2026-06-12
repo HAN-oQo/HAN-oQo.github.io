@@ -49,85 +49,85 @@
 <body>
 <div class="wrap">
 
-<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · <a href="llmservingsim-qwen3-runbook.html">Qwen3 런북</a> · <a href="llmservingsim-code-flow.html">코드 흐름</a></p>
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="llmservingsim-qwen3-runbook.html"><span class="en">Qwen3 Runbook</span><span class="ko">Qwen3 런북</span></a> · <a href="llmservingsim-code-flow.html"><span class="en">Code Flow</span><span class="ko">코드 흐름</span></a></p>
 
-<h1>LLMServingSim 예측 vs 실 vLLM — 정확도 비교</h1>
-<p class="sub">작성 시작: 2026-06-10 · 상태: <span class="status-wip">진행 중 (vLLM 측 측정 대기)</span> · 목표: 같은 워크로드(JSONL)를 (1) LLMServingSim으로 예측, (2) 실 GPU에 띄운 vLLM으로 측정 후 메트릭별 발산 정량화</p>
+<h1><span class="en">LLMServingSim Prediction vs Real vLLM — Accuracy Comparison</span><span class="ko">LLMServingSim 예측 vs 실 vLLM — 정확도 비교</span></h1>
+<p class="sub"><span class="en">Started: 2026-06-10 · Status: <span class="status-wip">In progress (waiting on vLLM-side measurement)</span> · Goal: take the same workload (JSONL), (1) predict via LLMServingSim, (2) measure on a real GPU running vLLM, then quantify the divergence per metric</span><span class="ko">작성 시작: 2026-06-10 · 상태: <span class="status-wip">진행 중 (vLLM 측 측정 대기)</span> · 목표: 같은 워크로드(JSONL)를 (1) LLMServingSim으로 예측, (2) 실 GPU에 띄운 vLLM으로 측정 후 메트릭별 발산 정량화</span></p>
 
-<div class="wip-banner">⚙ 진행중 — Sim 측 baseline (300 req Llama-3.1-8B / RTXPRO6000 / TP=1) <strong>완료</strong>. Replay client + diff script도 준비 완료. 다음: 실 vLLM 측정 (GPU 확보 시).</div>
+<div class="wip-banner"><span class="en">⚙ In progress — Sim-side baseline (300 req Llama-3.1-8B / RTXPRO6000 / TP=1) <strong>done</strong>. Replay client + diff script are also ready. Next: real vLLM measurement (when a GPU becomes available).</span><span class="ko">⚙ 진행중 — Sim 측 baseline (300 req Llama-3.1-8B / RTXPRO6000 / TP=1) <strong>완료</strong>. Replay client + diff script도 준비 완료. 다음: 실 vLLM 측정 (GPU 확보 시).</span></div>
 
 <div class="card toc">
-<strong>목차</strong>
+<strong><span class="en">Contents</span><span class="ko">목차</span></strong>
 <ol>
-  <li><a href="#why">왜 이 비교가 의미 있나</a></li>
-  <li><a href="#setup">설정 — 모델, 워크로드, HW 가정</a></li>
-  <li><a href="#sim">LLMServingSim 측 (baseline, GPU 불필요)</a></li>
-  <li><a href="#optb">Option B — RTXPRO6000이 아닌 GPU로 가는 길 (H100 워크드 예시)</a></li>
-  <li><a href="#vllm">실 vLLM 측 (GPU 필요, 진행 중)</a></li>
-  <li><a href="#cmp">비교 메트릭 정의</a></li>
-  <li><a href="#repro">재현 명령어 모음</a></li>
-  <li><a href="#status">진행 상태표 (전체)</a></li>
-  <li><a href="#results">결과 (TBD)</a></li>
+  <li><a href="#why"><span class="en">Why this comparison matters</span><span class="ko">왜 이 비교가 의미 있나</span></a></li>
+  <li><a href="#setup"><span class="en">Setup — model, workload, HW assumptions</span><span class="ko">설정 — 모델, 워크로드, HW 가정</span></a></li>
+  <li><a href="#sim"><span class="en">LLMServingSim side (baseline, no GPU needed)</span><span class="ko">LLMServingSim 측 (baseline, GPU 불필요)</span></a></li>
+  <li><a href="#optb"><span class="en">Option B — Path for GPUs other than RTXPRO6000 (H100 workflow example)</span><span class="ko">Option B — RTXPRO6000이 아닌 GPU로 가는 길 (H100 워크드 예시)</span></a></li>
+  <li><a href="#vllm"><span class="en">Real vLLM side (GPU required, in progress)</span><span class="ko">실 vLLM 측 (GPU 필요, 진행 중)</span></a></li>
+  <li><a href="#cmp"><span class="en">Comparison metric definitions</span><span class="ko">비교 메트릭 정의</span></a></li>
+  <li><a href="#repro"><span class="en">Reproduction commands</span><span class="ko">재현 명령어 모음</span></a></li>
+  <li><a href="#status"><span class="en">Progress table (overall)</span><span class="ko">진행 상태표 (전체)</span></a></li>
+  <li><a href="#results"><span class="en">Results (TBD)</span><span class="ko">결과 (TBD)</span></a></li>
 </ol>
 </div>
 
-<h2 id="why">1. 왜 이 비교가 의미 있나</h2>
+<h2 id="why"><span class="en">1. Why this comparison matters</span><span class="ko">1. 왜 이 비교가 의미 있나</span></h2>
 <div class="card">
-<p>LLMServingSim은 "프로파일 1회 + sim 영원히 무료" 아키텍처 (자세한 건 <a href="../study/frontier.html">Frontier 노트 §3-1</a>). 핵심 가정:</p>
+<p><span class="en">LLMServingSim is a "profile once + sim forever for free" architecture (details in <a href="../study/frontier.html">Frontier note §3-1</a>). Core assumptions:</span><span class="ko">LLMServingSim은 "프로파일 1회 + sim 영원히 무료" 아키텍처 (자세한 건 <a href="../study/frontier.html">Frontier 노트 §3-1</a>). 핵심 가정:</span></p>
 <ul>
-  <li>vLLM이 측정한 op latency CSV를 룩업으로 재사용</li>
-  <li>스케줄링/큐잉/comm은 시뮬레이터가 자체 모델로 처리</li>
+  <li><span class="en">Reuse the op latency CSV measured by vLLM as a lookup</span><span class="ko">vLLM이 측정한 op latency CSV를 룩업으로 재사용</span></li>
+  <li><span class="en">Scheduling / queuing / comm are handled by the simulator's own model</span><span class="ko">스케줄링/큐잉/comm은 시뮬레이터가 자체 모델로 처리</span></li>
 </ul>
-<p>이 가정이 얼마나 잘 맞는지 검증하려면 <strong>실제 vLLM 측정값과 시뮬레이터 예측값을 같은 워크로드에 대해 직접 비교</strong>해야 함. LLMServingSim 논문은 sim 오차 &lt;10% 클레임하지만 그건 그쪽 검증 셋. 우리 케이스에서도 그런지가 진짜 질문.</p>
+<p><span class="en">To verify how well this holds, you have to <strong>directly compare actual vLLM measurements with the simulator's predictions on the same workload</strong>. The LLMServingSim paper claims sim error &lt;10%, but that is their own validation set. Whether it holds in our case is the real question.</span><span class="ko">이 가정이 얼마나 잘 맞는지 검증하려면 <strong>실제 vLLM 측정값과 시뮬레이터 예측값을 같은 워크로드에 대해 직접 비교</strong>해야 함. LLMServingSim 논문은 sim 오차 &lt;10% 클레임하지만 그건 그쪽 검증 셋. 우리 케이스에서도 그런지가 진짜 질문.</span></p>
 
-<p>비교 결과로 얻고 싶은 것:</p>
+<p><span class="en">What we want from the comparison:</span><span class="ko">비교 결과로 얻고 싶은 것:</span></p>
 <ul>
-  <li><strong>절대 오차</strong>: TTFT / TPOT / latency p50/p95/p99 의 실측 vs 예측 (% 단위)</li>
-  <li><strong>발산 패턴</strong>: 어떤 요청에서 가장 많이 빗나가는가 (긴 input? 높은 concurrency? KV 압박 구간?)</li>
-  <li><strong>실용성 판단</strong>: 시뮬 결과를 어디까지 신뢰할 수 있나 — 절대값? 상대 비교? 트렌드만?</li>
+  <li><span class="en"><strong>Absolute error</strong>: measured vs predicted TTFT / TPOT / latency p50/p95/p99 (in %)</span><span class="ko"><strong>절대 오차</strong>: TTFT / TPOT / latency p50/p95/p99 의 실측 vs 예측 (% 단위)</span></li>
+  <li><span class="en"><strong>Divergence patterns</strong>: which requests miss the most (long input? high concurrency? KV-pressure regions?)</span><span class="ko"><strong>발산 패턴</strong>: 어떤 요청에서 가장 많이 빗나가는가 (긴 input? 높은 concurrency? KV 압박 구간?)</span></li>
+  <li><span class="en"><strong>Practical judgment</strong>: how far can we trust the sim results — absolute values? relative comparisons? trends only?</span><span class="ko"><strong>실용성 판단</strong>: 시뮬 결과를 어디까지 신뢰할 수 있나 — 절대값? 상대 비교? 트렌드만?</span></li>
 </ul>
 </div>
 
-<h2 id="setup">2. 설정 — 모델, 워크로드, HW 가정</h2>
+<h2 id="setup"><span class="en">2. Setup — model, workload, HW assumptions</span><span class="ko">2. 설정 — 모델, 워크로드, HW 가정</span></h2>
 <div class="card">
 
-<h3>2-1. 모델</h3>
+<h3><span class="en">2-1. Model</span><span class="ko">2-1. 모델</span></h3>
 <table>
-<tr><th>항목</th><th>값</th><th>이유</th></tr>
-<tr><td>모델</td><td><code>meta-llama/Llama-3.1-8B</code></td><td>LLMServingSim 인벤토리에 있음. 8B라 단일 GPU에 들어가 vLLM 띄우기 가장 쉬움</td></tr>
-<tr><td>dtype</td><td><code>bfloat16</code></td><td>shipped 프로파일이 bf16</td></tr>
-<tr><td>TP</td><td>1</td><td>single GPU 시나리오 — 가장 noise 적음</td></tr>
+<tr><th><span class="en">Item</span><span class="ko">항목</span></th><th><span class="en">Value</span><span class="ko">값</span></th><th><span class="en">Reason</span><span class="ko">이유</span></th></tr>
+<tr><td><span class="en">Model</span><span class="ko">모델</span></td><td><code>meta-llama/Llama-3.1-8B</code></td><td><span class="en">In the LLMServingSim inventory. As an 8B model it fits on a single GPU, making it the easiest case for spinning up vLLM</span><span class="ko">LLMServingSim 인벤토리에 있음. 8B라 단일 GPU에 들어가 vLLM 띄우기 가장 쉬움</span></td></tr>
+<tr><td>dtype</td><td><code>bfloat16</code></td><td><span class="en">Shipped profile is bf16</span><span class="ko">shipped 프로파일이 bf16</span></td></tr>
+<tr><td>TP</td><td>1</td><td><span class="en">Single-GPU scenario — least noise</span><span class="ko">single GPU 시나리오 — 가장 noise 적음</span></td></tr>
 </table>
 
-<h3>2-2. 워크로드</h3>
+<h3><span class="en">2-2. Workload</span><span class="ko">2-2. 워크로드</span></h3>
 <table>
-<tr><th>항목</th><th>값</th></tr>
-<tr><td>JSONL</td><td><code>workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl</code> (LLMServingSim shipped)</td></tr>
-<tr><td>요청 수</td><td>300</td></tr>
-<tr><td>도착률</td><td>10 samples / sec (Poisson)</td></tr>
-<tr><td>스키마</td><td><code>{input_toks, output_toks, arrival_time_ns, input_tok_ids}</code></td></tr>
+<tr><th><span class="en">Item</span><span class="ko">항목</span></th><th><span class="en">Value</span><span class="ko">값</span></th></tr>
+<tr><td>JSONL</td><td><code>workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl</code> <span class="en">(LLMServingSim shipped)</span><span class="ko">(LLMServingSim shipped)</span></td></tr>
+<tr><td><span class="en">Request count</span><span class="ko">요청 수</span></td><td>300</td></tr>
+<tr><td><span class="en">Arrival rate</span><span class="ko">도착률</span></td><td>10 samples / sec (Poisson)</td></tr>
+<tr><td><span class="en">Schema</span><span class="ko">스키마</span></td><td><code>{input_toks, output_toks, arrival_time_ns, input_tok_ids}</code></td></tr>
 </table>
 
-<div class="tip"><strong>핵심:</strong> JSONL에 <code>input_tok_ids</code> (실제 토큰 ID 리스트) 가 들어있음 → 같은 토크나이저로 디토큰화해서 vLLM에 prompt로 보내면 <strong>완전히 동일한 입력</strong> 사용 가능. 두 sim 모두 같은 토큰 시퀀스로 동작 보장.</div>
+<div class="tip"><strong><span class="en">Key:</span><span class="ko">핵심:</span></strong> <span class="en">The JSONL contains <code>input_tok_ids</code> (an actual list of token IDs) → detokenize with the same tokenizer and send to vLLM as a prompt → you can use <strong>exactly the same input</strong>. Both sims are guaranteed to operate on the same token sequence.</span><span class="ko">JSONL에 <code>input_tok_ids</code> (실제 토큰 ID 리스트) 가 들어있음 → 같은 토크나이저로 디토큰화해서 vLLM에 prompt로 보내면 <strong>완전히 동일한 입력</strong> 사용 가능. 두 sim 모두 같은 토큰 시퀀스로 동작 보장.</span></div>
 
 <h3>2-3. HW</h3>
 <table>
-<tr><th>항목</th><th>값</th><th>비고</th></tr>
+<tr><th><span class="en">Item</span><span class="ko">항목</span></th><th><span class="en">Value</span><span class="ko">값</span></th><th><span class="en">Note</span><span class="ko">비고</span></th></tr>
 <tr><td>HW label (sim)</td><td><code>RTXPRO6000</code></td><td>shipped profile</td></tr>
-<tr><td>실제 GPU (vLLM)</td><td>NVIDIA RTX PRO 6000 Blackwell Server Edition</td><td><strong>요 동일 HW 확보가 핵심 변수.</strong> 다른 GPU면 그 GPU용 프로파일 새로 만들어야 함 (<a href="llmservingsim-profiling-guide.html">프로파일링 가이드</a> 참고)</td></tr>
-<tr><td>VRAM</td><td>96 GB</td><td>Llama-3.1-8B (~16GB) + KV cache 충분</td></tr>
-<tr><td>대역폭</td><td>1597 GB/s</td><td>cluster config의 <code>mem_bw</code> 와 일치</td></tr>
+<tr><td><span class="en">Real GPU (vLLM)</span><span class="ko">실제 GPU (vLLM)</span></td><td>NVIDIA RTX PRO 6000 Blackwell Server Edition</td><td><strong><span class="en">Securing this exact same HW is the key variable.</span><span class="ko">요 동일 HW 확보가 핵심 변수.</span></strong> <span class="en">For a different GPU, you have to build a new profile for that GPU (see the <a href="llmservingsim-profiling-guide.html">profiling guide</a>)</span><span class="ko">다른 GPU면 그 GPU용 프로파일 새로 만들어야 함 (<a href="llmservingsim-profiling-guide.html">프로파일링 가이드</a> 참고)</span></td></tr>
+<tr><td>VRAM</td><td>96 GB</td><td><span class="en">Llama-3.1-8B (~16GB) + plenty of room for KV cache</span><span class="ko">Llama-3.1-8B (~16GB) + KV cache 충분</span></td></tr>
+<tr><td><span class="en">Bandwidth</span><span class="ko">대역폭</span></td><td>1597 GB/s</td><td><span class="en">Matches <code>mem_bw</code> in the cluster config</span><span class="ko">cluster config의 <code>mem_bw</code> 와 일치</span></td></tr>
 </table>
 
-<div class="note"><strong>HW 매칭 못 하면:</strong> 보유 GPU (H100 등) 로 한 번 <code>profiler/profile.sh</code> 돌려서 새 프로파일 만들고, cluster config의 <code>hardware</code> 라벨만 그 새 라벨로 바꾸면 됨. 추가 시간 ~1-2h + GPU 비용.</div>
+<div class="note"><strong><span class="en">If you can't match HW:</span><span class="ko">HW 매칭 못 하면:</span></strong> <span class="en">Run <code>profiler/profile.sh</code> once on the GPU you have (H100, etc.) to create a new profile, then just swap the <code>hardware</code> label in the cluster config to that new label. Adds ~1-2 h + GPU cost.</span><span class="ko">보유 GPU (H100 등) 로 한 번 <code>profiler/profile.sh</code> 돌려서 새 프로파일 만들고, cluster config의 <code>hardware</code> 라벨만 그 새 라벨로 바꾸면 됨. 추가 시간 ~1-2h + GPU 비용.</span></div>
 
 </div>
 
-<h2 id="sim">3. LLMServingSim 측 (baseline)</h2>
+<h2 id="sim"><span class="en">3. LLMServingSim side (baseline)</span><span class="ko">3. LLMServingSim 측 (baseline)</span></h2>
 <div class="card">
 
 <h3>3-1. Cluster config</h3>
-<p>레포 기본 <code>configs/cluster/single_node_single_instance.json</code> 이 Llama-3.1-8B / RTXPRO6000 / TP=1 으로 이미 세팅돼있음 — 그대로 사용.</p>
+<p><span class="en">The repo's default <code>configs/cluster/single_node_single_instance.json</code> is already set to Llama-3.1-8B / RTXPRO6000 / TP=1 — use it as-is.</span><span class="ko">레포 기본 <code>configs/cluster/single_node_single_instance.json</code> 이 Llama-3.1-8B / RTXPRO6000 / TP=1 으로 이미 세팅돼있음 — 그대로 사용.</span></p>
 <pre><code>{
     "num_nodes": 1,
     "link_bw": 16,
@@ -144,7 +144,7 @@
     }]
 }</code></pre>
 
-<h3>3-2. 실행 명령</h3>
+<h3><span class="en">3-2. Run command</span><span class="ko">3-2. 실행 명령</span></h3>
 <pre><code>docker exec servingsim_docker bash -c "
   cd /app/LLMServingSim && \
   python -m serving \
@@ -155,60 +155,60 @@
     --log-interval 1.0
 "</code></pre>
 
-<h3>3-3. 결과 (실측, GPU 0대)</h3>
-<p>2026-06-10 21:00 KST 실행 완료. 호스트 walltime <strong>11분 28초</strong>. 시뮬레이션 내부 시간 (sim time) <strong>65.7초</strong>. 산출물: <code>data/llmservingsim-vs-vllm/sim_llama8b_300.csv</code> (이 레포에 커밋됨, 300 rows).</p>
+<h3><span class="en">3-3. Results (measured, 0 GPUs)</span><span class="ko">3-3. 결과 (실측, GPU 0대)</span></h3>
+<p><span class="en">Ran 2026-06-10 21:00 KST. Host walltime <strong>11 min 28 s</strong>. Internal simulated time (sim time) <strong>65.7 s</strong>. Artifact: <code>data/llmservingsim-vs-vllm/sim_llama8b_300.csv</code> (committed in this repo, 300 rows).</span><span class="ko">2026-06-10 21:00 KST 실행 완료. 호스트 walltime <strong>11분 28초</strong>. 시뮬레이션 내부 시간 (sim time) <strong>65.7초</strong>. 산출물: <code>data/llmservingsim-vs-vllm/sim_llama8b_300.csv</code> (이 레포에 커밋됨, 300 rows).</span></p>
 
 <table>
-<tr><th>메트릭</th><th>예측값 (LLMServingSim)</th><th>비고</th></tr>
-<tr><td>전체 sim 시간 (arrival[0] → end[last])</td><td><strong>65.68 s</strong></td><td>300 req 다 처리하는 데 걸리는 시뮬 시간</td></tr>
-<tr><td>호스트 walltime</td><td>11m 28s</td><td>실제 sim 실행 시간 (M1 Mac, Rosetta)</td></tr>
-<tr><td>Request throughput</td><td><strong>4.57 req/s</strong></td><td>도착률(10 sps) &gt; 처리율 → 큐 빌딩업</td></tr>
+<tr><th><span class="en">Metric</span><span class="ko">메트릭</span></th><th><span class="en">Predicted (LLMServingSim)</span><span class="ko">예측값 (LLMServingSim)</span></th><th><span class="en">Note</span><span class="ko">비고</span></th></tr>
+<tr><td><span class="en">Total sim time (arrival[0] → end[last])</span><span class="ko">전체 sim 시간 (arrival[0] → end[last])</span></td><td><strong>65.68 s</strong></td><td><span class="en">Simulated time to process all 300 reqs</span><span class="ko">300 req 다 처리하는 데 걸리는 시뮬 시간</span></td></tr>
+<tr><td><span class="en">Host walltime</span><span class="ko">호스트 walltime</span></td><td>11m 28s</td><td><span class="en">Actual sim execution time (M1 Mac, Rosetta)</span><span class="ko">실제 sim 실행 시간 (M1 Mac, Rosetta)</span></td></tr>
+<tr><td>Request throughput</td><td><strong>4.57 req/s</strong></td><td><span class="en">Arrival rate (10 sps) &gt; service rate → queue build-up</span><span class="ko">도착률(10 sps) &gt; 처리율 → 큐 빌딩업</span></td></tr>
 <tr><td>Gen-token throughput</td><td>2,980 tok/s</td><td>—</td></tr>
-<tr><td>Mean TTFT</td><td><strong>7,072 ms</strong></td><td>queue 압박으로 평균이 큼</td></tr>
-<tr><td>Median TTFT</td><td>9,105 ms</td><td>분포가 우측으로 치우침</td></tr>
+<tr><td>Mean TTFT</td><td><strong>7,072 ms</strong></td><td><span class="en">Mean is large because of queue pressure</span><span class="ko">queue 압박으로 평균이 큼</span></td></tr>
+<tr><td>Median TTFT</td><td>9,105 ms</td><td><span class="en">Distribution is right-skewed</span><span class="ko">분포가 우측으로 치우침</span></td></tr>
 <tr><td>p95 TTFT</td><td>18,749 ms</td><td>—</td></tr>
 <tr><td>p99 TTFT</td><td>20,234 ms</td><td>—</td></tr>
-<tr><td>Mean TPOT</td><td><strong>32.7 ms</strong></td><td>decode iteration 평균 시간</td></tr>
-<tr><td>p95 / p99 TPOT</td><td>37.6 / 38.2 ms</td><td>분산 작음 (decode 안정적)</td></tr>
+<tr><td>Mean TPOT</td><td><strong>32.7 ms</strong></td><td><span class="en">Mean per-decode-iteration time</span><span class="ko">decode iteration 평균 시간</span></td></tr>
+<tr><td>p95 / p99 TPOT</td><td>37.6 / 38.2 ms</td><td><span class="en">Small variance (decode is stable)</span><span class="ko">분산 작음 (decode 안정적)</span></td></tr>
 <tr><td>Mean latency (per-req)</td><td>28,307 ms</td><td>= queuing + TTFT + N·TPOT</td></tr>
 <tr><td>p50 / p95 / p99 latency</td><td>29,981 / 37,149 / 37,960 ms</td><td>—</td></tr>
-<tr><td>Mean queuing delay</td><td>6,998 ms</td><td>도착 → 첫 batch 진입까지 — TTFT의 ~99%</td></tr>
+<tr><td>Mean queuing delay</td><td>6,998 ms</td><td><span class="en">Arrival → first batch entry — ~99% of TTFT</span><span class="ko">도착 → 첫 batch 진입까지 — TTFT의 ~99%</span></td></tr>
 </table>
 
-<div class="note"><strong>워크로드 특성 (참고):</strong> 입력 토큰 mean 857 / median 733 / p95 1785 / max 3998. 생성 토큰 mean 653 / median 633 / max 1021. 도착률 10 sps 가정으로 30s 동안 300 req 도착, 그 후 65s 마지막 처리까지 진행.</div>
+<div class="note"><strong><span class="en">Workload characteristics (FYI):</span><span class="ko">워크로드 특성 (참고):</span></strong> <span class="en">Input tokens mean 857 / median 733 / p95 1785 / max 3998. Generated tokens mean 653 / median 633 / max 1021. With a 10 sps arrival assumption, 300 reqs arrive over 30 s, then processing continues for another 65 s until the last completes.</span><span class="ko">입력 토큰 mean 857 / median 733 / p95 1785 / max 3998. 생성 토큰 mean 653 / median 633 / max 1021. 도착률 10 sps 가정으로 30s 동안 300 req 도착, 그 후 65s 마지막 처리까지 진행.</span></div>
 
-<div class="note"><strong>해석:</strong> TTFT 평균 7초 / median 9초 / p99 20초는 <strong>10 sps 도착률이 처리율(4.57 req/s) 보다 2배 큼</strong> 때문에 큐가 쌓여서 그런 것. 실 vLLM도 같은 도착률로 던지면 <strong>큐가 같은 양만큼 쌓일 것</strong>이므로 비교 의미 유지. 만약 sim과 실제의 처리율 자체가 다르면 TTFT가 크게 발산할 것 — 이게 비교의 핵심 포인트.</div>
+<div class="note"><strong><span class="en">Interpretation:</span><span class="ko">해석:</span></strong> <span class="en">Mean TTFT 7 s / median 9 s / p99 20 s is because <strong>the 10 sps arrival rate is 2× the service rate (4.57 req/s)</strong>, so the queue builds up. If we hit real vLLM at the same arrival rate, <strong>the queue will pile up by the same amount</strong>, so the comparison still makes sense. If sim vs real service rates differ, TTFT will diverge significantly — that's the key point of the comparison.</span><span class="ko">TTFT 평균 7초 / median 9초 / p99 20초는 <strong>10 sps 도착률이 처리율(4.57 req/s) 보다 2배 큼</strong> 때문에 큐가 쌓여서 그런 것. 실 vLLM도 같은 도착률로 던지면 <strong>큐가 같은 양만큼 쌓일 것</strong>이므로 비교 의미 유지. 만약 sim과 실제의 처리율 자체가 다르면 TTFT가 크게 발산할 것 — 이게 비교의 핵심 포인트.</span></div>
 
 </div>
 
-<h2 id="optb">4. Option B — RTXPRO6000이 아닌 GPU로 가는 길</h2>
+<h2 id="optb"><span class="en">4. Option B — Path for GPUs other than RTXPRO6000</span><span class="ko">4. Option B — RTXPRO6000이 아닌 GPU로 가는 길</span></h2>
 <div class="card">
 
-<p>shipped 프로파일이 RTXPRO6000 1종밖에 없는데, 실제로 잡히는 GPU는 보통 H100 또는 A100. 이 경우 <strong>그 GPU용 프로파일을 한 번 새로 만들고</strong>, cluster config의 <code>hardware</code> 라벨을 그 새 라벨로 바꾸면 됨. 한 번만 하면 그 (HW, model) 조합으로는 영원히 무료 sim.</p>
+<p><span class="en">The shipped profile only has one HW (RTXPRO6000), but the GPU you actually get is usually H100 or A100. In that case, <strong>build a new profile for that GPU once</strong>, swap the <code>hardware</code> label in the cluster config to that new label, and you're done. Do it once, and that (HW, model) pair gives you free sim forever after.</span><span class="ko">shipped 프로파일이 RTXPRO6000 1종밖에 없는데, 실제로 잡히는 GPU는 보통 H100 또는 A100. 이 경우 <strong>그 GPU용 프로파일을 한 번 새로 만들고</strong>, cluster config의 <code>hardware</code> 라벨을 그 새 라벨로 바꾸면 됨. 한 번만 하면 그 (HW, model) 조합으로는 영원히 무료 sim.</span></p>
 
-<p>아래는 <strong>H100을 예시</strong>로 한 완전 워크플로. 다른 GPU도 동일한 흐름이며 <code>HARDWARE</code> 라벨과 cluster config의 <code>mem_size</code>/<code>mem_bw</code>만 그 GPU 사양으로 바꾸면 됨.</p>
+<p><span class="en">Below is a full workflow <strong>using H100 as an example</strong>. The flow is the same for other GPUs — just change the <code>HARDWARE</code> label and the <code>mem_size</code>/<code>mem_bw</code> in the cluster config to match that GPU's spec.</span><span class="ko">아래는 <strong>H100을 예시</strong>로 한 완전 워크플로. 다른 GPU도 동일한 흐름이며 <code>HARDWARE</code> 라벨과 cluster config의 <code>mem_size</code>/<code>mem_bw</code>만 그 GPU 사양으로 바꾸면 됨.</span></p>
 
-<h3>4-1. 시간 + 비용 추정</h3>
+<h3><span class="en">4-1. Time + cost estimate</span><span class="ko">4-1. 시간 + 비용 추정</span></h3>
 <table>
-<tr><th>케이스</th><th>대략 시간</th><th>클라우드 spot 비용</th></tr>
-<tr><td>Llama-3.1-8B × H100 × TP=1 (skew 포함)</td><td><strong>~25–45 분</strong></td><td>~$1.5 (H100 spot ~$2/h)</td></tr>
-<tr><td>Llama-3.1-8B × H100 × TP=1 (<code>SKIP_SKEW=1</code>)</td><td>~10–20 분</td><td>~$0.7</td></tr>
-<tr><td>Llama-3.1-8B × H100 × TP=1,2,4 (full)</td><td>~1.5–2 h (TP=4면 4장 필요)</td><td>~$3-12</td></tr>
+<tr><th><span class="en">Case</span><span class="ko">케이스</span></th><th><span class="en">Approx. time</span><span class="ko">대략 시간</span></th><th><span class="en">Cloud spot cost</span><span class="ko">클라우드 spot 비용</span></th></tr>
+<tr><td><span class="en">Llama-3.1-8B × H100 × TP=1 (with skew)</span><span class="ko">Llama-3.1-8B × H100 × TP=1 (skew 포함)</span></td><td><strong>~25–45 <span class="en">min</span><span class="ko">분</span></strong></td><td><span class="en">~$1.5 (H100 spot ~$2/h)</span><span class="ko">~$1.5 (H100 spot ~$2/h)</span></td></tr>
+<tr><td>Llama-3.1-8B × H100 × TP=1 (<code>SKIP_SKEW=1</code>)</td><td>~10–20 <span class="en">min</span><span class="ko">분</span></td><td>~$0.7</td></tr>
+<tr><td>Llama-3.1-8B × H100 × TP=1,2,4 (full)</td><td><span class="en">~1.5–2 h (TP=4 needs 4 cards)</span><span class="ko">~1.5–2 h (TP=4면 4장 필요)</span></td><td>~$3-12</td></tr>
 </table>
-<p>본 비교는 TP=1만 필요 (single-GPU vLLM 서빙) → <strong>25-45분 + 약 $1.5</strong>면 충분.</p>
+<p><span class="en">This comparison only needs TP=1 (single-GPU vLLM serving) → <strong>25-45 min + about $1.5</strong> is enough.</span><span class="ko">본 비교는 TP=1만 필요 (single-GPU vLLM 서빙) → <strong>25-45분 + 약 $1.5</strong>면 충분.</span></p>
 
-<h3>4-2. 준비된 아티팩트 (이 레포 안에)</h3>
-<p>유저가 GPU 확보하면 바로 쓸 수 있게 아래 두 파일을 미리 만들어둠:</p>
+<h3><span class="en">4-2. Prepared artifacts (in this repo)</span><span class="ko">4-2. 준비된 아티팩트 (이 레포 안에)</span></h3>
+<p><span class="en">The two files below are pre-built so you can use them immediately once a GPU is available:</span><span class="ko">유저가 GPU 확보하면 바로 쓸 수 있게 아래 두 파일을 미리 만들어둠:</span></p>
 
 <table>
-<tr><th>파일</th><th>역할</th></tr>
-<tr><td><a href="https://github.com/HAN-oQo/HAN-oQo.github.io/blob/main/tools/run_profile_h100.sh"><code>tools/run_profile_h100.sh</code></a></td><td>vLLM 컨테이너 안에서 실행할 wrapper. <code>profile.sh</code>의 MODEL/HARDWARE/TP_DEGREES 만 H100/Llama-3.1-8B/TP=1로 오버라이드한 후 실행, 결과 smoke-test까지 자동.</td></tr>
-<tr><td><a href="https://github.com/HAN-oQo/HAN-oQo.github.io/blob/main/data/llmservingsim-vs-vllm/cluster_llama8b_h100.json"><code>data/llmservingsim-vs-vllm/cluster_llama8b_h100.json</code></a></td><td>프로파일 끝난 직후 LLMServingSim의 <code>configs/cluster/</code>에 복사할 cluster config. H100 SXM5 80GB 사양 (mem_size=80, mem_bw=3350) 반영.</td></tr>
+<tr><th><span class="en">File</span><span class="ko">파일</span></th><th><span class="en">Role</span><span class="ko">역할</span></th></tr>
+<tr><td><a href="https://github.com/HAN-oQo/HAN-oQo.github.io/blob/main/tools/run_profile_h100.sh"><code>tools/run_profile_h100.sh</code></a></td><td><span class="en">Wrapper to run inside the vLLM container. Overrides MODEL/HARDWARE/TP_DEGREES in <code>profile.sh</code> to H100/Llama-3.1-8B/TP=1, runs it, and then auto-smoke-tests the result.</span><span class="ko">vLLM 컨테이너 안에서 실행할 wrapper. <code>profile.sh</code>의 MODEL/HARDWARE/TP_DEGREES 만 H100/Llama-3.1-8B/TP=1로 오버라이드한 후 실행, 결과 smoke-test까지 자동.</span></td></tr>
+<tr><td><a href="https://github.com/HAN-oQo/HAN-oQo.github.io/blob/main/data/llmservingsim-vs-vllm/cluster_llama8b_h100.json"><code>data/llmservingsim-vs-vllm/cluster_llama8b_h100.json</code></a></td><td><span class="en">Cluster config to copy into LLMServingSim's <code>configs/cluster/</code> right after profiling completes. Reflects H100 SXM5 80GB specs (mem_size=80, mem_bw=3350).</span><span class="ko">프로파일 끝난 직후 LLMServingSim의 <code>configs/cluster/</code>에 복사할 cluster config. H100 SXM5 80GB 사양 (mem_size=80, mem_bw=3350) 반영.</span></td></tr>
 </table>
 
-<h3>4-3. Step-by-step (GPU 머신 위에서)</h3>
+<h3><span class="en">4-3. Step-by-step (on the GPU machine)</span><span class="ko">4-3. Step-by-step (GPU 머신 위에서)</span></h3>
 
-<h4><span class="step-num">1</span>LLMServingSim 클론 + vLLM 컨테이너 띄우기</h4>
+<h4><span class="step-num">1</span><span class="en">Clone LLMServingSim and start the vLLM container</span><span class="ko">LLMServingSim 클론 + vLLM 컨테이너 띄우기</span></h4>
 <pre><code># GPU 머신에서
 cd ~
 git clone --recurse-submodules https://github.com/casys-kaist/LLMServingSim.git
@@ -217,7 +217,7 @@ cd LLMServingSim
 export HF_TOKEN=hf_xxxxxxxxxx        # Llama gated, 미리 발급 받아둘 것
 bash scripts/docker-vllm.sh          # → vllm_docker 컨테이너 띄움 (--gpus all 자동)</code></pre>
 
-<h4><span class="step-num">2</span>이 레포의 wrapper 받기</h4>
+<h4><span class="step-num">2</span><span class="en">Grab the wrapper from this repo</span><span class="ko">이 레포의 wrapper 받기</span></h4>
 <pre><code># 인터넷 되는 GPU 머신이면 한 줄
 curl -sLO https://raw.githubusercontent.com/HAN-oQo/HAN-oQo.github.io/main/tools/run_profile_h100.sh
 chmod +x run_profile_h100.sh
@@ -226,7 +226,7 @@ chmod +x run_profile_h100.sh
 docker cp run_profile_h100.sh vllm_docker:/workspace/
 docker exec vllm_docker chmod +x /workspace/run_profile_h100.sh</code></pre>
 
-<h4><span class="step-num">3</span>프로파일링 실행 (~25-45분, GPU 필요)</h4>
+<h4><span class="step-num">3</span><span class="en">Run profiling (~25-45 min, GPU required)</span><span class="ko">프로파일링 실행 (~25-45분, GPU 필요)</span></h4>
 <pre><code>docker exec -e HF_TOKEN="$HF_TOKEN" vllm_docker bash -c "
   cd /workspace &&
   ./run_profile_h100.sh
@@ -235,20 +235,20 @@ docker exec vllm_docker chmod +x /workspace/run_profile_h100.sh</code></pre>
 #   ./run_profile_h100.sh SKIP_SKEW=1
 </code></pre>
 
-<p>스크립트 내부 동작:</p>
+<p><span class="en">What the script does internally:</span><span class="ko">스크립트 내부 동작:</span></p>
 <ol>
-  <li><code>profile.sh</code>를 sed로 한 줄씩 오버라이드 (MODEL/HARDWARE/TP_DEGREES)</li>
-  <li>vLLM 엔진 띄워서 4종 grid sweep (dense / per_sequence / attention / moe), 그리고 skew sweep</li>
-  <li>완료 후 <code>profiler/perf/H100/meta-llama/Llama-3.1-8B/bf16/tp1/</code>에 5개 CSV + 상위 폴더에 <code>meta.yaml</code></li>
-  <li>스모크 테스트: 각 CSV 존재 + 행 수 출력, meta.yaml 의 GPU/vLLM/CUDA 버전 출력</li>
+  <li><span class="en">Override <code>profile.sh</code> line by line with sed (MODEL/HARDWARE/TP_DEGREES)</span><span class="ko"><code>profile.sh</code>를 sed로 한 줄씩 오버라이드 (MODEL/HARDWARE/TP_DEGREES)</span></li>
+  <li><span class="en">Spin up the vLLM engine and run 4 grid sweeps (dense / per_sequence / attention / moe), plus a skew sweep</span><span class="ko">vLLM 엔진 띄워서 4종 grid sweep (dense / per_sequence / attention / moe), 그리고 skew sweep</span></li>
+  <li><span class="en">On completion, produces 5 CSVs in <code>profiler/perf/H100/meta-llama/Llama-3.1-8B/bf16/tp1/</code> and a <code>meta.yaml</code> in the parent folder</span><span class="ko">완료 후 <code>profiler/perf/H100/meta-llama/Llama-3.1-8B/bf16/tp1/</code>에 5개 CSV + 상위 폴더에 <code>meta.yaml</code></span></li>
+  <li><span class="en">Smoke test: print existence + row count of each CSV, and the GPU/vLLM/CUDA versions from meta.yaml</span><span class="ko">스모크 테스트: 각 CSV 존재 + 행 수 출력, meta.yaml 의 GPU/vLLM/CUDA 버전 출력</span></li>
 </ol>
 
-<h4><span class="step-num">4</span>Cluster config 갖다 놓기</h4>
+<h4><span class="step-num">4</span><span class="en">Drop in the cluster config</span><span class="ko">Cluster config 갖다 놓기</span></h4>
 <pre><code># GPU 머신에서 (sim 머신과 같으면 생략)
 curl -sLO https://raw.githubusercontent.com/HAN-oQo/HAN-oQo.github.io/main/data/llmservingsim-vs-vllm/cluster_llama8b_h100.json
 docker cp cluster_llama8b_h100.json servingsim_docker:/app/LLMServingSim/configs/cluster/</code></pre>
 
-<h4><span class="step-num">5</span>프로파일 sim 컨테이너로 옮기기</h4>
+<h4><span class="step-num">5</span><span class="en">Move the profile to the sim container</span><span class="ko">프로파일 sim 컨테이너로 옮기기</span></h4>
 <pre><code># GPU 머신 = sim 머신이면 (둘 다 vllm_docker + servingsim_docker가 같은 호스트)
 # sim 컨테이너에 perf 폴더 마운트:
 docker cp vllm_docker:/workspace/profiler/perf/H100 \
@@ -262,7 +262,7 @@ scp perf-h100.tar.gz user@sim-host:~/
 tar xzf perf-h100.tar.gz
 docker cp perf-h100/H100 servingsim_docker:/app/LLMServingSim/profiler/perf/</code></pre>
 
-<h4><span class="step-num">6</span>새 HW로 baseline 재실행 (이제부턴 GPU 없이)</h4>
+<h4><span class="step-num">6</span><span class="en">Re-run baseline on the new HW (now GPU-free)</span><span class="ko">새 HW로 baseline 재실행 (이제부턴 GPU 없이)</span></h4>
 <pre><code>docker exec servingsim_docker bash -c "
   cd /app/LLMServingSim &&
   python -m serving \
@@ -274,56 +274,56 @@ docker cp perf-h100/H100 servingsim_docker:/app/LLMServingSim/profiler/perf/</co
 "
 # ~11분 walltime 후 outputs/sim_llama8b_h100.csv 떨어짐</code></pre>
 
-<h3>4-4. 결과 비교 (RTXPRO6000 → H100 예측 변화)</h3>
-<p>같은 워크로드를 두 HW에 대해 sim 비교 가능 — H100이 빠를 거라 예상:</p>
+<h3><span class="en">4-4. Result comparison (RTXPRO6000 → H100 prediction shift)</span><span class="ko">4-4. 결과 비교 (RTXPRO6000 → H100 예측 변화)</span></h3>
+<p><span class="en">You can sim-compare the same workload across two HWs — expect H100 to be faster:</span><span class="ko">같은 워크로드를 두 HW에 대해 sim 비교 가능 — H100이 빠를 거라 예상:</span></p>
 <ul>
-  <li>H100 SXM5는 3350 GB/s, RTX PRO 6000은 1597 GB/s — 메모리 대역폭 약 2.1× → decode TPOT이 약 절반 (~16-17ms 예상)</li>
-  <li>FLOPS도 더 큼 → prefill 처리율 향상 → TTFT 분포 좌측 이동</li>
-  <li>Throughput 4.57 req/s → 약 8-9 req/s 예상 (10 sps 도착률을 거의 따라잡음)</li>
+  <li><span class="en">H100 SXM5 is 3350 GB/s, RTX PRO 6000 is 1597 GB/s — about 2.1× the memory bandwidth → decode TPOT roughly halves (~16-17 ms expected)</span><span class="ko">H100 SXM5는 3350 GB/s, RTX PRO 6000은 1597 GB/s — 메모리 대역폭 약 2.1× → decode TPOT이 약 절반 (~16-17ms 예상)</span></li>
+  <li><span class="en">FLOPS are also higher → prefill throughput up → TTFT distribution shifts left</span><span class="ko">FLOPS도 더 큼 → prefill 처리율 향상 → TTFT 분포 좌측 이동</span></li>
+  <li><span class="en">Throughput 4.57 req/s → about 8-9 req/s expected (nearly catches up with the 10 sps arrival rate)</span><span class="ko">Throughput 4.57 req/s → 약 8-9 req/s 예상 (10 sps 도착률을 거의 따라잡음)</span></li>
 </ul>
-<p>실제로 그렇게 나오는지가 부차 검증 포인트. 그 후에 실 vLLM 측 (§5) 비교가 본진.</p>
+<p><span class="en">Whether it actually comes out that way is a secondary check. After that, the real vLLM comparison (§5) is the main event.</span><span class="ko">실제로 그렇게 나오는지가 부차 검증 포인트. 그 후에 실 vLLM 측 (§5) 비교가 본진.</span></p>
 
-<h3>4-5. 다른 GPU로 가려면 (A100, RTX 4090 등)</h3>
+<h3><span class="en">4-5. To target a different GPU (A100, RTX 4090, etc.)</span><span class="ko">4-5. 다른 GPU로 가려면 (A100, RTX 4090 등)</span></h3>
 <table>
-<tr><th>GPU</th><th><code>HARDWARE</code> 라벨</th><th>cluster config 조정</th></tr>
-<tr><td>H100 SXM5 80GB</td><td><code>"H100"</code></td><td><code>mem_size: 80, mem_bw: 3350</code> (위 그대로)</td></tr>
+<tr><th>GPU</th><th><code>HARDWARE</code> <span class="en">label</span><span class="ko">라벨</span></th><th><span class="en">Cluster config adjustment</span><span class="ko">cluster config 조정</span></th></tr>
+<tr><td>H100 SXM5 80GB</td><td><code>"H100"</code></td><td><code>mem_size: 80, mem_bw: 3350</code> <span class="en">(as above)</span><span class="ko">(위 그대로)</span></td></tr>
 <tr><td>H100 PCIe 80GB</td><td><code>"H100_PCIE"</code></td><td><code>mem_size: 80, mem_bw: 2039</code></td></tr>
 <tr><td>A100 SXM4 80GB</td><td><code>"A100"</code></td><td><code>mem_size: 80, mem_bw: 2039</code></td></tr>
 <tr><td>A100 PCIe 40GB</td><td><code>"A100_40G"</code></td><td><code>mem_size: 40, mem_bw: 1555</code></td></tr>
 <tr><td>RTX 4090 24GB</td><td><code>"RTX4090"</code></td><td><code>mem_size: 24, mem_bw: 1008</code> · max-model-len ↓</td></tr>
 <tr><td>L40S 48GB</td><td><code>"L40S"</code></td><td><code>mem_size: 48, mem_bw: 864</code></td></tr>
 </table>
-<p>wrapper의 <code>HARDWARE="H100"</code> 한 줄, cluster config의 <code>hardware</code>+<code>npu_mem</code> 두 곳만 그 GPU에 맞게 바꾸면 그대로 작동.</p>
+<p><span class="en">Just change one line — <code>HARDWARE="H100"</code> in the wrapper — and two spots in the cluster config (<code>hardware</code> + <code>npu_mem</code>) to match that GPU, and it works as-is.</span><span class="ko">wrapper의 <code>HARDWARE="H100"</code> 한 줄, cluster config의 <code>hardware</code>+<code>npu_mem</code> 두 곳만 그 GPU에 맞게 바꾸면 그대로 작동.</span></p>
 
-<div class="note"><strong>주의:</strong> <code>HARDWARE</code> 라벨이 그 후 cluster config의 <code>hardware</code> 필드와 <strong>정확히 일치</strong>해야 함. 시뮬레이터가 <code>profiler/perf/&lt;라벨&gt;/...</code> 폴더를 그 문자열로 찾기 때문.</div>
+<div class="note"><strong><span class="en">Caution:</span><span class="ko">주의:</span></strong> <span class="en">The <code>HARDWARE</code> label must <strong>exactly match</strong> the <code>hardware</code> field in the cluster config afterwards. The simulator looks for the <code>profiler/perf/&lt;label&gt;/...</code> folder using that exact string.</span><span class="ko"><code>HARDWARE</code> 라벨이 그 후 cluster config의 <code>hardware</code> 필드와 <strong>정확히 일치</strong>해야 함. 시뮬레이터가 <code>profiler/perf/&lt;라벨&gt;/...</code> 폴더를 그 문자열로 찾기 때문.</span></div>
 
-<h3>4-6. 진행 상황</h3>
+<h3><span class="en">4-6. Progress</span><span class="ko">4-6. 진행 상황</span></h3>
 <table>
-<tr><th>아티팩트</th><th>위치</th><th>상태</th></tr>
-<tr><td>Wrapper script</td><td><code>tools/run_profile_h100.sh</code></td><td class="status-done">준비 완료</td></tr>
-<tr><td>Cluster config</td><td><code>data/llmservingsim-vs-vllm/cluster_llama8b_h100.json</code></td><td class="status-done">준비 완료</td></tr>
-<tr><td>Step-by-step 명령어</td><td>이 페이지 §4-3</td><td class="status-done">준비 완료</td></tr>
-<tr><td>Profile 실제 실행 (GPU 위에서)</td><td>—</td><td class="status-blocked">GPU 확보 필요</td></tr>
-<tr><td>H100 baseline sim 결과</td><td><code>data/.../sim_llama8b_h100.csv</code> (예정)</td><td class="status-todo">프로파일 후</td></tr>
+<tr><th><span class="en">Artifact</span><span class="ko">아티팩트</span></th><th><span class="en">Location</span><span class="ko">위치</span></th><th><span class="en">Status</span><span class="ko">상태</span></th></tr>
+<tr><td>Wrapper script</td><td><code>tools/run_profile_h100.sh</code></td><td class="status-done"><span class="en">Ready</span><span class="ko">준비 완료</span></td></tr>
+<tr><td>Cluster config</td><td><code>data/llmservingsim-vs-vllm/cluster_llama8b_h100.json</code></td><td class="status-done"><span class="en">Ready</span><span class="ko">준비 완료</span></td></tr>
+<tr><td><span class="en">Step-by-step commands</span><span class="ko">Step-by-step 명령어</span></td><td><span class="en">This page §4-3</span><span class="ko">이 페이지 §4-3</span></td><td class="status-done"><span class="en">Ready</span><span class="ko">준비 완료</span></td></tr>
+<tr><td><span class="en">Actual profile run (on GPU)</span><span class="ko">Profile 실제 실행 (GPU 위에서)</span></td><td>—</td><td class="status-blocked"><span class="en">GPU needed</span><span class="ko">GPU 확보 필요</span></td></tr>
+<tr><td><span class="en">H100 baseline sim result</span><span class="ko">H100 baseline sim 결과</span></td><td><code>data/.../sim_llama8b_h100.csv</code> <span class="en">(planned)</span><span class="ko">(예정)</span></td><td class="status-todo"><span class="en">After profiling</span><span class="ko">프로파일 후</span></td></tr>
 </table>
 </div>
 
-<h2 id="vllm">5. 실 vLLM 측 (진행 중)</h2>
+<h2 id="vllm"><span class="en">5. Real vLLM side (in progress)</span><span class="ko">5. 실 vLLM 측 (진행 중)</span></h2>
 <div class="card">
 
-<h3>4-1. JSONL replay 클라이언트</h3>
-<p>일반 LMeterX는 random prompt를 던지는 방식이라 JSONL의 정확한 arrival timing 재생 못 함. 그래서 전용 replay 스크립트 작성: <code>tools/replay_jsonl.py</code> (이 레포에 같이 커밋).</p>
+<h3><span class="en">4-1. JSONL replay client</span><span class="ko">4-1. JSONL replay 클라이언트</span></h3>
+<p><span class="en">Regular LMeterX throws random prompts, so it can't reproduce the JSONL's exact arrival timing. So we wrote a dedicated replay script: <code>tools/replay_jsonl.py</code> (committed alongside in this repo).</span><span class="ko">일반 LMeterX는 random prompt를 던지는 방식이라 JSONL의 정확한 arrival timing 재생 못 함. 그래서 전용 replay 스크립트 작성: <code>tools/replay_jsonl.py</code> (이 레포에 같이 커밋).</span></p>
 
-<p>역할:</p>
+<p><span class="en">What it does:</span><span class="ko">역할:</span></p>
 <ul>
-  <li>JSONL을 한 줄씩 읽음</li>
-  <li><code>input_tok_ids</code> → 토크나이저로 디토큰화 → prompt 문자열</li>
-  <li><code>arrival_time_ns</code> 만큼 기다린 후 vLLM <code>/v1/completions</code> 에 stream 요청 발사</li>
-  <li>per-token 응답으로 TTFT / ITL / TPOT 측정</li>
-  <li>LLMServingSim CSV와 <strong>동일한 12 컬럼 스키마</strong>로 결과 저장 → 직접 diff 가능</li>
+  <li><span class="en">Reads the JSONL line by line</span><span class="ko">JSONL을 한 줄씩 읽음</span></li>
+  <li><span class="en"><code>input_tok_ids</code> → detokenize → prompt string</span><span class="ko"><code>input_tok_ids</code> → 토크나이저로 디토큰화 → prompt 문자열</span></li>
+  <li><span class="en">Wait <code>arrival_time_ns</code> then fire a streaming request at vLLM <code>/v1/completions</code></span><span class="ko"><code>arrival_time_ns</code> 만큼 기다린 후 vLLM <code>/v1/completions</code> 에 stream 요청 발사</span></li>
+  <li><span class="en">Measure TTFT / ITL / TPOT from the per-token response</span><span class="ko">per-token 응답으로 TTFT / ITL / TPOT 측정</span></li>
+  <li><span class="en">Save results with the <strong>same 12-column schema</strong> as LLMServingSim CSV → direct diff possible</span><span class="ko">LLMServingSim CSV와 <strong>동일한 12 컬럼 스키마</strong>로 결과 저장 → 직접 diff 가능</span></li>
 </ul>
 
-<h3>4-2. vLLM 서빙 명령</h3>
+<h3><span class="en">4-2. vLLM serving command</span><span class="ko">4-2. vLLM 서빙 명령</span></h3>
 <pre><code># GPU 머신에서
 docker run --gpus all --rm -p 8000:8000 \
   -e HF_TOKEN=$HF_TOKEN \
@@ -334,7 +334,7 @@ docker run --gpus all --rm -p 8000:8000 \
     --tensor-parallel-size 1 \
     --max-model-len 4096</code></pre>
 
-<h3>4-3. Replay 실행</h3>
+<h3><span class="en">4-3. Run replay</span><span class="ko">4-3. Replay 실행</span></h3>
 <pre><code>python tools/replay_jsonl.py \
   --workload ~/LLMServingSim/workloads/sharegpt-llama-3.1-8b-300-sps10.jsonl \
   --endpoint http://&lt;gpu-host&gt;:8000/v1/completions \
@@ -342,33 +342,33 @@ docker run --gpus all --rm -p 8000:8000 \
   --output outputs/llama8b_real_300.csv \
   --tokenizer meta-llama/Llama-3.1-8B</code></pre>
 
-<h3>4-4. 결과 (TBD — GPU 확보 시)</h3>
+<h3><span class="en">4-4. Results (TBD — when GPU is secured)</span><span class="ko">4-4. 결과 (TBD — GPU 확보 시)</span></h3>
 <table>
-<tr><th>메트릭</th><th>실측값 (vLLM)</th></tr>
-<tr><td>전체 처리 시간</td><td><em>TBD</em></td></tr>
-<tr><td>평균 TTFT / TPOT</td><td><em>TBD</em></td></tr>
+<tr><th><span class="en">Metric</span><span class="ko">메트릭</span></th><th><span class="en">Measured (vLLM)</span><span class="ko">실측값 (vLLM)</span></th></tr>
+<tr><td><span class="en">Total processing time</span><span class="ko">전체 처리 시간</span></td><td><em>TBD</em></td></tr>
+<tr><td><span class="en">Mean TTFT / TPOT</span><span class="ko">평균 TTFT / TPOT</span></td><td><em>TBD</em></td></tr>
 <tr><td>p50/p95/p99 latency</td><td><em>TBD</em></td></tr>
 </table>
 </div>
 
-<h2 id="cmp">6. 비교 메트릭 정의</h2>
+<h2 id="cmp"><span class="en">6. Comparison metric definitions</span><span class="ko">6. 비교 메트릭 정의</span></h2>
 <div class="card">
-<p>두 CSV가 같은 스키마이므로 request_id로 1:1 매칭 후 메트릭별 비교:</p>
+<p><span class="en">Since both CSVs share the same schema, match 1:1 by request_id and compare per metric:</span><span class="ko">두 CSV가 같은 스키마이므로 request_id로 1:1 매칭 후 메트릭별 비교:</span></p>
 
 <table>
-<tr><th>메트릭</th><th>정의</th><th>판단 기준</th></tr>
-<tr><td>per-request TTFT 오차</td><td>|sim - real| / real</td><td>중앙값 &lt; 15% 이면 sim 신뢰 가능</td></tr>
-<tr><td>per-request TPOT 오차</td><td>동일</td><td>중앙값 &lt; 10% 이면 좋음</td></tr>
-<tr><td>per-request latency 오차</td><td>동일</td><td>TTFT + TPOT × N 의 누적 — 분산 큼</td></tr>
-<tr><td>throughput (전체)</td><td>req/s 단위 비교</td><td>±5% 이내면 시뮬이 정상</td></tr>
-<tr><td>p95/p99 latency</td><td>분포의 꼬리 비교</td><td>여기서 큰 차이 나면 큐잉/eviction 모델이 부정확</td></tr>
-<tr><td>발산 요청 분석</td><td>오차 상위 10개 요청의 (input_len, output_len, arrival_time) 패턴</td><td>긴 input? 혼잡 시점? 특정 KV size?</td></tr>
+<tr><th><span class="en">Metric</span><span class="ko">메트릭</span></th><th><span class="en">Definition</span><span class="ko">정의</span></th><th><span class="en">Threshold</span><span class="ko">판단 기준</span></th></tr>
+<tr><td><span class="en">Per-request TTFT error</span><span class="ko">per-request TTFT 오차</span></td><td>|sim - real| / real</td><td><span class="en">Median &lt; 15% → sim is trustworthy</span><span class="ko">중앙값 &lt; 15% 이면 sim 신뢰 가능</span></td></tr>
+<tr><td><span class="en">Per-request TPOT error</span><span class="ko">per-request TPOT 오차</span></td><td><span class="en">Same</span><span class="ko">동일</span></td><td><span class="en">Median &lt; 10% is good</span><span class="ko">중앙값 &lt; 10% 이면 좋음</span></td></tr>
+<tr><td><span class="en">Per-request latency error</span><span class="ko">per-request latency 오차</span></td><td><span class="en">Same</span><span class="ko">동일</span></td><td><span class="en">Cumulative TTFT + TPOT × N — high variance</span><span class="ko">TTFT + TPOT × N 의 누적 — 분산 큼</span></td></tr>
+<tr><td><span class="en">Throughput (overall)</span><span class="ko">throughput (전체)</span></td><td><span class="en">Compare in req/s</span><span class="ko">req/s 단위 비교</span></td><td><span class="en">Within ±5% means sim is sane</span><span class="ko">±5% 이내면 시뮬이 정상</span></td></tr>
+<tr><td>p95/p99 latency</td><td><span class="en">Compare distribution tails</span><span class="ko">분포의 꼬리 비교</span></td><td><span class="en">A big gap here means the queuing/eviction model is off</span><span class="ko">여기서 큰 차이 나면 큐잉/eviction 모델이 부정확</span></td></tr>
+<tr><td><span class="en">Divergent request analysis</span><span class="ko">발산 요청 분석</span></td><td><span class="en">(input_len, output_len, arrival_time) patterns of the top-10 highest-error requests</span><span class="ko">오차 상위 10개 요청의 (input_len, output_len, arrival_time) 패턴</span></td><td><span class="en">Long input? Congested moment? Specific KV size?</span><span class="ko">긴 input? 혼잡 시점? 특정 KV size?</span></td></tr>
 </table>
 
-<p>비교 스크립트 (<code>tools/compare_csv.py</code>) 가 위 표 자동 출력 + matplotlib으로 scatter plot 2개 (TTFT sim vs real, TPOT sim vs real) 생성. <em>다음 푸시에 포함 예정.</em></p>
+<p><span class="en">The comparison script (<code>tools/compare_csv.py</code>) auto-prints the table above and produces 2 matplotlib scatter plots (TTFT sim vs real, TPOT sim vs real). <em>To be included in the next push.</em></span><span class="ko">비교 스크립트 (<code>tools/compare_csv.py</code>) 가 위 표 자동 출력 + matplotlib으로 scatter plot 2개 (TTFT sim vs real, TPOT sim vs real) 생성. <em>다음 푸시에 포함 예정.</em></span></p>
 </div>
 
-<h2 id="repro">7. 재현 명령어 모음</h2>
+<h2 id="repro"><span class="en">7. Reproduction commands</span><span class="ko">7. 재현 명령어 모음</span></h2>
 <div class="card">
 <pre><code># --- LLMServingSim 측 (GPU 없음) ---
 git clone --recurse-submodules https://github.com/casys-kaist/LLMServingSim.git
@@ -412,28 +412,28 @@ python tools/compare_csv.py \
   --out comparison-report.html</code></pre>
 </div>
 
-<h2 id="status">8. 진행 상태표</h2>
+<h2 id="status"><span class="en">8. Progress table</span><span class="ko">8. 진행 상태표</span></h2>
 <div class="card">
 <table>
-<tr><th>#</th><th>단계</th><th>상태</th><th>아티팩트</th></tr>
-<tr><td>1</td><td>HTML 스켈레톤 작성</td><td class="status-done">완료</td><td>이 페이지</td></tr>
-<tr><td>2</td><td>워크로드 / cluster config 인벤토리</td><td class="status-done">완료</td><td>Llama-3.1-8B + sharegpt 300req JSONL 채택</td></tr>
-<tr><td>3</td><td>LLMServingSim baseline 시뮬 실행</td><td class="status-done">완료</td><td>data/llmservingsim-vs-vllm/sim_llama8b_300.csv (이 레포에 커밋)</td></tr>
-<tr><td>4</td><td>JSONL replay 클라이언트 작성</td><td class="status-done">완료</td><td>tools/replay_jsonl.py</td></tr>
-<tr><td>5</td><td>CSV 비교 스크립트 작성</td><td class="status-done">완료</td><td>tools/compare_csv.py</td></tr>
-<tr><td>6</td><td>GPU 확보 (RTXPRO6000 또는 동등 HW)</td><td class="status-blocked">사용자 입력 필요</td><td>—</td></tr>
-<tr><td>7</td><td>vLLM 서빙 + replay 실행</td><td class="status-todo">GPU 후</td><td>outputs/llama8b_real_300.csv</td></tr>
-<tr><td>8</td><td>비교 결과 + 분석</td><td class="status-todo">vLLM 후</td><td>이 페이지 §결과 섹션</td></tr>
+<tr><th>#</th><th><span class="en">Step</span><span class="ko">단계</span></th><th><span class="en">Status</span><span class="ko">상태</span></th><th><span class="en">Artifact</span><span class="ko">아티팩트</span></th></tr>
+<tr><td>1</td><td><span class="en">Write HTML skeleton</span><span class="ko">HTML 스켈레톤 작성</span></td><td class="status-done"><span class="en">Done</span><span class="ko">완료</span></td><td><span class="en">This page</span><span class="ko">이 페이지</span></td></tr>
+<tr><td>2</td><td><span class="en">Workload / cluster config inventory</span><span class="ko">워크로드 / cluster config 인벤토리</span></td><td class="status-done"><span class="en">Done</span><span class="ko">완료</span></td><td><span class="en">Adopted Llama-3.1-8B + sharegpt 300req JSONL</span><span class="ko">Llama-3.1-8B + sharegpt 300req JSONL 채택</span></td></tr>
+<tr><td>3</td><td><span class="en">Run LLMServingSim baseline sim</span><span class="ko">LLMServingSim baseline 시뮬 실행</span></td><td class="status-done"><span class="en">Done</span><span class="ko">완료</span></td><td><span class="en">data/llmservingsim-vs-vllm/sim_llama8b_300.csv (committed in this repo)</span><span class="ko">data/llmservingsim-vs-vllm/sim_llama8b_300.csv (이 레포에 커밋)</span></td></tr>
+<tr><td>4</td><td><span class="en">Write JSONL replay client</span><span class="ko">JSONL replay 클라이언트 작성</span></td><td class="status-done"><span class="en">Done</span><span class="ko">완료</span></td><td>tools/replay_jsonl.py</td></tr>
+<tr><td>5</td><td><span class="en">Write CSV comparison script</span><span class="ko">CSV 비교 스크립트 작성</span></td><td class="status-done"><span class="en">Done</span><span class="ko">완료</span></td><td>tools/compare_csv.py</td></tr>
+<tr><td>6</td><td><span class="en">Secure GPU (RTXPRO6000 or equivalent HW)</span><span class="ko">GPU 확보 (RTXPRO6000 또는 동등 HW)</span></td><td class="status-blocked"><span class="en">User input needed</span><span class="ko">사용자 입력 필요</span></td><td>—</td></tr>
+<tr><td>7</td><td><span class="en">Run vLLM serving + replay</span><span class="ko">vLLM 서빙 + replay 실행</span></td><td class="status-todo"><span class="en">After GPU</span><span class="ko">GPU 후</span></td><td>outputs/llama8b_real_300.csv</td></tr>
+<tr><td>8</td><td><span class="en">Comparison results + analysis</span><span class="ko">비교 결과 + 분석</span></td><td class="status-todo"><span class="en">After vLLM</span><span class="ko">vLLM 후</span></td><td><span class="en">Results section on this page</span><span class="ko">이 페이지 §결과 섹션</span></td></tr>
 </table>
 </div>
 
-<h2 id="results">9. 결과</h2>
+<h2 id="results"><span class="en">9. Results</span><span class="ko">9. 결과</span></h2>
 <div class="card">
-<p><em>vLLM 측정 완료 후 작성.</em></p>
+<p><em><span class="en">Will be written after vLLM measurement completes.</span><span class="ko">vLLM 측정 완료 후 작성.</span></em></p>
 </div>
 
 <footer>
-LLMServingSim 2.0 (KAIST CASYS) · 실 vLLM 정확도 비교 실험 · 2026-06-10 시작 · 진행중 문서. 본 비교는 LLMServingSim commit <code>8b5b943a3a37</code> 기준이며, vLLM 측 모델은 <code>meta-llama/Llama-3.1-8B</code> bf16 TP=1 single-GPU.
+<span class="en">LLMServingSim 2.0 (KAIST CASYS) · Real-vLLM accuracy comparison experiment · Started 2026-06-10 · In-progress document. This comparison is based on LLMServingSim commit <code>8b5b943a3a37</code>; the vLLM-side model is <code>meta-llama/Llama-3.1-8B</code> bf16 TP=1 single-GPU.</span><span class="ko">LLMServingSim 2.0 (KAIST CASYS) · 실 vLLM 정확도 비교 실험 · 2026-06-10 시작 · 진행중 문서. 본 비교는 LLMServingSim commit <code>8b5b943a3a37</code> 기준이며, vLLM 측 모델은 <code>meta-llama/Llama-3.1-8B</code> bf16 TP=1 single-GPU.</span>
 </footer>
 
 </div>
