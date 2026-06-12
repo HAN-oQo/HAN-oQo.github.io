@@ -1175,6 +1175,31 @@ import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'de
 <tr><td>18 (NVLink 4.0 full mesh)</td><td>32-64</td></tr>
 </table>
 
+<h5>본 실험 (P2pNccl PUT_ASYNC = P push) vs 이전 글 (NIXL = D pull) — 같은 PDD 인데 방향성 왜 다른가</h5>
+
+<div class="note"><strong>이전 본인 글 <a href="https://han-oqo.github.io/study/vllm_pd_disagg_flow.html">vllm_pd_disagg_flow.html</a> 와 본 글의 방향성 차이</strong>: 이전 글은 "<strong>NixlConnector is 'READ'-based. Prefill (P) doesn't push KV; instead, Decode (D) pulls P's KV blocks directly (pull)</strong>" 라고 묘사. 본 실험은 "P가 push (PUT_ASYNC)" 라고 적음. 둘이 충돌이 아니라 <strong>connector 별로 다른 방향성</strong>:</div>
+
+<table>
+<tr><th>Connector / send_type</th><th>방향</th><th>Trigger</th><th>이전 글 / 본 실험</th></tr>
+<tr><td><strong>NixlConnector</strong> (READ-based)</td><td><strong>Decode pulls</strong></td><td>D 가 forward 직전 NIXL READ async 호출 → P 의 KV block 가져옴</td><td>이전 글 (vllm_pd_disagg_flow.html) 의 시각 — NIXL 만 묘사</td></tr>
+<tr><td><strong>P2pNccl GET</strong></td><td>Decode pulls</td><td>D 가 P 의 send_store 에서 가져옴. NIXL 의 READ 와 같은 방향</td><td>우리 안 선택 (성능 중간)</td></tr>
+<tr><td><strong>P2pNccl PUT_ASYNC</strong> (우리 실험)</td><td><strong>Prefill pushes</strong></td><td>P 가 KV 만들자마자 async send queue 에 넣음. 별도 thread 가 D 로 push</td><td>본 실험 (성능 best)</td></tr>
+<tr><td><strong>P2pNccl PUT</strong></td><td>Prefill pushes (sync)</td><td>P 가 send 완료까지 main 이 block</td><td>(성능 worst)</td></tr>
+</table>
+
+<h6>왜 NIXL 은 D pull 인데 P2pNccl PUT_ASYNC 는 P push?</h6>
+
+<table>
+<tr><th>측면</th><th>NIXL (D pull)</th><th>P2pNccl PUT_ASYNC (P push)</th></tr>
+<tr><td><strong>Memory locality</strong></td><td>D 가 자기 ready 된 후 trigger → D 의 receive buffer overflow 위험 적음</td><td>P 가 즉시 push → D 의 receive buffer 가 충분히 커야 (5-10% VRAM 권장)</td></tr>
+<tr><td><strong>P resource 회수</strong></td><td>D 가 pull 끝까지 P 가 KV 들고 있어야 → P 의 다음 request 받는 게 늦어짐</td><td>P 가 send queue 에 넣자마자 main 진행 → 다음 request 즉시 받음. P throughput ↑</td></tr>
+<tr><td><strong>Latency overlap</strong></td><td>D 의 first forward 시작 직전에 pull → transfer 시간이 D 의 TTFT 에 추가</td><td>P 의 forward 끝나면서 즉시 send 시작 → D 가 호출될 즘 KV 이미 도착 (overlap)</td></tr>
+<tr><td><strong>Hardware 가정</strong></td><td>NVIDIA NIXL — RDMA primitives 가 D 측 trigger 의 native operation</td><td>NCCL/RCCL — 일반 collective 인데 PUT_ASYNC 가 latency overlap 에 잘 맞음</td></tr>
+<tr><td><strong>성능 (PR #18242 의 측정)</strong></td><td>중간 (P2pNccl GET 과 같은 카테고리)</td><td><strong>가장 빠름</strong> — "PUT_ASYNC should be prioritized"</td></tr>
+</table>
+
+<p><strong>결론</strong>: 둘 다 valid pattern. <strong>connector 가 다르면 KV 방향성도 다른 게 정상</strong>. 본 실험은 ROCm MI250 에서 NIXL 사용 불가 (NVIDIA 전용) → P2pNccl 선택 → 그 안의 best 성능인 PUT_ASYNC 사용 → 결과적으로 "P push" 방향. 이전 글의 "D pull" 은 NIXL 의 자체 design 시각.</p>
+
 <h5>일반 PDD 설명의 "decode 받아옴" vs PUT_ASYNC 의 "prefill 보냄"</h5>
 
 <p>이전에 본 일반 PDD 설명 (LLMServingSim / Heimdall / Frontier 문서들) 의 "decode 가 KV 받아옴" 표현은 <strong>받는 측 (consumer) 시각</strong>. KV 가 D 에 도착한다는 사실은 똑같음. 단 <strong>"누가 trigger" 는 connector / 옵션 별 다름</strong>:</p>
