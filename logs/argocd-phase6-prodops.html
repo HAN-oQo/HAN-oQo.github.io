@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArgoCD 실습 Phase 6 — 실운영 드릴 + 재해 복구</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.85rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.3rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 26px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  mark { background: var(--amber-bg); color: var(--amber-ink); padding: 0 3px; border-radius: 3px; }
+  .good { background: var(--green-bg); color: var(--green-ink); padding: 0 3px; border-radius: 3px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.87rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 16px; }
+  .diagram { background: var(--gray-bg); padding: 16px 20px; border-radius: 8px; font-family: "SF Mono", Menlo, monospace; font-size: 0.74rem; line-height: 1.5; white-space: pre; overflow-x: auto; border: 1px solid var(--line); }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .seriesnav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 22px 0; padding: 12px 16px;
+               background: var(--gray-bg); border: 1px solid var(--line); border-radius: 10px; font-size: 0.85rem; }
+  .seriesnav a { text-decoration: none; color: var(--blue-ink); font-weight: 600; }
+  .seriesnav a:hover { text-decoration: underline; }
+  .seriesnav .mid { color: var(--muted); font-weight: 400; }
+  .seriesnav .disabled { color: var(--faint); font-weight: 400; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width:1.7em; height:1.7em; padding:0 .5em; border-radius:999px; background:var(--teal); color:#fff; font-size:0.8rem; font-weight:700; margin-right:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="argocd-llm-d-gitops.html"><span class="en">Argo CD series</span><span class="ko">ArgoCD 시리즈</span></a> · <span class="en">Phase 6</span><span class="ko">Phase 6</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase5-gpu.html">← <span class="en">Phase 5: real GPU</span><span class="ko">Phase 5: 실제 GPU</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-llm-d-gitops.html"><span class="en">Series complete — back to overview</span><span class="ko">시리즈 완료 — 개요로</span> ↩</a>
+</div>
+
+<h1><span class="pchip">6</span><span class="en">Prod-ops &amp; disaster recovery</span><span class="ko">실운영 &amp; 재해 복구</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 · Status: <b class="status-ok">✓ DONE</b> · The payoff phase — whole cluster destroyed and rebuilt from Git in ~80s</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 · 상태: <b class="status-ok">✓ 완료</b> · 보상 단계 — 클러스터를 통째로 파괴하고 Git에서 약 80초에 재구축</span></p>
+
+<div class="tip"><strong><span class="en">Goal of this phase</span><span class="ko">이 단계 목표</span></strong><br>
+<span class="en">Prove the operational promise of GitOps: the cluster is <b>cattle, not a pet</b>. Delete the entire cluster, recreate it, apply <b>one</b> bootstrap object, and watch the whole stack from Phases 2–4 come back from Git — no snowflake state, no remembered commands. Plus the rest of the prod-ops toolbox.</span>
+<span class="ko">GitOps의 운영 약속을 증명한다: 클러스터는 <b>애완동물이 아니라 가축</b>이다. 클러스터를 통째로 삭제·재생성하고 <b>하나</b>의 부트스트랩 객체만 적용하면 Phase 2–4의 전체 스택이 Git에서 돌아온다 — 눈송이 상태도, 기억해 둔 명령도 없이. 그리고 실운영 툴박스의 나머지.</span></p>
+
+<h2><span class="en">One object rebuilds everything</span><span class="ko">객체 하나가 전부를 재구축</span></h2>
+<p><span class="en">The bootstrap is an app-of-apps that registers the three top-level Applications; <code>phase4-root</code> in turn brings up its two children. So a single <code>kubectl apply</code> reconstructs the full tree.</span>
+<span class="ko">부트스트랩은 상위 Application 3개를 등록하는 app-of-apps이고, <code>phase4-root</code>가 다시 자기 자식 2개를 올린다. 그래서 단 한 번의 <code>kubectl apply</code>가 전체 트리를 재구성한다.</span></p>
+<div class="diagram">  apps/00-bootstrap.yaml   (kubectl apply this ONE file)
+    └─ creates 3 top-level Applications:
+         ├─ phase2-hello          → whoami Deployment (ns demo)
+         ├─ phase3-model          → llama.cpp model server (ns serving)
+         └─ phase4-llmd-root      → app-of-apps:
+                                      ├─ phase4-gie-crds       (GIE CRDs)
+                                      └─ phase4-inferencepool  (InferencePool CR)</div>
+
+<h2><span class="en">The disaster-recovery drill — live</span><span class="ko">재해 복구 드릴 — 실제</span></h2>
+<pre><code># 1) DESTROY — simulate losing the cluster entirely
+$ kind delete cluster --name gitops-lab
+$ kind get clusters        # → []   (gone)
+
+# 2) REBUILD — recreate cluster + reinstall Argo CD (Phase 1, server-side) ... then ONE apply:
+$ kubectl apply -f .../apps/00-bootstrap.yaml
+application.argoproj.io/bootstrap created
+
+# 3) WATCH everything repopulate FROM GIT (who=whoami pods, model=model-server, pool=InferencePool):
+t+10s  who=0 model=0 pool=no    bootstrap=Synced phase2-hello=Synced phase3-model=Synced phase4-*=OutOfSync
+t+15s  who=0 model=0 pool=<mark>yes</mark>   ... phase4-gie-crds=Synced phase4-inferencepool=Synced phase4-llmd-root=Synced
+t+20s  who=<mark>2</mark> model=0 pool=yes
+t+80s  who=2 model=<mark>1</mark> pool=yes   <span class="good">-&gt; FULL STACK REBUILT FROM GIT</span>
+
+$ kubectl -n argocd get applications     # all six, Synced
+bootstrap  phase2-hello  phase3-model  phase4-llmd-root  phase4-gie-crds  phase4-inferencepool</code></pre>
+<p class="cap"><span class="en">~80 s from an empty recreated cluster to the full stack healthy — and the only "input" was one Git URL. The model-server delay is just the GGUF re-download; everything else converged in ~15 s.</span><span class="ko">빈 재생성 클러스터에서 전체 스택 정상까지 약 80초 — 유일한 "입력"은 Git URL 하나. model-server 지연은 GGUF 재다운로드 때문이고, 나머지는 약 15초에 수렴.</span></p>
+
+<div class="tip"><strong><span class="en">Why this is the whole point</span><span class="ko">이게 핵심인 이유</span></strong><br>
+<span class="en">There was no backup to restore, no runbook to follow, no "who remembers the replica count / image tag / pool selector." The cluster's entire desired state lived in Git, so recovery = recreate + point Argo CD at the repo. For a production llm-d fleet, that's the difference between a 20-minute rebuild and a frantic afternoon.</span>
+<span class="ko">복원할 백업도, 따를 런북도, "replica 수/이미지 태그/풀 selector 기억하는 사람?"도 없었다. 클러스터의 전체 desired state가 Git에 있으니 복구 = 재생성 + ArgoCD를 저장소에 연결. 프로덕션 llm-d fleet이라면, 20분 재구축과 정신없는 오후의 차이다.</span></p>
+
+<h2><span class="en">The rest of the prod-ops toolbox</span><span class="ko">실운영 툴박스의 나머지</span></h2>
+<p><span class="en">DR is the headline; these are the day-to-day guardrails Argo CD gives you, layered on the same repo (fully demoing some needs multiple clusters, so they're summarized here):</span>
+<span class="ko">DR가 헤드라인이고, 다음은 같은 저장소 위에 얹는 일상 가드레일이다(일부는 완전 시연에 여러 클러스터가 필요해 요약):</span></p>
+<table>
+<tr><th><span class="en">Tool</span><span class="ko">도구</span></th><th><span class="en">What it buys you</span><span class="ko">무엇을 주나</span></th></tr>
+<tr><td><b>ApplicationSet</b></td><td><span class="en">One template → an Application per env/cluster (dev→staging→prod) using Kustomize overlays. Promotion = merge a PR; no copy-paste drift between environments.</span><span class="ko">템플릿 하나 → 환경/클러스터별 Application(dev→staging→prod), Kustomize overlay 사용. 승격 = PR 머지; 환경 간 복붙 drift 없음.</span></td></tr>
+<tr><td><b>AppProject</b></td><td><span class="en">RBAC/guardrails: restrict which repos, clusters, namespaces, and resource kinds a team's apps may touch — e.g. the inference team can deploy to <code>serving</code> only.</span><span class="ko">RBAC/가드레일: 팀 앱이 건드릴 수 있는 repo·클러스터·네임스페이스·리소스 종류 제한 — 예: 추론 팀은 <code>serving</code>에만 배포.</span></td></tr>
+<tr><td><span class="en"><b>Sync windows</b></span><span class="ko"><b>Sync window</b></span></td><td><span class="en">Block auto-sync during peak inference hours; allow it overnight. Change lands in Git now, deploys in the safe window.</span><span class="ko">피크 추론 시간엔 auto-sync 차단, 야간엔 허용. 변경은 지금 Git에 들어오고 안전한 창에서 배포.</span></td></tr>
+<tr><td><span class="en"><b>Notifications</b></span><span class="ko"><b>알림</b></span></td><td><span class="en">Slack/webhook on sync failed / health degraded / out-of-sync — operators learn about drift before users do.</span><span class="ko">sync 실패 / health degraded / out-of-sync 시 Slack/webhook — 사용자보다 먼저 운영자가 drift를 안다.</span></td></tr>
+</table>
+
+<h2><span class="en">Reproduce</span><span class="ko">재현</span></h2>
+<pre><code># the DR drill (destroys + rebuilds the lab cluster):
+kind delete cluster --name gitops-lab
+kind create cluster --name gitops-lab --wait 180s
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply --server-side --force-conflicts -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl -n argocd rollout status deploy/argocd-server --timeout=420s
+kubectl apply -f https://raw.githubusercontent.com/hanq-moreh/argocd-gitops-lab/main/apps/00-bootstrap.yaml
+watch -n3 'kubectl -n argocd get applications; kubectl -n serving get deploy,inferencepool; kubectl -n demo get deploy'</code></pre>
+
+<h2><span class="en">Series wrap-up</span><span class="ko">시리즈 정리</span></h2>
+<p><span class="en">Six phases, all executed live on mi250-052: bootstrap (1), the GitOps loop and self-heal/rollback (2), a real model server (3), the llm-d control plane as app-of-apps + sync waves (4), an honest GPU-passthrough boundary (5), and disaster recovery (6). The throughline: operating a vLLM + llm-d fleet means operating <i>Kubernetes objects</i>, and Argo CD makes every one of them a reviewable, revertible, self-healing, rebuildable commit. Engine internals were covered in the Heimdall deep-dives; this series is the operational other half.</span>
+<span class="ko">여섯 단계 전부 mi250-052에서 실제 실행: 부트스트랩(1), GitOps 루프와 self-heal/롤백(2), 진짜 모델 서버(3), app-of-apps + sync waves로 llm-d 컨트롤플레인(4), 정직한 GPU passthrough 경계(5), 재해 복구(6). 관통하는 주제: vLLM + llm-d fleet 운영은 곧 <i>Kubernetes 객체</i> 운영이고, ArgoCD는 그 하나하나를 리뷰·되돌리기·self-heal·재구축 가능한 커밋으로 만든다. 엔진 내부는 Heimdall 딥다이브에서 다뤘고, 이 시리즈는 그 운영 반쪽이다.</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase5-gpu.html">← <span class="en">Phase 5: real GPU</span><span class="ko">Phase 5: 실제 GPU</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <span class="disabled"><span class="en">Series complete ✓</span><span class="ko">시리즈 완료 ✓</span></span>
+</div>
+
+<footer><span class="en">Argo CD lab series · Phase 6/6 (final) · 2026-06-12 · mi250-052 · GitOps repo: github.com/hanq-moreh/argocd-gitops-lab</span><span class="ko">ArgoCD 실습 시리즈 · Phase 6/6 (마지막) · 2026-06-12 · mi250-052 · GitOps 저장소: github.com/hanq-moreh/argocd-gitops-lab</span></footer>
+
+</div>
+</body>
+</html>

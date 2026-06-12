@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArgoCD 실습 Phase 5 — MI250 GPU passthrough (stretch)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.85rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.3rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 26px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  mark { background: var(--amber-bg); color: var(--amber-ink); padding: 0 3px; border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.87rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .fail { border-left: 4px solid var(--red-bd); background: var(--red-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+  .fail strong { color: var(--red); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 16px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .status-fail { color: var(--red); font-weight: 600; }
+  .status-wip { color: var(--amber-ink); font-weight: 600; }
+  .seriesnav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 22px 0; padding: 12px 16px;
+               background: var(--gray-bg); border: 1px solid var(--line); border-radius: 10px; font-size: 0.85rem; }
+  .seriesnav a { text-decoration: none; color: var(--blue-ink); font-weight: 600; }
+  .seriesnav a:hover { text-decoration: underline; }
+  .seriesnav .mid { color: var(--muted); font-weight: 400; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width:1.7em; height:1.7em; padding:0 .5em; border-radius:999px; background:var(--purple); color:#fff; font-size:0.8rem; font-weight:700; margin-right:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="argocd-llm-d-gitops.html"><span class="en">Argo CD series</span><span class="ko">ArgoCD 시리즈</span></a> · <span class="en">Phase 5</span><span class="ko">Phase 5</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase4-llmd.html">← <span class="en">Phase 4: llm-d control plane</span><span class="ko">Phase 4: llm-d 컨트롤플레인</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase6-prodops.html"><span class="en">Phase 6: prod-ops &amp; DR</span><span class="ko">Phase 6: 실운영 &amp; DR</span> →</a>
+</div>
+
+<h1><span class="pchip">5</span><span class="en">Stretch — real MI250 GPU under Argo CD</span><span class="ko">Stretch — ArgoCD 아래 진짜 MI250 GPU</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 (AMD MI250) · Status: <b class="status-fail">⚠ passthrough blocked</b> — root-caused, contrasted, fallback documented (exactly the honest outcome the plan reserved for this stretch)</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 (AMD MI250) · 상태: <b class="status-fail">⚠ passthrough 막힘</b> — 근본원인 규명·대조·폴백 문서화 (계획이 이 stretch에 예비해 둔 바로 그 정직한 결과)</span></p>
+
+<div class="tip"><strong><span class="en">Goal of this phase</span><span class="ko">이 단계 목표</span></strong><br>
+<span class="en">Get a pod that actually uses an MI250 GCD, scheduled by Kubernetes and managed by Argo CD — by exposing the GPU into a kind node + the AMD device plugin (advertising <code>amd.com/gpu</code>). The plan flagged this as a stretch with a documented fallback if passthrough fights us. It fought us; here's exactly where and what to do instead.</span>
+<span class="ko">Kubernetes가 스케줄하고 ArgoCD가 관리하는, 실제 MI250 GCD를 쓰는 파드를 얻는 것 — kind 노드에 GPU를 노출 + AMD device plugin(<code>amd.com/gpu</code> 광고)으로. 계획은 이걸 "막히면 폴백 문서화"하는 stretch로 표시했다. 막혔고, 정확히 어디서 막혔고 대신 뭘 해야 하는지 적는다.</span></p>
+
+<h2><span class="en">The attempt</span><span class="ko">시도</span></h2>
+<p><span class="en">To avoid disturbing the live <code>gitops-lab</code> cluster, a <b>separate</b> kind cluster <code>gitops-gpu</code> was configured to bind-mount the ROCm device files into its node, the way <code>docker run --device</code> does:</span>
+<span class="ko">살아있는 <code>gitops-lab</code>을 안 건드리려고 <b>별도</b> kind 클러스터 <code>gitops-gpu</code>를 만들어, <code>docker run --device</code>가 하듯 ROCm 장치 파일을 노드에 bind-mount하도록 구성했다:</span></p>
+<pre><code># gpu-kind.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: gitops-gpu
+nodes:
+  - role: control-plane
+    extraMounts:
+      - { hostPath: /dev/kfd, containerPath: /dev/kfd }
+      - { hostPath: /dev/dri, containerPath: /dev/dri }</code></pre>
+
+<div class="fail"><strong><span class="en">Failure — the kind node won't boot with the device files mounted</span><span class="ko">실패 — 장치 파일을 마운트하면 kind 노드가 부팅 안 됨</span></strong><br>
+<pre><code>$ kind create cluster --config gpu-kind.yaml --wait 120s
+ ✓ Ensuring node image (kindest/node:v1.36.1) 🖼
+ ✗ Preparing nodes 📦
+Deleted nodes: ["gitops-gpu-control-plane"]
+ERROR: failed to create cluster: could not find a log line that matches
+  "Reached target .*Multi-User System.*|detected cgroup v1"</code></pre>
+<span class="en">A kind node is <b>not</b> a plain container — it runs <code>systemd</code> + containerd inside. Bind-mounting <code>/dev/kfd</code> and the <code>/dev/dri</code> device directory over the node's own <code>/dev</code> disrupts that init: the node never reaches the <code>Multi-User System</code> target, so kind times out and deletes it. The <code>docker run --device</code> trick that works for a normal container does not translate to kind's systemd node.</span>
+<span class="ko">kind 노드는 <b>평범한 컨테이너가 아니다</b> — 안에서 <code>systemd</code> + containerd를 돌린다. <code>/dev/kfd</code>와 <code>/dev/dri</code> 장치 디렉터리를 노드 자기 <code>/dev</code> 위에 bind-mount하면 그 init이 깨진다: 노드가 <code>Multi-User System</code> 타깃에 도달하지 못해 kind이 타임아웃 후 삭제한다. 일반 컨테이너에 먹히는 <code>docker run --device</code>가 kind의 systemd 노드엔 안 통한다.</span></div>
+
+<div class="note"><strong><span class="en">Honest side-effect (and cleanup)</span><span class="ko">정직한 부작용 (그리고 정리)</span></strong><br>
+<span class="en">Because the cluster create failed, the script's <code>kubectl config use-context kind-gitops-gpu</code> also failed — so <code>kubectl</code> stayed pointed at <code>gitops-lab</code>, and the next step accidentally applied the AMD device-plugin DaemonSet onto the <b>main</b> cluster, where it crash-looped (no GPU visible there). Caught it, deleted the stray DaemonSet, and confirmed <code>gitops-lab</code> was clean and all five Phase 1–4 Applications were still <code>Synced/Healthy</code>. Lesson: a failed context switch silently falls back to the current context — pin <code>--context</code> explicitly in scripts.</span>
+<span class="ko">클러스터 생성이 실패하니 스크립트의 <code>kubectl config use-context kind-gitops-gpu</code>도 실패 → <code>kubectl</code>이 <code>gitops-lab</code>을 계속 가리켰고, 다음 단계가 AMD device-plugin DaemonSet을 실수로 <b>메인</b> 클러스터에 적용해 crashloop(거긴 GPU가 안 보임). 잡아서 stray DaemonSet 삭제, <code>gitops-lab</code>이 깨끗하고 Phase 1–4 앱 5개가 여전히 <code>Synced/Healthy</code>임을 확인. 교훈: context 전환이 실패하면 조용히 현재 context로 폴백한다 — 스크립트에선 <code>--context</code>를 명시적으로 고정할 것.</span></div>
+
+<h2><span class="en">The contrast — Docker passthrough itself is fine</span><span class="ko">대조 — Docker passthrough 자체는 멀쩡</span></h2>
+<p><span class="en">To prove the GPU/device side is healthy and the problem is kind-specific, the same device flags on a plain container work:</span>
+<span class="ko">GPU/장치 쪽은 멀쩡하고 문제는 kind 특유임을 증명하려고, 같은 device 플래그를 평범한 컨테이너에 주면 잘 된다:</span></p>
+<pre><code>$ docker run --rm --device /dev/kfd --device /dev/dri busybox ls -l /dev/kfd
+crw-rw----  1 root  44  510, 0  /dev/kfd       # ← the MI250 KFD char device, inside the container
+
+$ rocm-smi --showproductname    # (host) GPUs present and healthy
+GPU[0..]: AMD INSTINCT MI250 (MCM) ...</code></pre>
+<p class="cap"><span class="en">So the GPU is exposable to <i>containers</i> — it's the kind <i>node</i>'s systemd init that the device mount breaks.</span><span class="ko">즉 GPU는 <i>컨테이너</i>엔 노출 가능 — device mount가 깨뜨리는 건 kind <i>노드</i>의 systemd init이다.</span></p>
+
+<h2><span class="en">What to do instead — the documented fallbacks</span><span class="ko">대신 할 것 — 문서화된 폴백</span></h2>
+<table>
+<tr><th><span class="en">Option</span><span class="ko">선택지</span></th><th><span class="en">How</span><span class="ko">방법</span></th><th><span class="en">Trade-off</span><span class="ko">트레이드오프</span></th></tr>
+<tr><td><b><span class="en">A. GPU server in Docker + Argo CD-managed external Service</span><span class="ko">A. Docker GPU 서버 + ArgoCD 관리 외부 Service</span></b></td><td><span class="en">Run vLLM-ROCm via <code>docker run --device …</code> (where passthrough works); have Argo CD manage a headless <code>Service</code> + manual <code>Endpoints</code> pointing at the host port.</span><span class="ko">vLLM-ROCm을 <code>docker run --device …</code>로(passthrough 되는 곳) 실행; ArgoCD는 그 호스트 포트를 가리키는 headless <code>Service</code> + 수동 <code>Endpoints</code>를 관리.</span></td><td><span class="en">Works on this node today; GPU process is outside k8s scheduling.</span><span class="ko">이 노드에서 오늘 됨; GPU 프로세스는 k8s 스케줄링 밖.</span></td></tr>
+<tr><td><b><span class="en">B. Real (non-kind) K8s on the GPU node</span><span class="ko">B. GPU 노드에 진짜(비-kind) K8s</span></b></td><td><span class="en">A node-level distro (k3s/RKE2/kubeadm) with the AMD GPU device plugin on the host kernel — the production-correct path; <code>amd.com/gpu</code> scheduling works natively.</span><span class="ko">호스트 커널에 AMD GPU device plugin을 둔 노드 레벨 배포판(k3s/RKE2/kubeadm) — 프로덕션 정석; <code>amd.com/gpu</code> 스케줄링이 네이티브로 됨.</span></td><td><span class="en">Needs root/systemd — blocked on this shared node (the very reason we chose kind).</span><span class="ko">root/systemd 필요 — 이 공유 노드에선 막힘(애초에 kind 고른 이유).</span></td></tr>
+<tr><td><span class="en">C. Advanced kind GPU</span><span class="ko">C. 고급 kind GPU</span></td><td><span class="en">Inject devices post-boot (not via extraMounts) + a privileged device-plugin with hostPath devices; finicky and unofficial for AMD.</span><span class="ko">부팅 후 장치 주입(extraMounts 말고) + hostPath 장치를 쓰는 privileged device-plugin; AMD엔 까다롭고 비공식.</span></td><td><span class="en">Possible but fragile; not worth it for a learning lab.</span><span class="ko">가능하나 취약; 학습 랩엔 안 맞음.</span></td></tr>
+</table>
+
+<div class="tip"><strong><span class="en">Takeaway</span><span class="ko">핵심</span></strong><br>
+<span class="en">The Argo CD / GitOps lessons (Phases 1–4) are entirely engine-agnostic — they don't need a GPU. Real GPU scheduling belongs on a real K8s node with the AMD device plugin (Option B), which is exactly the kind of cluster a production llm-d would run on. kind was the right call for learning the control plane; it is the wrong tool for GPU passthrough. Knowing that boundary precisely <i>is</i> the result of this phase.</span>
+<span class="ko">ArgoCD / GitOps 레슨(Phase 1–4)은 전적으로 엔진 무관 — GPU가 필요 없다. 실제 GPU 스케줄링은 AMD device plugin이 있는 진짜 K8s 노드(선택지 B)의 몫이고, 그게 바로 프로덕션 llm-d가 도는 클러스터다. kind은 컨트롤플레인 학습엔 옳은 선택, GPU passthrough엔 틀린 도구. 그 경계를 정확히 아는 것이 이 단계의 결과다.</span></p></div>
+
+<h2><span class="en">Reproduce (the finding)</span><span class="ko">재현 (이 발견)</span></h2>
+<pre><code># reproduce the failure:
+cat > gpu-kind.yaml &lt;&lt;'Y'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: gitops-gpu
+nodes: [{ role: control-plane, extraMounts: [
+  { hostPath: /dev/kfd, containerPath: /dev/kfd },
+  { hostPath: /dev/dri, containerPath: /dev/dri } ] }]
+Y
+kind create cluster --config gpu-kind.yaml --wait 120s    # → fails: "could not find a log line ... Multi-User System"
+
+# reproduce the contrast (works):
+docker run --rm --device /dev/kfd --device /dev/dri busybox ls -l /dev/kfd</code></pre>
+
+<div class="seriesnav">
+  <a href="argocd-phase4-llmd.html">← <span class="en">Phase 4: llm-d control plane</span><span class="ko">Phase 4: llm-d 컨트롤플레인</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase6-prodops.html"><span class="en">Phase 6: prod-ops &amp; DR</span><span class="ko">Phase 6: 실운영 &amp; DR</span> →</a>
+</div>
+
+<footer><span class="en">Argo CD lab series · Phase 5/6 · 2026-06-12 · mi250-052 · GitOps repo: github.com/hanq-moreh/argocd-gitops-lab</span><span class="ko">ArgoCD 실습 시리즈 · Phase 5/6 · 2026-06-12 · mi250-052 · GitOps 저장소: github.com/hanq-moreh/argocd-gitops-lab</span></footer>
+
+</div>
+</body>
+</html>

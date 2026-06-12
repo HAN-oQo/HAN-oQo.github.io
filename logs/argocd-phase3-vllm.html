@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArgoCD 실습 Phase 3 — 모델 서버 under GitOps</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.85rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.3rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 26px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  mark { background: var(--amber-bg); color: var(--amber-ink); padding: 0 3px; border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.87rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 16px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .seriesnav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 22px 0; padding: 12px 16px;
+               background: var(--gray-bg); border: 1px solid var(--line); border-radius: 10px; font-size: 0.85rem; }
+  .seriesnav a { text-decoration: none; color: var(--blue-ink); font-weight: 600; }
+  .seriesnav a:hover { text-decoration: underline; }
+  .seriesnav .mid { color: var(--muted); font-weight: 400; }
+  .seriesnav .disabled { color: var(--faint); font-weight: 400; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width:1.7em; height:1.7em; padding:0 .5em; border-radius:999px; background:var(--blue); color:#fff; font-size:0.8rem; font-weight:700; margin-right:6px; }
+  .drill { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--purple-bd); border-radius: 10px; padding: 14px 20px; margin: 16px 0; }
+  .drill h3 { margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="argocd-llm-d-gitops.html"><span class="en">Argo CD series</span><span class="ko">ArgoCD 시리즈</span></a> · <span class="en">Phase 3</span><span class="ko">Phase 3</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase2-selfheal.html">← <span class="en">Phase 2: self-heal</span><span class="ko">Phase 2: self-heal</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase4-llmd.html"><span class="en">Phase 4: llm-d control plane</span><span class="ko">Phase 4: llm-d 컨트롤플레인</span> →</a>
+</div>
+
+<h1><span class="pchip">3</span><span class="en">A real model server under GitOps</span><span class="ko">GitOps 아래 진짜 모델 서버</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 (CPU path) · Status: <b class="status-ok">✓ DONE</b> · Served: Qwen2.5-0.5B-Instruct GGUF via an OpenAI-compatible endpoint</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 (CPU 경로) · 상태: <b class="status-ok">✓ 완료</b> · 서빙: Qwen2.5-0.5B-Instruct GGUF, OpenAI 호환 엔드포인트</span></p>
+
+<div class="tip"><strong><span class="en">Goal of this phase</span><span class="ko">이 단계 목표</span></strong><br>
+<span class="en">Put an actual inference server — an OpenAI <code>/v1</code> endpoint serving a real model — under the same Argo CD control as Phase 2, and do a <b>model version bump as a commit</b> (watch the rolling update). The point is operating the inference workload itself declaratively.</span>
+<span class="ko">실제 추론 서버 — 진짜 모델을 서빙하는 OpenAI <code>/v1</code> 엔드포인트 — 를 Phase 2와 같은 ArgoCD 통제 아래 두고, <b>모델 버전업을 커밋으로</b> 수행한다(롤링 업데이트 관찰). 핵심은 추론 워크로드 자체를 선언형으로 운영하는 것.</span></p>
+
+<div class="note"><strong><span class="en">Engine choice — why llama.cpp, not vLLM, on this CPU path</span><span class="ko">엔진 선택 — 이 CPU 경로에서 vLLM 아닌 llama.cpp인 이유</span></strong><br>
+<span class="en">The plan named "CPU vLLM," but vLLM's published images are CUDA-oriented and a CPU build is heavy to stand up in a kind pod (the earlier CPU-cluster log already established this). For a reliable, tiny, OpenAI-compatible server the stand-in is <code>llama.cpp</code> serving a Qwen2.5-0.5B GGUF. The GitOps lesson — and the API surface (<code>/v1/models</code>, <code>/v1/chat/completions</code>) — is identical; only the engine binary differs. Phase 5 is where a real GPU engine is attempted.</span>
+<span class="ko">계획엔 "CPU vLLM"이라 적었지만, vLLM 공개 이미지는 CUDA 지향이고 CPU 빌드를 kind 파드에 띄우는 건 무겁다(앞선 CPU-cluster 로그에서 확인). 작고 안정적인 OpenAI 호환 서버 스탠드인은 Qwen2.5-0.5B GGUF를 서빙하는 <code>llama.cpp</code>. GitOps 레슨과 API 표면(<code>/v1/models</code>, <code>/v1/chat/completions</code>)은 동일하고 엔진 바이너리만 다르다. 진짜 GPU 엔진은 Phase 5에서 시도.</span></div>
+
+<h2><span class="en">The manifest</span><span class="ko">매니페스트</span></h2>
+<p><span class="en">An <code>initContainer</code> downloads the GGUF to a shared volume, then the server loads it locally — this mirrors how a real model server loads weights via a PVC/initContainer (and it's robust, see the gotcha below).</span>
+<span class="ko"><code>initContainer</code>가 GGUF를 공유 볼륨에 받아두고, 서버는 그걸 로컬로 로드 — 실제 모델 서버가 PVC/initContainer로 가중치를 로딩하는 방식과 같다(그리고 견고하다, 아래 함정 참고).</span></p>
+<pre><code># manifests/phase3-model/deployment.yaml  (excerpt)
+initContainers:
+  - name: fetch-model            # weights as a separate, cacheable step
+    image: curlimages/curl:8.10.1
+    args: ["-fL","-o","/models/model.gguf",
+           "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"]
+    volumeMounts: [{ name: models, mountPath: /models }]
+containers:
+  - name: llama
+    image: ghcr.io/ggml-org/llama.cpp:server
+    args: ["-m","/models/model.gguf","--host","0.0.0.0","--port","8000","-c","4096","--alias","qwen2.5-0.5b-q4_k_m"]
+    readinessProbe: { httpGet: { path: /health, port: 8000 }, failureThreshold: 60 }</code></pre>
+
+<div class="note"><strong><span class="en">Real gotcha — llama.cpp's <code>-hf</code> auto-download hit HTTP 401</span><span class="ko">실전 함정 — llama.cpp <code>-hf</code> 자동 다운로드가 HTTP 401</span></strong><br>
+<span class="en">The first version used llama.cpp's built-in <code>-hf ggml-org/...</code> fetcher. It crash-looped:</span>
+<span class="ko">첫 버전은 llama.cpp 내장 <code>-hf ggml-org/...</code> 페처를 썼다. 크래시루프:</span>
+<pre><code>E get_repo_commit: error: GET failed (401): Invalid username or password.
+W get_repo_files: failed to resolve commit for ggml-org/Qwen2.5-0.5B-Instruct-GGUF
+failed to download model from Hugging Face   → exitCode=1, CrashLoopBackOff</code></pre>
+<span class="en">The resolver authenticated badly against that repo path. Fix: stop using <code>-hf</code> and pull the GGUF directly with an <code>initContainer</code> (anonymous HTTPS works fine for the public <code>Qwen/...</code> repo). Robust <i>and</i> a better separation of concerns. This is the kind of thing that, once in Git, never bites the next operator.</span>
+<span class="ko">그 resolver가 해당 repo 경로에 인증을 잘못 했다. 해결: <code>-hf</code>를 버리고 <code>initContainer</code>로 GGUF를 직접 받음(public <code>Qwen/...</code> repo는 anonymous HTTPS로 잘 됨). 견고하고 관심사 분리도 더 낫다. 이런 건 한 번 Git에 박히면 다음 운영자를 다신 안 문다.</span></div>
+
+<h2><span class="en">Register &amp; serve</span><span class="ko">등록 &amp; 서빙</span></h2>
+<pre><code>$ kubectl apply -f https://raw.githubusercontent.com/hanq-moreh/argocd-gitops-lab/main/apps/phase3-model.yaml
+application.argoproj.io/phase3-model created
+# Argo CD: sync=Synced, creates ns serving + Deployment + Service
+#   init=terminated (download done) → container ready=true  @ ~24s</code></pre>
+
+<h3><span class="en">It actually answers</span><span class="ko">실제로 응답한다</span></h3>
+<pre><code>$ curl .../v1/models
+{"data":[{"id":"<mark>qwen2.5-0.5b-q4_k_m</mark>","object":"model","owned_by":"llamacpp",
+  "meta":{"n_ctx":4096,"n_params":630167424,"size":485452288}}]}   # 630M params, 485 MB
+
+$ curl .../v1/chat/completions -d '{"model":"qwen2.5-0.5b-q4_k_m",
+    "messages":[{"role":"user","content":"In one sentence: what is GitOps?"}],"max_tokens":60}'
+{"choices":[{"message":{"role":"assistant",
+  "content":"GitOps is a model of continuous integration and deployment using Git, ..."}}],
+ "usage":{"prompt_tokens":38,"completion_tokens":27,"total_tokens":65},
+ "timings":{"prompt_per_second":30.8, <mark>"predicted_per_second":3.25</mark>}}    # ← CPU speed, real numbers</code></pre>
+<p class="cap"><span class="en">~3.25 tokens/s decode on CPU for a 0.5B Q4 model — slow, as expected, but it's a genuine model server now under GitOps control.</span><span class="ko">0.5B Q4 모델이 CPU에서 디코딩 ~3.25 tok/s — 예상대로 느리지만, 이제 GitOps 통제 아래의 진짜 모델 서버다.</span></p>
+
+<div class="drill">
+<h3><span class="en">Drill — model version bump as a commit</span><span class="ko">드릴 — 모델 버전업을 커밋으로</span></h3>
+<p><span class="en">Change the quant <code>q4_k_m → q5_0</code> in Git (new weight URL + alias), commit, push. Argo CD does a rolling update: a new ReplicaSet downloads the new weights, becomes ready, and the old one scales to zero.</span>
+<span class="ko">Git에서 quant <code>q4_k_m → q5_0</code> 변경(새 가중치 URL + alias), 커밋, push. ArgoCD가 롤링 업데이트: 새 ReplicaSet이 새 가중치를 받아 ready가 되고 옛 것은 0으로 축소.</span></p>
+<pre><code># local: git commit -am "model version bump q4_k_m -> q5_0" && git push   (commit ba709b5)
+
+$ kubectl -n serving get rs
+model-server-5d64bdbf99   desired=1  ready=1     # ← q5_0 (new)
+model-server-69db74887f   desired=0  ready=0     # ← q4_k_m (rolled back to 0)
+model-server-78bb96b484   desired=0  ready=0     # ← original -hf attempt
+
+$ curl .../v1/models  →  "id":"<mark>qwen2.5-0.5b-q5_0</mark>"     # the new version is live</code></pre>
+<p class="cap"><span class="en">A model upgrade is now a reviewable commit with an automatic, ordered rollout — and rollback is <code>git revert</code>, exactly as in Phase 2.</span><span class="ko">모델 업그레이드가 이제 리뷰 가능한 커밋 + 자동·순차 롤아웃이고, 롤백은 Phase 2처럼 <code>git revert</code>.</span></p>
+</div>
+
+<h2><span class="en">Reproduce</span><span class="ko">재현</span></h2>
+<pre><code># needs Phase 1 cluster. register:
+kubectl apply -f https://raw.githubusercontent.com/hanq-moreh/argocd-gitops-lab/main/apps/phase3-model.yaml
+# wait for ready, then test from inside the cluster:
+kubectl -n serving run c --image=curlimages/curl:8.10.1 --rm -i --restart=Never -- \
+  curl -s http://model-server.serving.svc.cluster.local:8000/v1/models
+# version bump: edit the weight URL + --alias in manifests/phase3-model/deployment.yaml, commit, push, refresh.
+# cleanup: kubectl -n argocd delete application phase3-model   (prune removes ns serving workload)</code></pre>
+
+<h2><span class="en">Result</span><span class="ko">결과</span></h2>
+<p><span class="en">A real OpenAI-compatible model server runs under Argo CD: deployed from Git, weight-loaded via initContainer, version-bumped by commit with an automatic rolling update. The workload that used to be a hand-run <code>docker run</code> is now a reviewable, revertible, self-healing GitOps object. Phase 4 puts the llm-d routing layer (gateway + Inference Extension + endpoint picker) in front of it — as an app-of-apps with sync waves.</span>
+<span class="ko">진짜 OpenAI 호환 모델 서버가 ArgoCD 아래 돈다: Git에서 배포, initContainer로 가중치 로딩, 커밋으로 버전업 + 자동 롤링 업데이트. 손으로 <code>docker run</code>하던 워크로드가 이제 리뷰·되돌리기·self-heal 되는 GitOps 객체다. Phase 4는 그 앞에 llm-d 라우팅 계층(게이트웨이 + Inference Extension + endpoint picker)을 — sync wave 있는 app-of-apps로 — 둔다.</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase2-selfheal.html">← <span class="en">Phase 2: self-heal</span><span class="ko">Phase 2: self-heal</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase4-llmd.html"><span class="en">Phase 4: llm-d control plane</span><span class="ko">Phase 4: llm-d 컨트롤플레인</span> →</a>
+</div>
+
+<footer><span class="en">Argo CD lab series · Phase 3/6 · 2026-06-12 · mi250-052 · GitOps repo: github.com/hanq-moreh/argocd-gitops-lab</span><span class="ko">ArgoCD 실습 시리즈 · Phase 3/6 · 2026-06-12 · mi250-052 · GitOps 저장소: github.com/hanq-moreh/argocd-gitops-lab</span></footer>
+
+</div>
+</body>
+</html>

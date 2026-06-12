@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArgoCD 실습 Phase 4 — llm-d 컨트롤플레인 (app-of-apps + sync waves)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.85rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.3rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 26px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  mark { background: var(--amber-bg); color: var(--amber-ink); padding: 0 3px; border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.87rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .us { border-left: 4px solid var(--purple-bd); background: var(--purple-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--purple-ink); }
+  .us strong { color: var(--purple-ink); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 16px; }
+  .diagram { background: var(--gray-bg); padding: 16px 20px; border-radius: 8px; font-family: "SF Mono", Menlo, monospace; font-size: 0.74rem; line-height: 1.5; white-space: pre; overflow-x: auto; border: 1px solid var(--line); }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .status-wip { color: var(--amber-ink); font-weight: 600; }
+  .seriesnav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 22px 0; padding: 12px 16px;
+               background: var(--gray-bg); border: 1px solid var(--line); border-radius: 10px; font-size: 0.85rem; }
+  .seriesnav a { text-decoration: none; color: var(--blue-ink); font-weight: 600; }
+  .seriesnav a:hover { text-decoration: underline; }
+  .seriesnav .mid { color: var(--muted); font-weight: 400; }
+  .seriesnav .disabled { color: var(--faint); font-weight: 400; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width:1.7em; height:1.7em; padding:0 .5em; border-radius:999px; background:var(--blue); color:#fff; font-size:0.8rem; font-weight:700; margin-right:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="argocd-llm-d-gitops.html"><span class="en">Argo CD series</span><span class="ko">ArgoCD 시리즈</span></a> · <span class="en">Phase 4</span><span class="ko">Phase 4</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase3-vllm.html">← <span class="en">Phase 3: model server</span><span class="ko">Phase 3: 모델 서버</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase5-gpu.html"><span class="en">Phase 5: real GPU</span><span class="ko">Phase 5: 실제 GPU</span> →</a>
+</div>
+
+<h1><span class="pchip">4</span><span class="en">llm-d control plane — app-of-apps + sync waves</span><span class="ko">llm-d 컨트롤플레인 — app-of-apps + sync waves</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 · Status: <b class="status-ok">✓ control-plane-as-code done</b> · dataplane (Envoy+EPP routing) intentionally out of scope — see note</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 · 상태: <b class="status-ok">✓ 컨트롤플레인 as-code 완료</b> · 데이터플레인(Envoy+EPP 실라우팅)은 의도적으로 범위 밖 — 아래 주석</span></p>
+
+<div class="tip"><strong><span class="en">Goal of this phase</span><span class="ko">이 단계 목표</span></strong><br>
+<span class="en">Express the llm-d control plane as code: a single <b>app-of-apps</b> root that brings up the Gateway API Inference Extension (GIE) CRDs and an <code>InferencePool</code> in the correct order using <b>sync waves</b> (CRDs before the CR that needs them). This is the ArgoCD machinery you'd use to operate the real llm-d stack.</span>
+<span class="ko">llm-d 컨트롤플레인을 코드로 표현한다: 단일 <b>app-of-apps</b> 루트가 Gateway API Inference Extension(GIE) CRD와 <code>InferencePool</code>을 <b>sync wave</b>로 올바른 순서로 올린다(CRD를 그걸 필요로 하는 CR보다 먼저). 실제 llm-d 스택을 운영할 때 쓰는 바로 그 ArgoCD 장치다.</span></p>
+
+<div class="diagram">  apps/phase4-root.yaml  (app-of-apps)
+       │  creates child Applications, applied in sync-wave order
+       ├─ wave 0 ─►  phase4-gie-crds        →  InferencePool / InferenceObjective / … CRDs
+       └─ wave 1 ─►  phase4-inferencepool    →  InferencePool CR  (selector: app=model-server)
+                            │                              │
+                            ▼                              ▼
+                     CRD registered first    →    CR accepted (would point the EPP at the Phase-3 pods)</div>
+<span class="cap"><span class="en">Fig — the llm-d slice as one app-of-apps. Apply the root, the rest unfolds in order.</span><span class="ko">그림 — llm-d 조각을 app-of-apps 하나로. 루트를 적용하면 나머지가 순서대로 펼쳐진다.</span></span>
+
+<h2><span class="en">What got applied</span><span class="ko">무엇이 적용됐나</span></h2>
+<pre><code># apps/phase4-llmd/00-gie-crds.yaml   (child Application, wave 0)
+metadata: { annotations: { argocd.argoproj.io/sync-wave: "0" } }
+spec.syncPolicy.syncOptions: [ ServerSideApply=true ]   # ← avoids the Phase-1 256 KiB CRD trap
+
+# apps/phase4-llmd/10-inferencepool.yaml  (child Application, wave 1)
+metadata: { annotations: { argocd.argoproj.io/sync-wave: "1" } }
+
+# manifests/phase4-llmd/pool/inferencepool.yaml  (the CR)
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+spec:
+  selector: { matchLabels: { app: model-server } }   # ← the Phase 3 pods
+  targetPorts: [ { number: 8000 } ]
+  endpointPickerRef: { name: qwen-epp, port: { number: 9002 } }</code></pre>
+
+<h2><span class="en">Live — the waves unfold</span><span class="ko">실제 — wave가 펼쳐진다</span></h2>
+<pre><code>$ kubectl apply -f .../apps/phase4-root.yaml      # apply ONE object
+application.argoproj.io/phase4-llmd-root created
+
+# the root creates the two child apps; watched live:
+t+33s  CRD_registered=<mark>yes</mark>   InferencePool_CR=no    # wave 0 done, wave 1 retrying
+t+27s* InferencePool_CR=<mark>yes</mark>   inferencepool-app=Synced/Healthy   # wave 1 converged
+
+$ kubectl -n argocd get applications | grep phase4
+phase4-llmd-root       Synced   Healthy     # app-of-apps root
+phase4-gie-crds        Synced   Healthy     # wave 0 (CRDs) — briefly Degraded while establishing
+phase4-inferencepool   Synced   Healthy     # wave 1 (CR)
+
+$ kubectl -n serving get inferencepool qwen-pool -o ...
+name=qwen-pool  selector={"app":"model-server"}  port=8000  epp=qwen-epp:9002</code></pre>
+<p class="cap"><span class="en">The sync-wave ordering is the point: the CR (wave 1) cannot exist before its CRD (wave 0). Argo CD created the CRDs app first; the pool app's early attempts failed until the CRD was registered, then its retry succeeded — eventual convergence, no manual sequencing.</span><span class="ko">sync-wave 순서가 핵심: CR(wave1)은 CRD(wave0) 없이 존재할 수 없다. ArgoCD가 CRD 앱을 먼저 만들고, pool 앱의 초기 시도는 CRD 등록 전까진 실패하다 재시도로 성공 — 수동 순서 지정 없이 최종 수렴.</span></p>
+
+<div class="note"><strong><span class="en">Two real gotchas</span><span class="ko">실전 함정 둘</span></strong><br>
+<span class="en">① <b>InferencePool v1 requires <code>endpointPickerRef.port</code></b> — without it the apply is rejected (<code>port is required when kind is 'Service'</code>); the pool app sat OutOfSync/Missing until fixed. ② <b><code>phase4-gie-crds</code> briefly showed Degraded</b> while the four CRDs were still establishing (Argo CD returns empty health for a CRD until its <code>Established</code> condition is True), then <b>resolved to Healthy on its own</b> once all four reported <code>Established=True</code>. A transient, not a failure — a good reminder that CRD health is eventually-consistent.</span>
+<span class="ko">① <b>InferencePool v1은 <code>endpointPickerRef.port</code> 필수</b> — 없으면 apply 거부(<code>port is required ...</code>); 고치기 전까지 pool 앱이 OutOfSync/Missing. ② <b><code>phase4-gie-crds</code>가 잠깐 Degraded</b>였다 — CRD 4개가 establishing 중일 때(ArgoCD는 CRD의 <code>Established</code>가 True가 되기 전까진 빈 health를 반환), 그 뒤 4개 모두 <code>Established=True</code>가 되자 <b>스스로 Healthy로 풀렸다</b>. 실패가 아니라 transient — CRD health가 eventually-consistent임을 보여주는 좋은 사례.</span></div>
+
+<h2><span class="en">Honest scope — what this is and isn't</span><span class="ko">정직한 범위 — 무엇이고 무엇이 아닌가</span></h2>
+<p><span class="en">This phase delivers the <b>control-plane-as-code</b>: the GIE CRDs and an <code>InferencePool</code> that groups the model-server pods, brought up by an app-of-apps with sync-wave ordering — exactly the ArgoCD pattern you'd use for the real stack. It does <b>not</b> stand up the live dataplane (an Envoy-based gateway + a running EPP actually scoring endpoints and routing traffic): that needs a gateway implementation (kgateway/Istio) and the EPP image, which is heavy and flaky on a CPU kind box and adds little to the <i>GitOps</i> lesson.</span>
+<span class="ko">이 단계는 <b>컨트롤플레인 as-code</b>를 제공한다: GIE CRD와 model-server 파드를 묶는 <code>InferencePool</code>을 sync-wave 순서의 app-of-apps로 기동 — 실제 스택에 쓸 바로 그 ArgoCD 패턴. 다만 라이브 <b>데이터플레인</b>(Envoy 기반 게이트웨이 + 엔드포인트를 실제로 스코어링·라우팅하는 EPP)은 세우지 않았다: 그건 게이트웨이 구현체(kgateway/Istio)와 EPP 이미지가 필요한데 CPU kind에선 무겁고 불안정하며 <i>GitOps</i> 레슨엔 보태는 게 적다.</span></p>
+
+<div class="us"><strong><span class="en">Editor's note — connects to the Heimdall deep-dives</span><span class="ko">편집자 주 — Heimdall 딥다이브와 연결</span></strong><br>
+<span class="en">The EPP named here (<code>qwen-epp</code>) and the routing logic behind an <code>InferencePool</code> are exactly what the earlier code-level deep-dives covered: the <i>heimdall-inference-scheduler</i> (the EPP fork — scorers, flow control, P/D) and <i>heimdall-aigateway</i>. Phase 4 is the operational complement: how those components are <b>deployed and ordered</b> as code. Code internals there, GitOps wiring here.</span>
+<span class="ko">여기 이름 붙인 EPP(<code>qwen-epp</code>)와 <code>InferencePool</code> 뒤의 라우팅 로직이 바로 앞선 코드 차원 딥다이브의 내용이다: <i>heimdall-inference-scheduler</i>(EPP fork — 스코어러·flow control·P/D)와 <i>heimdall-aigateway</i>. Phase 4는 그 운영 짝 — 그 컴포넌트들을 코드로 <b>어떻게 배포·순서화</b>하는가. 거긴 코드 내부, 여긴 GitOps 배선.</span></div>
+
+<h2><span class="en">Reproduce</span><span class="ko">재현</span></h2>
+<pre><code># needs Phase 1 cluster + Phase 3 model server. apply the app-of-apps root:
+kubectl apply -f https://raw.githubusercontent.com/hanq-moreh/argocd-gitops-lab/main/apps/phase4-root.yaml
+# watch the children + ordering:
+watch -n2 'kubectl -n argocd get applications | grep phase4; kubectl get crd | grep inference; kubectl -n serving get inferencepool'
+# cleanup (reverse order handled by Argo CD): kubectl -n argocd delete application phase4-llmd-root</code></pre>
+
+<h2><span class="en">Result</span><span class="ko">결과</span></h2>
+<p><span class="en">The llm-d control-plane slice is now a single committable unit: one <code>kubectl apply</code> of the root brings up CRDs then the InferencePool in dependency order, self-heals, and tears down cleanly. That's the operational backbone for running llm-d. Phase 5 attempts the part a CPU box can't fake — a real MI250 GPU under this same control.</span>
+<span class="ko">llm-d 컨트롤플레인 조각이 이제 커밋 가능한 단일 단위다: 루트를 한 번 <code>kubectl apply</code>하면 CRD→InferencePool이 의존 순서로 올라오고, self-heal하고, 깔끔히 내려간다. llm-d 운영의 골격이다. Phase 5는 CPU 박스가 흉내 못 내는 부분 — 같은 통제 아래의 진짜 MI250 GPU — 를 시도한다.</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase3-vllm.html">← <span class="en">Phase 3: model server</span><span class="ko">Phase 3: 모델 서버</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase5-gpu.html"><span class="en">Phase 5: real GPU</span><span class="ko">Phase 5: 실제 GPU</span> →</a>
+</div>
+
+<footer><span class="en">Argo CD lab series · Phase 4/6 · 2026-06-12 · mi250-052 · GitOps repo: github.com/hanq-moreh/argocd-gitops-lab</span><span class="ko">ArgoCD 실습 시리즈 · Phase 4/6 · 2026-06-12 · mi250-052 · GitOps 저장소: github.com/hanq-moreh/argocd-gitops-lab</span></footer>
+
+</div>
+</body>
+</html>

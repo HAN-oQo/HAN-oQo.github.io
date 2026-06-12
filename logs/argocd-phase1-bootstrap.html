@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArgoCD 실습 Phase 1 — kind + ArgoCD 부트스트랩</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.85rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.3rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 26px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.87rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 16px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .seriesnav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 22px 0; padding: 12px 16px;
+               background: var(--gray-bg); border: 1px solid var(--line); border-radius: 10px; font-size: 0.85rem; }
+  .seriesnav a { text-decoration: none; color: var(--blue-ink); font-weight: 600; }
+  .seriesnav a:hover { text-decoration: underline; }
+  .seriesnav .mid { color: var(--muted); font-weight: 400; }
+  .seriesnav .disabled { color: var(--faint); font-weight: 400; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width:1.7em; height:1.7em; padding:0 .5em; border-radius:999px; background:var(--blue); color:#fff; font-size:0.8rem; font-weight:700; margin-right:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="argocd-llm-d-gitops.html"><span class="en">Argo CD series</span><span class="ko">ArgoCD 시리즈</span></a> · <span class="en">Phase 1</span><span class="ko">Phase 1</span></p>
+
+<div class="seriesnav">
+  <span class="disabled">← <span class="en">Phase 0</span><span class="ko">Phase 0</span></span>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase2-selfheal.html"><span class="en">Phase 2: self-heal &amp; rollback</span><span class="ko">Phase 2: self-heal &amp; 롤백</span> →</a>
+</div>
+
+<h1><span class="pchip">1</span><span class="en">Bootstrap — kind cluster + Argo CD</span><span class="ko">부트스트랩 — kind 클러스터 + ArgoCD</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 · Status: <b class="status-ok">✓ DONE</b> · Result: Argo CD v3.4.3 on kind v0.32 (K8s v1.36.1), root-free, ~1m51s</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 · 상태: <b class="status-ok">✓ 완료</b> · 결과: kind v0.32(K8s v1.36.1) 위 ArgoCD v3.4.3, root 없이 약 1분 51초</span></p>
+
+<div class="tip"><strong><span class="en">Goal of this phase</span><span class="ko">이 단계 목표</span></strong><br>
+<span class="en">Stand up a throwaway Kubernetes cluster and an Argo CD control plane on a shared GPU node — without root, without touching the host — so the rest of the series has somewhere to run. Concept learned: <b>the Argo CD control-plane components and the install gotcha.</b></span>
+<span class="ko">공유 GPU 노드에 일회용 Kubernetes 클러스터와 ArgoCD 컨트롤플레인을 — root 없이, 호스트 안 건드리고 — 띄워서 시리즈 나머지가 돌 곳을 만든다. 배운 개념: <b>ArgoCD 컨트롤플레인 구성요소 + 설치 함정.</b></span></p>
+
+<p><span class="en">Why <b>kind</b> (Kubernetes-in-Docker) and not kubeadm/k3s: this is a shared node with no passwordless sudo, and the house rule is "Docker-only, don't mutate the host." kind runs each K8s node as a Docker container, so the whole cluster is root-free and disappears with one command. Full rationale is in the <a href="argocd-llm-d-gitops.html#env">series overview §3</a>.</span>
+<span class="ko"><b>kind</b>(Kubernetes-in-Docker)를 쓰고 kubeadm/k3s를 안 쓴 이유: passwordless sudo 없는 공유 노드이고 "Docker 전용, 호스트 건드리지 말 것" 규칙이 있어서다. kind은 각 K8s 노드를 Docker 컨테이너로 띄워 클러스터 전체가 root 불필요하고 명령 한 줄로 사라진다. 자세한 근거는 <a href="argocd-llm-d-gitops.html#env">시리즈 개요 §3</a>.</span></p>
+
+<h2><span class="en">Live execution</span><span class="ko">실제 실행</span></h2>
+
+<h3><span class="en">Cluster up</span><span class="ko">클러스터 기동</span></h3>
+<pre><code>$ kind create cluster --name gitops-lab --wait 180s
+ ✓ Ensuring node image (kindest/node:v1.36.1) 🖼
+ ✓ Starting control-plane 🕹️   ✓ Installing CNI 🔌   ✓ Installing StorageClass 💾
+ • Ready after 16s 💚
+
+$ kubectl get nodes -o wide
+NAME                       STATUS  ROLES          VERSION  OS-IMAGE                      CONTAINER-RUNTIME
+gitops-lab-control-plane   Ready   control-plane  v1.36.1  Debian GNU/Linux 13 (trixie)  containerd://2.3.1</code></pre>
+<p class="cap"><span class="en">A full K8s control plane inside one Docker container — no host services, no sudo.</span><span class="ko">Docker 컨테이너 하나 안의 완전한 K8s 컨트롤플레인 — 호스트 서비스 없음, sudo 없음.</span></p>
+
+<h3><span class="en">Argo CD installed — 7 components</span><span class="ko">ArgoCD 설치 — 구성요소 7개</span></h3>
+<pre><code>$ kubectl create namespace argocd
+$ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+$ kubectl -n argocd rollout status deploy/argocd-server --timeout=420s
+deployment "argocd-server" successfully rolled out
+
+$ kubectl -n argocd get pods
+argocd-application-controller-0       1/1  Running   # ← the reconcile engine (the loop)
+argocd-repo-server-...                1/1  Running   # ← clones Git, renders manifests
+argocd-server-...                     1/1  Running   # ← API + Web UI
+argocd-applicationset-controller-...  1/1  Running   # ← fans out ApplicationSets
+argocd-dex-server-...                 1/1  Running   # ← SSO (unused locally)
+argocd-notifications-controller-...   1/1  Running   # ← alerts
+argocd-redis-...                      1/1  Running   # ← cache
+# images: quay.io/argoproj/argocd:v3.4.3</code></pre>
+<p class="cap"><span class="en">The two doing the real work: <code>application-controller</code> (runs the observe→diff→sync loop) and <code>repo-server</code> (turns your Git into manifests).</span><span class="ko">실제 일하는 둘: <code>application-controller</code>(관찰→비교→sync 루프)와 <code>repo-server</code>(Git을 매니페스트로 변환).</span></p>
+
+<div class="note"><strong><span class="en">Real gotcha — the ApplicationSet CRD didn't install</span><span class="ko">실전 함정 — ApplicationSet CRD가 설치 안 됨</span></strong><br>
+<pre><code>The CustomResourceDefinition "applicationsets.argoproj.io" is invalid:
+  metadata.annotations: Too long: may not be more than 262144 bytes
+$ kubectl get crd applicationsets.argoproj.io
+Error from server (NotFound): ... not found     # ← silently missing</code></pre>
+<span class="en">Client-side <code>kubectl apply</code> stamps a <code>last-applied-configuration</code> annotation on each object; the ApplicationSet CRD is large enough that this annotation exceeds Kubernetes' 256 KiB limit, so that one resource fails while everything else succeeds. Fix = <b>server-side apply</b> (no such annotation):</span>
+<span class="ko">클라이언트 측 <code>kubectl apply</code>는 각 객체에 <code>last-applied-configuration</code> 어노테이션을 박는데, ApplicationSet CRD가 커서 그게 256 KiB 한도를 넘긴다. 그 리소스 하나만 실패하고 나머진 성공. 해결 = <b>server-side apply</b>(그 어노테이션 없음):</span>
+<pre><code>$ kubectl apply --server-side=true --force-conflicts -n argocd -f .../install.yaml
+$ kubectl get crd | grep argoproj
+applications.argoproj.io       ...    applicationsets.argoproj.io  ✓    appprojects.argoproj.io  ...</code></pre>
+<span class="en"><b>Carried into the lab:</b> the reproduce block below uses <code>--server-side</code> from the start, so you never hit this.</span>
+<span class="ko"><b>실습에 반영:</b> 아래 재현 블록은 처음부터 <code>--server-side</code>라 이 함정을 안 밟는다.</span></div>
+
+<h2><span class="en">Reproduce from scratch</span><span class="ko">처음부터 재현</span></h2>
+<p><span class="en">Any Linux host with Docker (your user in the <code>docker</code> group). No root, no system packages — only <code>~/bin</code> + containers.</span><span class="ko">Docker 있는 Linux 호스트면 됨(사용자가 <code>docker</code> 그룹). root·시스템 패키지 없음 — <code>~/bin</code> + 컨테이너만.</span></p>
+<pre><code>set -euo pipefail
+mkdir -p ~/bin && export PATH="$HOME/bin:$PATH"
+curl -fLo ~/bin/kind    https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64      && chmod +x ~/bin/kind
+curl -fLo ~/bin/kubectl https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl && chmod +x ~/bin/kubectl
+
+kind get clusters | grep -qx gitops-lab || kind create cluster --name gitops-lab --wait 180s
+
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply --server-side=true --force-conflicts -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl -n argocd rollout status deploy/argocd-server --timeout=420s
+
+# verify + UI access
+kubectl get crd | grep argoproj          # applications / applicationsets / appprojects
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+kubectl -n argocd port-forward svc/argocd-server 8080:443   # ssh -L 8080:localhost:8080 &lt;node&gt; → https://localhost:8080
+
+# teardown (zero host footprint)
+# kind delete cluster --name gitops-lab</code></pre>
+
+<h2><span class="en">Result</span><span class="ko">결과</span></h2>
+<p><span class="en">A real Argo CD control plane runs on mi250-052 — root-free, fully containerized, all three CRDs registered, reconcile engine healthy. The cluster is ready to be pointed at a Git repo, which is exactly Phase 2.</span>
+<span class="ko">진짜 ArgoCD 컨트롤플레인이 mi250-052에서 — root 없이, 완전 컨테이너화로, CRD 3개 등록, reconcile 엔진 정상 — 돌고 있다. 클러스터를 Git 저장소에 물릴 준비 완료, 그게 바로 Phase 2.</span></p>
+
+<div class="seriesnav">
+  <span class="disabled">← <span class="en">Phase 0</span><span class="ko">Phase 0</span></span>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase2-selfheal.html"><span class="en">Phase 2: self-heal &amp; rollback</span><span class="ko">Phase 2: self-heal &amp; 롤백</span> →</a>
+</div>
+
+<footer><span class="en">Argo CD lab series · Phase 1/6 · 2026-06-12 · mi250-052 · GitOps repo: github.com/hanq-moreh/argocd-gitops-lab</span><span class="ko">ArgoCD 실습 시리즈 · Phase 1/6 · 2026-06-12 · mi250-052 · GitOps 저장소: github.com/hanq-moreh/argocd-gitops-lab</span></footer>
+
+</div>
+</body>
+</html>

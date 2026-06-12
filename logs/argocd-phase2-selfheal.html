@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArgoCD 실습 Phase 2 — 우리 GitOps repo + self-heal / 롤백</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.85rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.3rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 26px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  mark { background: var(--amber-bg); color: var(--amber-ink); padding: 0 3px; border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.87rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 16px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .seriesnav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 22px 0; padding: 12px 16px;
+               background: var(--gray-bg); border: 1px solid var(--line); border-radius: 10px; font-size: 0.85rem; }
+  .seriesnav a { text-decoration: none; color: var(--blue-ink); font-weight: 600; }
+  .seriesnav a:hover { text-decoration: underline; }
+  .seriesnav .mid { color: var(--muted); font-weight: 400; }
+  .seriesnav .disabled { color: var(--faint); font-weight: 400; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width:1.7em; height:1.7em; padding:0 .5em; border-radius:999px; background:var(--blue); color:#fff; font-size:0.8rem; font-weight:700; margin-right:6px; }
+  .drill { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--purple-bd); border-radius: 10px; padding: 14px 20px; margin: 16px 0; }
+  .drill h3 { margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="argocd-llm-d-gitops.html"><span class="en">Argo CD series</span><span class="ko">ArgoCD 시리즈</span></a> · <span class="en">Phase 2</span><span class="ko">Phase 2</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase1-bootstrap.html">← <span class="en">Phase 1: bootstrap</span><span class="ko">Phase 1: 부트스트랩</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase3-vllm.html"><span class="en">Phase 3: model server</span><span class="ko">Phase 3: 모델 서버</span> →</a>
+</div>
+
+<h1><span class="pchip">2</span><span class="en">Our own GitOps repo — drift, self-heal, rollback</span><span class="ko">우리 GitOps repo — drift · self-heal · 롤백</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 · Status: <b class="status-ok">✓ DONE</b> · Repo: <a href="https://github.com/hanq-moreh/argocd-gitops-lab">github.com/hanq-moreh/argocd-gitops-lab</a></span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 · 상태: <b class="status-ok">✓ 완료</b> · 저장소: <a href="https://github.com/hanq-moreh/argocd-gitops-lab">github.com/hanq-moreh/argocd-gitops-lab</a></span></p>
+
+<div class="tip"><strong><span class="en">Goal of this phase</span><span class="ko">이 단계 목표</span></strong><br>
+<span class="en">Make a real Git repo the source of truth, register it as an Argo CD <code>Application</code>, and then prove the three behaviors that make GitOps worth it — by trying to break them: <b>commit→auto-sync</b>, <b>self-heal</b> (manual drift gets reverted), and <b>rollback</b> (<code>git revert</code>). Every status below is captured live.</span>
+<span class="ko">진짜 Git 저장소를 진실 공급원으로 삼아 ArgoCD <code>Application</code>으로 등록하고, GitOps를 가치 있게 만드는 세 동작을 — 일부러 깨뜨려 보며 — 증명한다: <b>commit→auto-sync</b>, <b>self-heal</b>(수동 drift가 되돌려짐), <b>롤백</b>(<code>git revert</code>). 아래 모든 상태는 라이브 캡쳐.</span></p>
+
+<h2><span class="en">The source of truth</span><span class="ko">진실 공급원</span></h2>
+<p><span class="en">A trivial workload (<code>traefik/whoami</code>, which echoes which pod served you) plus an Argo CD <code>Application</code> that points at it. The Application lives in the repo too — that's the GitOps idea: even "what Argo CD manages" is declared in Git.</span>
+<span class="ko">사소한 워크로드(<code>traefik/whoami</code> — 어느 파드가 응답했는지 알려줌)와 그걸 가리키는 ArgoCD <code>Application</code>. Application도 저장소에 들어있다 — 그게 GitOps: "ArgoCD가 무엇을 관리하는가"조차 Git에 선언.</span></p>
+<pre><code># apps/phase2-hello.yaml  — the Argo CD Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: phase2-hello, namespace: argocd }
+spec:
+  source:
+    repoURL: https://github.com/hanq-moreh/argocd-gitops-lab.git
+    targetRevision: main
+    path: manifests/phase2-hello          # ← sync this folder
+  destination: { server: https://kubernetes.default.svc, namespace: demo }
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }   # ← the two policies we test below
+    syncOptions: [ CreateNamespace=true ]</code></pre>
+
+<h2><span class="en">Register it &amp; first sync</span><span class="ko">등록 &amp; 첫 sync</span></h2>
+<pre><code>$ kubectl apply -f https://raw.githubusercontent.com/hanq-moreh/argocd-gitops-lab/main/apps/phase2-hello.yaml
+application.argoproj.io/phase2-hello created
+
+# auto-sync runs on its own — watched live:
+  t+1s  sync/health = /
+  t+2s  sync/health = OutOfSync/Healthy
+  t+3s  sync/health = Synced/Progressing
+  t+5s  sync/health = <mark>Synced/Healthy</mark></code></pre>
+
+<h3><span class="en">The resource tree (same info the Web UI shows)</span><span class="ko">리소스 트리 (Web UI가 보여주는 그 정보)</span></h3>
+<pre><code>$ kubectl -n argocd get application phase2-hello -o jsonpath='...'
+Synced  Healthy  (rev ba0e599)
+  - Service/whoami    -> Synced
+  - Deployment/whoami -> Synced
+
+$ kubectl -n demo get pods                     # Git says replicas: 2
+whoami-f568969bb-2l6fs   1/1   Running
+whoami-f568969bb-4flkq   1/1   Running
+
+$ curl http://whoami.demo.svc.cluster.local/   # hit it from inside the cluster
+Hostname: whoami-f568969bb-2l6fs
+IP: 10.244.0.12</code></pre>
+<p class="cap"><span class="en">Argo CD cloned the repo, rendered the two manifests, created namespace <code>demo</code>, and brought the Deployment to Healthy — all from one Application object.</span><span class="ko">ArgoCD가 저장소를 클론하고 매니페스트 2개를 렌더링, <code>demo</code> 네임스페이스 생성, Deployment를 Healthy까지 — Application 객체 하나로 전부.</span></p>
+
+<h2><span class="en">The three drills</span><span class="ko">세 가지 드릴</span></h2>
+
+<div class="drill">
+<h3>A · <span class="en">commit → auto-sync</span><span class="ko">commit → auto-sync</span></h3>
+<p><span class="en">Bump replicas <code>2 → 3</code> in Git and push. Argo CD picks up the new commit and converges — no <code>kubectl</code> touched the cluster.</span><span class="ko">Git에서 replicas <code>2 → 3</code> 올리고 push. ArgoCD가 새 커밋을 잡아 수렴 — <code>kubectl</code>로 클러스터를 건드리지 않았다.</span></p>
+<pre><code># local: git commit -am "scale whoami 2 -> 3" && git push   (commit 38cce16)
+  t+2s  syncedRev=ba0e599  readyReplicas=2
+  t+4s  syncedRev=<mark>38cce16</mark>  readyReplicas=2
+  t+6s  syncedRev=38cce16  readyReplicas=<mark>3</mark>   -> auto-synced to new commit, 3 pods ready</code></pre>
+<p class="cap"><span class="en">In production the trigger is a Git webhook or the default 3-minute poll; here a manual refresh annotation made it instant for the demo.</span><span class="ko">프로덕션에선 Git 웹훅 또는 기본 3분 폴링이 트리거; 여기선 데모용으로 refresh 어노테이션으로 즉시 반영.</span></p>
+</div>
+
+<div class="drill">
+<h3>B · <span class="en">self-heal — the 3 a.m. hotfix gets reverted</span><span class="ko">self-heal — 새벽 핫픽스가 되돌려짐</span></h3>
+<p><span class="en">Now drift the live cluster by hand: scale to 1. Git still says 3. Argo CD notices and reverts — in ~2 seconds.</span><span class="ko">이제 클러스터를 손으로 drift: 1로 깎는다. Git은 여전히 3. ArgoCD가 알아채고 되돌린다 — 약 2초.</span></p>
+<pre><code>$ kubectl -n demo scale deploy/whoami --replicas=1     # the manual "fix"
+  t+1s  spec.replicas=1  ready=1  appSync=<mark>OutOfSync</mark>
+  t+2s  spec.replicas=3  ready=1  appSync=Synced        # ← Argo CD already rewrote it back to 3
+  t+3s  spec.replicas=3  ready=3  appSync=Synced  -> self-heal reverted to 3</code></pre>
+<p class="cap"><span class="en">This is the line that makes "the cluster always matches Git" literally true. No silent config drift survives.</span><span class="ko">이 한 줄이 "클러스터는 항상 Git과 일치"를 말 그대로 참으로 만든다. 조용한 설정 drift가 살아남지 못한다.</span></p>
+</div>
+
+<div class="drill">
+<h3>C · <span class="en">rollback = <code>git revert</code></span><span class="ko">롤백 = <code>git revert</code></span></h3>
+<p><span class="en">No "remember the old value." Roll back the scale by reverting the commit and pushing. Argo CD syncs the cluster back to 2.</span><span class="ko">"예전 값 기억하기" 없음. 커밋을 revert·push해서 스케일을 롤백. ArgoCD가 클러스터를 2로 되돌린다.</span></p>
+<pre><code># local: git revert --no-edit HEAD && git push    (revert commit eb9a053)
+  t+2s  syncedRev=38cce16  readyReplicas=3
+  t+4s  syncedRev=<mark>eb9a053</mark>  readyReplicas=<mark>2</mark>   -> rolled back to 2 pods
+
+# the deploy history is the audit trail:
+  id=0  rev=ba0e599  at=12:51:49Z     (initial)
+  id=1  rev=38cce16  at=12:53:22Z     (scale to 3)
+  id=2  rev=eb9a053  at=12:54:18Z     (revert to 2)</code></pre>
+<p class="cap"><span class="en">Every state the cluster was ever in maps to a commit — that's the rollback target <i>and</i> the audit log, for free.</span><span class="ko">클러스터가 거쳐간 모든 상태가 커밋에 대응 — 그게 롤백 대상이자 감사 로그, 공짜로.</span></p>
+</div>
+
+<h2><span class="en">Reproduce</span><span class="ko">재현</span></h2>
+<p><span class="en">Assumes Phase 1 (a kind cluster with Argo CD). The repo is public, so no credentials needed.</span><span class="ko">Phase 1(ArgoCD 깔린 kind 클러스터) 전제. 저장소가 public이라 자격증명 불필요.</span></p>
+<pre><code># 1) register the app (from the public repo)
+kubectl apply -f https://raw.githubusercontent.com/hanq-moreh/argocd-gitops-lab/main/apps/phase2-hello.yaml
+
+# 2) watch it converge
+watch -n1 'kubectl -n argocd get application phase2-hello \
+  -o jsonpath="{.status.sync.status}/{.status.health.status}{\"\n\"}"; kubectl -n demo get pods'
+
+# 3) drills
+#  A auto-sync : edit replicas in Git, push, then:  kubectl -n argocd annotate application phase2-hello argocd.argoproj.io/refresh=normal --overwrite
+#  B self-heal : kubectl -n demo scale deploy/whoami --replicas=1   # watch it revert
+#  C rollback  : git revert --no-edit HEAD && git push              # watch it go back
+
+# cleanup:  kubectl -n argocd delete application phase2-hello   (prune=true removes the workload too)</code></pre>
+
+<h2><span class="en">Result</span><span class="ko">결과</span></h2>
+<p><span class="en">All three GitOps behaviors verified on a live cluster: changes flow Git→cluster automatically, manual drift is auto-corrected in seconds, and rollback is an ordinary <code>git revert</code>. The discipline this enforces — every change is a reviewable, revertible commit — is exactly what we want when the workload is a fleet of model servers. Next, Phase 3 puts a real model server under this same control.</span>
+<span class="ko">세 GitOps 동작을 라이브 클러스터에서 검증: 변경이 Git→클러스터로 자동 전파, 수동 drift는 수초 내 자동 교정, 롤백은 평범한 <code>git revert</code>. 이게 강제하는 규율 — 모든 변경이 리뷰·되돌리기 가능한 커밋 — 이 워크로드가 모델 서버 fleet일 때 바로 우리가 원하는 것. 다음 Phase 3은 진짜 모델 서버를 이 통제 아래 둔다.</span></p>
+
+<div class="seriesnav">
+  <a href="argocd-phase1-bootstrap.html">← <span class="en">Phase 1: bootstrap</span><span class="ko">Phase 1: 부트스트랩</span></a>
+  <a class="mid" href="argocd-llm-d-gitops.html"><span class="en">Overview &amp; plan</span><span class="ko">개요 &amp; 계획</span></a>
+  <a href="argocd-phase3-vllm.html"><span class="en">Phase 3: model server</span><span class="ko">Phase 3: 모델 서버</span> →</a>
+</div>
+
+<footer><span class="en">Argo CD lab series · Phase 2/6 · 2026-06-12 · mi250-052 · GitOps repo: github.com/hanq-moreh/argocd-gitops-lab</span><span class="ko">ArgoCD 실습 시리즈 · Phase 2/6 · 2026-06-12 · mi250-052 · GitOps 저장소: github.com/hanq-moreh/argocd-gitops-lab</span></footer>
+
+</div>
+</body>
+</html>
