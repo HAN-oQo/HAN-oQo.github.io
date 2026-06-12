@@ -646,10 +646,26 @@ ts            device,temp,power,gpu%,vram%,mem_act
 <tr><td>왜 같은 request_id?</td><td>decode 가 받은 KV 가 어느 request 의 것인지 매칭하려면 same key. prefill 가 send 할 때도 같은 ID 로 tag. decode 가 자기 ZMQ 로 받은 KV 의 ID 와 자기 HTTP request 의 ID 매칭</td></tr>
 </table>
 
-<p>출처: <a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_demo.py">vLLM disagg_proxy_demo.py</a> — 이 패턴 직접 구현. 아래 source 핵심:</p>
+<div class="note"><strong>⚠ 출처 정확히 — main branch 의 상황 변경</strong>: 본 실험이 인용한 코드는 <strong>실험 사용 image (rocm/vllm:latest, 6 months old) 안의 P2pNccl 전용 proxy</strong> 인 <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py</code>. 같은 코드가 <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 의 file</a> 인 <code>examples/online_serving/disagg_xpyd/disagg_prefill_proxy_xpyd.py</code>.<br><br>
+그러나 <strong>현재 vLLM main branch (2026-06 기준) 에서는 P2pNccl 관련 file 들 (proxy + p2p_nccl_engine.py + p2p connector 디렉토리) 이 사라짐</strong>. main 의 <a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_demo.py">disagg_proxy_demo.py</a> 는 다른 코드 — NIXL connector 같은 protocol 가정으로 <strong>request_id 인코딩 패턴 없음</strong>. 단순히 prefill 에 max_tokens=1 forward → decode 에 forward 만. KV routing 의 zmq_addr 부분이 connector 자체에서 처리되는 model.</div>
 
-<pre><code>prefill_request["max_tokens"] = 1            # max_tokens 강제 1
+<p><strong>출처</strong>: 본 실험이 직접 실행한 source — image 안의 <code>disagg_proxy_p2p_nccl_xpyd.py</code> + <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 file diff</a> 영구 link. 본 코드는 P2pNccl 의 정통 사용 패턴 — request_id 에 prefill / decode 의 zmq_addr 인코딩 + max_tokens=1 trick.</p>
 
+<pre><code># /app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py
+# (image 안 6mo old) 의 핵심 부분
+
+prefill_request["max_tokens"] = 1            # max_tokens 강제 1
+
+# prefill / decode 의 zmq_addr 발견 (proxy 가 service discovery 로 받은 dict 에서)
+prefill_list = list(prefill_instances.items())
+prefill_addr, prefill_zmq_addr = prefill_list[count % len(prefill_list)]
+prefill_zmq_addr = prefill_zmq_addr[0]
+decode_list = list(decode_instances.items())
+decode_addr, decode_zmq_addr = decode_list[count % len(decode_list)]
+decode_zmq_addr = decode_zmq_addr[0]
+
+# request_id 에 zmq_addr 인코딩 — prefill 의 P2pNcclConnector 가 parse 해서
+# 자기가 KV 보낼 곳 (decode_zmq_addr) 발견
 request_id = (
     f"___prefill_addr_{prefill_zmq_addr}___decode_addr_"
     f"{decode_zmq_addr}_{random_uuid()}"
@@ -667,6 +683,12 @@ generator = forward_request(
 )
 response = await make_response(generator)
 return response                               # decode 의 stream 반환</code></pre>
+
+<p><strong>실 실험 결과 (검증)</strong>: 우리가 받은 response 의 id 가 정확히 이 형식이었음 → image 의 이 코드가 동작함을 직접 증명:</p>
+<pre><code>{
+  "id": "cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_2a229150c5934404a3ba4bed4068ced2",
+  "choices": [{"text": " Photosynthesis is the process by which plants...", "finish_reason": "stop"}]
+}</code></pre>
 
 <h4>Proxy 없이 prefill 만 직접 호출하면?</h4>
 
@@ -715,7 +737,7 @@ This encoding embeds both the prefill instance address and decode instance addre
 <table>
 <tr><th>출처</th><th>인용 내용</th></tr>
 <tr><td><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a></td><td>P2pNcclConnector 의 원작자. proxy 의 dictionary maintenance + 1P1D selection + request_id 생성 역할 명시</td></tr>
-<tr><td><a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_demo.py">disagg_example_p2p_nccl_xpyd.sh</a></td><td>공식 demo script. proxy 명령이 vllm serve 명령들과 함께 한 sh 안에 있음 (proxy 없이 띄우는 패턴 X)</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 file: disagg_example_p2p_nccl_xpyd.sh</a></td><td>P2pNccl 의 공식 demo script (PR 의 file). vllm serve 명령들과 proxy 시작 명령을 한 sh 에 묶음. <strong>main branch 에서 이 sh 는 사라짐</strong> (P2pNccl deprecated). 본 실험은 image 안의 동일 file 사용</td></tr>
 <tr><td><a href="https://github.com/vllm-project/vllm/issues/16253">Issue #16253: [Usage] How to use xPyD disaggregated prefilling</a></td><td>사용자가 "demo 가 불명확해서 shell script 더 명확히 해달라" 요청 → 그 결과로 위 sh 가 추가됨. PDD 사용 = sh 따라가는 것</td></tr>
 <tr><td><a href="https://github.com/vllm-project/vllm/issues/21712">Issue #21712: P2PNcclConnector Assertion Error</a></td><td>사용자가 proxy 없이 chat completion 호출 시 만나는 assertion error 보고. 정확히 "remote_address None" 관련</td></tr>
 <tr><td><a href="https://github.com/vllm-project/vllm/blob/main/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py">vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</a></td><td>P2pNcclEngine source. <code>create_connect()</code> 의 <code>assert remote_address is not None</code><br>+ <code>ping</code> thread 가 <code>proxy_address != ""</code> 조건일 때만 start</td></tr>
@@ -736,7 +758,7 @@ This encoding embeds both the prefill instance address and decode instance addre
 
 <p>요약: <strong>ZMQ = handshake + metadata + control flow / NCCL = 실 KV cache tensor</strong>.</p>
 
-<p>그리고 <strong>source 코드 직접</strong> (<a href="https://github.com/vllm-project/vllm/blob/main/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py">vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</a>):</p>
+<p>그리고 <strong>source 코드 직접</strong> (image 안 + <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 의 file</a> 동일):</p>
 
 <pre><code># ZMQ ROUTER socket bind (들어오는 metadata listen)
 self.context = zmq.Context()
