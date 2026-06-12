@@ -187,7 +187,92 @@ P↔D transfer 는 매 request 마다 한 번 — TP 통신보다 빈도 낮음.
 <tr><td>network (huggingface.co)</td><td>✓ HTTP 200 — model pull 가능</td></tr>
 </table>
 
-<div class="note"><strong>운영 결정 (사용자 요청)</strong>: <code>pip install vllm</code> 안 함. <strong>Docker 로만 vLLM 띄움</strong> — 공유 노드에서 system Python 더럽히지 않기 위해 + ROCm vLLM 의 build 호환을 image 가 보장.</div>
+<div class="note"><strong>운영 결정 (사용자 요청)</strong>: <code>pip install vllm</code> 안 함. <strong>Docker 로만 vLLM 띄움</strong> — 공유 노드에서 system Python 더럽히지 않기 위해 + ROCm vLLM 의 build 호환을 image 가 보장.</div><h3>2-4. XGMI bandwidth 실 측정 — <code>rocm-smi --shownodesbw</code> + 왜 <code>--showtopo</code> 와 다른가</h3>
+
+<p><code>rocm-smi --showbw</code> 는 PCIe bandwidth 만 (XGMI 측정 X). XGMI bandwidth 는 별도 명령:</p>
+
+<pre><code>$ ssh mi250-052 rocm-smi --shownodesbw
+
+============================ ROCm System Management Interface ============================
+======================================= Bandwidth ========================================
+       GPU0         GPU1         GPU2         GPU3         GPU4         GPU5         GPU6         GPU7
+GPU0   N/A          50000-<strong>200000</strong> 0-0          0-0          50000-<strong>100000</strong> 0-0          50000-<strong>50000</strong>  0-0
+GPU1   50000-200000 N/A          0-0          50000-50000  0-0          0-0          0-0          50000-50000
+GPU2   0-0          0-0          N/A          50000-200000 50000-50000  0-0          50000-100000 0-0
+GPU3   0-0          50000-50000  50000-200000 N/A          0-0          50000-50000  0-0          0-0
+GPU4   50000-100000 0-0          50000-50000  0-0          N/A          50000-200000 0-0          0-0
+GPU5   0-0          0-0          0-0          50000-50000  50000-200000 N/A          0-0          50000-50000
+GPU6   50000-50000  0-0          50000-100000 0-0          0-0          0-0          N/A          50000-200000
+GPU7   0-0          50000-50000  0-0          0-0          0-0          50000-50000  50000-200000 N/A
+
+Format: min-max; Units: <strong>Mbps</strong>
+"0-0" min-max bandwidth indicates devices are <strong>not connected directly</strong></code></pre>
+
+<h4>실 측정 데이터 의 의미 — 토폴로지 정정</h4>
+
+<div class="note"><strong>§2-3 의 "mesh" 추정이 wrong</strong>: ROCm 의 <code>--showtopo</code> 가 weight 매트릭스 와 "Hops 모두 1" 표시했지만, 실 <code>--shownodesbw</code> 는 <strong>일부 쌍이 0-0 (XGMI 직접 연결 없음)</strong>. 즉 weight 매트릭스의 30/45 일부는 1-hop XGMI 아닌 <strong>2-hop indirect / 또는 PCIe fallback</strong>. 8 GCD 가 fully mesh 가 아니라 sparse XGMI network.</div>
+
+<table>
+<tr><th>측정 bandwidth (Mbps)</th><th>의미</th><th>해당 쌍</th><th>실 대역폭</th></tr>
+<tr><td><strong>50000-200000</strong></td><td>같은 OAM 카드 안 GCD 쌍 (Infinity Fabric, 4 XGMI link)</td><td>0↔1, 2↔3, 4↔5, 6↔7</td><td>최대 <strong>200 Gbps</strong> (= 25 GB/s)</td></tr>
+<tr><td><strong>50000-100000</strong></td><td>다른 OAM 의 가까운 쌍 (2 XGMI link)</td><td>0↔4, 2↔6</td><td>최대 <strong>100 Gbps</strong></td></tr>
+<tr><td><strong>50000-50000</strong></td><td>다른 OAM 의 보통 쌍 (1 XGMI link)</td><td>0↔6, 1↔3, 1↔7, 2↔4, 3↔5, 5↔7</td><td>최대 <strong>50 Gbps</strong></td></tr>
+<tr><td><strong>0-0</strong></td><td><strong>XGMI 직접 연결 없음</strong> — PCIe 또는 multi-hop XGMI 통해</td><td>0↔2, 0↔3, 0↔5, 0↔7, 1↔2, 1↔4, 1↔6, 2↔5, 2↔7, 3↔4, 3↔6, 3↔7, 4↔6, 4↔7, 5↔6</td><td>PCIe fallback (~ 60 GB/s, but RDMA X)</td></tr>
+</table>
+
+<h4>본 실험의 prefill GCD 0 ↔ decode GCD 4 bandwidth</h4>
+
+<p><strong>GPU 0 ↔ GPU 4 = 50000-100000 Mbps</strong> — 즉 <strong>100 Gbps (12.5 GB/s)</strong> 의 XGMI bandwidth. 2 link 직접 연결. KV transfer 가 이 link 활용.</p>
+
+<table>
+<tr><th>측정 항목</th><th>값</th></tr>
+<tr><td>P↔D 최대 bandwidth</td><td>100 Gbps</td></tr>
+<tr><td>Qwen2.5-1.5B 의 한 request KV 크기 (28 layer)</td><td>~ 564 KB (단일 prompt, max_tokens=40)</td></tr>
+<tr><td>KV transfer 이론 시간</td><td>564KB / 12.5GB/s ≈ <strong>0.05 ms</strong> (네트워크 latency 무시)</td></tr>
+<tr><td>실 wall time 의 KV transfer 비중</td><td>전체 570ms 의 < 0.01% — overhead 매우 작음</td></tr>
+</table>
+
+<h4>XGMI error counter (link 살아있는지 검증)</h4>
+
+<pre><code>$ ssh mi250-052 rocm-smi --showxgmierr
+GPU[0]		: XGMI Error count: 0 (No errors detected since last read)
+GPU[1]		: XGMI Error count: 0
+...
+GPU[7]		: XGMI Error count: 0</code></pre>
+
+<p>모든 GCD 의 XGMI link error 0 — link 정상.</p>
+
+<h4>못 측정한 것</h4>
+<ul>
+<li><code>rocm-bandwidth-test</code> 의 peer-to-peer 실측 — <code>command not found</code> (image / host 에 install 안 됨)</li>
+<li><code>rocm-smi --showbw</code> 는 PCIe bandwidth 만. XGMI bandwidth 실시간 utilization 측정 어려움 (rocprofiler 같은 별도 tool 필요)</li>
+</ul>
+
+<h4>왜 <code>--showtopo</code> 와 <code>--shownodesbw</code> 가 다른 결과를 보이는가</h4>
+
+<p>두 명령이 보여주는 데이터의 <strong>abstraction level 자체가 다름</strong>:</p>
+
+<table>
+<tr><th>명령</th><th>측정하는 것</th><th>0-0 / weight 의 의미</th></tr>
+<tr><td><code>--showtopo</code> 의 Weight 매트릭스</td><td>ROCm runtime 이 보는 <strong>logical connectivity cost</strong>. abstract metric — 두 GPU 사이 "어떻게든 연결 가능한가" + cost 추정</td><td>weight 15/30/45 — 작을수록 효율적 path. <strong>직접 link 없어도 multi-hop XGMI 통해 reach 가능</strong>하면 weight 표시</td></tr>
+<tr><td><code>--showtopo</code> 의 Hops</td><td>logical hop count (ROCm runtime 의 추상화). 모두 1 로 표시되는 건 ROCm SMI 가 모든 P2P-reachable GPU 를 "1 hop" 으로 단순화 표기</td><td>실 physical hop 수 와 다를 수 있음 (sparse network 에선 사실상 2 hop 가능)</td></tr>
+<tr><td><strong><code>--shownodesbw</code></strong></td><td><strong>실 physical hardware-reported bandwidth</strong>. 두 GPU 사이 <strong>직접 XGMI link 의 min/max bandwidth</strong></td><td><strong>"0-0" = 두 GPU 사이 직접 XGMI link 없음</strong>. 통신은 PCIe fallback 또는 multi-hop XGMI 거쳐야 → 직접 측정 값 X</td></tr>
+</table>
+
+<p><strong>핵심 차이</strong>:</p>
+<ul>
+<li><code>--showtopo</code> = "이 GPU 가 reachable 인가?" 의 logical view. 모든 GPU 가 어떻게든 talk 가능 → weight 표시</li>
+<li><code>--shownodesbw</code> = "직접 hardware link 가 있는가?" 의 physical view. 직접 link 없으면 0-0</li>
+</ul>
+
+<p><strong>본 실험의 MI250 의 실 토폴로지 (--shownodesbw 기준)</strong>: 8 GCD 가 fully mesh 가 아니라 <strong>sparse XGMI graph</strong>. 한 GCD 가 약 4 다른 GCD 와 직접 link, 나머지 3 다른 GCD 와는 직접 link 없음. <code>--showtopo</code> 의 weight 30/45 중 일부 (특히 0-0 으로 보이는 쌍) 는 <strong>multi-hop XGMI 또는 PCIe fallback</strong>:</p>
+<ul>
+<li><strong>Multi-hop XGMI</strong>: GPU A → GPU B (XGMI) → GPU C (XGMI) — B 가 relay. ROCm 이 자동으로 routing 가능</li>
+<li><strong>PCIe fallback</strong>: XGMI route 가 없으면 PCIe 통해. host CPU root complex 거침 (특히 본 실험의 GPU 0-3 vs GPU 4-7 가 다른 PCIe root 라 더 비쌈, <a href="#monitoring">§4 의 lspci 결과</a> 참조)</li>
+</ul>
+
+<p>실 KV transfer 시 ROCm/RCCL 이 자동으로 가장 빠른 path 선택. 본 실험의 P (GPU 0) ↔ D (GPU 4) 는 <code>--shownodesbw</code> 의 100 Gbps 직접 link 사용 (multi-hop / PCIe fallback 안 거침) — 그래서 transfer 시간이 매우 짧음.</p>
+
 
 </div>
 
@@ -362,67 +447,6 @@ ts,device,temp_c,power_w,gpu_use_pct,vram_pct,mem_activity
 ...</code></pre>
 
 <p>Idle 상태: 모든 GPU use=0%, VRAM=0%, power ~120W per OAM. temp 31-38°C — 정상.</p>
-
-<h3>4-7. XGMI bandwidth 실 측정 — <code>rocm-smi --shownodesbw</code></h3>
-
-<p><code>rocm-smi --showbw</code> 는 PCIe bandwidth 만 (XGMI 측정 X). XGMI bandwidth 는 별도 명령:</p>
-
-<pre><code>$ ssh mi250-052 rocm-smi --shownodesbw
-
-============================ ROCm System Management Interface ============================
-======================================= Bandwidth ========================================
-       GPU0         GPU1         GPU2         GPU3         GPU4         GPU5         GPU6         GPU7
-GPU0   N/A          50000-<strong>200000</strong> 0-0          0-0          50000-<strong>100000</strong> 0-0          50000-<strong>50000</strong>  0-0
-GPU1   50000-200000 N/A          0-0          50000-50000  0-0          0-0          0-0          50000-50000
-GPU2   0-0          0-0          N/A          50000-200000 50000-50000  0-0          50000-100000 0-0
-GPU3   0-0          50000-50000  50000-200000 N/A          0-0          50000-50000  0-0          0-0
-GPU4   50000-100000 0-0          50000-50000  0-0          N/A          50000-200000 0-0          0-0
-GPU5   0-0          0-0          0-0          50000-50000  50000-200000 N/A          0-0          50000-50000
-GPU6   50000-50000  0-0          50000-100000 0-0          0-0          0-0          N/A          50000-200000
-GPU7   0-0          50000-50000  0-0          0-0          0-0          50000-50000  50000-200000 N/A
-
-Format: min-max; Units: <strong>Mbps</strong>
-"0-0" min-max bandwidth indicates devices are <strong>not connected directly</strong></code></pre>
-
-<h4>실 측정 데이터 의 의미 — 토폴로지 정정</h4>
-
-<div class="note"><strong>§2-3 의 "mesh" 추정이 wrong</strong>: ROCm 의 <code>--showtopo</code> 가 weight 매트릭스 와 "Hops 모두 1" 표시했지만, 실 <code>--shownodesbw</code> 는 <strong>일부 쌍이 0-0 (XGMI 직접 연결 없음)</strong>. 즉 weight 매트릭스의 30/45 일부는 1-hop XGMI 아닌 <strong>2-hop indirect / 또는 PCIe fallback</strong>. 8 GCD 가 fully mesh 가 아니라 sparse XGMI network.</div>
-
-<table>
-<tr><th>측정 bandwidth (Mbps)</th><th>의미</th><th>해당 쌍</th><th>실 대역폭</th></tr>
-<tr><td><strong>50000-200000</strong></td><td>같은 OAM 카드 안 GCD 쌍 (Infinity Fabric, 4 XGMI link)</td><td>0↔1, 2↔3, 4↔5, 6↔7</td><td>최대 <strong>200 Gbps</strong> (= 25 GB/s)</td></tr>
-<tr><td><strong>50000-100000</strong></td><td>다른 OAM 의 가까운 쌍 (2 XGMI link)</td><td>0↔4, 2↔6</td><td>최대 <strong>100 Gbps</strong></td></tr>
-<tr><td><strong>50000-50000</strong></td><td>다른 OAM 의 보통 쌍 (1 XGMI link)</td><td>0↔6, 1↔3, 1↔7, 2↔4, 3↔5, 5↔7</td><td>최대 <strong>50 Gbps</strong></td></tr>
-<tr><td><strong>0-0</strong></td><td><strong>XGMI 직접 연결 없음</strong> — PCIe 또는 multi-hop XGMI 통해</td><td>0↔2, 0↔3, 0↔5, 0↔7, 1↔2, 1↔4, 1↔6, 2↔5, 2↔7, 3↔4, 3↔6, 3↔7, 4↔6, 4↔7, 5↔6</td><td>PCIe fallback (~ 60 GB/s, but RDMA X)</td></tr>
-</table>
-
-<h4>본 실험의 prefill GCD 0 ↔ decode GCD 4 bandwidth</h4>
-
-<p><strong>GPU 0 ↔ GPU 4 = 50000-100000 Mbps</strong> — 즉 <strong>100 Gbps (12.5 GB/s)</strong> 의 XGMI bandwidth. 2 link 직접 연결. KV transfer 가 이 link 활용.</p>
-
-<table>
-<tr><th>측정 항목</th><th>값</th></tr>
-<tr><td>P↔D 최대 bandwidth</td><td>100 Gbps</td></tr>
-<tr><td>Qwen2.5-1.5B 의 한 request KV 크기 (28 layer)</td><td>~ 564 KB (단일 prompt, max_tokens=40)</td></tr>
-<tr><td>KV transfer 이론 시간</td><td>564KB / 12.5GB/s ≈ <strong>0.05 ms</strong> (네트워크 latency 무시)</td></tr>
-<tr><td>실 wall time 의 KV transfer 비중</td><td>전체 570ms 의 < 0.01% — overhead 매우 작음</td></tr>
-</table>
-
-<h4>XGMI error counter (link 살아있는지 검증)</h4>
-
-<pre><code>$ ssh mi250-052 rocm-smi --showxgmierr
-GPU[0]		: XGMI Error count: 0 (No errors detected since last read)
-GPU[1]		: XGMI Error count: 0
-...
-GPU[7]		: XGMI Error count: 0</code></pre>
-
-<p>모든 GCD 의 XGMI link error 0 — link 정상.</p>
-
-<h4>못 측정한 것</h4>
-<ul>
-<li><code>rocm-bandwidth-test</code> 의 peer-to-peer 실측 — <code>command not found</code> (image / host 에 install 안 됨)</li>
-<li><code>rocm-smi --showbw</code> 는 PCIe bandwidth 만. XGMI bandwidth 실시간 utilization 측정 어려움 (rocprofiler 같은 별도 tool 필요)</li>
-</ul>
 
 </div>
 
