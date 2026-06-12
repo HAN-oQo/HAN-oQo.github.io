@@ -43,7 +43,9 @@
 <p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 이전: <a href="mi250-pd-disaggregation-experiment.html">MI250 PDD 1차 실험 (TP=1+1, mechanism 검증)</a></p>
 
 <h1>MI250 P/D Disaggregation 2차 — TP=4+4 실 실험</h1>
-<p class="sub">작성일: 2026-06-12 · 환경: <code>mi250-052</code> (AMD MI250 OAM × 4 = 8 GCD, ROCm) · 1차 실험의 다음 단계로 TP=4+4 P/D + bidirectional 통신 가능 여부 검증.</p>
+<p class="sub">작성일: 2026-06-12 · 환경: <code>mi250-052</code> (AMD MI250 OAM × 4 = 8 GCD, ROCm) · vLLM <strong>0.11.2.dev673+g839868462</strong> (rocm/vllm:latest, 최신 dev build) · 1차 실험 (v0.10.0 가정) 의 다음 단계로 TP=4+4 P/D + bidirectional 가능 여부 검증.</p>
+
+<div class="danger" style="margin: 16px 0;"><strong>실험 한줄 답</strong>: TP=4+4 P/D <span class="status-ok">동작 성공</span>. 단 KV 흐름은 <strong>P → D 한 방향만</strong>. <strong>Bidirectional (한 instance 동시 P+D) 은 ROCm + MI250 환경에서 현재 vLLM 으로 불가능</strong>. P2pNccl 코드 자체가 막음. 유일하게 kv_both 지원하는 Mooncake connector 는 CUDA 12 전용 (<code>libcudart.so.12</code>) 라 ROCm 사용 불가. 자세한 증명: <a href="#diff">§10</a></div>
 
 <div class="card toc">
 <strong>목차</strong>
@@ -556,10 +558,74 @@ self.p2p_nccl_engine.send_tensor(
 
 </div>
 
-<h2 id="diff">10. 일방 (PUT_ASYNC) 통신 의 실 동작</h2>
+<h2 id="diff">10. 일방 (PUT_ASYNC) 통신 의 실 동작 — Bidirectional 됐는가에 대한 답</h2>
 <div class="card">
 
-<h3>10-1. 본 실험의 KV 통신 방향 — P → D 한 방향만</h3>
+<div class="danger"><strong>본 실험 = Bidirectional 아닙니다. P → D 한 방향만 흘렀습니다.</strong> 글 제목에 "Bidirectional" 이 들어갔지만, vLLM v0.10.0 의 P2pNccl 자체가 한 instance 의 role 을 평생 고정하므로 진정한 양방향 (한 instance 가 동시에 P + D) 은 본질적으로 불가능. 본 글의 §2 표 도 그걸 admit. TP=4+4 가 한 것은 "<strong>4 channel 병렬 한 방향 송신 + phase 분리</strong>" 임.</div>
+
+<h3>10-1. "되지 않았다" 의 3 가지 증명</h3>
+
+<table>
+<tr><th>증명</th><th>로그 / 코드</th></tr>
+<tr><td><strong>(A) NCCL handshake log 의 방향 화살표</strong></td><td>
+P 측 4 rank: <code>🤝 ...👉192.168.3.52:22001~22004 (P sends)</code><br>
+D 측 4 rank: <code>🤝 ...👈192.168.3.52:20001~20004 (D receives)</code><br>
+양쪽 log 가 한 방향만. 만약 양방향이면 P 쪽에도 <code>👈</code>, D 쪽에도 <code>👉</code> 가 같이 나와야.
+</td></tr>
+<tr><td><strong>(B) P container 와 D container 의 함수 호출 분리</strong></td><td>
+P container 의 ncclSend log 수 = 다수 / ncclRecv log 수 = 0<br>
+D container 의 ncclRecv log 수 = 다수 / ncclSend log 수 = 0<br>
+한 host 의 두 container 가 정확히 sender / receiver 로 분리.
+</td></tr>
+<tr><td><strong>(C) vLLM source 의 instance role 고정 분기</strong></td><td>
+<code>p2p_nccl_connector.py L116</code> <code>if self.is_producer: return</code> — producer 는 외부 KV load 안 함<br>
+<code>p2p_nccl_connector.py L235</code> <code>if not self.is_producer: return</code> — consumer 는 외부 KV save 안 함<br>
+<code>self.is_producer</code> 는 instance 생성 시 1 회 set, immutable. 즉 한 process 가 send + recv 동시 불가.
+</td></tr>
+</table>
+
+<h3>10-2. "Bidirectional" 의 가장 가까운 시뮬 — vLLM 에서 가능한 한도</h3>
+
+<p>한 instance 가 양방향 = 불가. 단 <strong>시스템 차원의 양방향 (request 별로 어느 instance 가 P 인지 다름)</strong> 은 가능. proxy 의 XpYd routing 으로 구현. 본 실험은 1 P + 1 D 라 system 차원도 단방향.</p>
+
+<table>
+<tr><th>구성</th><th>각 instance role</th><th>system 차원 KV 흐름</th><th>본 실험?</th></tr>
+<tr><td>1 P + 1 D (본 실험)</td><td>고정 (P, D)</td><td>P → D 만</td><td><span class="status-ok">현재</span></td></tr>
+<tr><td>2 P + 2 D (XpYd)</td><td>각 고정 (P 2 개, D 2 개)</td><td>한 conv 마다 P i → D j routing</td><td>미시도 (다음 실험)</td></tr>
+<tr><td>한 host 가 P + 또 D (4 container, TP=2 씩)</td><td>각 고정</td><td>system 차원에서 양쪽으로 KV 흐름 가능 단 instance 자체는 단방향</td><td>미시도</td></tr>
+<tr><td>한 instance 가 P + D 동시</td><td>변동 (양쪽)</td><td>진정한 양방향</td><td><span class="status-fail">vLLM 미지원 (ROCm)</span></td></tr>
+</table>
+
+<h3>10-3. 최신 vLLM (0.11.2.dev) 의 kv_both 지원 connector 검증</h3>
+
+<div class="note"><strong>최신 vLLM 으로 재검증 — 사용자 지적에 따라</strong>: 1차 글에서 v0.10.0 으로 정적 분석 했지만 image (<code>rocm/vllm:latest</code>) 가 사실 0.11.2.dev673+g839868462 (사실상 main 의 dev build) 였음. v0.11.2 dev 의 connector 들의 kv_both 지원 여부를 코드 + 실 시도로 검증.</div>
+
+<table>
+<tr><th>Connector (v0.11.2.dev)</th><th>kv_both 지원?</th><th>ROCm/MI250 운영 가능?</th><th>코드 / 실 시도 근거</th></tr>
+<tr><td><strong>P2pNcclConnector</strong></td><td><span class="status-fail">아니오</span></td><td>가능</td><td>L88 <code>self.is_producer = ...is_kv_producer</code> + L125/L261/L310 분기. v0.10.0 와 동일 — bool 1 회 set, 평생 고정.</td></tr>
+<tr><td><strong>MooncakeConnector</strong></td><td><span class="status-ok">예</span> (L442 주석 "For kv_both, we will act both prefiller and decoder")</td><td><span class="status-fail">불가</span></td><td>코드 OK, 단 mooncake-transfer-engine wheel 이 <code>libcudart.so.12</code> 의존 (CUDA 12). ROCm 에 그 lib 없음 — <strong>실 import 시 ImportError</strong>.</td></tr>
+<tr><td><strong>NixlConnector</strong></td><td>코드는 kv_role 분기 없음 (가능성 ↑)</td><td><span class="status-fail">불가</span></td><td>image 안 <code>NIXL is not available</code> — NIXL library 미포함. NVIDIA 전용 dependency.</td></tr>
+<tr><td><strong>LMCacheConnector / lmcache_mp</strong></td><td>코드 kv_role 분기 없음</td><td><span class="status-fail">불가</span></td><td>LMCache server 의존성 미설치.</td></tr>
+<tr><td><strong>OffloadingConnector</strong></td><td>kv_role 분기 없음 (의미상 양방향 아님 — CPU offload)</td><td>가능</td><td>그러나 host CPU 로 offload — P/D 분리와 무관.</td></tr>
+</table>
+
+<h4>10-3-1. Mooncake 실 빌드 시도 — failed</h4>
+
+<pre><code># Dockerfile 안 pip — host pip X
+FROM rocm/vllm:latest
+RUN pip install --no-cache-dir mooncake-transfer-engine
+
+# build → mooncake-transfer-engine 0.3.11.post1 설치 OK
+# 그러나 실 import:
+$ docker run --rm vllm-mooncake:latest python -c \
+    "from mooncake.engine import TransferEngine"
+
+ImportError: libcudart.so.12: cannot open shared object file: No such file or directory
+# → Mooncake wheel 이 CUDA 12 runtime 에 link 됨. ROCm 환경에선 사용 불가.</code></pre>
+
+<div class="danger"><strong>결정적 결론</strong>: <strong>ROCm + MI250 의 vLLM 최신 (0.11.2.dev) 으로도 진정한 bidirectional 운영 불가능</strong>. P2pNccl 만 동작하고 그건 단방향. Mooncake/NIXL/LMCache 의 bidirectional 지원은 모두 NVIDIA CUDA stack 에 묶여 있음.</div>
+
+<h3>10-3. 본 실험의 KV 통신 방향 — P → D 한 방향만</h3>
 
 <p>P 측 로그의 화살표 <strong>👉</strong> 와 D 측의 <strong>👈</strong> 가 정확히 일치 — vLLM source 의 emoji 가 "from sender's perspective" 와 "from receiver's perspective" 로 다름. 한 방향만 흐름.</p>
 
@@ -613,7 +679,9 @@ while True:
 <li><strong>TP=4+4 P/D 가 실 mi250-052 위에서 동작</strong>. 8 회 시도 후 성공. 핵심 디버깅은 (1) JSON port int → string, (2) <code>zmq_addr</code> extra_config 무시 + <code>kv_port</code> top-level 사용.</li>
 <li><strong>4 쌍 NCCL Comm 동시 init</strong> 이 deadlock 없이 됨. P rank i ↔ D rank i 1:1 매칭. KV transfer 가 4 channel 병렬.</li>
 <li><strong>P/D phase 분리가 monitoring 으로 확정</strong>. 8 parallel load 중 P GCD 0% / D GCD 70-99%.</li>
-<li><strong>"Bidirectional" 의 실 의미 = "한 host 에 P+D 분리 + KV 4 채널 병렬 전송"</strong>. 진정한 양방향 (한 instance 동시 P+D) 은 vLLM source 차원에서 불가능.</li>
+<li><strong>Bidirectional = 안 됐음</strong>. KV 가 P → D 한 방향만 흐름. 3 가지 증명 (handshake 화살표, send/recv 함수 분리, instance role 고정 코드) — 자세히는 <a href="#diff">§10-1</a>.</li>
+<li><strong>최신 vLLM (0.11.2.dev673) 으로 재검증</strong> 해도 결과 동일. <strong>Mooncake 가 코드상 kv_both 지원하지만 CUDA 12 전용 (libcudart.so.12)</strong> 라 ROCm/MI250 사용 불가. NIXL / LMCache 도 의존성 미포함.</li>
+<li><strong>"Bidirectional" 의 본 실험에서의 실 의미 = "한 host 에 P+D 분리 + KV 4 채널 병렬 전송"</strong>. 진정한 양방향은 NVIDIA + Mooncake 환경이라야 시도 가능.</li>
 <li><strong>PUT_ASYNC 가 concurrent throughput 의 핵심</strong>. 5.6s (cold) → 0.8s (warm reuse) → 1.5s (3 parallel) 의 패턴 확인.</li>
 </ul>
 
