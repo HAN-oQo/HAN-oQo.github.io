@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArgoCD로 vLLM + llm-d 운영하기 — 개념부터 실습 계획까지</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.08rem; margin-top: 28px; }
+  h4 { font-size: 0.95rem; margin-top: 18px; color: var(--blue); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc ol { margin: 8px 0; }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .toc a:hover { color: var(--blue-ink); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip  { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .us   { border-left: 4px solid var(--purple-bd); background: var(--purple-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--purple-ink); }
+  .us strong { color: var(--purple-ink); }
+  .diagram { background: var(--gray-bg); padding: 18px 22px; border-radius: 8px; font-family: "SF Mono", Menlo, monospace;
+             font-size: 0.76rem; line-height: 1.5; white-space: pre; overflow-x: auto; border: 1px solid var(--line); }
+  figcap, .figcap { display:block; font-size: 0.76rem; color: var(--muted); margin: 6px 2px 18px; }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .status-fail { color: var(--red); font-weight: 600; }
+  .status-wip { color: var(--amber-ink); font-weight: 600; }
+  .status-todo { color: var(--muted); }
+  /* phase cards */
+  .phase { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--blue-bd); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+  .phase h3 { margin-top: 0; display: flex; align-items: center; gap: 10px; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width: 1.7em; height:1.7em; padding:0 .5em;
+           border-radius: 999px; background: var(--blue); color: #fff; font-size: 0.8rem; font-weight: 700; }
+  .phase.stretch { border-left-color: var(--purple-bd); }
+  .phase.stretch .pchip { background: var(--purple); }
+  .phase.ops { border-left-color: var(--teal-bd); }
+  .phase.ops .pchip { background: var(--teal); }
+  .meta { font-size: 0.78rem; color: var(--muted); margin: 2px 0 10px; }
+  .meta b { color: var(--ink); }
+  /* glossary grid */
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 14px 0; }
+  .mini { background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+  .mini .term { font-weight: 700; font-size: 0.9rem; margin-bottom: 4px; }
+  .mini .def { font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
+  kbd { font-family: "SF Mono", Menlo, monospace; font-size: 0.8em; background: var(--gray-bg); border: 1px solid var(--line);
+        border-radius: 4px; padding: 1px 5px; }
+  @media (max-width: 720px) { .diagram { font-size: 0.66rem; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a></p>
+
+<h1><span class="en">Operating vLLM + llm-d with Argo CD — concept to a hands-on plan</span><span class="ko">ArgoCD로 vLLM + llm-d 운영하기 — 개념부터 실습 계획까지</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 (AMD MI250 ×8 GCD, 96 vCPU, 503 GB RAM, 284 GB free) · Docker rootful, no passwordless sudo → <b>kind</b> · Goal: understand what Argo CD is and <i>why</i> GitOps matters for LLM serving ops, then a phased lab + real-ops plan — executed and recorded live.</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 (AMD MI250 ×8 GCD, 96 vCPU, 503 GB RAM, 284 GB 여유) · Docker rootful, passwordless sudo 없음 → <b>kind</b> · 목표: ArgoCD가 뭐고 LLM 서빙 운영에 <i>왜</i> GitOps가 필요한지 이해하고, 단계별 실습 + 실운영 계획을 세워 직접 실행하며 기록.</span></p>
+
+<div class="card toc">
+<strong><span class="en">Table of contents</span><span class="ko">목차</span></strong>
+<ol>
+  <li><a href="#what"><span class="en">1. What Argo CD is and why it's needed</span><span class="ko">1. ArgoCD가 뭐고 왜 필요한가</span></a></li>
+  <li><a href="#why-llmd"><span class="en">2. Why Argo CD specifically for vLLM + llm-d ops</span><span class="ko">2. 왜 하필 vLLM + llm-d 운영에 ArgoCD인가</span></a></li>
+  <li><a href="#env"><span class="en">3. Lab environment design — why kind on this node</span><span class="ko">3. 실습 환경 설계 — 이 노드에서 왜 kind인가</span></a></li>
+  <li><a href="#plan"><span class="en">4. The phased hands-on plan (lab → real-ops)</span><span class="ko">4. 단계별 실습 계획 (실습 → 실운영)</span></a></li>
+  <li><a href="#repro"><span class="en">5. Reproduce from scratch (the runbook)</span><span class="ko">5. 처음부터 재현 (런북)</span></a></li>
+  <li><a href="#phase1"><span class="en">6. Phase 1 — bootstrap, executed live (DONE)</span><span class="ko">6. Phase 1 — 부트스트랩, 실제 실행 기록 (완료)</span></a></li>
+  <li><a href="#glossary"><span class="en">7. Glossary + references</span><span class="ko">7. 용어 글로서리 + 참고</span></a></li>
+</ol>
+</div>
+
+<div class="tip">
+<strong><span class="en">One-line summary</span><span class="ko">한 줄 요약</span></strong><br>
+<span class="en">Argo CD = "the cluster always matches what's in Git." For llm-d — a CRD-heavy, multi-component K8s stack (Gateway API + Inference Extension + EPP + vLLM pods) — that turns risky hand-applied changes into reviewable, auditable, revertible commits, with automatic drift correction. Plan: build the whole thing on a throwaway <b>kind</b> cluster on mi250-052, no root, learning one Argo CD concept per phase.</span>
+<span class="ko">ArgoCD = "클러스터 상태가 항상 Git과 일치한다." CRD가 많고 컴포넌트가 여러 개인 K8s 스택(Gateway API + Inference Extension + EPP + vLLM 파드)인 llm-d에서는, 손으로 적용하던 위험한 변경을 <b>리뷰·감사·되돌리기 가능한 커밋</b>으로 바꾸고 drift(설정 어긋남)를 자동 교정해 줌. 계획: mi250-052 위에 일회용 <b>kind</b> 클러스터로 전체를 root 없이 띄우며, 단계마다 ArgoCD 개념 하나씩 체득.</span>
+</div>
+
+
+<h2 id="what"><span class="en">1. What Argo CD is and why it's needed</span><span class="ko">1. ArgoCD가 뭐고 왜 필요한가</span></h2>
+
+<p><span class="en"><b>Argo CD is a declarative GitOps continuous-delivery tool for Kubernetes</b> (a CNCF Graduated project). Plain version: you describe the desired state of your cluster as YAML files in a Git repository, and an agent running <i>inside</i> the cluster continuously makes the live cluster match that repo.</span>
+<span class="ko"><b>ArgoCD는 Kubernetes를 위한 선언형 GitOps 지속배포(CD) 도구</b>다 (CNCF Graduated 프로젝트). 쉽게 말하면: 클러스터가 어떤 상태여야 하는지를 Git 저장소에 YAML로 적어두면, 클러스터 <i>안에서</i> 도는 에이전트가 실제 클러스터를 그 저장소와 계속 일치시켜 준다.</span></p>
+
+<h3><span class="en">"GitOps" — Git is the single source of truth</span><span class="ko">"GitOps" — Git이 단일 진실 공급원</span></h3>
+<p><span class="en">In GitOps the Git repo is the <b>only</b> place that defines what should be running. You don't <code>kubectl apply</code> from your laptop; you commit a change to Git, and the change reaches the cluster through the agent. So every change is a commit — meaning it is reviewable (PR), auditable (git log / who-changed-what), reproducible (rebuild a cluster from the repo), and revertible (<code>git revert</code>).</span>
+<span class="ko">GitOps에서 Git 저장소는 무엇이 돌아야 하는지를 정의하는 <b>유일한</b> 장소다. 노트북에서 <code>kubectl apply</code>로 직접 밀어넣지 않고, Git에 변경을 커밋하면 그 변경이 에이전트를 거쳐 클러스터에 도달한다. 그래서 모든 변경이 곧 커밋 — 즉 리뷰 가능(PR), 감사 가능(git log / 누가 무엇을 바꿨나), 재현 가능(저장소로 클러스터를 다시 구성), 되돌리기 가능(<code>git revert</code>).</span></p>
+
+<h3><span class="en">Push CD vs Pull GitOps — the core difference</span><span class="ko">Push CD vs Pull GitOps — 핵심 차이</span></h3>
+<p><span class="en">Traditional CI/CD <b>pushes</b>: a CI job (Jenkins/GitHub Actions) holds cluster credentials and runs <code>kubectl apply</code> from outside, once, then forgets. Argo CD <b>pulls</b>: it lives in the cluster, watches Git, and reconciles continuously. Two practical wins: (1) cluster credentials never leave the cluster, and (2) it keeps watching, so it notices and corrects drift.</span>
+<span class="ko">전통 CI/CD는 <b>밀어넣는다(push)</b>: CI 작업(Jenkins/GitHub Actions)이 클러스터 자격증명을 들고 밖에서 <code>kubectl apply</code>를 한 번 쏘고 잊는다. ArgoCD는 <b>당겨온다(pull)</b>: 클러스터 안에 살면서 Git을 지켜보고 계속 reconcile(조정)한다. 실무 이점 둘: (1) 클러스터 자격증명이 클러스터 밖으로 안 나가고, (2) 계속 감시하므로 drift를 알아채고 교정한다.</span></p>
+
+<div class="diagram">  PUSH  (traditional CI/CD)                       PULL  (GitOps / Argo CD)
+  ─────────────────────────                       ─────────────────────────
+   dev ─push─► Git ─trigger─► CI job                dev ─push─► Git repo
+                               │ kubectl apply                    ▲ watch (poll/webhook)
+                               │ (밖에서 한 번 밀어넣음)             │ (안에서 계속 당겨옴)
+                               ▼                                   │
+                        ┌─────────────┐                  ┌────────────────────────┐
+                        │  K8s API    │                  │  Argo CD (클러스터 내부)  │
+                        └─────────────┘                  │   desired = Git          │
+                         · creds가 CI에 있음              │   live    = 실제 클러스터 │
+                         · 쏘고 끝 → drift 모름           │   diff → sync, 계속 감시  │
+                                                          └────────────────────────┘</div>
+<span class="figcap"><span class="en">Fig 1 — Push-based CD vs pull-based GitOps. The agent-inside-the-cluster model is what enables continuous drift detection.</span><span class="ko">그림 1 — Push 방식 CD vs Pull 방식 GitOps. "에이전트가 클러스터 안에 있다"는 점이 지속적 drift 감지를 가능케 한다.</span></span>
+
+<h3><span class="en">The reconcile loop — observe → diff → act</span><span class="ko">Reconcile 루프 — 관찰 → 비교 → 실행</span></h3>
+<p><span class="en">Argo CD runs a loop: <b>observe</b> the desired state in Git, <b>diff</b> it against the live cluster, and if they differ, <b>sync</b> (apply the difference). Two policies make this powerful: <b>auto-sync</b> (apply automatically when Git changes) and <b>self-heal</b> (if someone hand-edits the live cluster away from Git, revert it back). "Rollback" is just syncing to an older Git revision — usually a <code>git revert</code>.</span>
+<span class="ko">ArgoCD는 루프를 돈다: Git의 원하는 상태를 <b>관찰</b>하고, 실제 클러스터와 <b>비교(diff)</b>하고, 다르면 <b>동기화(sync)</b>한다(차이를 적용). 두 정책이 이를 강력하게 만든다: <b>auto-sync</b>(Git이 바뀌면 자동 적용)와 <b>self-heal</b>(누가 실제 클러스터를 Git과 다르게 손으로 고치면 다시 Git대로 되돌림). "롤백"은 그냥 과거 Git 리비전으로 sync하는 것 — 보통 <code>git revert</code>.</span></p>
+
+<div class="diagram">        ┌──────────────────── Argo CD reconcile loop ─────────────────────┐
+        │                                                                  │
+  Git (desired) ──observe──►  [ diff ]  ──out-of-sync?──►  [ sync/apply ] ──┼──► live cluster
+        ▲                        │                                         │
+        │                        └── in-sync ──► do nothing                │
+        │                                                                  │
+        └──── self-heal:  live ≠ Git (누가 kubectl edit 함)  → revert to Git ┘</div>
+<span class="figcap"><span class="en">Fig 2 — The reconciliation loop. self-heal is the arrow that makes "the cluster always matches Git" literally true.</span><span class="ko">그림 2 — Reconcile 루프. self-heal 화살표가 "클러스터는 항상 Git과 일치한다"를 말 그대로 참으로 만든다.</span></span>
+
+<h3><span class="en">The objects you actually work with</span><span class="ko">실제로 다루는 객체들</span></h3>
+<table>
+<tr><th><span class="en">Object</span><span class="ko">객체</span></th><th><span class="en">What it does</span><span class="ko">무슨 일을 하나</span></th></tr>
+<tr><td><code>Application</code></td><td><span class="en">The core unit. "Sync <b>this repo path</b> to <b>this cluster/namespace</b>." Source can be plain manifests, Kustomize, or Helm.</span><span class="ko">핵심 단위. "<b>이 저장소 경로</b>를 <b>이 클러스터/네임스페이스</b>로 sync" — 소스는 일반 매니페스트, Kustomize, Helm 모두 가능.</span></td></tr>
+<tr><td><code>ApplicationSet</code></td><td><span class="en">A template that fans out into many Applications (per-cluster, per-env, per-directory). How you do dev/staging/prod or multi-cluster without copy-paste.</span><span class="ko">하나의 템플릿을 여러 Application으로 펼침(클러스터별·환경별·디렉터리별). 복붙 없이 dev/staging/prod 또는 멀티 클러스터를 하는 방법.</span></td></tr>
+<tr><td><code>AppProject</code></td><td><span class="en">Guardrails/RBAC: which repos, clusters, namespaces, and resource kinds a group of Applications is allowed to touch.</span><span class="ko">가드레일/RBAC: 한 Application 그룹이 어떤 repo·클러스터·네임스페이스·리소스 종류를 건드릴 수 있는지 제한.</span></td></tr>
+<tr><td><span class="en">Sync waves & hooks</span><span class="ko">Sync wave · hook</span></td><td><span class="en">Ordering. Annotation <code>argocd.argoproj.io/sync-wave: "0"</code> applies lower waves first (CRDs before the CRs that use them). Hooks (PreSync/PostSync) run jobs like DB migrations.</span><span class="ko">순서 제어. 어노테이션 <code>argocd.argoproj.io/sync-wave: "0"</code>로 낮은 wave부터 적용(CRD를 그걸 쓰는 CR보다 먼저). hook(PreSync/PostSync)으로 마이그레이션 같은 작업 실행.</span></td></tr>
+<tr><td><span class="en">app-of-apps</span><span class="ko">app-of-apps</span></td><td><span class="en">A pattern: one root Application whose job is to create other Applications. Bootstrap an entire platform from a single commit.</span><span class="ko">패턴: 다른 Application들을 만드는 게 임무인 루트 Application 하나. 커밋 한 번으로 플랫폼 전체를 부트스트랩.</span></td></tr>
+</table>
+
+<div class="note"><strong><span class="en">Without GitOps, the failure mode is familiar</span><span class="ko">GitOps 없이의 전형적 실패</span></strong><br>
+<span class="en">The real config lives in someone's terminal history. Two engineers <code>kubectl edit</code> the same Deployment differently. A 3 a.m. hotfix is never written down, then a redeploy silently reverts it. Rollback means "does anyone remember the old replica count / image tag?" GitOps removes all four: Git is the history, the diff, the audit, and the rollback target.</span>
+<span class="ko">진짜 설정이 누군가의 터미널 히스토리에만 있다. 두 엔지니어가 같은 Deployment를 서로 다르게 <code>kubectl edit</code>한다. 새벽 3시 핫픽스는 기록되지 않고, 재배포가 조용히 되돌려 버린다. 롤백은 "예전 replica 수/이미지 태그 기억하는 사람?"이 된다. GitOps는 이 넷을 전부 없앤다 — Git이 곧 히스토리이자 diff이자 감사 로그이자 롤백 대상.</span></div>
+
+
+<h2 id="why-llmd"><span class="en">2. Why Argo CD specifically for vLLM + llm-d ops</span><span class="ko">2. 왜 하필 vLLM + llm-d 운영에 ArgoCD인가</span></h2>
+
+<p><span class="en">A single vLLM container is easy — <code>docker run</code> and you're done (that's exactly the earlier mi250 P/D logs). The pain starts when you run it as a <b>fleet</b> under <b>llm-d</b>, because llm-d is a K8s-native, CRD-heavy, multi-component stack. That is precisely the shape of system GitOps was invented for.</span>
+<span class="ko">vLLM 컨테이너 하나는 쉽다 — <code>docker run</code>이면 끝(앞선 mi250 P/D 로그가 바로 그것). 고통은 그것을 <b>llm-d</b> 아래에서 <b>여러 대(fleet)</b>로 운영할 때 시작된다. llm-d는 K8s 네이티브에 CRD가 많고 컴포넌트가 여러 개인 스택이기 때문이다. 이게 바로 GitOps가 만들어진 이유에 해당하는 시스템 형태다.</span></p>
+
+<h3><span class="en">llm-d's deployment surface — what you'd be managing</span><span class="ko">llm-d의 배포 표면 — 무엇을 관리하게 되나</span></h3>
+<table>
+<tr><th><span class="en">Layer</span><span class="ko">계층</span></th><th><span class="en">K8s resources</span><span class="ko">K8s 리소스</span></th></tr>
+<tr><td><span class="en">Edge / routing</span><span class="ko">엣지 / 라우팅</span></td><td><code>GatewayClass</code>, <code>Gateway</code>, <code>HTTPRoute</code> <span class="en">(Gateway API)</span><span class="ko">(Gateway API)</span></td></tr>
+<tr><td><span class="en">Inference Extension (GIE)</span><span class="ko">추론 확장 (GIE)</span></td><td><code>InferencePool</code>, <code>InferenceModel</code>/<code>InferenceObjective</code> <span class="en">+ the EPP (endpoint picker) Deployment + its scheduler/scorer ConfigMaps</span><span class="ko">+ EPP(endpoint picker) Deployment + 스케줄러/스코어러 ConfigMap</span></td></tr>
+<tr><td><span class="en">Model servers</span><span class="ko">모델 서버</span></td><td><span class="en">vLLM</span><span class="ko">vLLM</span> <code>Deployment</code>/<code>LeaderWorkerSet</code>, <code>Service</code>, <span class="en">weights via PVC/initContainers</span><span class="ko">PVC/initContainer로 가중치 로딩</span></td></tr>
+<tr><td><span class="en">Disaggregation (optional)</span><span class="ko">분리 (선택)</span></td><td><span class="en">separate prefill & decode pools + KV-transfer config (NIXL/LMCache/Mooncake)</span><span class="ko">prefill·decode 풀 분리 + KV 전송 설정 (NIXL/LMCache/Mooncake)</span></td></tr>
+</table>
+<p class="meta"><span class="en">That's dozens of interdependent YAMLs and a handful of CRDs across multiple namespaces — and the two Heimdall components dissected earlier (the inference-scheduler/EPP fork and the aigateway) are exactly the kind of Deployments + CRs that live in here.</span><span class="ko">서로 의존하는 YAML 수십 개 + CRD 여러 개가 여러 네임스페이스에 걸쳐 있다 — 그리고 앞서 딥다이브한 Heimdall 두 컴포넌트(inference-scheduler/EPP fork, aigateway)가 바로 이 안에 사는 Deployment + CR들이다.</span></p>
+
+<h3><span class="en">The operational tasks Argo CD makes safe</span><span class="ko">ArgoCD가 안전하게 만들어 주는 운영 작업들</span></h3>
+<table>
+<tr><th><span class="en">Ops task</span><span class="ko">운영 작업</span></th><th><span class="en">Hand-applied (today)</span><span class="ko">손으로 (지금)</span></th><th><span class="en">With Argo CD / GitOps</span><span class="ko">ArgoCD / GitOps로</span></th></tr>
+<tr><td><span class="en">Model version bump</span><span class="ko">모델 버전 올리기</span></td><td><span class="en">edit image tag, <code>kubectl apply</code>, hope</span><span class="ko">이미지 태그 고쳐 <code>kubectl apply</code>, 운에 맡김</span></td><td><span class="en">change tag in Git → PR → auto-sync; rollback = <code>git revert</code></span><span class="ko">Git에서 태그 변경 → PR → auto-sync; 롤백 = <code>git revert</code></span></td></tr>
+<tr><td><span class="en">Scale prefill vs decode</span><span class="ko">prefill·decode 스케일</span></td><td><span class="en"><code>kubectl scale</code>, undocumented</span><span class="ko"><code>kubectl scale</code>, 기록 없음</span></td><td><span class="en">replica count is in Git, diff shown before apply</span><span class="ko">replica 수가 Git에 있고 적용 전 diff 확인</span></td></tr>
+<tr><td><span class="en">EPP scorer/SLO tuning</span><span class="ko">EPP 스코어러/SLO 튜닝</span></td><td><span class="en"><code>kubectl edit configmap</code>, easy to forget</span><span class="ko"><code>kubectl edit configmap</code>, 잊기 쉬움</span></td><td><span class="en">ConfigMap in Git; EPP hot-reloads; change is auditable</span><span class="ko">ConfigMap이 Git에; EPP가 hot-reload; 변경이 감사됨</span></td></tr>
+<tr><td><span class="en">3 a.m. hotfix drift</span><span class="ko">새벽 핫픽스 drift</span></td><td><span class="en">silent, until a redeploy erases it</span><span class="ko">조용함, 재배포가 지울 때까지</span></td><td><span class="en">self-heal reverts to Git (or alerts) automatically</span><span class="ko">self-heal이 자동으로 Git대로 되돌림(또는 알림)</span></td></tr>
+<tr><td><span class="en">dev → prod promotion</span><span class="ko">dev → prod 승격</span></td><td><span class="en">re-run scripts per env, drift between envs</span><span class="ko">환경마다 스크립트 재실행, 환경 간 drift</span></td><td><span class="en">ApplicationSet + Kustomize overlays; promote by merging</span><span class="ko">ApplicationSet + Kustomize overlay; 머지로 승격</span></td></tr>
+<tr><td><span class="en">Ordering (CRD→CR)</span><span class="ko">순서 (CRD→CR)</span></td><td><span class="en">apply in the right order by hand, or it errors</span><span class="ko">손으로 순서 맞춰 적용, 아니면 에러</span></td><td><span class="en">sync waves enforce: CRDs → gateway → pool → servers</span><span class="ko">sync wave가 강제: CRD → gateway → pool → 서버</span></td></tr>
+<tr><td><span class="en">Disaster recovery</span><span class="ko">재해 복구</span></td><td><span class="en">rebuild from memory / scattered scripts</span><span class="ko">기억/흩어진 스크립트로 재구성</span></td><td><span class="en">recreate cluster → root app repopulates from Git</span><span class="ko">클러스터 재생성 → 루트 앱이 Git에서 다시 채움</span></td></tr>
+</table>
+
+<div class="diagram">  Git repo:  gitops/
+   └─ root Application  (app-of-apps)
+        ├─ wave 0 ─►  Gateway API CRDs  +  GIE CRDs (InferencePool, InferenceModel)
+        ├─ wave 1 ─►  llm-d gateway (Envoy)   +   EPP / inference-scheduler
+        ├─ wave 2 ─►  InferencePool CR  +  InferenceModel CR   (라우팅 정책)
+        └─ wave 3 ─►  vLLM model servers (Deployment/LWS) + Service
+                              │   Argo CD syncs in wave order, self-heals drift
+                              ▼
+        kind / MI250 cluster:   request ─► gateway ─► EPP picks endpoint ─► vLLM pod</div>
+<span class="figcap"><span class="en">Fig 3 — The whole llm-d stack expressed as one app-of-apps with sync waves. One commit can bring up or tear down the entire serving platform, in the right order.</span><span class="ko">그림 3 — llm-d 스택 전체를 sync wave가 있는 app-of-apps 하나로 표현. 커밋 한 번으로 서빙 플랫폼 전체를 올바른 순서로 올리거나 내릴 수 있다.</span></span>
+
+<div class="us"><strong><span class="en">Editor's note — our angle (not a claim about Argo CD itself)</span><span class="ko">편집자 주 — 우리 관점 (ArgoCD 자체의 주장이 아님)</span></strong><br>
+<span class="en">We already reverse-engineered the Heimdall EPP and aigateway at the code level. The missing half is the <b>operational</b> picture: how those components actually get deployed, configured, versioned, and rolled back in production. Doing the llm-d stack under Argo CD on a toy cluster is the cheapest way to build that operator's intuition before touching a real MI250 fleet.</span>
+<span class="ko">우리는 이미 Heimdall EPP와 aigateway를 코드 차원에서 역분석했다. 빠진 절반은 <b>운영</b> 그림이다 — 그 컴포넌트들이 실제로 어떻게 배포·설정·버저닝·롤백되는가. 장난감 클러스터에서 llm-d 스택을 ArgoCD로 돌려보는 것이, 실제 MI250 fleet을 건드리기 전에 그 운영자 직관을 쌓는 가장 싼 방법이다.</span></div>
+
+
+<h2 id="env"><span class="en">3. Lab environment design — why kind on this node</span><span class="ko">3. 실습 환경 설계 — 이 노드에서 왜 kind인가</span></h2>
+
+<p><span class="en">Argo CD needs a Kubernetes cluster, and mi250-052 had none. It's a <b>shared GPU node</b> with no passwordless sudo and a "Docker-only, don't mutate the host" hygiene rule from earlier sessions. So the cluster has to be non-invasive and root-free. Options:</span>
+<span class="ko">ArgoCD는 Kubernetes 클러스터가 필요한데 mi250-052엔 없었다. 이 노드는 <b>공유 GPU 노드</b>이고 passwordless sudo가 없으며, 이전 세션들의 "Docker 전용, 호스트 건드리지 말 것" 위생 규칙이 있다. 그래서 클러스터는 비침습적이고 root 불필요해야 한다. 선택지:</span></p>
+
+<table>
+<tr><th><span class="en">Option</span><span class="ko">선택지</span></th><th><span class="en">Needs root?</span><span class="ko">root 필요?</span></th><th><span class="en">Touches host?</span><span class="ko">호스트 건드림?</span></th><th><span class="en">Verdict</span><span class="ko">판정</span></th></tr>
+<tr><td><b>kubeadm</b></td><td><span class="en">yes (kubelet, swap, containerd)</span><span class="ko">예 (kubelet·swap·containerd)</span></td><td><span class="en">heavily — systemd services on host</span><span class="ko">크게 — 호스트에 systemd 서비스</span></td><td class="status-fail">✗ <span class="en">invasive on a shared node</span><span class="ko">공유 노드에 침습적</span></td></tr>
+<tr><td><b>k3s</b></td><td><span class="en">yes (installs a systemd service)</span><span class="ko">예 (systemd 서비스 설치)</span></td><td><span class="en">yes</span><span class="ko">예</span></td><td class="status-fail">✗ <span class="en">no passwordless sudo here</span><span class="ko">여긴 passwordless sudo 없음</span></td></tr>
+<tr><td><b>minikube</b> (docker driver)</td><td><span class="en">no</span><span class="ko">아니오</span></td><td><span class="en">low</span><span class="ko">낮음</span></td><td class="status-wip">△ <span class="en">works, but heavier; single-profile</span><span class="ko">됨, 다만 더 무겁고 단일 프로파일</span></td></tr>
+<tr><td><b>kind</b> (k8s-in-Docker)</td><td><span class="en"><b>no</b> (just Docker group)</span><span class="ko"><b>아니오</b> (Docker 그룹이면 됨)</span></td><td><span class="en"><b>none</b> — all in containers</span><span class="ko"><b>없음</b> — 전부 컨테이너 안</span></td><td class="status-ok">✓ <span class="en">chosen</span><span class="ko">선택</span></td></tr>
+</table>
+
+<p><span class="en"><b>kind</b> ("Kubernetes IN Docker") runs each K8s node as a Docker container. Spin up, tear down, and rebuild cost seconds and leave zero footprint on the host — the perfect throwaway GitOps sandbox, and a clean fit for this node's rules.</span>
+<span class="ko"><b>kind</b>("Kubernetes IN Docker")는 각 K8s 노드를 Docker 컨테이너로 띄운다. 생성·삭제·재구성이 초 단위이고 호스트에 흔적이 0 — 일회용 GitOps 샌드박스로 완벽하고, 이 노드 규칙에도 깔끔히 맞는다.</span></p>
+
+<div class="note"><strong><span class="en">The GPU caveat (handled honestly in Phase 5)</span><span class="ko">GPU 단서 (Phase 5에서 정직하게 다룸)</span></strong><br>
+<span class="en">kind nodes are containers, so exposing the MI250s to pods needs privileged nodes + <code>/dev/kfd</code> & <code>/dev/dri</code> mounts + the AMD device plugin — fiddly. But here's the key insight: <b>Phases 1–4 (the entire GitOps + control-plane learning) need no GPU.</b> The model servers can be tiny CPU vLLM pods. Real GPU passthrough is a stretch goal (Phase 5), with a documented fallback if it fights us.</span>
+<span class="ko">kind 노드는 컨테이너라 MI250를 파드에 노출하려면 privileged 노드 + <code>/dev/kfd</code>·<code>/dev/dri</code> 마운트 + AMD device plugin이 필요 — 까다롭다. 하지만 핵심 통찰: <b>Phase 1–4(GitOps + 컨트롤플레인 학습 전부)는 GPU가 필요 없다.</b> 모델 서버는 작은 CPU vLLM 파드면 된다. 실제 GPU passthrough는 stretch 목표(Phase 5)로 두고, 막히면 대안을 기록한다.</span></div>
+
+
+<h2 id="plan"><span class="en">4. The phased hands-on plan (lab → real-ops)</span><span class="ko">4. 단계별 실습 계획 (실습 → 실운영)</span></h2>
+
+<p><span class="en">Each phase teaches one Argo CD concept and maps to one real operational skill. Phases build on each other; the cluster from Phase 1 carries through. <b>Reproducibility is part of the plan, not an afterthought:</b> §5 is a from-scratch copy-paste runbook, and every later phase will append its own reproduce block (exact commands + how to verify + how to tear down) so anyone can rebuild the whole thing.</span>
+<span class="ko">각 단계는 ArgoCD 개념 하나를 가르치고, 실제 운영 스킬 하나에 대응된다. 단계는 누적되며 Phase 1의 클러스터가 끝까지 이어진다. <b>재현성은 계획의 일부다(나중 일이 아니라):</b> §5는 처음부터 복붙 가능한 런북이고, 이후 모든 단계는 자기 재현 블록(정확한 명령 + 검증법 + 정리법)을 덧붙여 누구나 전체를 다시 만들 수 있게 한다.</span></p>
+
+<div class="phase">
+<h3><span class="pchip">1</span> <span class="en">Bootstrap — cluster + Argo CD + first sync</span><span class="ko">부트스트랩 — 클러스터 + ArgoCD + 첫 sync</span></h3>
+<p class="meta"><b><span class="en">Concept:</span><span class="ko">개념:</span></b> Application CR, the sync loop, the UI/CLI &nbsp;·&nbsp; <b><span class="en">Real-ops skill:</span><span class="ko">실운영 스킬:</span></b> <span class="en">getting a GitOps control plane stood up</span><span class="ko">GitOps 컨트롤플레인 기동</span> &nbsp;·&nbsp; <b>Status:</b> <span class="status-ok">✓ DONE (§5)</span></p>
+<p><span class="en">Create a kind cluster, install Argo CD, log into the UI, and sync the canonical example app (argoproj guestbook) from a public Git repo to <i>see</i> the loop work end to end.</span>
+<span class="ko">kind 클러스터 생성, ArgoCD 설치, UI 로그인, 정석 예제 앱(argoproj guestbook)을 공개 Git 저장소에서 sync해서 루프가 끝까지 도는 걸 <i>눈으로</i> 확인.</span></p>
+</div>
+
+<div class="phase">
+<h3><span class="pchip">2</span> <span class="en">Our own GitOps repo — drift, self-heal, rollback</span><span class="ko">우리만의 GitOps 저장소 — drift·self-heal·롤백</span></h3>
+<p class="meta"><b><span class="en">Concept:</span><span class="ko">개념:</span></b> auto-sync, self-heal, prune, rollback &nbsp;·&nbsp; <b><span class="en">Real-ops skill:</span><span class="ko">실운영 스킬:</span></b> <span class="en">change discipline & recovery</span><span class="ko">변경 규율 & 복구</span></p>
+<p><span class="en">Make a small Git repo with a trivial Deployment, register it as an Application with auto-sync + self-heal on. Then deliberately: (a) commit a change → watch it sync; (b) <code>kubectl edit</code> the live object → watch self-heal revert it; (c) <code>git revert</code> → watch rollback.</span>
+<span class="ko">사소한 Deployment 하나로 작은 Git 저장소를 만들고, auto-sync + self-heal 켠 Application으로 등록. 그다음 일부러: (a) 변경 커밋 → sync 관찰; (b) live 객체를 <code>kubectl edit</code> → self-heal이 되돌리는 것 관찰; (c) <code>git revert</code> → 롤백 관찰.</span></p>
+</div>
+
+<div class="phase">
+<h3><span class="pchip">3</span> <span class="en">A real model server under GitOps (CPU vLLM)</span><span class="ko">GitOps 아래 실제 모델 서버 (CPU vLLM)</span></h3>
+<p class="meta"><b><span class="en">Concept:</span><span class="ko">개념:</span></b> managing a real workload declaratively &nbsp;·&nbsp; <b><span class="en">Real-ops skill:</span><span class="ko">실운영 스킬:</span></b> <span class="en">model rollout/rollback</span><span class="ko">모델 롤아웃/롤백</span></p>
+<p><span class="en">Deploy a CPU vLLM (tiny model, e.g. Qwen2.5-0.5B) as a Deployment + Service via Argo CD, hit <code>/v1/models</code>, then practice a model/image bump as a commit. This is the same workload from the earlier CPU-cluster log, now operated by GitOps.</span>
+<span class="ko">CPU vLLM(작은 모델, 예: Qwen2.5-0.5B)을 Deployment + Service로 ArgoCD를 통해 배포, <code>/v1/models</code> 호출, 그다음 모델/이미지 버전업을 커밋으로 연습. 앞선 CPU-cluster 로그의 그 워크로드를 이제 GitOps로 운영하는 것.</span></p>
+</div>
+
+<div class="phase">
+<h3><span class="pchip">4</span> <span class="en">The llm-d control plane via GitOps</span><span class="ko">GitOps로 llm-d 컨트롤플레인</span></h3>
+<p class="meta"><b><span class="en">Concept:</span><span class="ko">개념:</span></b> sync waves, hooks, app-of-apps, Helm sources, CRDs &nbsp;·&nbsp; <b><span class="en">Real-ops skill:</span><span class="ko">실운영 스킬:</span></b> <span class="en">operating the whole serving stack as code</span><span class="ko">서빙 스택 전체를 코드로 운영</span></p>
+<p><span class="en">Install Gateway API + GIE CRDs, the gateway, and the EPP — all as Argo CD Applications wired with sync waves (Fig 3) under one app-of-apps root. Route a request through the gateway → EPP → the CPU vLLM pod from Phase 3. This is where the Heimdall deep-dives become tangible.</span>
+<span class="ko">Gateway API + GIE CRD, 게이트웨이, EPP를 전부 ArgoCD Application으로, sync wave(그림 3)로 엮어 app-of-apps 루트 하나 아래 설치. 요청을 게이트웨이 → EPP → Phase 3의 CPU vLLM 파드로 라우팅. 여기서 Heimdall 딥다이브가 손에 잡힌다.</span></p>
+</div>
+
+<div class="phase stretch">
+<h3><span class="pchip">5</span> <span class="en">Stretch — real MI250 GPU under Argo CD</span><span class="ko">Stretch — ArgoCD 아래 실제 MI250 GPU</span></h3>
+<p class="meta"><b><span class="en">Concept:</span><span class="ko">개념:</span></b> device plugins, node resources, privileged nodes &nbsp;·&nbsp; <b><span class="en">Real-ops skill:</span><span class="ko">실운영 스킬:</span></b> <span class="en">GPU scheduling on K8s</span><span class="ko">K8s에서 GPU 스케줄링</span></p>
+<p><span class="en">Attempt AMD GPU passthrough into the kind node (privileged + <code>/dev/kfd</code>,<code>/dev/dri</code> + AMD device plugin advertising <code>amd.com/gpu</code>), then run a real vLLM-on-MI250 pod — and, if it holds, a P/D-disaggregation pair — under Argo CD. <b>Honest fallback:</b> if passthrough fights us, document exactly why and either point Argo CD at the existing Docker-run MI250 vLLM as an external Service, or stay CPU.</span>
+<span class="ko">kind 노드에 AMD GPU passthrough 시도(privileged + <code>/dev/kfd</code>,<code>/dev/dri</code> + <code>amd.com/gpu</code> 광고하는 AMD device plugin), 그다음 실제 vLLM-on-MI250 파드 — 되면 P/D 분리 쌍 — 를 ArgoCD 아래 실행. <b>정직한 대안:</b> passthrough가 막히면 정확한 원인을 기록하고, 기존 Docker로 띄운 MI250 vLLM을 외부 Service로 ArgoCD에 물리거나 CPU로 유지.</span></p>
+</div>
+
+<div class="phase ops">
+<h3><span class="pchip">6</span> <span class="en">Real-ops drills — the operator's playbook</span><span class="ko">실운영 드릴 — 운영자 플레이북</span></h3>
+<p class="meta"><b><span class="en">Concept:</span><span class="ko">개념:</span></b> ApplicationSet, AppProject RBAC, sync windows, notifications, DR &nbsp;·&nbsp; <b><span class="en">Real-ops skill:</span><span class="ko">실운영 스킬:</span></b> <span class="en">running it like production</span><span class="ko">프로덕션처럼 운영</span></p>
+<p><span class="en">Multi-env promotion (ApplicationSet + Kustomize overlays dev/prod), guardrails via AppProject, drift notifications, a sync window (no auto-deploy during peak), and a disaster-recovery drill: <code>kind delete cluster</code> → recreate → root app rebuilds the entire llm-d stack from Git. The payoff that proves GitOps.</span>
+<span class="ko">멀티 환경 승격(ApplicationSet + Kustomize overlay dev/prod), AppProject 가드레일, drift 알림, sync window(피크 시간 자동배포 금지), 그리고 재해복구 드릴: <code>kind delete cluster</code> → 재생성 → 루트 앱이 Git에서 llm-d 스택 전체를 재구성. GitOps를 증명하는 보상.</span></p>
+</div>
+
+
+<h2 id="repro"><span class="en">5. Reproduce from scratch (the runbook)</span><span class="ko">5. 처음부터 재현 (런북)</span></h2>
+
+<p><span class="en">This is the consolidated, idempotent, copy-paste version of everything in Phase 1 — improved so you <i>don't</i> hit the CRD trap (it uses server-side apply from the start). Run it on any Linux host with Docker; it leaves zero footprint on the host (no root, no system packages — only <code>~/bin</code> and Docker containers).</span>
+<span class="ko">Phase 1의 모든 것을 한데 묶은, 멱등(idempotent)하고 복붙 가능한 버전 — CRD 함정을 <i>안</i> 밟도록 처음부터 server-side apply를 쓴다. Docker가 있는 Linux 호스트면 어디서든 실행 가능하고, 호스트에 흔적을 0으로 남긴다(root·시스템 패키지 없음 — <code>~/bin</code>과 Docker 컨테이너만).</span></p>
+
+<h3><span class="en">5.1 — Prerequisites</span><span class="ko">5.1 — 전제 조건</span></h3>
+<table>
+<tr><th><span class="en">Need</span><span class="ko">필요</span></th><th><span class="en">Why / check</span><span class="ko">이유 / 확인</span></th></tr>
+<tr><td><span class="en">Docker, your user in the <code>docker</code> group</span><span class="ko">Docker, 사용자가 <code>docker</code> 그룹</span></td><td><code>docker ps</code> <span class="en">works without sudo (kind runs nodes as containers)</span><span class="ko">가 sudo 없이 됨 (kind이 노드를 컨테이너로 띄움)</span></td></tr>
+<tr><td><span class="en">Outbound HTTPS</span><span class="ko">아웃바운드 HTTPS</span></td><td><span class="en">to pull binaries + images (github / dl.k8s.io / quay.io / ghcr.io / docker hub)</span><span class="ko">바이너리·이미지 pull (github / dl.k8s.io / quay.io / ghcr.io / docker hub)</span></td></tr>
+<tr><td><span class="en">~2 GB disk, a few GB RAM</span><span class="ko">디스크 ~2 GB, RAM 수 GB</span></td><td><span class="en">node image + Argo CD images</span><span class="ko">노드 이미지 + ArgoCD 이미지</span></td></tr>
+<tr><td><span class="en">No root / sudo</span><span class="ko">root / sudo 불필요</span></td><td><span class="en">deliberately — nothing is installed on the host</span><span class="ko">의도적 — 호스트엔 아무것도 설치 안 함</span></td></tr>
+</table>
+
+<h3><span class="en">5.2 — One copy-paste block</span><span class="ko">5.2 — 복붙 한 블록</span></h3>
+<pre><code>set -euo pipefail
+mkdir -p ~/bin && export PATH="$HOME/bin:$PATH"   # add to ~/.bashrc to persist
+
+# 1) tools — pinned for reproducibility (swap for `latest`/`stable.txt` if you prefer newest)
+curl -fLo ~/bin/kind    https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64      && chmod +x ~/bin/kind
+curl -fLo ~/bin/kubectl https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl && chmod +x ~/bin/kubectl
+
+# 2) cluster — idempotent (skips if it already exists)
+kind get clusters | grep -qx gitops-lab || kind create cluster --name gitops-lab --wait 180s
+
+# 3) Argo CD — server-side apply avoids the 256 KiB ApplicationSet-CRD trap (see §6)
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply --server-side=true --force-conflicts -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl -n argocd rollout status deploy/argocd-server --timeout=420s
+
+# 4) verify
+kubectl get crd | grep argoproj            # → applications / applicationsets / appprojects
+kubectl -n argocd get pods                 # → 7 pods, all Running
+
+# 5) access the UI
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d; echo            # initial admin password
+kubectl -n argocd port-forward svc/argocd-server 8080:443     # leave running
+#   then from your laptop:  ssh -L 8080:localhost:8080 &lt;node&gt;  →  https://localhost:8080  (admin / pw)</code></pre>
+
+<h3><span class="en">5.3 — Teardown (zero host footprint)</span><span class="ko">5.3 — 정리 (호스트 흔적 0)</span></h3>
+<pre><code>kind delete cluster --name gitops-lab    # removes the cluster + all Argo CD state
+# binaries remain in ~/bin; remove with: rm ~/bin/kind ~/bin/kubectl</code></pre>
+
+<div class="tip"><strong><span class="en">Pin vs latest</span><span class="ko">고정 vs 최신</span></strong><br>
+<span class="en">The block pins <code>kind v0.32.0</code> / <code>kubectl v1.36.2</code> so this log reproduces byte-for-byte. For the newest instead: kind → the <code>tag_name</code> from <code>api.github.com/repos/kubernetes-sigs/kind/releases/latest</code>; kubectl → <code>curl -L https://dl.k8s.io/release/stable.txt</code>. Argo CD is always pulled from the <code>stable</code> manifest branch.</span>
+<span class="ko">이 블록은 <code>kind v0.32.0</code> / <code>kubectl v1.36.2</code>로 고정해 이 로그가 그대로 재현되게 했다. 최신을 원하면: kind → <code>api.github.com/repos/kubernetes-sigs/kind/releases/latest</code>의 <code>tag_name</code>; kubectl → <code>curl -L https://dl.k8s.io/release/stable.txt</code>. ArgoCD는 항상 <code>stable</code> 매니페스트 브랜치에서 pull.</span></div>
+
+
+<h2 id="phase1"><span class="en">6. Phase 1 — bootstrap, executed live (DONE)</span><span class="ko">6. Phase 1 — 부트스트랩, 실제 실행 기록 (완료)</span></h2>
+
+<p class="meta"><span class="en">Ran on mi250-052, 2026-06-12 12:25–12:28 UTC. Everything below is real output, lightly trimmed. Total wall-clock for cluster + Argo CD: <b>~1m51s</b>.</span><span class="ko">mi250-052에서 실행, 2026-06-12 12:25–12:28 UTC. 아래는 전부 실제 출력(약간만 정리). 클러스터 + ArgoCD 총 소요: <b>약 1분 51초</b>.</span></p>
+
+<h3><span class="en">5.1 — Tooling (no root, into ~/bin)</span><span class="ko">5.1 — 도구 설치 (root 없이 ~/bin으로)</span></h3>
+<pre><code>mkdir -p ~/bin && export PATH=$HOME/bin:$PATH
+# kind (latest) + kubectl (stable) — plain binary downloads, no system packages
+curl -fLo ~/bin/kind    https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64        && chmod +x ~/bin/kind
+curl -fLo ~/bin/kubectl https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl   && chmod +x ~/bin/kubectl
+
+$ kind version       # kind v0.32.0 go1.26.3 linux/amd64
+$ kubectl version    # Client Version: v1.36.2</code></pre>
+
+<h3><span class="en">5.2 — Create the kind cluster</span><span class="ko">5.2 — kind 클러스터 생성</span></h3>
+<pre><code>$ kind create cluster --name gitops-lab --wait 180s
+ ✓ Ensuring node image (kindest/node:v1.36.1) 🖼
+ ✓ Preparing nodes 📦
+ ✓ Starting control-plane 🕹️
+ ✓ Installing CNI 🔌
+ ✓ Installing StorageClass 💾
+ ✓ Waiting ≤ 3m0s for control-plane = Ready ⏳
+ • Ready after 16s 💚
+
+$ kubectl get nodes -o wide
+NAME                       STATUS  ROLES          AGE  VERSION  OS-IMAGE                     CONTAINER-RUNTIME
+gitops-lab-control-plane   Ready   control-plane  21s  v1.36.1  Debian GNU/Linux 13 (trixie) containerd://2.3.1</code></pre>
+<p class="meta"><span class="en">K8s v1.36.1 in a single Docker container. No host services, no sudo. Tearing this down later is one <code>kind delete cluster</code>.</span><span class="ko">Docker 컨테이너 하나 안의 K8s v1.36.1. 호스트 서비스 없음, sudo 없음. 나중에 정리는 <code>kind delete cluster</code> 한 줄.</span></p>
+
+<h3><span class="en">5.3 — Install Argo CD</span><span class="ko">5.3 — ArgoCD 설치</span></h3>
+<pre><code>$ kubectl create namespace argocd
+$ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+$ kubectl -n argocd rollout status deploy/argocd-server --timeout=420s
+deployment "argocd-server" successfully rolled out
+
+$ kubectl -n argocd get pods
+argocd-application-controller-0                     1/1  Running   # the reconcile engine
+argocd-applicationset-controller-5bc66cf64c-djspn   1/1  Running   # fans out ApplicationSets
+argocd-dex-server-...                               1/1  Running   # SSO (unused locally)
+argocd-notifications-controller-...                 1/1  Running   # alerts on sync/health
+argocd-redis-...                                    1/1  Running   # cache
+argocd-repo-server-...                              1/1  Running   # clones git, renders manifests
+argocd-server-...                                   1/1  Running   # API + Web UI
+
+# images: quay.io/argoproj/argocd:v3.4.3 (server/controllers/repo), redis:8.2.3, dex:v2.45.0</code></pre>
+<p class="meta"><span class="en">Seven components, each a clean responsibility — note <code>repo-server</code> (renders your Git into manifests) and <code>application-controller</code> (the actual reconcile loop). These are the two doing the work in Fig 2.</span><span class="ko">컴포넌트 7개, 각자 깔끔한 책임 — <code>repo-server</code>(Git을 매니페스트로 렌더링)와 <code>application-controller</code>(실제 reconcile 루프)에 주목. 그림 2에서 일하는 게 이 둘.</span></p>
+
+<div class="note"><strong><span class="en">Real gotcha hit & fixed — the ApplicationSet CRD didn't install</span><span class="ko">실전 함정 발생 & 해결 — ApplicationSet CRD가 설치 안 됨</span></strong><br>
+<pre><code># the plain `kubectl apply` printed:
+The CustomResourceDefinition "applicationsets.argoproj.io" is invalid:
+  metadata.annotations: Too long: may not be more than 262144 bytes
+
+$ kubectl get crd applicationsets.argoproj.io
+Error from server (NotFound): ... "applicationsets.argoproj.io" not found   # ← missing!</code></pre>
+<span class="en">This is the classic Argo CD install trap. Client-side <code>kubectl apply</code> stuffs a <code>last-applied-configuration</code> annotation onto each object; the ApplicationSet CRD is so large the annotation blows past Kubernetes' 256 KiB limit, so that one resource silently fails while everything else applies. Fix = <b>server-side apply</b>, which doesn't use that annotation:</span>
+<span class="ko">ArgoCD 설치의 고전적 함정. 클라이언트 측 <code>kubectl apply</code>는 각 객체에 <code>last-applied-configuration</code> 어노테이션을 박아 넣는데, ApplicationSet CRD가 너무 커서 그 어노테이션이 Kubernetes의 256 KiB 한도를 넘긴다. 그래서 그 리소스 하나만 조용히 실패하고 나머지는 다 적용됨. 해결 = <b>server-side apply</b>(그 어노테이션을 안 씀):</span>
+<pre><code>$ kubectl apply --server-side=true --force-conflicts -n argocd \
+    -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+customresourcedefinition.../applicationsets.argoproj.io serverside-applied
+
+$ kubectl get crd | grep argoproj
+applications.argoproj.io       2026-06-12T12:26:58Z
+applicationsets.argoproj.io    2026-06-12T12:28:47Z   # ← now present ✓
+appprojects.argoproj.io        2026-06-12T12:26:58Z</code></pre>
+<span class="en"><b>Lesson for the real plan:</b> always install Argo CD (and any CRD-heavy chart) with <code>--server-side</code>. Worth carrying into the GitOps repo itself.</span>
+<span class="ko"><b>실제 계획 교훈:</b> ArgoCD(및 CRD 많은 차트)는 항상 <code>--server-side</code>로 설치. GitOps 저장소 자체에도 반영할 가치 있음.</span></div>
+
+<h3><span class="en">5.4 — Accessing the UI / CLI</span><span class="ko">5.4 — UI / CLI 접근</span></h3>
+<pre><code># initial admin password (kept local — throwaway kind secret, not committed here)
+$ kubectl -n argocd get secret argocd-initial-admin-secret \
+    -o jsonpath='{.data.password}' | base64 -d
+
+# reach the UI from a laptop over SSH (kind's API is only on the node's loopback):
+#   on node:   kubectl -n argocd port-forward svc/argocd-server 8080:443
+#   on laptop: ssh -L 8080:localhost:8080 mi250-052   → browse https://localhost:8080
+#   login: admin / &lt;the password above&gt;</code></pre>
+
+<div class="tip"><strong><span class="en">Phase 1 result</span><span class="ko">Phase 1 결과</span></strong><br>
+<span class="en">A real Argo CD control plane is running on mi250-052, root-free, fully containerized, with all three CRDs registered. The reconcile engine and repo-server are healthy — the cluster is ready to be pointed at a Git repo. Next: Phase 2 (our own repo + self-heal/rollback drills).</span>
+<span class="ko">진짜 ArgoCD 컨트롤플레인이 mi250-052에서 root 없이, 완전 컨테이너화로, CRD 3개 등록된 채 돌고 있다. reconcile 엔진과 repo-server 정상 — 클러스터를 Git 저장소에 물릴 준비 완료. 다음: Phase 2(우리 저장소 + self-heal/롤백 드릴).</span></div>
+
+
+<h2 id="glossary"><span class="en">7. Glossary (infra terms for vLLM-only folks) + references</span><span class="ko">7. 용어 글로서리 (vLLM만 다뤄본 사람을 위한 인프라 용어) + 참고</span></h2>
+
+<p><span class="en">If your world has been "model weights, tokens, TTFT/TPOT, KV cache, prefill/decode, TP, <code>vllm serve</code>," then almost every word above that isn't about the model itself is new vocabulary. Here is that vocabulary, grouped — the Kubernetes / GitOps / cluster-plumbing terms a vLLM engine person typically hasn't met yet.</span>
+<span class="ko">당신의 세계가 "모델 가중치, 토큰, TTFT/TPOT, KV cache, prefill/decode, TP, <code>vllm serve</code>"였다면, 위에서 모델 자체가 아닌 단어는 거의 다 새 어휘다. 그 어휘를 그룹별로 정리한다 — vLLM 엔진 쪽 사람이 보통 아직 안 만나본 Kubernetes / GitOps / 클러스터 배관 용어.</span></p>
+
+<h3><span class="en">A. Kubernetes basics — the nouns that appear everywhere</span><span class="ko">A. Kubernetes 기본 — 사방에 나오는 명사들</span></h3>
+<div class="grid3">
+  <div class="mini"><div class="term">Kubernetes (K8s)</div><div class="def"><span class="en">A container orchestrator: you declare what should run, it keeps that true across a fleet of machines (restart, reschedule, scale). "8" replaces the 8 letters in K-ubernete-s.</span><span class="ko">컨테이너 오케스트레이터: 무엇이 돌아야 하는지 선언하면, 여러 머신에 걸쳐 그걸 계속 참으로 유지(재시작·재배치·스케일). K8s는 가운데 8글자 줄임.</span></div></div>
+  <div class="mini"><div class="term">Pod</div><div class="def"><span class="en">The smallest deployable unit — one (or a few tightly-coupled) containers sharing a network/IP. Your vLLM process runs inside a Pod, not a bare container.</span><span class="ko">배포의 최소 단위 — 네트워크/IP를 공유하는 컨테이너 1개(또는 밀접한 몇 개). vLLM 프로세스는 맨 컨테이너가 아니라 Pod 안에서 돈다.</span></div></div>
+  <div class="mini"><div class="term">Deployment</div><div class="def"><span class="en">A controller that keeps N identical Pods running and does rolling updates. "Run 3 copies of this vLLM image" → a Deployment.</span><span class="ko">동일한 Pod N개를 유지하고 롤링 업데이트를 하는 컨트롤러. "이 vLLM 이미지 3벌 띄워" → Deployment.</span></div></div>
+  <div class="mini"><div class="term">ReplicaSet / replica / rollout</div><div class="def"><span class="en">replica = one copy of a Pod; a Deployment manages a ReplicaSet of them; a rollout = replacing old Pods with new ones gradually.</span><span class="ko">replica = Pod 한 벌; Deployment가 그것들의 ReplicaSet을 관리; rollout = 옛 Pod를 새 Pod로 점진 교체.</span></div></div>
+  <div class="mini"><div class="term">Service</div><div class="def"><span class="en">A stable virtual IP + DNS name in front of a changing set of Pods, with load-balancing. Pods come and go; the Service address doesn't.</span><span class="ko">바뀌는 Pod 집합 앞에 두는 안정적 가상 IP + DNS 이름(부하분산 포함). Pod는 생기고 사라져도 Service 주소는 그대로.</span></div></div>
+  <div class="mini"><div class="term">Namespace</div><div class="def"><span class="en">A logical partition of the cluster for grouping/isolating resources (e.g. everything Argo CD lives in namespace <code>argocd</code>).</span><span class="ko">리소스를 묶고 격리하는 클러스터의 논리적 칸(예: ArgoCD 전부가 <code>argocd</code> 네임스페이스에).</span></div></div>
+  <div class="mini"><div class="term">ConfigMap / Secret</div><div class="def"><span class="en">K8s objects holding config (ConfigMap) or sensitive data (Secret, base64-encoded), mounted into Pods. The EPP's scorer config is a ConfigMap.</span><span class="ko">설정(ConfigMap) 또는 민감 데이터(Secret, base64)를 담아 Pod에 마운트하는 객체. EPP 스코어러 설정이 ConfigMap.</span></div></div>
+  <div class="mini"><div class="term">Node / control-plane</div><div class="def"><span class="en">Node = a machine (or, in kind, a container) that runs Pods. control-plane = the brain (API server, scheduler, controllers) that decides what goes where.</span><span class="ko">Node = Pod를 돌리는 머신(또는 kind에선 컨테이너). control-plane = 무엇을 어디 둘지 정하는 두뇌(API 서버·스케줄러·컨트롤러).</span></div></div>
+  <div class="mini"><div class="term">kubectl</div><div class="def"><span class="en">The CLI that talks to the K8s API server (<code>get</code>, <code>apply</code>, <code>edit</code>, <code>logs</code>…). In GitOps you stop using it to <i>change</i> things and mostly use it to <i>look</i>.</span><span class="ko">K8s API 서버와 대화하는 CLI(<code>get</code>·<code>apply</code>·<code>edit</code>·<code>logs</code>…). GitOps에선 <i>바꾸는</i> 용도로는 안 쓰고 주로 <i>보는</i> 용도로 쓴다.</span></div></div>
+  <div class="mini"><div class="term">controller / reconcile</div><div class="def"><span class="en">A controller is a loop that watches desired vs actual and fixes the gap (reconcile). Argo CD is a controller; so is every Deployment under the hood.</span><span class="ko">컨트롤러 = 원하는 상태 vs 실제를 보고 차이를 메우는 루프(reconcile). ArgoCD가 컨트롤러이고, 모든 Deployment도 속으로 그렇다.</span></div></div>
+</div>
+
+<h3><span class="en">B. Extension mechanism — CRDs and the llm-d resources</span><span class="ko">B. 확장 메커니즘 — CRD와 llm-d 리소스</span></h3>
+<div class="grid3">
+  <div class="mini"><div class="term">CRD / CR</div><div class="def"><span class="en">CustomResourceDefinition teaches K8s a <i>new kind</i> of object; a CR is an instance of it. <code>InferencePool</code> is a CRD; your specific pool is a CR. This is how llm-d adds LLM-aware concepts to K8s.</span><span class="ko">CustomResourceDefinition은 K8s에게 <i>새로운 종류</i>의 객체를 가르치고, CR은 그 인스턴스. <code>InferencePool</code>이 CRD, 당신의 실제 풀이 CR. llm-d가 LLM 개념을 K8s에 추가하는 방식.</span></div></div>
+  <div class="mini"><div class="term">Gateway API</div><div class="def"><span class="en">The modern K8s standard for ingress/L7 routing: <code>GatewayClass</code> (which implementation), <code>Gateway</code> (a listener), <code>HTTPRoute</code> (match→backend rules). Replaces the older Ingress.</span><span class="ko">인그레스/L7 라우팅의 현대 K8s 표준: <code>GatewayClass</code>(구현체), <code>Gateway</code>(리스너), <code>HTTPRoute</code>(매칭→백엔드 규칙). 구형 Ingress를 대체.</span></div></div>
+  <div class="mini"><div class="term">GIE (Inference Extension)</div><div class="def"><span class="en">Gateway API Inference Extension — a SIG-Network standard that adds LLM-aware routing (load/KV-cache/SLO-aware) on top of Gateway API. llm-d implements it.</span><span class="ko">Gateway API Inference Extension — Gateway API 위에 LLM 인지 라우팅(부하·KV cache·SLO 인지)을 더하는 SIG-Network 표준. llm-d가 이를 구현.</span></div></div>
+  <div class="mini"><div class="term">InferencePool / InferenceModel</div><div class="def"><span class="en">GIE CRDs: an InferencePool groups the model-server Pods that can serve a model; InferenceModel/Objective expresses routing intent & SLOs for a model name.</span><span class="ko">GIE CRD: InferencePool은 한 모델을 서빙할 수 있는 모델서버 Pod들을 묶고, InferenceModel/Objective는 모델명에 대한 라우팅 의도·SLO를 표현.</span></div></div>
+  <div class="mini"><div class="term">EPP (Endpoint Picker)</div><div class="def"><span class="en">The inference scheduler process that, per request, picks <i>which</i> model Pod should serve it (prefix-cache / load / P-D aware). The Heimdall inference-scheduler is an EPP fork.</span><span class="ko">요청마다 <i>어느</i> 모델 Pod이 처리할지 고르는 추론 스케줄러 프로세스(prefix-cache/부하/P-D 인지). Heimdall inference-scheduler가 EPP fork.</span></div></div>
+  <div class="mini"><div class="term">LeaderWorkerSet (LWS)</div><div class="def"><span class="en">A workload type for multi-Pod groups that act as one unit — used when one model is sharded across several Pods/nodes (e.g. large TP / multi-node).</span><span class="ko">여러 Pod가 한 단위로 동작하는 워크로드 타입 — 한 모델을 여러 Pod/노드로 샤딩할 때 사용(예: 큰 TP / 멀티노드).</span></div></div>
+</div>
+
+<h3><span class="en">C. Packaging & Argo CD objects</span><span class="ko">C. 패키징 & ArgoCD 객체</span></h3>
+<div class="grid3">
+  <div class="mini"><div class="term">Helm / chart</div><div class="def"><span class="en">A package manager for K8s. A "chart" is a templated bundle of manifests with values you fill in (<code>image.tag</code>, replicas…). llm-d ships as Helm charts.</span><span class="ko">K8s의 패키지 매니저. "chart"는 값(<code>image.tag</code>·replicas…)을 채워 넣는 템플릿화된 매니페스트 묶음. llm-d는 Helm chart로 배포됨.</span></div></div>
+  <div class="mini"><div class="term">Kustomize / overlay</div><div class="def"><span class="en">A template-free way to layer patches over a base set of manifests. A <code>dev</code> overlay and a <code>prod</code> overlay reuse one base — how you promote across environments.</span><span class="ko">템플릿 없이 기본 매니페스트 위에 패치를 겹치는 방식. <code>dev</code> overlay와 <code>prod</code> overlay가 base 하나를 재사용 — 환경 간 승격 방법.</span></div></div>
+  <div class="mini"><div class="term">Application (Argo CR)</div><div class="def"><span class="en">Argo CD's core object: "sync <i>this Git repo+path</i> to <i>this cluster+namespace</i>." Source can be raw YAML, Kustomize, or Helm.</span><span class="ko">ArgoCD의 핵심 객체: "<i>이 Git 저장소+경로</i>를 <i>이 클러스터+네임스페이스</i>로 sync." 소스는 생 YAML·Kustomize·Helm.</span></div></div>
+  <div class="mini"><div class="term">ApplicationSet</div><div class="def"><span class="en">A template that generates many Applications (one per cluster/env/directory) — multi-env, multi-cluster without copy-paste.</span><span class="ko">여러 Application을 만들어내는 템플릿(클러스터/환경/디렉터리별 하나씩) — 복붙 없이 멀티 환경·멀티 클러스터.</span></div></div>
+  <div class="mini"><div class="term">AppProject</div><div class="def"><span class="en">Guardrails/RBAC: which repos, clusters, namespaces, and resource kinds a group of Applications may touch.</span><span class="ko">가드레일/RBAC: 한 Application 그룹이 어떤 repo·클러스터·네임스페이스·리소스 종류를 건드릴 수 있는지 제한.</span></div></div>
+  <div class="mini"><div class="term">app-of-apps</div><div class="def"><span class="en">A pattern: one root Application whose job is to create other Applications — bootstrap a whole platform from one commit.</span><span class="ko">패턴: 다른 Application들을 만드는 게 임무인 루트 Application 하나 — 커밋 하나로 플랫폼 전체 부트스트랩.</span></div></div>
+  <div class="mini"><div class="term">sync / sync wave / hook</div><div class="def"><span class="en">sync = apply Git's desired state to the cluster. sync wave = ordering (low waves first). hook = run a Job at a phase (PreSync/PostSync), e.g. a migration.</span><span class="ko">sync = Git의 원하는 상태를 클러스터에 적용. sync wave = 순서(낮은 wave 먼저). hook = 특정 단계(PreSync/PostSync)에 Job 실행, 예: 마이그레이션.</span></div></div>
+  <div class="mini"><div class="term">auto-sync / self-heal / prune</div><div class="def"><span class="en">auto-sync = apply automatically on Git change. self-heal = revert manual drift back to Git. prune = delete resources removed from Git.</span><span class="ko">auto-sync = Git 변경 시 자동 적용. self-heal = 수동 drift를 Git대로 되돌림. prune = Git에서 지워진 리소스를 클러스터에서도 삭제.</span></div></div>
+  <div class="mini"><div class="term">GitOps / reconcile / drift</div><div class="def"><span class="en">GitOps = Git as single source of truth + an in-cluster agent reconciling to match it. drift = live cluster diverging from Git (self-heal fixes it).</span><span class="ko">GitOps = Git을 단일 진실 공급원으로 + 클러스터 내부 에이전트가 거기에 맞춤. drift = 실제 클러스터가 Git과 어긋남(self-heal이 교정).</span></div></div>
+</div>
+
+<h3><span class="en">D. Cluster plumbing & GPU exposure</span><span class="ko">D. 클러스터 배관 & GPU 노출</span></h3>
+<div class="grid3">
+  <div class="mini"><div class="term">kind</div><div class="def"><span class="en">"Kubernetes IN Docker" — runs each K8s node as a Docker container; root-free, seconds to create/destroy. Our lab cluster.</span><span class="ko">"Kubernetes IN Docker" — 각 K8s 노드를 Docker 컨테이너로 실행; root 불필요, 생성/삭제 초 단위. 우리 실습 클러스터.</span></div></div>
+  <div class="mini"><div class="term">containerd / CNI</div><div class="def"><span class="en">containerd = the container runtime that actually runs Pods (below K8s). CNI = the plugin that gives Pods networking/IPs. You saw both in the Phase 1 output.</span><span class="ko">containerd = Pod를 실제로 돌리는 컨테이너 런타임(K8s 아래). CNI = Pod에 네트워킹/IP를 주는 플러그인. Phase 1 출력에서 둘 다 봤다.</span></div></div>
+  <div class="mini"><div class="term">StorageClass / PVC / initContainer</div><div class="def"><span class="en">PVC (PersistentVolumeClaim) = a Pod's request for disk; StorageClass = how that disk is provisioned. initContainer = a setup container that runs before the main one (e.g. download model weights).</span><span class="ko">PVC = Pod의 디스크 요청; StorageClass = 그 디스크를 어떻게 만들지. initContainer = 본 컨테이너 전에 도는 준비 컨테이너(예: 모델 가중치 다운로드).</span></div></div>
+  <div class="mini"><div class="term">RBAC / ServiceAccount</div><div class="def"><span class="en">RBAC = role-based access control (who/what may do which API action). ServiceAccount = an identity for in-cluster processes (Argo CD's controllers each have one).</span><span class="ko">RBAC = 역할 기반 접근 제어(누가/무엇이 어떤 API 동작을 할 수 있나). ServiceAccount = 클러스터 내부 프로세스의 신원(ArgoCD 컨트롤러마다 하나씩).</span></div></div>
+  <div class="mini"><div class="term">port-forward</div><div class="def"><span class="en"><code>kubectl port-forward</code> tunnels a local port to a Pod/Service inside the cluster — how we reach the Argo CD UI without exposing it publicly.</span><span class="ko"><code>kubectl port-forward</code>는 로컬 포트를 클러스터 내부 Pod/Service로 터널링 — ArgoCD UI를 공개하지 않고 접근하는 방법.</span></div></div>
+  <div class="mini"><div class="term">device plugin (amd.com/gpu)</div><div class="def"><span class="en">A DaemonSet that advertises hardware (GPUs) to K8s as a schedulable resource like <code>amd.com/gpu: 1</code>. Needs <code>/dev/kfd</code> & <code>/dev/dri</code> (ROCm device files) reachable by the Pod.</span><span class="ko">하드웨어(GPU)를 K8s에 <code>amd.com/gpu: 1</code> 같은 스케줄 가능한 자원으로 광고하는 DaemonSet. Pod이 <code>/dev/kfd</code>·<code>/dev/dri</code>(ROCm 장치 파일)에 닿아야 함.</span></div></div>
+  <div class="mini"><div class="term"><span class="en">privileged container</span><span class="ko">privileged 컨테이너</span></div><div class="def"><span class="en">A container granted near-host-level access (devices, capabilities). Needed to push GPU device files into a kind node — and exactly why it's a Phase 5 stretch.</span><span class="ko">호스트에 가까운 권한(장치·capability)을 받은 컨테이너. GPU 장치 파일을 kind 노드에 넣으려면 필요 — 그래서 Phase 5 stretch인 이유.</span></div></div>
+  <div class="mini"><div class="term"><span class="en">server-side vs client-side apply</span><span class="ko">server-side vs client-side apply</span></div><div class="def"><span class="en">client-side apply stamps a <code>last-applied</code> annotation (256 KiB cap → broke our CRD); server-side apply lets the API server merge fields with no such annotation. Use <code>--server-side</code> for big CRDs.</span><span class="ko">client-side apply는 <code>last-applied</code> 어노테이션을 박음(256 KiB 한도 → 우리 CRD 깨짐); server-side apply는 API 서버가 필드를 병합해 그 어노테이션이 없음. 큰 CRD엔 <code>--server-side</code>.</span></div></div>
+</div>
+
+<h3><span class="en">References</span><span class="ko">참고</span></h3>
+<ul>
+  <li><span class="en">Argo CD docs</span><span class="ko">ArgoCD 문서</span> — <a href="https://argo-cd.readthedocs.io/">argo-cd.readthedocs.io</a></li>
+  <li><span class="en">Argo CD example apps (guestbook)</span><span class="ko">ArgoCD 예제 앱 (guestbook)</span> — <a href="https://github.com/argoproj/argocd-example-apps">github.com/argoproj/argocd-example-apps</a></li>
+  <li>kind — <a href="https://kind.sigs.k8s.io/">kind.sigs.k8s.io</a></li>
+  <li>llm-d — <a href="https://github.com/llm-d/llm-d">github.com/llm-d/llm-d</a> · <span class="en">Gateway API Inference Extension</span><span class="ko">Gateway API Inference Extension</span> — <a href="https://github.com/kubernetes-sigs/gateway-api-inference-extension">kubernetes-sigs/gateway-api-inference-extension</a></li>
+  <li><span class="en">Related logs in this repo: the CPU vLLM/llm-d/Dynamo tryout, and the Heimdall EPP & aigateway deep-dives (code-level companions to Phase 4).</span><span class="ko">이 레포의 관련 로그: CPU vLLM/llm-d/Dynamo 따라하기, Heimdall EPP & aigateway 딥다이브(Phase 4의 코드 차원 짝).</span></li>
+</ul>
+
+<footer>
+  <span class="en">Work log · 2026-06-12 · mi250-052 · Argo CD v3.4.3 on kind (K8s v1.36.1). Phase 1 done live; Phases 2–6 to follow and be recorded here.</span>
+  <span class="ko">작업 로그 · 2026-06-12 · mi250-052 · kind(K8s v1.36.1) 위 ArgoCD v3.4.3. Phase 1 실제 완료; Phase 2–6 이어서 여기 기록 예정.</span>
+</footer>
+
+</div>
+</body>
+</html>
