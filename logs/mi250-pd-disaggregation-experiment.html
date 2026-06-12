@@ -106,13 +106,13 @@
 
 <p>기본 용어 (form factor / die / OAM / GCD / MCM) 의 풀이는 <a href="#refs">§12. 용어 풀이</a> 표 참조. 아래는 mi250-052 노드의 실 layout:</p>
 <div class="diagram">  mi250-052
-  ├─ OAM 카드 0  →  GCD 0 (64GB HBM) ↔ GCD 1 (64GB HBM)    ← Infinity Fabric 으로 가깝게
-  ├─ OAM 카드 1  →  GCD 2            ↔ GCD 3              ← 같은 OAM 안 GCD 쌍 = XGMI weight 15
-  ├─ OAM 카드 2  →  GCD 4            ↔ GCD 5
-  └─ OAM 카드 3  →  GCD 6            ↔ GCD 7
+  ├─ OAM card 0  →  GCD 0 (64GB HBM) ↔ GCD 1 (64GB HBM)    ← close via Infinity Fabric
+  ├─ OAM card 1  →  GCD 2            ↔ GCD 3              ← same-OAM GCD pair = XGMI weight 15
+  ├─ OAM card 2  →  GCD 4            ↔ GCD 5
+  └─ OAM card 3  →  GCD 6            ↔ GCD 7
 
-  ※ ROCm 이 8 GCD 를 GPU0..GPU7 로 인식. "8 GPU" 라고 자주 부르지만 실은 4 OAM × 2 GCD.
-  ※ Power sensor 는 OAM 단위 → secondary die 는 Power = N/A.</div>
+  * ROCm sees 8 GCD as GPU0..GPU7. Often called "8 GPU" but really 4 OAM x 2 GCD.
+  * Power sensor is per-OAM  →  secondary die has Power = N/A.</div>
 
 <p>실험 시작 전 직접 캡쳐. GPU 간 XGMI weight (낮을수록 가까움):</p>
 
@@ -296,7 +296,7 @@ GPU[7]		: XGMI Error count: 0</code></pre>
 
 <h3>3-2. 토폴로지 다이어그램 (실 진행)</h3>
 <div class="diagram">  ┌─────────────────────────────────────────────────────────────┐
-  │  mi250-052 노드 (-network host 라 같은 192.168.3.52)           │
+  │  mi250-052 node (-network host so same 192.168.3.52)           │
   │                                                                │
   │  Client (curl)                                                 │
   │     ↓ POST :10001/v1/completions                               │
@@ -307,7 +307,7 @@ GPU[7]		: XGMI Error count: 0</code></pre>
   │  └────┬──────────────────────┬──────────────┘                  │
   │       │ ② HTTP (max_tokens=1) │ ③ HTTP (full request)          │
   │       ↓                       ↓                                │
-  │  ┌──── OAM 카드 0 ────┐    ┌──── OAM 카드 2 ────┐               │
+  │  ┌──── OAM card 0 ────┐    ┌──── OAM card 2 ────┐               │
   │  │  GCD 0  GCD 1     │    │  GCD 4  GCD 5     │                │
   │  │  [Prefill]         │    │  [Decode]          │                │
   │  │  vLLM TP=1        │    │  vLLM TP=1        │                │
@@ -317,11 +317,11 @@ GPU[7]		: XGMI Error count: 0</code></pre>
   │  └────────┬───────────┘    └────────┬───────────┘               │
   │           │ ④ ZMQ (handshake, NCCL unique_id)                  │
   │           └──────────────────────────┘                          │
-  │           │ ⑤ RCCL P2P (16 channels) — 실 KV tensor             │
+  │           │ ⑤ RCCL P2P (16 channels) — real KV tensor           │
   │           │     bandwidth = 100 Gbps (XGMI 2 link)              │
   │           └──────────────────────────►                          │
   │                                                                  │
-  │  ┌──── OAM 카드 1 ────┐    ┌──── OAM 카드 3 ────┐                │
+  │  ┌──── OAM card 1 ────┐    ┌──── OAM card 3 ────┐                │
   │  │  GCD 2 GCD 3 idle  │    │  GCD 6 GCD 7 idle  │                │
   │  └────────────────────┘    └────────────────────┘                │
   └─────────────────────────────────────────────────────────────────┘</div>
@@ -540,25 +540,25 @@ ts            device,temp,power,gpu%,vram%,mem_act
 
 <p>본 실험에 떠 있는 3 컴포넌트 + 그들 사이 4 종류의 통신 channel:</p>
 
-<div class="diagram">  mi250-052 노드 (--network host 라 모두 192.168.3.52 공유)
+<div class="diagram">  mi250-052 node (--network host so all share 192.168.3.52)
   ┌─────────────────────────────────────────────────────────────────────────────┐
   │                                                                              │
   │   Client (curl)                                                             │
   │       │                                                                      │
-  │       │ ① HTTP POST /v1/completions  (단일 endpoint)                          │
+  │       │ ① HTTP POST /v1/completions  (single endpoint)                        │
   │       ↓                                                                      │
   │   ┌────────────────────────────────────────────────────────────────┐        │
   │   │  vllm-proxy container                                            │        │
   │   │   - Image: vllm-proxy:latest (rocm/vllm + quart)                 │        │
-  │   │   - listen :10001  → client request 받음                          │        │
-  │   │   - listen :30001  → prefill/decode 의 ping 받음 (service disc.)  │        │
-  │   │   - 로직: ② prefill 에 max_tokens=1 으로 forward (KV 만 만듬)      │        │
-  │   │          ③ decode 에 원본 request forward                          │        │
-  │   │          → decode 의 response 를 client 에 stream                   │        │
+  │   │   - listen :10001  → recv client request                          │        │
+  │   │   - listen :30001  → recv prefill/decode ping (service disc.)     │        │
+  │   │   - logic: ② forward to prefill, max_tokens=1 (KV only)           │        │
+  │   │           ③ forward original request to decode                     │        │
+  │   │           → stream decode response to client                       │        │
   │   └─────────┬──────────────────────┬───────────────────────────────┘        │
   │             │ ②                    │ ③                                       │
   │             │ HTTP                 │ HTTP                                    │
-  │             │ (max_tokens=1)       │ (원본)                                  │
+  │             │ (max_tokens=1)       │ (original)                              │
   │             ↓                      ↓                                         │
   │   ┌─────────────────────┐   ┌─────────────────────┐                          │
   │   │ vllm-prefill        │   │ vllm-decode         │                          │
@@ -566,7 +566,7 @@ ts            device,temp,power,gpu%,vram%,mem_act
   │   │  - vLLM :20003 HTTP │   │  - vLLM :20005 HTTP │                          │
   │   │  - ZMQ ROUTER :20001│   │  - ZMQ ROUTER :22001│                          │
   │   │  - kv_role=producer │   │  - kv_role=consumer │                          │
-  │   │  - buffer 1e1 (작음)│   │  - buffer 8e9 (8GB) │                          │
+  │   │  - buffer 1e1(small)│   │  - buffer 8e9 (8GB) │                          │
   │   │  - mem-util 0.9     │   │  - mem-util 0.7     │                          │
   │   └─────┬───┬───────────┘   └─────────┬───┬───────┘                          │
   │         │   │ ④ ping :30001            │   │ ④ ping :30001                  │
@@ -574,14 +574,14 @@ ts            device,temp,power,gpu%,vram%,mem_act
   │         │                                                                    │
   │         │ ⑤ NCCL/RCCL P2P (16 channels)  KV cache transfer                   │
   │         │     ZMQ 20001 → ZMQ 22001                                          │
-  │         │     RCCL 으로 GCD 0 의 KV → GCD 4 의 KV                              │
+  │         │     RCCL: GCD 0 KV → GCD 4 KV                                       │
   │         └────────────────────────────────────────→ vllm-decode               │
   │                                                                              │
   └─────────────────────────────────────────────────────────────────────────────┘
 
-  ② ③ = HTTP 평범 통신
-  ④ = "service discovery" — prefill/decode 가 살아있다고 proxy 에 ping
-  ⑤ = KV cache 의 진짜 transfer — RCCL 으로 GPU-GPU 직접</div>
+  ② ③ = plain HTTP communication
+  ④ = "service discovery" — prefill/decode ping proxy to signal alive
+  ⑤ = real KV cache transfer — RCCL, GPU-to-GPU direct</div>
 
 <h3>6-2. 정확한 명령 — 양 instance 모두 (생략 없이)</h3>
 <pre><code># Prefill instance: GCD 0, http port 20003, ZMQ port 20001
@@ -683,16 +683,16 @@ docker run -d --name vllm-decode \
 </table>
 
 <h4>한 시각으로 — config 가 만드는 4 종류의 channel</h4>
-<div class="diagram">  Channel                            Prefill 측              Decode 측
+<div class="diagram">  Channel                            Prefill side            Decode side
   ────────────────────────────────────────────────────────────────────────
   ① HTTP (client → proxy → vLLM)    :20003 listen          :20005 listen
                                      (--port)               (--port)
   ② ZMQ (P2pNccl control plane)     :20001 ROUTER bind     :22001 ROUTER bind
                                      (kv_port)              (kv_port)
-  ③ Proxy 의 ping 받는 port          ─ (proxy 가 :30001)    ─ (proxy 가 :30001)
+  ③ Proxy port that recv ping         ─ (proxy at :30001)   ─ (proxy at :30001)
                                      proxy_ip / proxy_port  same
   ④ NCCL/RCCL data plane            16 channels: prefill_gpu ↔ decode_gpu
-                                     RCCL handshake 통해 만들어짐</div>
+                                     created via RCCL handshake</div>
 
 <p>아래 config 옵션의 깊은 질문들 (send_type 비교, kv_buffer_size, nccl_num_channels, ZMQ, direction) 은 <a href="#qa">§7. 돌리면서 생긴 질문들</a> 참조.</p>
 
@@ -833,11 +833,11 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
   ┌─────────────────────────────────────────────────────────────────┐
   │  Proxy (disagg_proxy_demo.py)                                    │
   │                                                                   │
-  │  ② request_id 생성 (prefill/decode address 인코딩):              │
+  │  ② build request_id (encode prefill/decode address):            │
   │     request_id = "cmpl-___prefill_addr_192.168.3.52:20001"        │
   │                  "___decode_addr_192.168.3.52:22001___&lt;uuid&gt;"      │
   │                                                                   │
-  │  ③ prefill 용 body 작성 (max_tokens 만 1 로 강제):                │
+  │  ③ build prefill body (force max_tokens to 1):                   │
   │     prefill_body = {**original_body, "max_tokens": 1}            │
   │                                                                   │
   │  ④ ─── HTTP POST → prefill instance ───                          │
@@ -845,27 +845,27 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
   │       X-Request-Id: ___prefill_addr_...___decode_addr_...___uuid │
   │       body = prefill_body                                         │
   │       ↓                                                            │
-  │       (prefill 가 prompt forward + KV 생성 + ⑤ KV 를 RCCL 로      │
-  │        decode 에 PUT_ASYNC send. send 가 비동기 시작)             │
+  │       (prefill forwards prompt + builds KV + ⑤ sends KV via      │
+  │        RCCL PUT_ASYNC to decode. send starts asynchronously)     │
   │       ↓                                                            │
-  │       prefill 가 max_tokens=1 짜리 response 반환 ← 의미 없음      │
+  │       prefill returns max_tokens=1 response ← meaningless        │
   │       └────── async for _ in prefill_response: continue           │
-  │              (proxy 가 prefill response 소비 + 버림)              │
+  │              (proxy consumes + discards prefill response)        │
   │                                                                   │
-  │  ⑥ ─── HTTP POST → decode instance ───  (prefill 완료 후)        │
+  │  ⑥ ─── HTTP POST → decode instance ───  (after prefill done)     │
   │       POST http://192.168.3.52:20005/v1/completions             │
-  │       X-Request-Id: 같은 request_id (decode 가 KV 매칭에 사용)   │
-  │       body = original_body  (max_tokens=30 원본)                  │
+  │       X-Request-Id: same request_id (decode uses it to match KV) │
+  │       body = original_body  (max_tokens=30 original)              │
   │       ↓                                                            │
-  │       (decode 가 받은 KV 활용 + generation. 이 때 ⑤ 의 KV transfer│
-  │        가 거의 완료된 상태. async 라 보통 충분히 빨리 도착)       │
+  │       (decode uses received KV + generation. by now ⑤ KV xfer   │
+  │        is nearly done. async, so usually arrives fast enough)    │
   │       ↓                                                            │
-  │       decode 가 stream response                                   │
+  │       decode streams response                                     │
   │                                                                   │
-  │  ⑦ stream response 를 client 에 forward                          │
+  │  ⑦ forward stream response to client                             │
   └─────────────────────────────────────────────────────────────────┘
        ↓
-  Client (받은 답 = decode 가 생성한 token stream)</div>
+  Client (answer = token stream generated by decode)</div>
 
 <p><strong>핵심</strong>: <strong>Sequential</strong>. 즉 "prefill 완료 콜 없이 decode 한테 같이 보내는 거" 아님. <strong>prefill HTTP 끝나야 decode HTTP 호출</strong>. 단:</p>
 
@@ -1410,24 +1410,24 @@ import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'de
 
 <p>먼저 일반 vLLM 단일 instance 의 KV 흐름. 비교 baseline 으로 명확히 짚어둠.</p>
 
-<div class="diagram">  한 vLLM instance (예: 8 GPU TP=8) 안에서
+<div class="diagram">  Inside one vLLM instance (e.g. 8 GPU TP=8)
   ┌─────────────────────────────────────────────────────────┐
   │                                                          │
-  │  ① Prefill (한 batch step):                              │
-  │    request prompt → tokenize → embed → forward (모든     │
-  │    layer) → KV (key, value) tensor 가 layer 마다 생성   │
-  │    → PagedAttention 의 block manager 가 GPU VRAM 안의    │
-  │    block table 에 page 단위로 저장 (16 token / page)    │
+  │  ① Prefill (one batch step):                             │
+  │    request prompt → tokenize → embed → forward (all      │
+  │    layers) → KV (key, value) tensor built per layer     │
+  │    → PagedAttention block manager stores it in the      │
+  │    block table in GPU VRAM, per page (16 token / page)  │
   │                                                          │
-  │  ② Decode (매 token 마다):                              │
-  │    이전 token + cached KV → forward (모든 layer)        │
-  │    → 새 K, V 만 append 해서 cache 에 추가 → 1 token 생성│
+  │  ② Decode (per token):                                  │
+  │    prev token + cached KV → forward (all layers)        │
+  │    → append only new K, V to cache → emit 1 token       │
   │                                                          │
-  │  ※ KV cache 는 같은 GPU process 의 VRAM 안에서만 살음.  │
-  │    TP 시에도 GPU 사이 KV 는 stay — token dim 만 split.  │
-  │  ※ Continuous batching: P 와 D 요청이 token-level 로     │
-  │    같은 batch 에 섞임. 한 step 에서 P 토큰 일부 + D 토큰  │
-  │    일부 동시 처리.                                       │
+  │  * KV cache lives only in VRAM of the same GPU process. │
+  │    Even with TP, KV stays per-GPU — only token dim split.│
+  │  * Continuous batching: P and D requests mix at the      │
+  │    token level in the same batch. One step handles some  │
+  │    P tokens + some D tokens together.                    │
   └─────────────────────────────────────────────────────────┘</div>
 
 <p>핵심: <strong>KV 가 같은 process / 같은 VRAM block table 에 머무름</strong>. transfer 자체가 없음. 같은 batch 안의 P 와 D 가 GPU compute 자원을 token-level 로 공유.</p>
@@ -1437,27 +1437,27 @@ import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'de
 <div class="diagram">  Prefill instance (4 GPU TP=4) → KV transfer → Decode instance (4 GPU TP=4)
   ┌─────────────────────────────────────────────────────────────────┐
   │                                                                   │
-  │  ① Prefill instance 안:                                          │
-  │    request 받음 → tokenize → embed → forward (모든 layer)        │
-  │    → KV tensor 가 GCD 0-3 의 VRAM 의 block table 에 생성          │
-  │    → 첫 token 1 개 생성 (또는 prefill 종료 시점)                 │
-  │    → "이 request 의 KV 다 만들었음" 신호                          │
+  │  ① Inside prefill instance:                                      │
+  │    recv request → tokenize → embed → forward (all layers)        │
+  │    → KV tensor built in block table in GCD 0-3 VRAM              │
+  │    → emit first 1 token (or at prefill end)                      │
+  │    → signal "KV for this request fully built"                    │
   │                                                                   │
-  │  ② KV connector 가 transfer:                                     │
-  │    block table 안의 K, V tensor 들을 serialize → 다른 instance   │
-  │    로 보냄. 구체적 transport 는 connector 마다:                  │
-  │      - MoRIIO: ROCm 의 GPU-to-GPU direct memcpy (RDMA-like)      │
-  │      - P2pNccl: RCCL collective (broadcast/send 같은)            │
-  │      - LMCache: 중간 서버 (CPU memory pool) 거침                 │
+  │  ② KV connector transfers:                                       │
+  │    serialize K, V tensors in block table → send to the other    │
+  │    instance. The exact transport depends on the connector:      │
+  │      - MoRIIO: ROCm GPU-to-GPU direct memcpy (RDMA-like)         │
+  │      - P2pNccl: RCCL collective (broadcast/send-like)           │
+  │      - LMCache: via an intermediate server (CPU memory pool)    │
   │      - ExampleConnector: filesystem write/read (CPU bounce)      │
   │                                                                   │
-  │  ③ Decode instance 안:                                           │
-  │    KV 받아서 자기 block manager 에 install → 새 request 로 등록  │
-  │    → autoregressive 한 token 씩 generation. 모델 weights forward │
-  │    + cache 된 KV 사용 → 응답 stream.                              │
+  │  ③ Inside decode instance:                                       │
+  │    recv KV, install into its block manager → register as new    │
+  │    request → autoregressive per-token generation. forward model │
+  │    weights + use cached KV → stream response.                    │
   │                                                                   │
-  │  ※ Prefill instance 는 ② 끝나는 순간 그 request 의 KV 비움 →    │
-  │    다음 request 받음. P 는 throughput 위주, D 는 latency 위주.    │
+  │  * Prefill instance frees that request's KV the moment ② ends → │
+  │    takes next request. P is throughput-first, D latency-first.   │
   └─────────────────────────────────────────────────────────────────┘</div>
 
 <h3>8-3. 실 측정 — 진행 중</h3>
@@ -1891,19 +1891,19 @@ Config flags: <code>"do_remote_decode": True</code> + <code>"do_remote_prefill":
 
 <div class="diagram">  Turn 1 (initial):
     User: "What is photosynthesis?"
-    ① Proxy → Prefill (Q1) → KV(Q1) → ② P→D transfer (단방향, 기존 PDD)
+    ① Proxy → Prefill (Q1) → KV(Q1) → ② P→D transfer (one-way, classic PDD)
     ③ Decode (KV(Q1)) → A1
-    ④ Decode 가 자기 KV(Q1+A1) 들고 있음. Proxy 가 conversation_id 로 KV block 정보 cache.
+    ④ Decode now holds KV(Q1+A1). Proxy caches KV block info by conversation_id.
 
   Turn 2 (multi-turn, bidirectional):
     User: "How does it work in plants specifically?"
-    ① Proxy 가 conversation_id 매칭 → "이 conv 의 Q1+A1 KV 는 Decode 에 있음"
-    ② Proxy → Decode 에게 "KV(Q1+A1) 를 P 로 보내라" (D→P, 역방향)  ← 이게 bidirectional
-    ③ Decode → KV(Q1+A1) 를 NCCL 으로 P 에 send
+    ① Proxy matches conversation_id → "KV(Q1+A1) for this conv is on Decode"
+    ② Proxy → tells Decode "send KV(Q1+A1) to P" (D→P, reverse)  ← this is bidirectional
+    ③ Decode → sends KV(Q1+A1) to P via NCCL
     ④ Proxy → Prefill (Q1+A1+Q2 full context)
-       Prefill 가 forward 시작 — Q1+A1 부분은 KV 가 D 에서 받은 거 활용 (reuse, 새로 compute X) →
-       새로 추가된 Q2 부분만 compute → KV(Q2) 생성
-    ⑤ Prefill → Decode 로 KV(Q2) send (P→D, 정방향)
+       Prefill starts forward — Q1+A1 part reuses KV received from D (no recompute) →
+       computes only the newly added Q2 part → builds KV(Q2)
+    ⑤ Prefill → sends KV(Q2) to Decode (P→D, forward)
     ⑥ Decode → A2 generation</div>
 
 <h4>기대 효과 (다음 실험에서 측정하고 싶은 것)</h4>

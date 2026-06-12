@@ -153,27 +153,27 @@
 <h3>3-1. 한 화면 high-level 그림 — 3 단계 (Profile → 학습 → Sim)</h3>
 <p>Frontier 워크플로는 명확히 <strong>3 단계</strong>로 나뉨. 1단계만 GPU 필요. 2-3단계는 CPU 만. 학습은 한 번 하면 pickle cache 되어 다음 run 부터는 skip.</p>
 <div class="diagram">  ┌────────────────────────────────────────────────────────────────────────────┐
-  │  [1단계]  PROFILE  (GPU 필요, 한 번만)                                       │
+  │  [STAGE 1]  PROFILE  (GPU needed, once only)                                │
   │                                                                            │
-  │   사용자                                                                    │
+  │   user                                                                      │
   │     ↓ "python -m frontier.profiling.linear_op.main --models ... --device h100 --max_tokens 4096"
   │   ┌───────────────────────────────────────┐                                │
   │   │ frontier/profiling/linear_op/main.py  │                                │
   │   │   ├─ argparse                          │                                │
-  │   │   ├─ get_num_tokens_to_profile()      │  ← grid [1,2,4,...,4096] 250점 │
+  │   │   ├─ get_num_tokens_to_profile()      │  ← grid [1,2,4,...,4096] 250pts │
   │   │   └─ ProcessPoolExecutor (N GPU)      │                                │
   │   └────────────────┬──────────────────────┘                                │
   │                    │ for each (model, num_tokens, TP):                     │
   │                    ▼                                                       │
   │   ┌───────────────────────────────────────┐                                │
   │   │ LinearOpWrapper.profile(num_tokens)   │                                │
-  │   │   ├─ GPTModel(model_config, TP)       │ ← Vidur 의 profile harness fork (origin: Sarathi/vLLM)
-  │   │   ├─ WARMUP=3, ACTIVE=20 회 forward   │                                │
-  │   │   └─ stats = TimerStatsStore.get()    │ ← CudaTimer 결과 모음          │
+  │   │   ├─ GPTModel(model_config, TP)       │ ← fork of Vidur profile harness (origin: Sarathi/vLLM)
+  │   │   ├─ WARMUP=3, ACTIVE=20 forwards     │                                │
+  │   │   └─ stats = TimerStatsStore.get()    │ ← collect CudaTimer results    │
   │   └────────────────┬──────────────────────┘                                │
   │                    ▼                                                       │
   │   ┌────────────────────────────────────────────────────────────────────┐  │
-  │   │  ※ 산출물 (Profile DB — 측정값 raw CSV)                              │  │
+  │   │  * output (Profile DB — raw measured CSV)                           │  │
   │   │  data/profiling/                                                   │  │
   │   │   ├─ compute/h100/meta-llama/Llama-2-7b-hf/                       │  │
   │   │   │     ├─ linear_op.csv     ← (token_count, mlp_up_proj_ms, ...)  │  │
@@ -182,46 +182,46 @@
   │   │   └─ network/h100/all_reduce.csv                                   │  │
   │   └─────────────────────┬──────────────────────────────────────────────┘  │
   └─────────────────────────┼─────────────────────────────────────────────────┘
-                            │  ※ Profile CSV 는 측정한 grid point (250 개) 뿐
-                            │     실제 sim 은 임의 token count 예측 필요 → 학습 필요
+                            │  * Profile CSV holds only measured grid points (250)
+                            │     real sim needs arbitrary token count → training needed
                             ▼
   ┌─────────────────────────┴─────────────────────────────────────────────────┐
-  │  [2단계]  학습  (CPU 만, 첫 sim 실행 시 자동 — pickle cache)                │
+  │  [STAGE 2]  TRAIN  (CPU only, auto on first sim run — pickle cache)         │
   │                                                                            │
   │   ┌────────────────────────────────────────────────────────────────────┐  │
   │   │ SklearnExecutionTimePredictor.__init__()                            │  │
-  │   │   (Simulator init 안에서 호출 — 사용자가 별도 명령 안 침)            │  │
+  │   │   (called inside Simulator init — no separate user command)         │  │
   │   │                                                                    │  │
-  │   │   ├─ pd.read_csv(linear_op.csv)  ← [1단계] 산출 읽음                │  │
+  │   │   ├─ pd.read_csv(linear_op.csv)  ← read [STAGE 1] output            │  │
   │   │   │                                                                │  │
   │   │   ├─ for op in [mlp_up_proj, mlp_down_proj, attn_qkv, ...]:        │  │
   │   │   │     X = df[['num_tokens']], y = df[f'{op}_ms']                 │  │
   │   │   │     GridSearchCV(RandomForestRegressor, params).fit(X, y)      │  │
-  │   │   │     ← op 마다 별개 sklearn 모델 학습 (약 15 op)                  │  │
+  │   │   │     ← train a separate sklearn model per op (~15 ops)          │  │
   │   │   │                                                                │  │
   │   │   ├─ for n in 1..max_tokens:                                       │  │
   │   │   │     self._predictions[op][(n,)] = model.predict([[n]])         │  │
-  │   │   │     ← 모든 정수 token count 미리 계산해서 dict 캐시              │  │
+  │   │   │     ← precompute every integer token count into a dict cache   │  │
   │   │   │                                                                │  │
   │   │   └─ pickle.dump(self, "data/cache/<sha>.pkl")                     │  │
-  │   │      ← 다음 run 부터는 이거 load 만 (학습 skip)                       │  │
+  │   │      ← later runs just load this (skip training)                    │  │
   │   └────────────────┬──────────────────────────────────────────────────┘  │
   │                                                                            │
-  │   ※ 산출물 (Predictor — 학습된 ML 모델 + token 별 prediction dict)         │
-  │      한 번 학습되면 pickle cache 로 다음 run 즉시 시작                       │
+  │   * output (Predictor — trained ML model + per-token prediction dict)      │
+  │     once trained, pickle cache lets the next run start instantly           │
   └─────────────────────────┼─────────────────────────────────────────────────┘
                             │
                             ▼
   ┌─────────────────────────┴─────────────────────────────────────────────────┐
-  │  [3단계]  SIMULATION  (CPU 만, GPU 없어도 OK)                              │
+  │  [STAGE 3]  SIMULATION  (CPU only, OK without GPU)                         │
   │                                                                            │
-  │   사용자                                                                    │
+  │   user                                                                      │
   │     ↓ "python -m frontier.main --model_name ... --..._compute_input_file PATH ..."
   │   ┌───────────────────────────────────────┐                                │
   │   │ frontier/main.py:main()               │                                │
   │   │   ├─ SimulationConfig.from_cli_args() │                                │
-  │   │   └─ Simulator(config).run()          │  ← run() 만 여기서             │
-  │   └────────────────┬──────────────────────┘    init 안에서 [2단계] 발생    │
+  │   │   └─ Simulator(config).run()          │  ← only run() here             │
+  │   └────────────────┬──────────────────────┘    init triggers [STAGE 2]     │
   │                    ▼                                                       │
   │   ┌───────────────────────────────────────────────────────────────────┐  │
   │   │ Simulator.run() — discrete-event loop                              │  │
@@ -230,17 +230,17 @@
   │   │     event = heapq.heappop(event_queue)                            │  │
   │   │     new_events = event.handle_event(scheduler, metric_store)      │  │
   │   │                                                                    │  │
-  │   │   매 REPLICA_STAGE_SCHEDULE event:                                 │  │
+  │   │   per REPLICA_STAGE_SCHEDULE event:                                │  │
   │   │     execution_time = predictor.predict_stage_execution_time(...)  │  │
   │   │       → self._predictions[op][(token_count,)]                      │  │
-  │   │         ← [2단계] 의 dict cache, O(1) lookup                        │  │
+  │   │         ← [STAGE 2] dict cache, O(1) lookup                         │  │
   │   └────────────────┬──────────────────────────────────────────────────┘  │
   │                    ▼                                                       │
   │   ┌───────────────────────────────────────────────────────────────────┐  │
-  │   │ ※ 산출물 (Simulation 결과)                                          │  │
+  │   │ * output (Simulation results)                                       │  │
   │   │   outputs/{run_id}/                                                │  │
-  │   │     ├─ request_metrics.csv  ← 80 컬럼 per-request                  │  │
-  │   │     ├─ system_metrics.json  ← TTFT/TPOT/E2E 통계                   │  │
+  │   │     ├─ request_metrics.csv  ← 80 cols per-request                  │  │
+  │   │     ├─ system_metrics.json  ← TTFT/TPOT/E2E stats                  │  │
   │   │     └─ *.png plots                                                 │  │
   │   └───────────────────────────────────────────────────────────────────┘  │
   └────────────────────────────────────────────────────────────────────────────┘</div>
@@ -287,16 +287,16 @@
 <p><strong>정리</strong>: vLLM 실 forward 의 <strong>op kernel 시간만 정확히 같음</strong>. 그 외 모든 Python/scheduler/cache overhead 는 별도 측정한 다음 sim 안에서 합산. 그래서 sim 의 batch latency 가 production vLLM 의 batch latency 와 ~ 비슷하지만 정확히 같지는 않음 — 의도된 설계 (Sarathi 부터 이 방식).</p>
 
 <h4>측정 mechanism — 한 forward 안에서 모든 op 동시 측정</h4>
-<div class="diagram">  # frontier/profiling/linear_op/linear_op_impl.py 안의 op 들이
-  # 자기 자체에 CudaTimer 를 갖고 있음:
+<div class="diagram">  # ops in frontier/profiling/linear_op/linear_op_impl.py
+  # each carry their own CudaTimer:
 
   class Attention(nn.Module):
       def __init__(self, ...):
           self._attn_pre_proj_timer = CudaTimer("attn_pre_proj")
           self._attn_rope_timer     = CudaTimer("attn_rope")
           ...
-          self.qkv_proj = ColumnParallelLinear(...)  ← frontier 자체
-          self.rotary_emb = get_rope(...)             ← frontier 자체
+          self.qkv_proj = ColumnParallelLinear(...)  ← frontier's own
+          self.rotary_emb = get_rope(...)             ← frontier's own
 
       def forward(self, hidden_states, positions):
           with self._attn_pre_proj_timer:                ← Timer ENTER (cuda Event)
@@ -323,13 +323,13 @@
               out = self.down_proj(h)
           ...
 
-  # 그래서 한 GPTModel.forward(batch) 호출 시:
-  # - attention.forward → attn_pre_proj_timer, attn_rope_timer 각각 발화
-  # - mlp.forward      → mlp_up_proj_timer, mlp_act_timer, mlp_down_proj_timer 발화
-  # → TimerStatsStore 가 모든 timer 결과를 layer 별로 모음
-  # → 1 forward = 모든 op 의 latency 한 번에 측정 완료
+  # so on one GPTModel.forward(batch) call:
+  # - attention.forward → fires attn_pre_proj_timer, attn_rope_timer
+  # - mlp.forward      → fires mlp_up_proj_timer, mlp_act_timer, mlp_down_proj_timer
+  # → TimerStatsStore collects all timer results per layer
+  # → 1 forward = latency of every op measured at once
   #
-  # ACTIVE_STEPS=20 회 forward 반복 → op 별 min/max/mean/median/std 계산</div>
+  # repeat forward ACTIVE_STEPS=20 times → per-op min/max/mean/median/std</div>
 
 <h4>왜 vLLM 의 LlamaForCausalLM 직접 import 안 하나</h4>
 <p>vLLM 의 model class 는 <strong>scheduler / KV cache manager / sampler / 전체 inference engine</strong> 과 묶여서 동작. 그래서 직접 import 해서 forward 하려면 vLLM 엔진 전체 띄워야 함 (init 시간 30초+). 그리고 그러면 측정값에 vLLM Python 오버헤드까지 다 들어가서 "순수 op 시간" 분리가 어려움.</p>
@@ -338,29 +338,29 @@
 <h3>3-3. Workflow A: Profile DB 만들기</h3>
 
 <h4>전체 흐름 (한눈에)</h4>
-<div class="diagram">  사용자 명령어
+<div class="diagram">  user command
        ↓
-  Shell 또는 직접:
+  Shell or directly:
   python -m frontier.profiling.linear_op.main --models meta-llama/Llama-2-7b-hf \
       --output_dir data/profiling --device h100 --num_gpus 1 --disable_ray \
       --max_tokens 4096 --num_tensor_parallel_workers 1 2 \
       --profile_method cuda_event
        ↓
-  Python 이 `frontier/profiling/linear_op/main.py` 의 main() 호출
-       ├─ parse_args()              ─ argparse 로 CLI 파싱
+  Python calls main() in `frontier/profiling/linear_op/main.py`
+       ├─ parse_args()              ─ parse CLI via argparse
        ├─ require_profiling_dependencies("linear-op", ("torch", "vllm"))
-       ├─ _get_available_gpus(num_gpus)  ─ nvidia-smi 호출해서 GPU 발견
-       ├─ config_dir = output_dir/compute/h100/  + linear_op_config.yaml 저장
+       ├─ _get_available_gpus(num_gpus)  ─ call nvidia-smi to find GPUs
+       ├─ config_dir = output_dir/compute/h100/  + save linear_op_config.yaml
        ├─ get_num_tokens_to_profile(max_tokens=4096)
-       │    → [1, 2, 4, ..., 4096] 약 ~250 점 (dense grid)
-       ├─ confirm_profiling_execution(...)  ─ 사용자 확인 대화창
+       │    → [1, 2, 4, ..., 4096] about ~250 pts (dense grid)
+       ├─ confirm_profiling_execution(...)  ─ user confirmation prompt
        │
        └─ FOR model in args.models:
             └─ result_df = profile_model(args, model, num_tokens, pbar)
                  │
-                 ├─ ProcessPoolExecutor(max_workers=num_gpus) 띄움
+                 ├─ spawn ProcessPoolExecutor(max_workers=num_gpus)
                  │
-                 └─ 각 worker:
+                 └─ each worker:
                       ├─ _worker_init_gpu(gpu_id)   ─ torch.cuda.set_device()
                       ├─ wrapper = LinearOpWrapper(
                       │     model_config, tp_size, profile_method, rank, output_dir
@@ -373,8 +373,8 @@
                       ├─ FOR num_tokens in grid:
                       │     └─ wrapper.profile(num_tokens):
                       │           ├─ input_tensor = torch.randn(num_tokens, hidden_dim)
-                      │           ├─ WARMUP_STEPS=3 회 warmup forward
-                      │           ├─ ACTIVE_STEPS=20 회 측정 forward:
+                      │           ├─ WARMUP_STEPS=3 warmup forwards
+                      │           ├─ ACTIVE_STEPS=20 measured forwards:
                       │           │     for step in range(20):
                       │           │         with CudaTimer("mlp_up_proj"):
                       │           │             output = model.mlp_up_proj(input)
@@ -384,9 +384,9 @@
                       │           └─ stats = timer_stats_store.get_stats()
                       │              → {"mlp_up_proj": {min,max,mean,median,std}, ...}
                       │
-                      └─ 모든 (model, num_tokens, tp) 결과 row dict 모음
+                      └─ collect all (model, num_tokens, tp) result row dicts
        ↓
-  pd.DataFrame(rows) → DataFrame 정규화 (time_stats 컬럼 expand)
+  pd.DataFrame(rows) → normalize DataFrame (expand time_stats columns)
        ↓
   result_df.to_csv(output_file)
        │
@@ -400,15 +400,15 @@
            )
            = "data/profiling/compute/h100/meta-llama/Llama-2-7b-hf/linear_op.csv"
        ↓
-  산출물: linear_op.csv (cuda_event 측정) — eager mode 용
-           또는 linear_op_kernel_only.csv (record_function 측정) — CUDA graph 용
+  output: linear_op.csv (cuda_event measure) — for eager mode
+           or linear_op_kernel_only.csv (record_function) — for CUDA graph
 
-  같은 절차를 attention / moe / collectives / cpu_overhead 모듈마다 반복:
+  Repeat the same procedure for each attention / moe / collectives / cpu_overhead module:
     python -m frontier.profiling.attention.main ...
     python -m frontier.profiling.moe.main ...
     python -m frontier.profiling.collectives.main ...
     python -m frontier.profiling.cpu_overhead.main ...
-  → 각각 attention.csv / moe.csv / network/all_reduce.csv / cpu_overhead.csv</div>
+  → respectively attention.csv / moe.csv / network/all_reduce.csv / cpu_overhead.csv</div>
 
 <h4>단계별 file:line 정확히</h4>
 <table>
@@ -439,15 +439,15 @@ time_stats.mlp_up_proj.min,time_stats.mlp_up_proj.max,time_stats.mlp_up_proj.mea
 <h3>3-4. Workflow B: Simulation 실행</h3>
 
 <h4>전체 흐름 (한눈에)</h4>
-<div class="diagram">  사용자 명령어
+<div class="diagram">  user command
        ↓
   bash examples/architecture/co-location/offline/dense_model_basic.sh
        ↓
   Shell script:
-    - 환경변수 설정 (PYTHONPATH, WANDB_DISABLED=true 등)
-    - 사용자 override 변수 (MODEL_NAME, ATTN_TP, NUM_REPLICAS 등) 적용
-    - CMD 배열로 python 명령 조립
-    - 마지막에 "${CMD[@]}" 로 실행:
+    - set env vars (PYTHONPATH, WANDB_DISABLED=true, etc.)
+    - apply user override vars (MODEL_NAME, ATTN_TP, NUM_REPLICAS, etc.)
+    - assemble python command into CMD array
+    - finally run via "${CMD[@]}":
         python -m frontier.main \
             --simulation_mode offline \
             --sys_arch co-location \
@@ -461,14 +461,14 @@ time_stats.mlp_up_proj.min,time_stats.mlp_up_proj.max,time_stats.mlp_up_proj.mea
                 "data/profiling/compute/h100/meta-llama/Llama-2-7b-hf/attention.csv" \
             ...
        ↓
-  `frontier/main.py:134` 의 main() 진입
+  enter main() at `frontier/main.py:134`
        ├─ _exit_if_disaggregated_architecture_requested(argv)  ← release guard
        ├─ _exit_if_aiconfigurator_backend_requested(argv)
        ├─ config = SimulationConfig.create_from_cli_args()  ← argparse + dataclass
        ├─ set_seeds(config.seed)
        └─ simulator = Simulator(config); simulator.run()
        ↓
-  `frontier/simulator.py:42` 의 Simulator.__init__():
+  Simulator.__init__() at `frontier/simulator.py:42`:
        ├─ if config.is_disaggregated_mode(): raise  ← release guard #2
        ├─ self._event_queue = []  (min-heap)
        │
@@ -479,36 +479,36 @@ time_stats.mlp_up_proj.min,time_stats.mlp_up_proj.max,time_stats.mlp_up_proj.mea
        │                 Replica(replica_cfg, ...)
        │
        ├─ self._metric_store = MetricsStore(simulation_config, cluster_configs, trace_store)
-       │     └─ DataSeries 들 초기화 (TTFT, TPOT, e2e_latency 별로)
+       │     └─ init DataSeries (one per TTFT, TPOT, e2e_latency)
        │
        ├─ self._request_generator = RequestGeneratorRegistry.get(provider, ...)
-       │     예: TraceRequestGenerator (load CSV), SyntheticRequestGenerator (Poisson)
+       │     e.g. TraceRequestGenerator (load CSV), SyntheticRequestGenerator (Poisson)
        │
        ├─ self._global_scheduler = BaseGlobalScheduler(clusters, ...)
-       │     └─ 각 cluster_type 별 BaseClusterScheduler 생성
-       │           └─ 각 replica_id 별 ReplicaScheduler 생성 (e.g. vllm_v1_engine_replica_scheduler)
+       │     └─ create a BaseClusterScheduler per cluster_type
+       │           └─ create a ReplicaScheduler per replica_id (e.g. vllm_v1_engine_replica_scheduler)
        │
-       └─ self._execution_time_predictor 생성  ← 여기서 profile CSV 읽음!
+       └─ build self._execution_time_predictor  ← reads profile CSV here!
               SklearnExecutionTimePredictor.__init__():
                 ├─ self._initialize_file_paths(training_file_paths)
-                │    → linear_op.csv, attention.csv, moe.csv, all_reduce.csv 경로 저장
+                │    → store paths of linear_op.csv, attention.csv, moe.csv, all_reduce.csv
                 │
-                ├─ ExecutionTimePredictionModelManager 호출:
+                ├─ call ExecutionTimePredictionModelManager:
                 │    ├─ FOR cluster_type, cluster_cfg:
                 │    │     for measurement_type in {CUDA_EVENT, KERNEL_ONLY}:
                 │    │         df = pd.read_csv(linear_op_csv_path)
                 │    │         FOR op in ["mlp_up_proj", "mlp_down_proj", ...]:
-                │    │             # GridSearchCV 학습
-                │    │             model = RandomForestRegressor(...) 또는 PolynomialRegression
+                │    │             # GridSearchCV training
+                │    │             model = RandomForestRegressor(...) or PolynomialRegression
                 │    │             grid_search.fit(df[["num_tokens"]],
                 │    │                             df[f"time_stats.{op}.median"])
                 │    │             best_model = grid_search.best_estimator_
                 │    │             self._models[f"{measurement}:{op}"] = best_model
                 │    │
-                │    └─ pickle.dump() 로 캐시 디렉토리에 저장 (다음 실행은 cache hit)
+                │    └─ pickle.dump() to cache dir (next run is a cache hit)
                 │
                 └─ self._predictions = self._predict_from_models()
-                     # 모든 정수 token count 미리 predict
+                     # predict every integer token count ahead of time
                      for op in ops:
                          for n in range(1, max_tokens + 1):
                              self._predictions[op][(n,)] = model.predict([[n]])[0]
@@ -516,7 +516,7 @@ time_stats.mlp_up_proj.min,time_stats.mlp_up_proj.max,time_stats.mlp_up_proj.mea
   Simulator.run():
        └─ _init_event_queue():
             ├─ requests = self._request_generator.generate()
-            │     예: 100 req with Poisson arrival
+            │     e.g. 100 req with Poisson arrival
             ├─ for req in requests:
             │     if offline: req.set_arrived_at(0); GlobalScheduleEvent(0)
             │     if online: RequestArrivalEvent(req.arrived_at, req, ...)
@@ -527,13 +527,13 @@ time_stats.mlp_up_proj.min,time_stats.mlp_up_proj.max,time_stats.mlp_up_proj.mea
            self._set_time(event._time)
            new_events = event.handle_event(self._global_scheduler, self._metric_store)
                             ↑
-                  주요 event handler:
-                  - REPLICA_STAGE_SCHEDULE event 가 predictor 호출:
+                  main event handler:
+                  - REPLICA_STAGE_SCHEDULE event calls predictor:
                        execution_time = predictor.predict_stage_execution_time(
                            batch, stage_id, cluster_type, num_layers=1
                        )
                             ↑
-                  predict_stage_execution_time() 내부:
+                  inside predict_stage_execution_time():
                        effective_tokens = batch.get_effective_total_tokens_rounded(cluster_type)
                        key = (effective_tokens,)
                        if key in self._predictions["mlp_up_proj"]:
@@ -549,15 +549,15 @@ time_stats.mlp_up_proj.min,time_stats.mlp_up_proj.max,time_stats.mlp_up_proj.mea
                        )
            self._add_events(new_events)
        ↓
-  종료 후 _write_output():
-       ├─ self._metric_store.plot()  ← CSV + PNG 생성
+  after end, _write_output():
+       ├─ self._metric_store.plot()  ← generate CSV + PNG
        │   → outputs/{run_id}/e2e_latency.csv
        │   → outputs/{run_id}/ttft.csv
        │   → outputs/{run_id}/tpot.csv
        │   → outputs/{run_id}/batch_latency.csv
        │   → outputs/{run_id}/throughput.csv
-       │   → 각 metric 별 PNG plot
-       └─ JSON event trace (옵션)</div>
+       │   → a PNG plot per metric
+       └─ JSON event trace (optional)</div>
 
 <h4>Profile 결과 → Simulator 연결 지점 (중요)</h4>
 <p>Profile 산출물이 simulator 에 어떻게 입력되는지가 가장 헷갈리는 부분. 정리:</p>
@@ -840,24 +840,24 @@ Discrete-Event Simulator ← §3-5 에서 자세히</code></pre>
 
 <h4>전체 구조</h4>
 <p>Frontier 의 ML 학습은 <strong>simulator 와 분리된 별도 CLI 파이프라인</strong>. 한 번 학습 후 pickle 캐시 → simulator 가 그 캐시 로드.</p>
-<div class="diagram">  사용자: python -m frontier.training &lt;structure&gt; ...
+<div class="diagram">  user: python -m frontier.training &lt;structure&gt; ...
        ↓
-  frontier/training/cli.py:637-661 (argparse → 3 subcommand)
+  frontier/training/cli.py:637-661 (argparse → 3 subcommands)
        ├─ "moe"        → train_moe()    → MoETrainer(...).train()
        ├─ "linear_op"  → train_linear_op() → LinearOpTrainer(...).train()
        └─ "attention"  → train_attention() → AttentionTrainer(...).train()
        ↓
-  각 Trainer 는 BaseTrainer (base_trainer.py) 상속
+  each Trainer subclasses BaseTrainer (base_trainer.py)
        │
-       ├─ _get_model_names()          ← op 별 학습할 모델 이름 리스트
-       ├─ _get_feature_cols(name)     ← 어떤 column 을 feature 로
-       ├─ _get_target_col(name)       ← 어떤 column 을 target 으로
-       ├─ _get_training_df_for_model(name) ← profile CSV 에서 어떤 row 만 추려서 학습 데이터로
-       └─ _train_single_model(name, df, features, target)  ← 실제 GridSearchCV
+       ├─ _get_model_names()          ← list of model names to train per op
+       ├─ _get_feature_cols(name)     ← which columns are features
+       ├─ _get_target_col(name)       ← which column is the target
+       ├─ _get_training_df_for_model(name) ← pick which rows from profile CSV as training data
+       └─ _train_single_model(name, df, features, target)  ← the actual GridSearchCV
        ↓
   Trained model → pickle.dump → {output_dir}/{model_name}_{hash}.pkl
        ↓
-  Simulator init 시 ExecutionTimePredictionModelManager 가 같은 hash 로 load</code></pre></div>
+  At Simulator init, ExecutionTimePredictionModelManager loads it by the same hash</code></pre></div>
 
 <h4>per-op-category 학습 디테일</h4>
 
@@ -990,21 +990,21 @@ with InterProcessReaderWriterLock(lock_file):
 <h4>End-to-end 데이터 흐름</h4>
 <div class="diagram">  Profile CSV (e.g. linear_op.csv, 500 rows)
        ↓
-  ExecutionTimePredictionModelManager (simulator init 시점)
+  ExecutionTimePredictionModelManager (at simulator init)
        ├─ pd.read_csv(linear_op.csv)
        ├─ FOR cluster_type × measurement_type × op:
        │     df = _get_training_df_for_model(...)
-       │     ├─ Cache lookup (hash 매칭)
+       │     ├─ Cache lookup (hash match)
        │     │     hit  → pickle.load → BaseEstimator
        │     │     miss → GridSearchCV.fit(df[features], df[target])
        │     │            → best_estimator_ → pickle.dump
        │     └─ models["eager:mlp_up_proj"] = best_estimator
        │
-       └─ Trained model 들 SklearnExecutionTimePredictor 로 넘김
+       └─ pass trained models to SklearnExecutionTimePredictor
        ↓
   SklearnExecutionTimePredictor.__init__():
        ├─ _activate_measurement_type(MeasurementType.CUDA_EVENT)
-       └─ _predict_from_models()  ← 모든 정수 token count 미리 계산
+       └─ _predict_from_models()  ← precompute every integer token count
             for op in models:
                 for n in 1..max_tokens:
                     self._predictions_eager[op][(n,)] = model.predict([[n]])[0]
@@ -1012,25 +1012,25 @@ with InterProcessReaderWriterLock(lock_file):
                 for n in 1..max_tokens:
                     self._predictions_kernel_only[op][(n,)] = model.predict([[n]])[0]
        ↓
-  Simulator.run() 의 event loop:
-       매 REPLICA_STAGE_SCHEDULE event 마다 predictor 호출:
+  event loop in Simulator.run():
+       call predictor per REPLICA_STAGE_SCHEDULE event:
        ↓
   predict_stage_execution_time(batch, stage_id, cluster_type, num_layers):
        ├─ measurement_type = _select_measurement_type_for_batch(batch)
-       │     (CUDA_EVENT vs KERNEL_ONLY 선택)
+       │     (pick CUDA_EVENT vs KERNEL_ONLY)
        ├─ _activate_measurement_type(measurement_type)
-       │     → self._predictions = self._predictions_eager 또는 _kernel_only
+       │     → self._predictions = self._predictions_eager or _kernel_only
        ├─ effective_tokens = batch.get_effective_total_tokens_rounded(cluster_type)
        │     (3-layer padding: stage / DP / CUDA Graph capture size)
        │
        ├─ FOR op in ["mlp_up_proj", "mlp_down_proj", "attn_rope", ...]:
-       │     key = (effective_tokens,)  # 단일 feature op
-       │     # 또는 (batch_size, kv_cache_size) for attention
+       │     key = (effective_tokens,)  # single-feature op
+       │     # or (batch_size, kv_cache_size) for attention
        │     if key in self._predictions[op]:
        │         raw_time = self._predictions[op][key]    ← O(1) exact lookup
        │     else:
        │         raw_time = self._models[op].predict([[effective_tokens]])[0]
-       │         ← fallback regression (드물게 발생)
+       │         ← fallback regression (rarely happens)
        │     calibration_scale = self._get_calibration_scale("_mlp_up_proj_calibration_scale", ...)
        │     time = raw_time * calibration_scale
        │
@@ -1044,7 +1044,7 @@ with InterProcessReaderWriterLock(lock_file):
               ...
           )
        ↓
-  Event loop 가 그 ExecutionTime 으로 BatchStageEndEvent 생성:
+  event loop builds a BatchStageEndEvent from that ExecutionTime:
        event_time = current_time + execution_time.total_time
        heapq.heappush(event_queue, (event_time, BatchStageEndEvent(...)))</div>
 
@@ -1151,58 +1151,58 @@ result = predict_collective_time(scenario={...}, repo_root=...)
 <div class="card">
 
 <h4>전체 그림 — Simulator.run() 안에서</h4>
-<div class="diagram">  Simulator.__init__()  (한 번)
+<div class="diagram">  Simulator.__init__()  (once)
        ├─ cluster (Cluster + Replica)
        ├─ MetricsStore
        ├─ RequestGenerator              ← §3-5 request_generator
        ├─ BaseGlobalScheduler           ← §3-1 scheduler hierarchy
        │   └─ ClusterScheduler × N
-       │       └─ ReplicaScheduler × M   (vllm_v1_engine 등)
+       │       └─ ReplicaScheduler × M   (vllm_v1_engine etc.)
        │           └─ ReplicaStageScheduler × P (pipeline parallel)
        ├─ ExecutionTimePredictor        ← §3-4
-       │   ├─ Profile CSV load + 학습 dispatch
-       │   ├─ ExecutionTimePredictionModelManager (sklearn 학습)
+       │   ├─ Profile CSV load + dispatch training
+       │   ├─ ExecutionTimePredictionModelManager (sklearn training)
        │   └─ Pre-computed dict cache
        └─ cc_backend                    ← §3-4
        ↓
   _init_event_queue():
        ├─ requests = request_generator.generate()
-       │     ├─ SyntheticRequestGenerator (Poisson+length 조합) 또는
-       │     └─ TraceReplayRequestGenerator (CSV 읽음)
+       │     ├─ SyntheticRequestGenerator (Poisson+length combo) or
+       │     └─ TraceReplayRequestGenerator (reads CSV)
        └─ if offline: GlobalScheduleEvent(0)
-          if online:  RequestArrivalEvent(t=arrived_at, req) 각각 enqueue
+          if online:  enqueue each RequestArrivalEvent(t=arrived_at, req)
        ↓
   _run_sequential() event loop:
     while not terminate:
         while event_queue:
             (priority, event) = heapq.heappop(event_queue)
-            self._time = event._time                         ← 글로벌 clock 전진
+            self._time = event._time                         ← advance global clock
             new_events = event.handle_event(scheduler, metric_store)
-            self._add_events(new_events)                     ← 새 event push
+            self._add_events(new_events)                     ← push new events
 
-  주요 event handler 호출 chain:
+  main event-handler call chain:
     REQUEST_ARRIVAL → GlobalScheduleEvent
     GlobalSchedule → ClusterScheduleEvent × cluster_type
     ClusterSchedule → cluster_scheduler.schedule() → ReplicaScheduleEvent
     ReplicaSchedule → replica_scheduler.on_schedule()
-                       └─ vLLM v1 의 admission logic 그대로 (§3-1 ②)
-                       └─ Batch 생성 (§3-1 ②)
+                       └─ vLLM v1 admission logic as-is (§3-1 ②)
+                       └─ build Batch (§3-1 ②)
                      → BatchStageArrivalEvent
     BatchStageArrival → ReplicaStageScheduleEvent
     ReplicaStageSchedule → predictor.predict_stage_execution_time(batch, ...)   ← §3-4 ④
-                            ├─ measurement_type 선택 (CUDA_EVENT vs KERNEL_ONLY)
-                            ├─ effective_tokens 계산 (3-layer padding)
+                            ├─ pick measurement_type (CUDA_EVENT vs KERNEL_ONLY)
+                            ├─ compute effective_tokens (3-layer padding)
                             ├─ FOR op in batch:
                             │     dict lookup: self._predictions[op][(token,)]
                             ├─ cc_backend.predict_allreduce(...)
-                            └─ ExecutionTime(...) 반환
-                          → execution_time 합산해서 stage end 시간 계산
-                          → BatchStageEndEvent(time = current + execution_time) 발행
-    BatchStageEnd → 다음 stage 또는 ClusterBatchEndEvent
+                            └─ return ExecutionTime(...)
+                          → sum execution_time to compute stage end time
+                          → emit BatchStageEndEvent(time = current + execution_time)
+    BatchStageEnd → next stage or ClusterBatchEndEvent
     ClusterBatchEnd → GlobalBatchEndEvent
-    GlobalBatchEnd → request 완료 처리 + metric 기록 + 다음 ReplicaScheduleEvent
+    GlobalBatchEnd → finalize request + record metric + next ReplicaScheduleEvent
        ↓
-  종료 후 _write_output():
+  after end, _write_output():
     outputs/{run_id}/e2e_latency.csv
     outputs/{run_id}/ttft.csv
     outputs/{run_id}/tpot.csv
@@ -1576,7 +1576,7 @@ NUM_REQUESTS=4 bash .../moe_spec_dec.sh
     num_tokens=1024  → 75 us
     num_tokens=2048  → 139 us
     num_tokens=4096  → 267 us
-    ↑ 총 9 점, profile 시간 ~5-10분
+    ↑ 9 points total, profile time ~5-10 min
 
   Frontier sweep (dense grid):
     num_tokens=1     → 11 us
@@ -1594,7 +1594,7 @@ NUM_REQUESTS=4 bash .../moe_spec_dec.sh
     num_tokens=4128  → 269 us
     ...
     num_tokens=128K  → 8214 us
-    ↑ 총 620 점, profile 시간 ~25-40분 (단일 GPU)</div>
+    ↑ 620 points total, profile time ~25-40 min (single GPU)</div>
 
 <h4>trade-off 정리</h4>
 <table>
@@ -1746,24 +1746,24 @@ SCHEDULER_TYPE=vllm_v1_engine_replica_scheduler bash thinking_mode_basic.sh
 <p>2025-2026 출시 모델 (Llama 4, Qwen3.5, DeepSeek V3.2, GPT-5, Kimi K2 등) 을 Frontier 로 시뮬레이트 하려면.</p>
 
 <h3>8-1. 적용 가능 여부 결정 트리</h3>
-<div class="diagram">  새 모델 X 를 Frontier 로 시뮬레이트하려면?
+<div class="diagram">  Want to simulate a new model X in Frontier?
    │
-   ├─ 1. 모델 architecture 가 vLLM 지원하나?
-   │     ├─ Yes → 다음 단계
-   │     └─ No → Frontier 사용 불가 (Frontier 가 vLLM 의존)
+   ├─ 1. Is the model architecture supported by vLLM?
+   │     ├─ Yes → next step
+   │     └─ No → Frontier unusable (Frontier depends on vLLM)
    │
-   ├─ 2. 모델 type 이 dense / MoE 둘 중 하나인가?
-   │     ├─ dense: linear_op + attention profile 필요
-   │     ├─ MoE: + moe profile 필요
-   │     └─ Multimodal (vision/audio): 추가로 encoder 측 — 현재 release 미지원
+   ├─ 2. Is the model type dense or MoE?
+   │     ├─ dense: need linear_op + attention profile
+   │     ├─ MoE: + need moe profile
+   │     └─ Multimodal (vision/audio): also encoder side — not in current release
    │
-   ├─ 3. profile DB 가 있나? (data/profiling/compute/&lt;HW&gt;/&lt;model&gt;/)
-   │     ├─ Yes → 바로 sim 가능
-   │     └─ No → 다음 단계
+   ├─ 3. Is there a profile DB? (data/profiling/compute/&lt;HW&gt;/&lt;model&gt;/)
+   │     ├─ Yes → can sim right away
+   │     └─ No → next step
    │
-   └─ 4. profile 새로 만들 수 있나? (GPU 1대 1-3시간)
-         ├─ Yes → 4-1 으로 진행
-         └─ No → dummy mode (정확도 ↓) 또는 사용 불가</div>
+   └─ 4. Can you build a new profile? (1 GPU, 1-3 hours)
+         ├─ Yes → proceed to 4-1
+         └─ No → dummy mode (lower accuracy) or unusable</div>
 
 <h3>8-2. 모델별 적용 가이드</h3>
 

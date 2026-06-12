@@ -532,103 +532,103 @@ def write_flush(self, p, input):
   build_cluster_config()│ config_builder.py:245
         │ (returns instances + NPU mappings)
         ▼
-  Scheduler × N         │ __main__.py:384 (이 시나리오 N=1)
+  Scheduler × N         │ __main__.py:384 (this scenario N=1)
   Controller(total_npu) │ __main__.py:400
   Router(...)           │ __main__.py:402
         │
         ▼
   router.load_requests(dataset)
-        │ (JSONL → pending_requests[], 라우팅 아직 X)
+        │ (JSONL → pending_requests[], not yet routed)
         ▼
-  generate_graph(None, event=True)  ← 빈 초기 Chakra graph
+  generate_graph(None, event=True)  ← empty initial Chakra graph
         │
         ▼
   subprocess.Popen(astra_sim_binary)│ __main__.py:461
-        │ (C++ 백엔드 stdin/stdout pipe 연결)
+        │ (C++ backend stdin/stdout pipe connect)
         ▼
-  while True: (메인 루프) ─────────────────────►</div>
+  while True: (main loop) ─────────────────────►</div>
 
 <h3><span class="en">11-2. One iteration of the main loop (following a single request's lifecycle)</span><span class="ko">11-2. 메인 루프 한 iteration (단일 요청 lifecycle 따라가기)</span></h3>
 <div class="diagram">  ┌─────────────────────────────────────────────────────────────────────┐
-  │ Python 측 (메인 루프)              │ ASTRA-Sim 측 (subprocess)        │
+  │ Python side (main loop)             │ ASTRA-Sim side (subprocess)      │
   ├─────────────────────────────────────┼─────────────────────────────────┤
-  │ controller.read_wait(p)             │ ...iteration N 시뮬 중...        │
-  │     ↓ (블로킹)                       │ "sys[1] iteration M finished,    │
+  │ controller.read_wait(p)             │ ...iteration N simulating...     │
+  │     ↓ (blocking)                    │ "sys[1] iteration M finished,    │
   │     ◄────────────────────────────── │  12345 cycles, ..."              │
   │                                     │ "Waiting"                        │
   │ controller.parse_output()           │                                  │
   │   → current = 12345 ns              │                                  │
   │                                     │                                  │
   │ router.route_arrived_requests(c)    │                                  │
-  │   → 도착시간 ≤ 12345 인 req 라우팅   │                                  │
+  │   → route reqs w/ arrival ≤ 12345   │                                  │
   │   → sched.request.append(Request)   │                                  │
   │                                     │                                  │
   │ schedulers[i].add_done(id, sys, c)  │                                  │
-  │   → 직전 batch 토큰 수 정산          │                                  │
+  │   → settle prev batch token count   │                                  │
   │   → req.num_computed_tokens += dt   │                                  │
-  │   → 끝났으면 self.done.append(req)   │                                  │
+  │   → if done self.done.append(req)   │                                  │
   │                                     │                                  │
   │ schedulers[i].schedule(c, sys, id)  │                                  │
   │   ↓ schedule_base()                 │                                  │
-  │     token budget 할당                │                                  │
-  │     KV-cache eviction 검사           │                                  │
-  │     Batch 객체 생성                  │                                  │
-  │   → 리턴: Batch (또는 None)          │                                  │
+  │     token budget allocation         │                                  │
+  │     KV-cache eviction check         │                                  │
+  │     Batch object creation           │                                  │
+  │   → return: Batch (or None)         │                                  │
   │                                     │                                  │
   │ generate_trace(batch, ...)          │                                  │
   │   ↓ _load_perf_db(...)              │                                  │
   │     CSV lookup (cost table!)         │                                  │
   │   ↓ _synthesize_trace(batch_ctx)    │                                  │
-  │     레이어 × op 순회                 │                                  │
-  │     각 op 시간 = interp(perf_db)    │                                  │
-  │   → ASCII trace.txt 작성            │                                  │
+  │     iterate layer × op              │                                  │
+  │     each op time = interp(perf_db)  │                                  │
+  │   → write ASCII trace.txt           │                                  │
   │                                     │                                  │
   │ generate_graph(batch, ...)          │                                  │
   │   → chakra converter subprocess      │                                  │
-  │   → llm.{0,1,...}.et 바이너리        │                                  │
+  │   → llm.{0,1,...}.et binary         │                                  │
   │                                     │                                  │
   │ controller.write_flush(p, workload) │                                  │
-  │   ─────────────────────────────────►│ stdin에서 workload 경로 read     │
-  │                                     │ trace 실행: collective comm 시뮬 │
-  │                                     │ → cycle 계산 → 다시 출력         │
+  │   ─────────────────────────────────►│ read workload path from stdin    │
+  │                                     │ run trace: collective comm sim   │
+  │                                     │ → compute cycle → output again   │
   │ (loop back to read_wait)            │                                  │
   └─────────────────────────────────────┴─────────────────────────────────┘</div>
 
 <h3><span class="en">11-3. Single-request timeline</span><span class="ko">11-3. 단일 요청 timeline</span></h3>
-<div class="diagram">  t=0:        요청 arrival (JSONL에 적힌 arrival_time_ns)
-  t=0:        route_arrived_requests → sched.request에 append
-              schedule → prefill batch (287 토큰)
+<div class="diagram">  t=0:        request arrival (arrival_time_ns from JSONL)
+  t=0:        route_arrived_requests → append to sched.request
+              schedule → prefill batch (287 tokens)
               generate_trace → trace.txt
-              write_flush → ASTRA-Sim 던짐
+              write_flush → push to ASTRA-Sim
 
-  t=0~Tp:     ASTRA-Sim이 prefill batch 시뮬레이션 (cycle 계산)
+  t=0~Tp:     ASTRA-Sim simulates prefill batch (compute cycle)
 
   t=Tp:       parse_output → current=Tp ns
               add_done(batch_id, sys, Tp)
                 req.num_computed_tokens = 287 (= input)
-                req.set_ttft(Tp)         ← TTFT 기록!
-              schedule → decode batch (1 토큰)
+                req.set_ttft(Tp)         ← TTFT recorded!
+              schedule → decode batch (1 token)
               generate_trace → trace.txt (decode shape)
               write_flush
 
-  t=Tp~Tp+Td: ASTRA-Sim이 decode 1 iteration 시뮬
+  t=Tp~Tp+Td: ASTRA-Sim simulates decode 1 iteration
 
   t=Tp+Td:    add_done
                 req.num_computed_tokens = 288
                 req.add_itl(Tp+Td)        ← ITL[0]
-              schedule → decode batch (1 토큰)
+              schedule → decode batch (1 token)
               ...
 
-  (반복 157번)
+  (repeat 157 times)
 
   t=Tp+157×Td: add_done
                  req.num_computed_tokens = 445 (= output)
-                 req.add_latency(현재시각)   ← TPOT 계산
-                 self.done.append(req)       ← 요청 완료!
+                 req.add_latency(now)       ← compute TPOT
+                 self.done.append(req)       ← request done!
                  KV-cache free
 
-  (모든 요청 done이면 메인 루프 break)
-  schedulers[0].save_output("outputs/foo.csv")  ← 한 줄 적힘</div>
+  (when all requests done, break main loop)
+  schedulers[0].save_output("outputs/foo.csv")  ← one row written</div>
 </div>
 
 <h2 id="repro"><span class="en">12. Reproducing — if you want to follow along yourself</span><span class="ko">12. 재현하기 — 직접 따라가려면</span></h2>
