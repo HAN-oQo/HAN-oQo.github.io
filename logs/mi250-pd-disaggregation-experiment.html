@@ -183,61 +183,63 @@ GPU0..GPU7 모두 XGMI 로 직접 연결 (1 hop)</code></pre>
 
 </div>
 
-<h2 id="design">3. 실험 설계 — 4 GPU P / 4 GPU D</h2>
+<h2 id="design">3. 실험 설계 — 2 GCD (TP=1 + TP=1)</h2>
 <div class="card">
 
-<h3>3-1. 설계 결정 (사전 plan)</h3>
-
-<div class="note"><strong>⚠ 설계 vs 실 진행 — TP=4 plan 했지만 TP=1 로만 검증</strong>: 아래 표는 본 실험의 <strong>처음 plan</strong>. 실제로는 SharedStorage 시도 (TP=4, TEST 1-10) 가 모두 quality 실패 → TEST 11 의 P2pNccl 성공은 <strong>공식 예제 default 인 TP=1+TP=1</strong> (2 GCD 만 사용) 으로 mechanism 검증까지만. 8 GCD 활용한 TP=4+TP=4 정통 PDD 는 다음 실험으로. 자세한 어긋남 history 는 §7-bis-A 참조.</div>
+<h3>3-1. 설계 결정</h3>
 
 <table>
-<tr><th>결정</th><th>값 (plan)</th><th>이유 (plan 시점)</th><th>실 진행</th></tr>
-<tr><td>Prefill GPU</td><td>GCD 0-3 (카드 0, 1)</td><td>같은 OAM 카드 안 GCD 쌍 (0+1 / 2+3) 은 Infinity Fabric 400 GB/s — TP=4 시 fastest path</td><td><strong>GCD 0 만</strong> (TP=1)</td></tr>
-<tr><td>Decode GPU</td><td>GCD 4-7 (카드 2, 3)</td><td>Prefill 그룹과 다른 카드 → KV transfer 가 카드 간 (100 GB/s) 발생, real PDD 시뮬레이션</td><td><strong>GCD 4 만</strong> (TP=1)</td></tr>
-<tr><td>TP / PP</td><td>TP=4 (각 instance)</td><td>한 instance 가 4 GPU 사용 — 작은 모델이라 TP=4 면 거의 여유</td><td><strong>TP=1+TP=1</strong> — 공식 예제 default, 우선 mechanism 검증</td></tr>
-<tr><td>모델 선택</td><td>Qwen2.5-7B-Instruct (또는 1.5B 작은)</td><td>4 × 64GB = 256GB 면 70B 도 가능. 7B 로 부하 시나리오 / 1.5B 로 작은 시작. 후보 둘 다 시도</td></tr>
-<tr><td>KV connector</td><td>PyNcclConnector 또는 MoRIIOConnector</td><td>AMD ROCm 환경 — NCCL → RCCL 자동 매핑. MoRIIO 는 ROCm only 명시</td></tr>
-<tr><td>비교 baseline</td><td>vLLM 단일 (TP=8 또는 TP=4 + replica 2)</td><td>같은 자원에서 PDD vs no-PDD throughput 측정</td></tr>
+<tr><th>결정</th><th>값</th><th>이유</th></tr>
+<tr><td>Prefill GPU</td><td><strong>GCD 0</strong> (TP=1)</td><td>공식 예제 default. mechanism 검증 우선 — 단순한 setup 으로 정통 P2pNccl 동작 확인</td></tr>
+<tr><td>Decode GPU</td><td><strong>GCD 4</strong> (TP=1)</td><td>Prefill 과 다른 OAM 카드 (카드 2). KV transfer 가 카드 간 XGMI 통해 발생 — real PDD 시뮬레이션. <a href="#monitoring">§5-4</a> 의 측정 결과 GPU 0↔4 = 100 Gbps (2 XGMI link)</td></tr>
+<tr><td>TP / PP</td><td><strong>TP=1+TP=1</strong></td><td>공식 예제 (<code>disagg_example_p2p_nccl_xpyd.sh</code>) default. 8 GCD 활용한 TP=4+4 는 다음 실험 (§11) 으로</td></tr>
+<tr><td>모델 선택</td><td><strong>Qwen2.5-1.5B-Instruct</strong></td><td>작은 모델 (3GB fp16) — TP=1 GCD 64GB 안에 KV cache buffer 까지 충분 여유. PDD mechanism 검증 목적</td></tr>
+<tr><td>KV connector</td><td><strong>P2pNcclConnector</strong></td><td>AMD ROCm 환경 — NCCL → RCCL 자동 매핑. MoRIIO 는 image 에 없음, NIXL/Mooncake 는 NVIDIA 전용 (<a href="#stack">§4-2</a>)</td></tr>
+<tr><td>send_type</td><td><strong>PUT_ASYNC</strong></td><td>공식 예제 default + PR #18242 의 "PUT_ASYNC should be prioritized". 자세한 비교는 <a href="#qa">§7</a></td></tr>
+<tr><td>Proxy</td><td>vLLM 공식 <code>disagg_proxy_p2p_nccl_xpyd.py</code> (별도 docker)</td><td>P2pNccl 의 정통 사용 = unique kv_port + external proxy 가 필수. proxy 없이 사용 불가 (<a href="#qa">§7</a> 참조)</td></tr>
 </table>
 
-<h3>3-2. 토폴로지 다이어그램</h3>
+<h3>3-2. 토폴로지 다이어그램 (실 진행)</h3>
 <div class="diagram">  ┌─────────────────────────────────────────────────────────────┐
-  │  mi250-052 노드                                               │
+  │  mi250-052 노드 (-network host 라 같은 192.168.3.52)           │
   │                                                                │
-  │  ┌──── OAM 카드 0 ────┐    ┌──── OAM 카드 1 ────┐               │
-  │  │  GCD 0 ↔ GCD 1     │    │  GCD 2 ↔ GCD 3     │               │
-  │  │  Infinity 400 GB/s │    │  Infinity 400 GB/s │               │
+  │  Client (curl)                                                 │
+  │     ↓ POST :10001/v1/completions                               │
+  │  ┌──────────────────────────────────────────┐                  │
+  │  │  Proxy (vllm-proxy container)             │                  │
+  │  │   - listen :10001 (client endpoint)       │                  │
+  │  │   - listen :30001 (P/D ping discovery)    │                  │
+  │  └────┬──────────────────────┬──────────────┘                  │
+  │       │ ② HTTP (max_tokens=1) │ ③ HTTP (full request)          │
+  │       ↓                       ↓                                │
+  │  ┌──── OAM 카드 0 ────┐    ┌──── OAM 카드 2 ────┐               │
+  │  │  GCD 0  GCD 1     │    │  GCD 4  GCD 5     │                │
+  │  │  [Prefill]         │    │  [Decode]          │                │
+  │  │  vLLM TP=1        │    │  vLLM TP=1        │                │
+  │  │  :20003 HTTP      │    │  :20005 HTTP       │                │
+  │  │  :20001 ZMQ ROUTER│    │  :22001 ZMQ ROUTER │                │
+  │  │  kv_producer       │    │  kv_consumer       │                │
   │  └────────┬───────────┘    └────────┬───────────┘               │
-  │           │                          │                          │
-  │           └──── inter-card ~ 100 GB/s ────┐                    │
-  │                                            │                    │
-  │  ┌─────────────────────────────────────────┴──────────────┐    │
-  │  │  Prefill instance (vLLM TP=4)                          │    │
-  │  │   - GCD 0, 1, 2, 3                                     │    │
-  │  │   - prompt forward → KV cache 생성                     │    │
-  │  └────────────────┬───────────────────────────────────────┘    │
-  │                   │ KV transfer (RCCL / NIXL-like / CPU)        │
-  │                   ↓                                              │
-  │  ┌─────────────────────────────────────────┬──────────────┐    │
-  │  │  Decode instance (vLLM TP=4)            │              │    │
-  │  │   - GCD 4, 5, 6, 7                      │              │    │
-  │  │   - 받은 KV 로 generation 이어감         │              │    │
-  │  └─────────────────────────────────────────┴──────────────┘    │
+  │           │ ④ ZMQ (handshake, NCCL unique_id)                  │
+  │           └──────────────────────────┘                          │
+  │           │ ⑤ RCCL P2P (16 channels) — 실 KV tensor             │
+  │           │     bandwidth = 100 Gbps (XGMI 2 link)              │
+  │           └──────────────────────────►                          │
   │                                                                  │
-  │  ┌──── OAM 카드 2 ────┐    ┌──── OAM 카드 3 ────┐                │
-  │  │  GCD 4 ↔ GCD 5     │    │  GCD 6 ↔ GCD 7     │                │
+  │  ┌──── OAM 카드 1 ────┐    ┌──── OAM 카드 3 ────┐                │
+  │  │  GCD 2 GCD 3 idle  │    │  GCD 6 GCD 7 idle  │                │
   │  └────────────────────┘    └────────────────────┘                │
   └─────────────────────────────────────────────────────────────────┘</div>
 
-<h3>3-3. 실행 단계 plan</h3>
+<h3>3-3. 실행 단계</h3>
 <ol>
-<li><strong>Step 1</strong> — 환경 검증: vLLM ROCm 빌드 install 또는 build, 모델 download</li>
-<li><strong>Step 2</strong> — baseline: 단일 vLLM TP=8 띄움. 실 call + 모니터링 캡쳐. 기준점.</li>
-<li><strong>Step 3</strong> — P/D deploy: prefill instance (TP=4, GCD 0-3) + decode instance (TP=4, GCD 4-7). proxy script (vLLM 공식 disagg_prefill_proxy_server) 으로 client → prefill → decode.</li>
-<li><strong>Step 4</strong> — 모니터링: 두 시나리오 모두 <code>rocm-smi -d &lt;gpu&gt; --json</code> 1초 단위 캡쳐 (util, mem, inter-GCD link bw). 기록.</li>
-<li><strong>Step 5</strong> — KV transfer trace: <code>RCCL_DEBUG=INFO</code> + vLLM <code>--log-stats</code> 로 KV transfer 시간 / 크기 / source GCD → target GCD 확인.</li>
-<li><strong>Step 6</strong> — 벤치마크: 동일 워크로드 (conc 1/4/16/32, prompt 길이 512/2048) baseline vs PDD. TTFT / TPOT / throughput / GPU util.</li>
-<li><strong>Step 7</strong> — 분석: 효과 정량화 + 만난 문제 + production 적용 시 고려사항.</li>
+<li><strong>Step 1</strong> — 환경 검증: docker image (<code>rocm/vllm:latest</code>) pull, model download cache 준비</li>
+<li><strong>Step 2</strong> — baseline: 단일 vLLM TP=1 띄움 (GCD 0 만, NO kv-transfer-config). 실 chat call + 모니터링. <a href="#baseline">§5</a></li>
+<li><strong>Step 3</strong> — P/D deploy: prefill (TP=1 GCD 0) + decode (TP=1 GCD 4) + proxy 별도 container. 정확한 P2pNccl config (kv_port unique / proxy_ip / http_port / send_type=PUT_ASYNC / nccl_num_channels=16). <a href="#success">§6</a></li>
+<li><strong>Step 4</strong> — 모니터링: <code>rocm-smi --shownodesbw</code> 의 XGMI bandwidth + 1초 polling monitor script 로 GPU% / VRAM% / Power 캡쳐</li>
+<li><strong>Step 5</strong> — KV transfer trace: <code>NCCL_DEBUG=INFO</code> + vLLM log 로 RCCL handshake (16 channel) + ZMQ + request_id 인코딩 확인</li>
+<li><strong>Step 6</strong> — 만난 문제 정리: <a href="#issues">§9</a> 의 토글 안에 11 TEST history + 4 카테고리 진단</li>
+<li><strong>Step 7</strong> — 결론 + 다음 실험 plan: <a href="#analysis">§10</a> + <a href="#next">§11</a></li>
 </ol>
 
 </div>
