@@ -964,6 +964,29 @@ docker run -d --name vllm-decode \
 <li><strong>GET 의 단점</strong>: D 가 trigger 라면 D 가 자기 forward 시작할 때 비로소 KV pull. 그 transfer 시간이 D 의 TTFT 에 직접 추가 (overlap X)</li>
 </ol>
 
+<h5>PUT_ASYNC + KV cache hit 시 어떻게 되는가</h5>
+
+<div class="note"><strong>두 종류의 cache 가 별개 layer</strong>:
+<ul style="margin:4px 0;">
+<li><strong>vLLM 의 in-engine prefix cache</strong>: 한 instance 안의 VRAM block table. 같은 prefix 의 다음 request 면 KV 재사용. <code>enable_prefix_caching=True</code> default</li>
+<li><strong>P2pNccl 의 KV transfer</strong>: P → D 의 inter-instance KV 이동. 매 request 의 prompt forward 후 RCCL send</li>
+</ul>
+두 cache 는 <strong>독립</strong> — 한 쪽이 hit 라도 다른 쪽에는 영향 없음.</div>
+
+<table>
+<tr><th>시나리오</th><th>P 의 prefix cache</th><th>D 의 prefix cache</th><th>RCCL transfer</th></tr>
+<tr><td>둘 다 miss (첫 요청)</td><td>P 가 전체 forward → 모든 layer KV 생성</td><td>D 가 받은 KV install + generation</td><td>매 layer KV 전체 push (PUT_ASYNC 의 send_queue 사용)</td></tr>
+<tr><td><strong>P hit / D miss</strong></td><td>P forward skip — <strong>compute 시간 줄어듦</strong></td><td>D 는 모르고 받음</td><td><strong>여전히 일어남</strong> — P 의 cached KV 가 그대로 RCCL send</td></tr>
+<tr><td>P miss / D hit</td><td>P 가 forward + KV 생성 → send</td><td>D 가 자기 cache 갖고 있어도 받은 KV install</td><td>일어남 (redundant 하지만 P2pNccl 가 D cache 모름)</td></tr>
+<tr><td>둘 다 hit</td><td>P forward skip</td><td>D 가 받을 필요 없는데 받음</td><td>여전히 일어남</td></tr>
+</table>
+
+<p><strong>핵심</strong>: <strong>P2pNccl 은 D 의 cache 상태 모름</strong>. 매 request 마다 무조건 push. D cache hit 라도 transfer 일어남 — 정확성 보장. 더 똑똑한 protocol (ZMQ control 로 D cache 사전 확인) 은 미래 최적화.</p>
+
+<p><strong>Buffer 영향</strong>: P cache hit 라도 send buffer 사용 (KV 자체는 옮김). D cache hit 라도 receive buffer 사용. 즉 <strong>cache hit 와 buffer 사용은 무관</strong> — buffer 의 영향은 transfer rate 와 backpressure 에만.</p>
+
+<p><strong>한 줄</strong>: PUT_ASYNC + cache hit 라도 <strong>RCCL transfer 그대로 일어남</strong>. cache hit 의 이점은 P forward compute 시간 줄임만. transfer overhead 줄지 않음.</p>
+
 <h5>kv_buffer_size 가 send_type 별로 적용되는 곳이 다름</h5>
 
 <p>사용자 질문: "PUT 이면 kv_buffer_size 어떻게? PUT_ASYNC 와 다른지?" — <a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 직접 인용:</p>
