@@ -368,7 +368,7 @@ docker run -d --rm \
 <tr><td><code>MooncakeConnector</code></td><td><strong>Mooncake transfer engine</strong> (Moonshot AI 의 KV cache pool) 통해 transfer. 외부 mooncake 서버 + InfiniBand RDMA</td><td>CUDA + IB + mooncake 서버</td><td>✗</td><td>시도 불가</td></tr>
 <tr><td><code>LMCacheConnectorV1</code></td><td><strong>LMCache</strong> (별도 KV cache pool 서버) 통해 KV 저장/공유. 여러 vLLM instance 가 LMCache 의 shared pool 활용. CPU offload + remote tier 지원. <strong>v1 = vLLM v1 engine 호환</strong></td><td>LMCache 서버 (별도 deploy)</td><td>⚠</td><td>image 에 lmcache module 없음 — 시도 못 함</td></tr>
 <tr><td><code>LMCacheMPConnector</code></td><td>LMCache 의 <strong>multi-process</strong> variant. 같은 host 안 여러 vLLM process 가 LMCache shared memory 로 KV 교환. 단일 host 시나리오</td><td>LMCache + 같은 host</td><td>⚠</td><td>위와 동일</td></tr>
-<tr><td><code>P2pNcclConnector</code></td><td>두 vLLM instance 사이 <strong>NCCL collective</strong> 으로 KV 직접 transfer. ROCm 빌드면 NCCL 호출이 <strong>RCCL 자동 매핑</strong>. ZMQ ROUTER socket + 외부 proxy server 가 producer↔consumer 매칭. <strong>본 실험 성공 경로 (§7-bis)</strong></td><td>NCCL/RCCL + 외부 proxy server (quart-based)</td><td>✓</td><td>✅ 11번 시도 끝에 성공</td></tr>
+<tr><td><code>P2pNcclConnector</code></td><td>두 vLLM instance 사이 <strong>NCCL collective</strong> 으로 KV 직접 transfer. ROCm 빌드면 NCCL 호출이 <strong>RCCL 자동 매핑</strong>. ZMQ ROUTER socket + 외부 proxy server 가 producer↔consumer 매칭. <strong>본 실험 성공 경로 (§6)</strong></td><td>NCCL/RCCL + 외부 proxy server (quart-based)</td><td>✓</td><td>✅ 11번 시도 끝에 성공</td></tr>
 <tr><td><code>SharedStorageConnector</code></td><td>filesystem 또는 shared storage 로 KV blob save/load. layer 별 <strong>safetensors</strong> 파일 (한 file 당 한 transformer layer 의 K,V tensor). source comment 가 "<strong>debug implementation</strong>" 명시. PDD 라기보다 prefix cache 공유 / 학습용</td><td>filesystem (또는 shared mount)</td><td>✓</td><td>⚠ mechanism 동작, quality 깨짐</td></tr>
 <tr><td><code>OffloadingConnector</code></td><td>KV cache 일부를 GPU 에서 <strong>CPU memory 로 offload</strong>. cross-instance PDD 가 아닌 <strong>single-instance 의 memory 압박 해소</strong> 용. 긴 context 받을 때 사용</td><td>CPU memory (host RAM)</td><td>✓</td><td>PDD 시나리오 아님 — 시도 안 함</td></tr>
 <tr><td><code>MultiConnector</code></td><td>여러 connector 를 <strong>동시 / hierarchical 사용</strong>. 예: NixlConnector (가까운 GPU 사이) + LMCacheConnector (멀리). fallback chain 또는 tier별 KV storage</td><td>위 connector 들의 조합</td><td>위에 의존</td><td>시도 안 함</td></tr>
@@ -395,11 +395,11 @@ docker run -d --rm \
 <ul>
 <li><strong>어제 (§6 history)</strong>: P2pNccl 정확한 config 없이 첫 시도 → ZMQ port 14579 충돌 (둘 다 default port 사용, proxy / unique kv_port 없이 시도) → 막힘</li>
 <li>"부분 동작 하는" SharedStorageConnector 로 도피 — 어제 prefill 호출이 정상 답 (cache miss) + KV file 28 layer safetensors 정확히 생성 → "거의 다 됐다" 느낌</li>
-<li><strong>오늘 (§7-bis-A TEST 1-10)</strong>: SharedStorage 의 quality 깨짐 원인 찾으려고 다양한 옵션 (kv_both / permute / v0 engine / TP=1 / kv_producer only / kv_buffer_device=cpu) 시도. <strong>모두 (A) category — debug implementation 의 한계</strong></li>
+<li><strong>오늘 (§6-A TEST 1-10)</strong>: SharedStorage 의 quality 깨짐 원인 찾으려고 다양한 옵션 (kv_both / permute / v0 engine / TP=1 / kv_producer only / kv_buffer_device=cpu) 시도. <strong>모두 (A) category — debug implementation 의 한계</strong></li>
 <li><strong>TEST 11</strong>: 결국 vLLM 공식 예제 (<code>disaggregated_serving_p2p_nccl_xpyd/disagg_example_p2p_nccl_xpyd.sh</code>) 발견 + 정확한 config (unique kv_port + proxy + send_type 등) + proxy server 별도 build → P2pNccl 성공. <strong>처음 plan 의 2순위가 정답이었지만, 정확한 config 가 필요함을 몰랐기에 우회</strong></li>
 </ul>
 
-즉 전략 자체는 옳았지만 (P2pNccl 이 정답) <strong>실 진행에서는 SharedStorage 의 mechanism 시연이 함정 + 공식 P2pNccl 예제 위치 늦게 발견</strong> 으로 11 시도까지 걸림. 자세한 시도 history + 원인 분류는 §7-bis-A.</div>
+즉 전략 자체는 옳았지만 (P2pNccl 이 정답) <strong>실 진행에서는 SharedStorage 의 mechanism 시연이 함정 + 공식 P2pNccl 예제 위치 늦게 발견</strong> 으로 11 시도까지 걸림. 자세한 시도 history + 원인 분류는 §6-A.</div>
 
 <div class="tip"><strong>핵심 finding</strong>: AMD MI250 + ROCm 환경에서 가능한 정통 PDD connector 는 <strong>P2pNcclConnector + 외부 proxy server</strong> 가 사실상 유일. NIXL/Mooncake 는 NVIDIA 전용, LMCache 는 별도 server 필요 (image 에 없으면 빌드). SharedStorage 는 debug 용. MoRIIO 는 최신 image 에만 있을 가능성. <strong>P2pNccl 의 정통 사용은 (a) unique kv_port, (b) external proxy, (c) request_id 인코딩 (proxy 가 자동 생성) — 3 요소가 모두 필요</strong></div>
 
@@ -556,7 +556,7 @@ ts            device,temp,power,gpu%,vram%,mem_act
 <h2 id="success">6. 실험 2 — P/D 돌리기 (성공 버전, P2pNccl + 공식 proxy)</h2>
 <div class="card">
 
-<h3>7-bis-A. 11번 실패의 원인 분류</h3>
+<h3>6-A. 11번 실패의 원인 분류</h3>
 
 <p>왜 한 번에 안 됐나 — 각 시도가 어떤 부분에서 막혔는지:</p>
 
@@ -596,7 +596,7 @@ ts            device,temp,power,gpu%,vram%,mem_act
 
 <div class="tip"><strong>핵심 finding</strong>: SharedStorageConnector 는 source comment 가 "debug implementation" 명시 + cross-instance quality 깨짐. <strong>정통 PDD 는 P2pNccl + 공식 proxy server</strong> + 정확한 kv_port / proxy_port / http_port config 필요. 11 번 시도 끝에 동작.</div>
 
-<h3>7-bis-0. 아키텍처 — 3 컴포넌트가 어떻게 떠 있나</h3>
+<h3>6-1. 아키텍처 — 3 컴포넌트가 어떻게 떠 있나</h3>
 
 <p>본 실험에 떠 있는 3 컴포넌트 + 그들 사이 4 종류의 통신 channel:</p>
 
@@ -643,7 +643,7 @@ ts            device,temp,power,gpu%,vram%,mem_act
   ④ = "service discovery" — prefill/decode 가 살아있다고 proxy 에 ping
   ⑤ = KV cache 의 진짜 transfer — RCCL 으로 GPU-GPU 직접</div>
 
-<h3>7-bis-0-b. Proxy 가 왜 필요한가</h3>
+<h3>6-2. Proxy 가 왜 필요한가</h3>
 
 <p>vLLM 자체는 단일 endpoint 가정. PDD 는 두 endpoint (prefill, decode) 가 한 logical "service" 처럼 동작해야 함. 사용자가 client 측에서 두 호출 분리하기 X. <strong>proxy 가 그 추상화 layer</strong>. 4 가지 일 함:</p>
 
@@ -892,7 +892,7 @@ sock.connect(f"tcp://192.168.3.52:22001")             # 상대 ROUTER 로 connec
 <tr><td><strong>NCCL/RCCL</strong> (16 channels)</td><td>실 KV tensor (큰 bytes)</td><td>GPU-GPU 직접 transfer. ZMQ 보다 훨씬 빠름 (NVLink/XGMI 활용)</td></tr>
 </table>
 
-<h3>7-bis-1. 정확한 명령 — 양 instance 모두 (생략 없이)</h3>
+<h3>6-3. 정확한 명령 — 양 instance 모두 (생략 없이)</h3>
 <pre><code># Prefill instance: GCD 0, http port 20003, ZMQ port 20001
 docker run -d --name vllm-prefill \
   --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
@@ -945,7 +945,7 @@ docker run -d --name vllm-decode \
       }
     }'</code></pre>
 
-<h3>7-bis-1-b. 모든 config 옵션 — 한 줄 한 줄 설명</h3>
+<h3>6-4. 모든 config 옵션 — 한 줄 한 줄 설명</h3>
 
 <h4>Docker 옵션 (instance container)</h4>
 <table>
@@ -1333,7 +1333,7 @@ import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'de
 
 <p>4 종류 channel 다 살아있어야 PDD 동작. 어느 하나 broken (예: ZMQ port 충돌 / NCCL handshake fail / HTTP 못 받음) 면 garbage 또는 hang.</p>
 
-<h3>7-bis-2. Proxy server 직접 build + 실행 (간단 구현)</h3>
+<h3>6-5. Proxy server 직접 build + 실행 (간단 구현)</h3>
 
 <p><strong>vLLM 공식 예제 출처</strong>:</p>
 <ul>
@@ -1372,7 +1372,7 @@ $ docker run -d --name vllm-proxy --network host vllm-proxy:latest \
 # - 30001: prefill / decode 가 ping 보내는 service discovery
 # - 10001: client 가 호출하는 OpenAI-compatible endpoint (hardcoded in script)</code></pre>
 
-<h3>7-bis-3. NCCL handshake 성공 — 실 log</h3>
+<h3>6-6. NCCL handshake 성공 — 실 log</h3>
 
 <pre><code>[EngineCore_DP0] 💯P2pNcclEngine init, rank:0, local_rank:0,
   http_address:192.168.3.52:20003, zmq_address:192.168.3.52:20001,
@@ -1391,7 +1391,7 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
 
 <p><strong>16 NCCL channels</strong> 가 두 GCD 사이 RCCL 으로 wired. ROCm 의 NCCL = RCCL 자동 매핑.</p>
 
-<h3>7-bis-4. 실 chat — 3 calls 정상 답</h3>
+<h3>6-7. 실 chat — 3 calls 정상 답</h3>
 
 <pre><code>$ curl -s -m 30 http://127.0.0.1:<strong>10001</strong>/v1/completions \
   -H 'Content-Type: application/json' \
@@ -1413,7 +1413,7 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
 
 <p>모든 호출 정상 답 (40 token). wall ~570ms 매번 — P/D 분담 + KV 직접 RCCL transfer + decode 가 작은 모델 (1.5B) 의 40 token generation. <strong>request_id 에 prefill_addr + decode_addr 명시</strong>.</p>
 
-<h3>7-bis-5. Monitoring (rocm-smi CSV) — P/D 분담 명확 캡쳐</h3>
+<h3>6-8. Monitoring (rocm-smi CSV) — P/D 분담 명확 캡쳐</h3>
 
 <pre><code>ts            device,temp,power, gpu%, vram%, mem
 # === idle ===
@@ -1454,7 +1454,7 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
 <li>이전 글 (NixlConnector READ-based, D pull) 과 본 실험 (PUT_ASYNC P push) 의 방향성 차이? — §7-H</li>
 </ul>
 
-<p>(아래 본문 — 옛 §7-bis 의 sub-section 들 + §7 (옛 PDD deploy) 의 monitoring 결과 모두 포함)</p>
+<p>(아래 본문 — 옛 §6 의 sub-section 들 + §7 (옛 PDD deploy) 의 monitoring 결과 모두 포함)</p>
 </div>
 
 <h2 id="bench-old" style="display:none">7-구. PDD deploy + 모니터링 캡쳐 (실 결과)</h2>
@@ -1811,7 +1811,7 @@ ts             card,temp,power,gpu%,vram%,mem
 
 <h3>10-6. 한 줄 결론</h3>
 
-<p><strong>MI250 8 GCD 위에 vLLM PDD mechanism 동작 확인 — KV cache 가 layer 별 safetensors 로 두 instance 사이 transfer 되는 것까지 직접 봄. 단 SharedStorageConnector 의 학습용 한계로 quality 깨짐 + production 측정 불가. 정통 평가는 P2pNcclConnector + 외부 proxy server (§7-bis) 으로 11번 시도 끝에 성공. 다음 실험은 multi-turn bidirectional (§10-6) 으로 KV reuse 효과 정량화.</strong></p>
+<p><strong>MI250 8 GCD 위에 vLLM PDD mechanism 동작 확인 — KV cache 가 layer 별 safetensors 로 두 instance 사이 transfer 되는 것까지 직접 봄. 단 SharedStorageConnector 의 학습용 한계로 quality 깨짐 + production 측정 불가. 정통 평가는 P2pNcclConnector + 외부 proxy server (§6) 으로 11번 시도 끝에 성공. 다음 실험은 multi-turn bidirectional (§10-6) 으로 KV reuse 효과 정량화.</strong></p>
 
 </div>
 
