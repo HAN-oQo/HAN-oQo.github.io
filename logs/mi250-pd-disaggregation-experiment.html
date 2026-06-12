@@ -299,15 +299,26 @@ docker run -d --rm \
 <tr><td><code>ExampleConnector</code></td><td>SharedStorageConnector 와 비슷한 학습용. 별도 글 (<a href="pd-disaggregation-metal-tryout.html">Apple Silicon PDD 시도</a>) 에서 사용</td><td>본 image 의 0.11.2 에는 SharedStorage 가 대응</td></tr>
 </table>
 
-<h4>전략 결정 (실험 시작 시)</h4>
+<h4>전략 결정 (실험 시작 시 — 사전 가설)</h4>
 <ol>
 <li><strong>1순위 — MoRIIOConnector</strong> (ROCm 전용): 없음 → skip</li>
-<li><strong>2순위 — P2pNcclConnector</strong> (NCCL→RCCL): 시도. <strong>성공 (§7-bis)</strong></li>
-<li><strong>3순위 fallback — SharedStorageConnector</strong>: mechanism 시연 용이지만 quality 깨짐</li>
-<li><strong>4순위 — LMCache</strong>: image 에 없어서 시도 못 함</li>
+<li><strong>2순위 — P2pNcclConnector</strong> (NCCL→RCCL): 시도</li>
+<li><strong>3순위 fallback — SharedStorageConnector</strong></li>
+<li><strong>4순위 — LMCache</strong>: image 에 없으면 빌드</li>
 </ol>
 
-<div class="note"><strong>핵심 finding</strong>: AMD MI250 + ROCm 환경에서 가능한 정통 PDD connector 는 <strong>P2pNcclConnector + 외부 proxy server</strong> 가 사실상 유일. NIXL/Mooncake 는 NVIDIA 전용, LMCache 는 별도 server 필요 (image 에 없으면 빌드). SharedStorage 는 debug 용. MoRIIO 는 최신 image 에만 있을 가능성.</div>
+<div class="note"><strong>⚠ 전략과 실 진행이 어긋난 점 — 솔직히</strong>: 위 plan 은 "P2pNccl 우선 → SharedStorage fallback" 이었으나 <strong>실제로는 거의 반대로 진행</strong>됨:
+
+<ul>
+<li><strong>어제 (§6 history)</strong>: P2pNccl 정확한 config 없이 첫 시도 → ZMQ port 14579 충돌 (둘 다 default port 사용, proxy / unique kv_port 없이 시도) → 막힘</li>
+<li>"부분 동작 하는" SharedStorageConnector 로 도피 — 어제 prefill 호출이 정상 답 (cache miss) + KV file 28 layer safetensors 정확히 생성 → "거의 다 됐다" 느낌</li>
+<li><strong>오늘 (§7-bis-A TEST 1-10)</strong>: SharedStorage 의 quality 깨짐 원인 찾으려고 다양한 옵션 (kv_both / permute / v0 engine / TP=1 / kv_producer only / kv_buffer_device=cpu) 시도. <strong>모두 (A) category — debug implementation 의 한계</strong></li>
+<li><strong>TEST 11</strong>: 결국 vLLM 공식 예제 (<code>disaggregated_serving_p2p_nccl_xpyd/disagg_example_p2p_nccl_xpyd.sh</code>) 발견 + 정확한 config (unique kv_port + proxy + send_type 등) + proxy server 별도 build → P2pNccl 성공. <strong>처음 plan 의 2순위가 정답이었지만, 정확한 config 가 필요함을 몰랐기에 우회</strong></li>
+</ul>
+
+즉 전략 자체는 옳았지만 (P2pNccl 이 정답) <strong>실 진행에서는 SharedStorage 의 mechanism 시연이 함정 + 공식 P2pNccl 예제 위치 늦게 발견</strong> 으로 11 시도까지 걸림. 자세한 시도 history + 원인 분류는 §7-bis-A.</div>
+
+<div class="tip"><strong>핵심 finding</strong>: AMD MI250 + ROCm 환경에서 가능한 정통 PDD connector 는 <strong>P2pNcclConnector + 외부 proxy server</strong> 가 사실상 유일. NIXL/Mooncake 는 NVIDIA 전용, LMCache 는 별도 server 필요 (image 에 없으면 빌드). SharedStorage 는 debug 용. MoRIIO 는 최신 image 에만 있을 가능성. <strong>P2pNccl 의 정통 사용은 (a) unique kv_port, (b) external proxy, (c) request_id 인코딩 (proxy 가 자동 생성) — 3 요소가 모두 필요</strong></div>
 
 </div>
 
