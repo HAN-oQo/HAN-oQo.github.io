@@ -581,256 +581,7 @@ ts            device,temp,power,gpu%,vram%,mem_act
   ④ = "service discovery" — prefill/decode 가 살아있다고 proxy 에 ping
   ⑤ = KV cache 의 진짜 transfer — RCCL 으로 GPU-GPU 직접</div>
 
-<h3>6-2. Proxy 가 왜 필요한가</h3>
-
-<p>vLLM 자체는 단일 endpoint 가정. PDD 는 두 endpoint (prefill, decode) 가 한 logical "service" 처럼 동작해야 함. 사용자가 client 측에서 두 호출 분리하기 X. <strong>proxy 가 그 추상화 layer</strong>. 4 가지 일 함:</p>
-
-<table>
-<tr><th>역할</th><th>구체 행동</th><th>왜 필요</th></tr>
-<tr><td><strong>① Single endpoint 제공</strong></td><td>client 는 <code>POST :10001/v1/completions</code> 한 번. proxy 가 내부적으로 prefill 호출 → decode 호출</td><td>OpenAI 호환 API 유지 — client 가 PDD 인 줄 모름</td></tr>
-<tr><td><strong>② Prefill 단계 트리거</strong></td><td>받은 request 의 <code>max_tokens</code> 을 <strong>1 로 강제 변경</strong> 한 후 prefill 에 forward. prefill 는 prompt forward → KV 생성 → KV 를 RCCL 로 decode 에 send</td><td>prefill instance 가 "1 token 만 출력 + KV 보내라" 라는 신호. 실제 generation 은 decode 가 함</td></tr>
-<tr><td><strong>③ Decode 라우팅</strong></td><td>원본 request 를 decode 에 forward. request_id 에 <strong>prefill_addr + decode_addr</strong> 인코딩 (예: <code>cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_&lt;uuid&gt;</code>) — decode 가 그 ZMQ address 의 prefill 로부터 KV 받음을 알게 함</td><td>decode 는 자기 ZMQ port 로 들어온 KV 가 어느 request 의 것인지 매칭해야 함. request_id 가 routing key</td></tr>
-<tr><td><strong>④ Service discovery</strong></td><td>prefill/decode 가 시작 시 proxy 의 :30001 에 ping 보냄. proxy 가 그들의 <code>http_address</code> + <code>zmq_address</code> 등록. proxy 가 죽으면 새 instance 도 등록 가능</td><td>proxy 가 어느 instance 가 살아있는지 + zmq 주소 동적 발견. config 에 hardcode 안 해도 됨 (XpYd scaling 위해)</td></tr>
-</table>
-
-<p>즉 proxy = <strong>(a) client API gateway + (b) prefill/decode 매칭 + (c) request-ID 기반 KV routing key + (d) service discovery</strong>. 4 in 1.</p>
-
-<h4>Proxy 가 만드는 2 request 의 정확한 형식 + 흐름</h4>
-
-<p>Client 가 한 번 호출 → proxy 가 <strong>sequential 로 2 request</strong> 만듬. 동작 순서:</p>
-
-<div class="diagram">  ① Client
-       ↓ POST :10001/v1/completions
-         body = {"prompt": "Why is the sky blue?", "max_tokens": 30, ...}
-       ↓
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  Proxy (disagg_proxy_demo.py)                                    │
-  │                                                                   │
-  │  ② request_id 생성 (prefill/decode address 인코딩):              │
-  │     request_id = "cmpl-___prefill_addr_192.168.3.52:20001"        │
-  │                  "___decode_addr_192.168.3.52:22001___&lt;uuid&gt;"      │
-  │                                                                   │
-  │  ③ prefill 용 body 작성 (max_tokens 만 1 로 강제):                │
-  │     prefill_body = {**original_body, "max_tokens": 1}            │
-  │                                                                   │
-  │  ④ ─── HTTP POST → prefill instance ───                          │
-  │       POST http://192.168.3.52:20003/v1/completions             │
-  │       X-Request-Id: ___prefill_addr_...___decode_addr_...___uuid │
-  │       body = prefill_body                                         │
-  │       ↓                                                            │
-  │       (prefill 가 prompt forward + KV 생성 + ⑤ KV 를 RCCL 로      │
-  │        decode 에 PUT_ASYNC send. send 가 비동기 시작)             │
-  │       ↓                                                            │
-  │       prefill 가 max_tokens=1 짜리 response 반환 ← 의미 없음      │
-  │       └────── async for _ in prefill_response: continue           │
-  │              (proxy 가 prefill response 소비 + 버림)              │
-  │                                                                   │
-  │  ⑥ ─── HTTP POST → decode instance ───  (prefill 완료 후)        │
-  │       POST http://192.168.3.52:20005/v1/completions             │
-  │       X-Request-Id: 같은 request_id (decode 가 KV 매칭에 사용)   │
-  │       body = original_body  (max_tokens=30 원본)                  │
-  │       ↓                                                            │
-  │       (decode 가 받은 KV 활용 + generation. 이 때 ⑤ 의 KV transfer│
-  │        가 거의 완료된 상태. async 라 보통 충분히 빨리 도착)       │
-  │       ↓                                                            │
-  │       decode 가 stream response                                   │
-  │                                                                   │
-  │  ⑦ stream response 를 client 에 forward                          │
-  └─────────────────────────────────────────────────────────────────┘
-       ↓
-  Client (받은 답 = decode 가 생성한 token stream)</div>
-
-<p><strong>핵심</strong>: <strong>Sequential</strong>. 즉 "prefill 완료 콜 없이 decode 한테 같이 보내는 거" 아님. <strong>prefill HTTP 끝나야 decode HTTP 호출</strong>. 단:</p>
-
-<table>
-<tr><th>관점</th><th>설명</th></tr>
-<tr><td>Proxy 의 HTTP 호출 순서</td><td><strong>Sequential</strong>: prefill HTTP 완료 (response 소비) → decode HTTP 호출. <code>async for _ in forward(prefill...): continue</code> 로 prefill response 다 소비 후 진행</td></tr>
-<tr><td>실 KV transfer</td><td><strong>Async background</strong>. <code>send_type=PUT_ASYNC</code> 라 prefill 가 KV 만들자마자 RCCL 로 즉시 send (HTTP response 와 무관). prefill HTTP 가 끝날 때쯤 KV 가 decode 에 거의 도착</td></tr>
-<tr><td>왜 prefill HTTP 가 필요한가</td><td>prefill 의 KV 생성을 트리거하기 위한 "신호". <code>max_tokens=1</code> 이라 첫 token 까지만 forward — 그게 prefill 단계의 일. 진짜 token generation 은 decode 가 함. prefill 의 1 token response 는 <strong>proxy 가 그대로 버림</strong></td></tr>
-<tr><td><strong>"Prefill done" 의 정확한 의미 — 2 단계로 갈림</strong></td><td>
-<table style="margin:4px 0; font-size:0.92em;">
-<tr><th>신호</th><th>의미</th></tr>
-<tr><td>① prefill HTTP response close<br>(= proxy 의 <code>async for _ in prefill_response: continue</code> 끝)</td><td>prefill 의 <strong>vLLM forward 완료</strong>. 모든 transformer layer 의 KV 가 prefill GPU 메모리에 존재 + 1 token output 반환. KV transfer 는 이 시점에 <strong>이미 PUT_ASYNC 로 send 진행 중</strong> 이지만 <strong>완료된 건 아님</strong></td></tr>
-<tr><td>② KV transfer 완료<br>(NCCL/RCCL 의 ncclSend/Recv 다 끝남)</td><td>decode 의 ZMQ channel 으로 metadata 도착 + RCCL data channel 으로 실 KV tensor 도착. HTTP 와 <strong>완전히 무관한 별도 channel</strong></td></tr>
-</table>
-즉 proxy 는 ① 만 보고 decode 호출 시작. ② 의 보장은 <strong>decode 의 vLLM 이 자기 forward 시작 시 KV 확인 단계에서 함</strong>:
-<ul style="margin:4px 0;">
-<li>decode 가 자기 ZMQ inbound 에서 "이 request_id 의 KV 받았나?" 확인</li>
-<li>안 받았으면 short wait (P2pNccl 의 wait queue)</li>
-<li>받았으면 그 KV 로 generation 진행 → stream response</li>
-</ul>
-보통 짧은 prompt + 빠른 RCCL channel 이면 ① 시점에 ② 도 거의 완료 → wait 무시할 수 있을 정도</td></tr>
-<tr><td>왜 같은 request_id?</td><td>decode 가 받은 KV 가 어느 request 의 것인지 매칭하려면 same key. prefill 가 send 할 때도 같은 ID 로 tag. decode 가 자기 ZMQ 로 받은 KV 의 ID 와 자기 HTTP request 의 ID 매칭</td></tr>
-</table>
-
-<div class="note"><strong>⚠ 출처 정확히 — main branch 의 상황 변경</strong>: 본 실험이 인용한 코드는 <strong>실험 사용 image (rocm/vllm:latest, 6 months old) 안의 P2pNccl 전용 proxy</strong> 인 <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py</code>. 같은 코드가 <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 의 file</a> 인 <code>examples/online_serving/disagg_xpyd/disagg_prefill_proxy_xpyd.py</code>.<br><br>
-그러나 <strong>현재 vLLM main branch (2026-06 기준) 에서는 P2pNccl 관련 file 들 (proxy + p2p_nccl_engine.py + p2p connector 디렉토리) 이 사라짐</strong>. main 의 <a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_demo.py">disagg_proxy_demo.py</a> 는 다른 코드 — NIXL connector 같은 protocol 가정으로 <strong>request_id 인코딩 패턴 없음</strong>. 단순히 prefill 에 max_tokens=1 forward → decode 에 forward 만. KV routing 의 zmq_addr 부분이 connector 자체에서 처리되는 model.</div>
-
-<p><strong>출처</strong>: 본 실험이 직접 실행한 source — image 안의 <code>disagg_proxy_p2p_nccl_xpyd.py</code> + <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 file diff</a> 영구 link. 본 코드는 P2pNccl 의 정통 사용 패턴 — request_id 에 prefill / decode 의 zmq_addr 인코딩 + max_tokens=1 trick.</p>
-
-<pre><code># /app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py
-# (image 안 6mo old) 의 핵심 부분
-
-prefill_request["max_tokens"] = 1            # max_tokens 강제 1
-
-# prefill / decode 의 zmq_addr 발견 (proxy 가 service discovery 로 받은 dict 에서)
-prefill_list = list(prefill_instances.items())
-prefill_addr, prefill_zmq_addr = prefill_list[count % len(prefill_list)]
-prefill_zmq_addr = prefill_zmq_addr[0]
-decode_list = list(decode_instances.items())
-decode_addr, decode_zmq_addr = decode_list[count % len(decode_list)]
-decode_zmq_addr = decode_zmq_addr[0]
-
-# request_id 에 zmq_addr 인코딩 — prefill 의 P2pNcclConnector 가 parse 해서
-# 자기가 KV 보낼 곳 (decode_zmq_addr) 발견
-request_id = (
-    f"___prefill_addr_{prefill_zmq_addr}___decode_addr_"
-    f"{decode_zmq_addr}_{random_uuid()}"
-)
-
-# finish prefill
-async for _ in forward_request(
-    f"http://{prefill_addr}{request.path}", prefill_request, request_id
-):
-    continue                                  # prefill response 소비 + 버림
-
-# return decode
-generator = forward_request(
-    f"http://{decode_addr}{request.path}", original_request_data, request_id
-)
-response = await make_response(generator)
-return response                               # decode 의 stream 반환</code></pre>
-
-<p><strong>실 실험 결과 (검증)</strong>: 우리가 받은 response 의 id 가 정확히 이 형식이었음 → image 의 이 코드가 동작함을 직접 증명:</p>
-<pre><code>{
-  "id": "cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_2a229150c5934404a3ba4bed4068ced2",
-  "choices": [{"text": " Photosynthesis is the process by which plants...", "finish_reason": "stop"}]
-}</code></pre>
-
-<h4>Proxy 없이 prefill 만 직접 호출하면?</h4>
-
-<p>"proxy 가 예쁘게 만들기 위한 거 아니냐" — <strong>아님, PDD 본질이 깨짐</strong>. 이유:</p>
-
-<p>P2pNcclConnector source (<code>p2p_nccl_engine.py</code>) 의 핵심 부분:</p>
-
-<pre><code>def create_connect(self, remote_address: str | None = None):
-    <strong>assert remote_address is not None</strong>   # 반드시 받아야 함
-    ...
-    sock.connect(f"tcp://{remote_address}")
-    unique_id = self.nccl.ncclGetUniqueId()   # NCCL handshake</code></pre>
-
-<p>producer 가 KV 보낼 때 <strong><code>remote_address</code> (= decode 의 ZMQ 주소)</strong> 를 알아야 함. 이 주소는 어디서 옴? — <strong>proxy 가 request_id 에 인코딩</strong> 해서 prefill 에 보냄:</p>
-
-<pre><code># proxy 가 만드는 request_id 형식
-"cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001___&lt;uuid&gt;"
-                       ┗━━━━━━━━━━━━━━━━━━━━━━┛  ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
-                       이 request 의 prefill ZMQ   이 request 의 decode ZMQ
-                       (kv_port 와 일치)           (peer 가 KV 받을 곳)</code></pre>
-
-<p>prefill 의 P2pNcclConnector 가 request_id 의 이 부분을 <strong>parse</strong> 해서 decode 주소 발견 → 그 주소로 ZMQ connect + NCCL handshake.</p>
-
-<table>
-<tr><th>시나리오</th><th>request_id</th><th>결과</th></tr>
-<tr><td>Proxy 거쳐서 prefill 호출</td><td><code>___prefill_addr_X___decode_addr_Y___uuid</code></td><td>✓ prefill 가 Y 알아서 KV 보냄 → 정통 PDD 동작</td></tr>
-<tr><td><strong>Proxy 안 거치고 prefill 에 직접 curl</strong></td><td><code>cmpl-abc123...</code> 표준 UUID</td><td>⚠ prefill 가 <strong>remote_address 못 알아냄</strong>. 두 가지 행동 중 하나:<ol style="margin:4px 0;"><li><strong>KV transfer skip</strong> → prefill 이 자체 generation → 단일 vLLM 같이 동작. <strong>Decode 의 4 GCD 가 놀음 = PDD 의미 X</strong></li><li>또는 hang / error</li></ol></td></tr>
-</table>
-
-<div class="note"><strong>요약</strong>: Proxy 는 "예쁨" 이 아니라 <strong>PDD 의 본질이 동작하려면 필수</strong>. Proxy 없으면 그냥 단일 vLLM + 다른 GPU 자원 낭비.</div>
-
-<h5>출처 — vLLM 의 공식 명시</h5>
-
-<p><strong>vLLM PR #18242</strong>: <a href="https://github.com/vllm-project/vllm/pull/18242">[V1][P/D] An native implementation of xPyD based on P2P NCCL by Abatom</a> — P2pNcclConnector 의 원작자가 직접 작성한 PR. proxy 의 역할 명시:</p>
-
-<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
-"Proxy/Router (Demo)" 섹션:<br>
-The proxy <strong>maintains a dictionary of <code>http_addr → zmq_addr</code></strong> and is responsible for <strong>selecting 1P1D based on the characteristics of the client request</strong> and <strong>generating a corresponding <code>request_id</code></strong>.<br><br>
-Request ID format 예시:<br>
-<code>cmpl-___prefill_addr_10.0.1.2:21001___decode_addr_10.0.1.3:22001_93923d63113b4b338973f24d19d4bf11-0</code><br>
-This encoding embeds both the prefill instance address and decode instance address within the request identifier, enabling the prefill instance to <strong>locate and communicate with its assigned decode instance</strong> through the zmq_addr resolution mechanism.
-</blockquote>
-
-<p>즉 PR 작성자가 명시: proxy 가 (1) service discovery, (2) 1P1D 선택, (3) request_id 생성 — 이 세 일을 하므로 <strong>P2pNccl 의 정통 사용에 proxy 필수</strong>.</p>
-
-<table>
-<tr><th>출처</th><th>인용 내용</th></tr>
-<tr><td><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a></td><td>P2pNcclConnector 의 원작자. proxy 의 dictionary maintenance + 1P1D selection + request_id 생성 역할 명시</td></tr>
-<tr><td><a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 file: disagg_example_p2p_nccl_xpyd.sh</a></td><td>P2pNccl 의 공식 demo script (PR 의 file). vllm serve 명령들과 proxy 시작 명령을 한 sh 에 묶음. <strong>main branch 에서 이 sh 는 사라짐</strong> (P2pNccl deprecated). 본 실험은 image 안의 동일 file 사용</td></tr>
-<tr><td><a href="https://github.com/vllm-project/vllm/issues/16253">Issue #16253: [Usage] How to use xPyD disaggregated prefilling</a></td><td>사용자가 "demo 가 불명확해서 shell script 더 명확히 해달라" 요청 → 그 결과로 위 sh 가 추가됨. PDD 사용 = sh 따라가는 것</td></tr>
-<tr><td><a href="https://github.com/vllm-project/vllm/issues/21712">Issue #21712: P2PNcclConnector Assertion Error</a></td><td>사용자가 proxy 없이 chat completion 호출 시 만나는 assertion error 보고. 정확히 "remote_address None" 관련</td></tr>
-<tr><td><a href="https://github.com/vllm-project/vllm/blob/main/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py">vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</a></td><td>P2pNcclEngine source. <code>create_connect()</code> 의 <code>assert remote_address is not None</code><br>+ <code>ping</code> thread 가 <code>proxy_address != ""</code> 조건일 때만 start</td></tr>
-</table>
-
-<p><strong>RFC 차원</strong>: <a href="https://github.com/vllm-project/vllm/issues/10818">Issue #10818 — Disaggregated prefilling and KV cache transfer roadmap</a> 에 PDD 전반 design 명시. proxy/router 가 disagg serving 의 표준 컴포넌트.</p>
-
-<h4>ZMQ 가 뭐야 — 출처 + source 직접 인용</h4>
-
-<div class="note"><strong>⚠ 본 source 도 main 에서 사라짐</strong>: P2pNcclEngine 의 source <code>vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</code> 가 PR #18242 추가 이후 어느 시점에 main 에서 제거됨 (2026-06 기준 디렉토리 자체 404). 본 실험 image 안에는 존재 + 동작 확인. 출처 인용은 <strong><a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 의 file diff (영구 link)</a></strong> + <strong>image 안의 동일 source</strong>.</div>
-
-<p><strong>ZMQ 사용의 출처 — PR #18242 가 직접 명시</strong>:</p>
-
-<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
-<strong><a href="https://github.com/vllm-project/vllm/pull/18242">vLLM PR #18242 (P2pNccl 원작자 Abatom)</a></strong> 의 design 섹션:<br><br>
-"This instance maintains a <strong>ZMQ Server</strong>, which runs a dedicated thread to listen on the <code>zmq_addr</code> address."<br><br>
-"These requests include requests to establish an <strong>NCCL connection</strong> and requests to send <strong>KVcache metadata</strong> (such as tensor shapes and data types). <strong>However, it does not actually transmit the KVcache data itself.</strong>"<br><br>
-"Both <strong>PUT and PUT_ASYNC</strong> involve the P instance actively sending KVcache to the D instance" <strong>via NCCL</strong>, while "control flow requests from other instances" and metadata exchange occur through ZMQ.
-</blockquote>
-
-<p>요약: <strong>ZMQ = handshake + metadata + control flow / NCCL = 실 KV cache tensor</strong>.</p>
-
-<p>그리고 <strong>source 코드 직접</strong> (image 안 + <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 의 file</a> 동일):</p>
-
-<pre><code># ZMQ ROUTER socket bind (들어오는 metadata listen)
-self.context = zmq.Context()
-self.router_socket = self.context.socket(zmq.ROUTER)
-self.router_socket.bind(f"tcp://{self.zmq_address}")   # 예: 0.0.0.0:20001
-
-# peer 가 ZMQ DEALER 로 connect
-sock = self.context.socket(zmq.DEALER)
-sock.connect(f"tcp://{remote_address}")
-
-# NCCL handshake metadata (unique_id) 를 ZMQ 로 전달
-unique_id = self.nccl.ncclGetUniqueId()
-data = {"cmd": "NEW", "unique_id": bytes(unique_id.internal)}
-sock.send(msgpack.dumps(data))                          # ← ZMQ 로 보냄
-
-# 그 후 NCCL Comm init — 실 KV 는 ncclSend/Recv 로
-comm = self.nccl.ncclCommInitRank(2, unique_id, rank)</code></pre>
-
-<h4>ZMQ 가 뭐야?</h4>
-
-<p><strong>ZMQ (ZeroMQ)</strong> = 고성능 비동기 messaging 라이브러리. TCP socket 위에 <strong>message queue + addressing</strong> layer 자동 처리. 단순 socket 보다 high-level abstraction.</p>
-
-<table>
-<tr><th>특징</th><th>설명</th></tr>
-<tr><td>Message 단위</td><td>byte stream 아닌 message 단위 (자동 framing). 보낸 message 1개 = 받는 message 1개</td></tr>
-<tr><td>자동 reconnect</td><td>peer 가 잠시 죽었다가 다시 떠도 자동 재연결</td></tr>
-<tr><td>Pattern 다양</td><td>ROUTER/DEALER (req/rep multi-peer), PUB/SUB (broadcast), PUSH/PULL (load balance) 등</td></tr>
-<tr><td>비유</td><td>"socket 위의 <strong>우체국 layer</strong>" — 누가 어디로 보낼지만 신경 쓰면 됨, queueing/buffering/reconnect 자동</td></tr>
-</table>
-
-<h5>vLLM P2pNccl 의 ZMQ 사용</h5>
-<pre><code># 각 vLLM instance 가:
-self.router_socket = self.context.socket(zmq.ROUTER)
-self.router_socket.bind(f"tcp://{self.zmq_address}")  # 예: 0.0.0.0:20001
-
-# peer (다른 instance) 가 :
-sock = self.context.socket(zmq.DEALER)
-sock.connect(f"tcp://192.168.3.52:22001")             # 상대 ROUTER 로 connect
-
-# 이 ZMQ channel 위로 교환되는 것:
-# - NCCL unique_id (handshake 시작 시)
-# - KV tensor metadata (어느 layer 의 KV 보낼지)
-# - 실 KV bytes (PUT mode 면 ZMQ 로, NCCL P2P 면 따로 RCCL 로)</code></pre>
-
-<p>즉 ZMQ 는 <strong>control plane</strong> (handshake 메타 정보), 큰 KV byte 는 <strong>NCCL/RCCL data plane</strong> 으로. 둘이 분리.</p>
-
-<table>
-<tr><th>Channel</th><th>전송하는 것</th><th>왜 분리</th></tr>
-<tr><td><strong>ZMQ</strong> (port 20001/22001)</td><td>handshake metadata, NCCL unique_id, "어느 request 의 KV 입니다" 같은 routing 정보</td><td>TCP 기반, small message 빠르게. CPU memory 만</td></tr>
-<tr><td><strong>NCCL/RCCL</strong> (16 channels)</td><td>실 KV tensor (큰 bytes)</td><td>GPU-GPU 직접 transfer. ZMQ 보다 훨씬 빠름 (NVLink/XGMI 활용)</td></tr>
-</table>
-
-<h3>6-3. 정확한 명령 — 양 instance 모두 (생략 없이)</h3>
+<h3>6-2. 정확한 명령 — 양 instance 모두 (생략 없이)</h3>
 <pre><code># Prefill instance: GCD 0, http port 20003, ZMQ port 20001
 docker run -d --name vllm-prefill \
   --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
@@ -883,7 +634,7 @@ docker run -d --name vllm-decode \
       }
     }'</code></pre>
 
-<h3>6-4. 모든 config 옵션 — 한 줄 한 줄 설명</h3>
+<h3>6-3. 모든 config 옵션 — 한 줄 한 줄 설명</h3>
 
 <h4>Docker 옵션 (instance container)</h4>
 <table>
@@ -1294,7 +1045,7 @@ import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'de
 
 <p>4 종류 channel 다 살아있어야 PDD 동작. 어느 하나 broken (예: ZMQ port 충돌 / NCCL handshake fail / HTTP 못 받음) 면 garbage 또는 hang.</p>
 
-<h3>6-5. Proxy server 직접 build + 실행 (간단 구현)</h3>
+<h3>6-4. Proxy server 직접 build + 실행 (간단 구현)</h3>
 
 <p><strong>vLLM 공식 예제 출처</strong>:</p>
 <ul>
@@ -1333,7 +1084,7 @@ $ docker run -d --name vllm-proxy --network host vllm-proxy:latest \
 # - 30001: prefill / decode 가 ping 보내는 service discovery
 # - 10001: client 가 호출하는 OpenAI-compatible endpoint (hardcoded in script)</code></pre>
 
-<h3>6-6. NCCL handshake 성공 — 실 log</h3>
+<h3>6-5. NCCL handshake 성공 — 실 log</h3>
 
 <pre><code>[EngineCore_DP0] 💯P2pNcclEngine init, rank:0, local_rank:0,
   http_address:192.168.3.52:20003, zmq_address:192.168.3.52:20001,
@@ -1352,7 +1103,7 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
 
 <p><strong>16 NCCL channels</strong> 가 두 GCD 사이 RCCL 으로 wired. ROCm 의 NCCL = RCCL 자동 매핑.</p>
 
-<h3>6-7. 실 chat — 3 calls 정상 답</h3>
+<h3>6-6. 실 chat — 3 calls 정상 답</h3>
 
 <pre><code>$ curl -s -m 30 http://127.0.0.1:<strong>10001</strong>/v1/completions \
   -H 'Content-Type: application/json' \
@@ -1374,7 +1125,7 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
 
 <p>모든 호출 정상 답 (40 token). wall ~570ms 매번 — P/D 분담 + KV 직접 RCCL transfer + decode 가 작은 모델 (1.5B) 의 40 token generation. <strong>request_id 에 prefill_addr + decode_addr 명시</strong>.</p>
 
-<h3>6-8. Monitoring (rocm-smi CSV) — P/D 분담 명확 캡쳐</h3>
+<h3>6-7. Monitoring (rocm-smi CSV) — P/D 분담 명확 캡쳐</h3>
 
 <pre><code>ts            device,temp,power, gpu%, vram%, mem
 # === idle ===
@@ -1417,6 +1168,257 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
 
 <p>(아래 본문 — 옛 §6 의 sub-section 들 + §7 (옛 PDD deploy) 의 monitoring 결과 모두 포함)</p>
 </div>
+
+<h3>7-1. Proxy 가 왜 필요한가 + 만드는 request 형식</h3>
+
+<p>vLLM 자체는 단일 endpoint 가정. PDD 는 두 endpoint (prefill, decode) 가 한 logical "service" 처럼 동작해야 함. 사용자가 client 측에서 두 호출 분리하기 X. <strong>proxy 가 그 추상화 layer</strong>. 4 가지 일 함:</p>
+
+<table>
+<tr><th>역할</th><th>구체 행동</th><th>왜 필요</th></tr>
+<tr><td><strong>① Single endpoint 제공</strong></td><td>client 는 <code>POST :10001/v1/completions</code> 한 번. proxy 가 내부적으로 prefill 호출 → decode 호출</td><td>OpenAI 호환 API 유지 — client 가 PDD 인 줄 모름</td></tr>
+<tr><td><strong>② Prefill 단계 트리거</strong></td><td>받은 request 의 <code>max_tokens</code> 을 <strong>1 로 강제 변경</strong> 한 후 prefill 에 forward. prefill 는 prompt forward → KV 생성 → KV 를 RCCL 로 decode 에 send</td><td>prefill instance 가 "1 token 만 출력 + KV 보내라" 라는 신호. 실제 generation 은 decode 가 함</td></tr>
+<tr><td><strong>③ Decode 라우팅</strong></td><td>원본 request 를 decode 에 forward. request_id 에 <strong>prefill_addr + decode_addr</strong> 인코딩 (예: <code>cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_&lt;uuid&gt;</code>) — decode 가 그 ZMQ address 의 prefill 로부터 KV 받음을 알게 함</td><td>decode 는 자기 ZMQ port 로 들어온 KV 가 어느 request 의 것인지 매칭해야 함. request_id 가 routing key</td></tr>
+<tr><td><strong>④ Service discovery</strong></td><td>prefill/decode 가 시작 시 proxy 의 :30001 에 ping 보냄. proxy 가 그들의 <code>http_address</code> + <code>zmq_address</code> 등록. proxy 가 죽으면 새 instance 도 등록 가능</td><td>proxy 가 어느 instance 가 살아있는지 + zmq 주소 동적 발견. config 에 hardcode 안 해도 됨 (XpYd scaling 위해)</td></tr>
+</table>
+
+<p>즉 proxy = <strong>(a) client API gateway + (b) prefill/decode 매칭 + (c) request-ID 기반 KV routing key + (d) service discovery</strong>. 4 in 1.</p>
+
+<h4>Proxy 가 만드는 2 request 의 정확한 형식 + 흐름</h4>
+
+<p>Client 가 한 번 호출 → proxy 가 <strong>sequential 로 2 request</strong> 만듬. 동작 순서:</p>
+
+<div class="diagram">  ① Client
+       ↓ POST :10001/v1/completions
+         body = {"prompt": "Why is the sky blue?", "max_tokens": 30, ...}
+       ↓
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  Proxy (disagg_proxy_demo.py)                                    │
+  │                                                                   │
+  │  ② request_id 생성 (prefill/decode address 인코딩):              │
+  │     request_id = "cmpl-___prefill_addr_192.168.3.52:20001"        │
+  │                  "___decode_addr_192.168.3.52:22001___&lt;uuid&gt;"      │
+  │                                                                   │
+  │  ③ prefill 용 body 작성 (max_tokens 만 1 로 강제):                │
+  │     prefill_body = {**original_body, "max_tokens": 1}            │
+  │                                                                   │
+  │  ④ ─── HTTP POST → prefill instance ───                          │
+  │       POST http://192.168.3.52:20003/v1/completions             │
+  │       X-Request-Id: ___prefill_addr_...___decode_addr_...___uuid │
+  │       body = prefill_body                                         │
+  │       ↓                                                            │
+  │       (prefill 가 prompt forward + KV 생성 + ⑤ KV 를 RCCL 로      │
+  │        decode 에 PUT_ASYNC send. send 가 비동기 시작)             │
+  │       ↓                                                            │
+  │       prefill 가 max_tokens=1 짜리 response 반환 ← 의미 없음      │
+  │       └────── async for _ in prefill_response: continue           │
+  │              (proxy 가 prefill response 소비 + 버림)              │
+  │                                                                   │
+  │  ⑥ ─── HTTP POST → decode instance ───  (prefill 완료 후)        │
+  │       POST http://192.168.3.52:20005/v1/completions             │
+  │       X-Request-Id: 같은 request_id (decode 가 KV 매칭에 사용)   │
+  │       body = original_body  (max_tokens=30 원본)                  │
+  │       ↓                                                            │
+  │       (decode 가 받은 KV 활용 + generation. 이 때 ⑤ 의 KV transfer│
+  │        가 거의 완료된 상태. async 라 보통 충분히 빨리 도착)       │
+  │       ↓                                                            │
+  │       decode 가 stream response                                   │
+  │                                                                   │
+  │  ⑦ stream response 를 client 에 forward                          │
+  └─────────────────────────────────────────────────────────────────┘
+       ↓
+  Client (받은 답 = decode 가 생성한 token stream)</div>
+
+<p><strong>핵심</strong>: <strong>Sequential</strong>. 즉 "prefill 완료 콜 없이 decode 한테 같이 보내는 거" 아님. <strong>prefill HTTP 끝나야 decode HTTP 호출</strong>. 단:</p>
+
+<table>
+<tr><th>관점</th><th>설명</th></tr>
+<tr><td>Proxy 의 HTTP 호출 순서</td><td><strong>Sequential</strong>: prefill HTTP 완료 (response 소비) → decode HTTP 호출. <code>async for _ in forward(prefill...): continue</code> 로 prefill response 다 소비 후 진행</td></tr>
+<tr><td>실 KV transfer</td><td><strong>Async background</strong>. <code>send_type=PUT_ASYNC</code> 라 prefill 가 KV 만들자마자 RCCL 로 즉시 send (HTTP response 와 무관). prefill HTTP 가 끝날 때쯤 KV 가 decode 에 거의 도착</td></tr>
+<tr><td>왜 prefill HTTP 가 필요한가</td><td>prefill 의 KV 생성을 트리거하기 위한 "신호". <code>max_tokens=1</code> 이라 첫 token 까지만 forward — 그게 prefill 단계의 일. 진짜 token generation 은 decode 가 함. prefill 의 1 token response 는 <strong>proxy 가 그대로 버림</strong></td></tr>
+<tr><td><strong>"Prefill done" 의 정확한 의미 — 2 단계로 갈림</strong></td><td>
+<table style="margin:4px 0; font-size:0.92em;">
+<tr><th>신호</th><th>의미</th></tr>
+<tr><td>① prefill HTTP response close<br>(= proxy 의 <code>async for _ in prefill_response: continue</code> 끝)</td><td>prefill 의 <strong>vLLM forward 완료</strong>. 모든 transformer layer 의 KV 가 prefill GPU 메모리에 존재 + 1 token output 반환. KV transfer 는 이 시점에 <strong>이미 PUT_ASYNC 로 send 진행 중</strong> 이지만 <strong>완료된 건 아님</strong></td></tr>
+<tr><td>② KV transfer 완료<br>(NCCL/RCCL 의 ncclSend/Recv 다 끝남)</td><td>decode 의 ZMQ channel 으로 metadata 도착 + RCCL data channel 으로 실 KV tensor 도착. HTTP 와 <strong>완전히 무관한 별도 channel</strong></td></tr>
+</table>
+즉 proxy 는 ① 만 보고 decode 호출 시작. ② 의 보장은 <strong>decode 의 vLLM 이 자기 forward 시작 시 KV 확인 단계에서 함</strong>:
+<ul style="margin:4px 0;">
+<li>decode 가 자기 ZMQ inbound 에서 "이 request_id 의 KV 받았나?" 확인</li>
+<li>안 받았으면 short wait (P2pNccl 의 wait queue)</li>
+<li>받았으면 그 KV 로 generation 진행 → stream response</li>
+</ul>
+보통 짧은 prompt + 빠른 RCCL channel 이면 ① 시점에 ② 도 거의 완료 → wait 무시할 수 있을 정도</td></tr>
+<tr><td>왜 같은 request_id?</td><td>decode 가 받은 KV 가 어느 request 의 것인지 매칭하려면 same key. prefill 가 send 할 때도 같은 ID 로 tag. decode 가 자기 ZMQ 로 받은 KV 의 ID 와 자기 HTTP request 의 ID 매칭</td></tr>
+</table>
+
+<div class="note"><strong>⚠ 출처 정확히 — main branch 의 상황 변경</strong>: 본 실험이 인용한 코드는 <strong>실험 사용 image (rocm/vllm:latest, 6 months old) 안의 P2pNccl 전용 proxy</strong> 인 <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py</code>. 같은 코드가 <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 의 file</a> 인 <code>examples/online_serving/disagg_xpyd/disagg_prefill_proxy_xpyd.py</code>.<br><br>
+그러나 <strong>현재 vLLM main branch (2026-06 기준) 에서는 P2pNccl 관련 file 들 (proxy + p2p_nccl_engine.py + p2p connector 디렉토리) 이 사라짐</strong>. main 의 <a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_demo.py">disagg_proxy_demo.py</a> 는 다른 코드 — NIXL connector 같은 protocol 가정으로 <strong>request_id 인코딩 패턴 없음</strong>. 단순히 prefill 에 max_tokens=1 forward → decode 에 forward 만. KV routing 의 zmq_addr 부분이 connector 자체에서 처리되는 model.</div>
+
+<p><strong>출처</strong>: 본 실험이 직접 실행한 source — image 안의 <code>disagg_proxy_p2p_nccl_xpyd.py</code> + <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 file diff</a> 영구 link. 본 코드는 P2pNccl 의 정통 사용 패턴 — request_id 에 prefill / decode 의 zmq_addr 인코딩 + max_tokens=1 trick.</p>
+
+<pre><code># /app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py
+# (image 안 6mo old) 의 핵심 부분
+
+prefill_request["max_tokens"] = 1            # max_tokens 강제 1
+
+# prefill / decode 의 zmq_addr 발견 (proxy 가 service discovery 로 받은 dict 에서)
+prefill_list = list(prefill_instances.items())
+prefill_addr, prefill_zmq_addr = prefill_list[count % len(prefill_list)]
+prefill_zmq_addr = prefill_zmq_addr[0]
+decode_list = list(decode_instances.items())
+decode_addr, decode_zmq_addr = decode_list[count % len(decode_list)]
+decode_zmq_addr = decode_zmq_addr[0]
+
+# request_id 에 zmq_addr 인코딩 — prefill 의 P2pNcclConnector 가 parse 해서
+# 자기가 KV 보낼 곳 (decode_zmq_addr) 발견
+request_id = (
+    f"___prefill_addr_{prefill_zmq_addr}___decode_addr_"
+    f"{decode_zmq_addr}_{random_uuid()}"
+)
+
+# finish prefill
+async for _ in forward_request(
+    f"http://{prefill_addr}{request.path}", prefill_request, request_id
+):
+    continue                                  # prefill response 소비 + 버림
+
+# return decode
+generator = forward_request(
+    f"http://{decode_addr}{request.path}", original_request_data, request_id
+)
+response = await make_response(generator)
+return response                               # decode 의 stream 반환</code></pre>
+
+<p><strong>실 실험 결과 (검증)</strong>: 우리가 받은 response 의 id 가 정확히 이 형식이었음 → image 의 이 코드가 동작함을 직접 증명:</p>
+<pre><code>{
+  "id": "cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_2a229150c5934404a3ba4bed4068ced2",
+  "choices": [{"text": " Photosynthesis is the process by which plants...", "finish_reason": "stop"}]
+}</code></pre>
+
+<h4>Proxy 없이 prefill 만 직접 호출하면?</h4>
+
+<p>"proxy 가 예쁘게 만들기 위한 거 아니냐" — <strong>아님, PDD 본질이 깨짐</strong>. 이유:</p>
+
+<p>P2pNcclConnector source (<code>p2p_nccl_engine.py</code>) 의 핵심 부분:</p>
+
+<pre><code>def create_connect(self, remote_address: str | None = None):
+    <strong>assert remote_address is not None</strong>   # 반드시 받아야 함
+    ...
+    sock.connect(f"tcp://{remote_address}")
+    unique_id = self.nccl.ncclGetUniqueId()   # NCCL handshake</code></pre>
+
+<p>producer 가 KV 보낼 때 <strong><code>remote_address</code> (= decode 의 ZMQ 주소)</strong> 를 알아야 함. 이 주소는 어디서 옴? — <strong>proxy 가 request_id 에 인코딩</strong> 해서 prefill 에 보냄:</p>
+
+<pre><code># proxy 가 만드는 request_id 형식
+"cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001___&lt;uuid&gt;"
+                       ┗━━━━━━━━━━━━━━━━━━━━━━┛  ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+                       이 request 의 prefill ZMQ   이 request 의 decode ZMQ
+                       (kv_port 와 일치)           (peer 가 KV 받을 곳)</code></pre>
+
+<p>prefill 의 P2pNcclConnector 가 request_id 의 이 부분을 <strong>parse</strong> 해서 decode 주소 발견 → 그 주소로 ZMQ connect + NCCL handshake.</p>
+
+<table>
+<tr><th>시나리오</th><th>request_id</th><th>결과</th></tr>
+<tr><td>Proxy 거쳐서 prefill 호출</td><td><code>___prefill_addr_X___decode_addr_Y___uuid</code></td><td>✓ prefill 가 Y 알아서 KV 보냄 → 정통 PDD 동작</td></tr>
+<tr><td><strong>Proxy 안 거치고 prefill 에 직접 curl</strong></td><td><code>cmpl-abc123...</code> 표준 UUID</td><td>⚠ prefill 가 <strong>remote_address 못 알아냄</strong>. 두 가지 행동 중 하나:<ol style="margin:4px 0;"><li><strong>KV transfer skip</strong> → prefill 이 자체 generation → 단일 vLLM 같이 동작. <strong>Decode 의 4 GCD 가 놀음 = PDD 의미 X</strong></li><li>또는 hang / error</li></ol></td></tr>
+</table>
+
+<div class="note"><strong>요약</strong>: Proxy 는 "예쁨" 이 아니라 <strong>PDD 의 본질이 동작하려면 필수</strong>. Proxy 없으면 그냥 단일 vLLM + 다른 GPU 자원 낭비.</div>
+
+<h5>출처 — vLLM 의 공식 명시</h5>
+
+<p><strong>vLLM PR #18242</strong>: <a href="https://github.com/vllm-project/vllm/pull/18242">[V1][P/D] An native implementation of xPyD based on P2P NCCL by Abatom</a> — P2pNcclConnector 의 원작자가 직접 작성한 PR. proxy 의 역할 명시:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+"Proxy/Router (Demo)" 섹션:<br>
+The proxy <strong>maintains a dictionary of <code>http_addr → zmq_addr</code></strong> and is responsible for <strong>selecting 1P1D based on the characteristics of the client request</strong> and <strong>generating a corresponding <code>request_id</code></strong>.<br><br>
+Request ID format 예시:<br>
+<code>cmpl-___prefill_addr_10.0.1.2:21001___decode_addr_10.0.1.3:22001_93923d63113b4b338973f24d19d4bf11-0</code><br>
+This encoding embeds both the prefill instance address and decode instance address within the request identifier, enabling the prefill instance to <strong>locate and communicate with its assigned decode instance</strong> through the zmq_addr resolution mechanism.
+</blockquote>
+
+<p>즉 PR 작성자가 명시: proxy 가 (1) service discovery, (2) 1P1D 선택, (3) request_id 생성 — 이 세 일을 하므로 <strong>P2pNccl 의 정통 사용에 proxy 필수</strong>.</p>
+
+<table>
+<tr><th>출처</th><th>인용 내용</th></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a></td><td>P2pNcclConnector 의 원작자. proxy 의 dictionary maintenance + 1P1D selection + request_id 생성 역할 명시</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 file: disagg_example_p2p_nccl_xpyd.sh</a></td><td>P2pNccl 의 공식 demo script (PR 의 file). vllm serve 명령들과 proxy 시작 명령을 한 sh 에 묶음. <strong>main branch 에서 이 sh 는 사라짐</strong> (P2pNccl deprecated). 본 실험은 image 안의 동일 file 사용</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/issues/16253">Issue #16253: [Usage] How to use xPyD disaggregated prefilling</a></td><td>사용자가 "demo 가 불명확해서 shell script 더 명확히 해달라" 요청 → 그 결과로 위 sh 가 추가됨. PDD 사용 = sh 따라가는 것</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/issues/21712">Issue #21712: P2PNcclConnector Assertion Error</a></td><td>사용자가 proxy 없이 chat completion 호출 시 만나는 assertion error 보고. 정확히 "remote_address None" 관련</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/blob/main/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py">vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</a></td><td>P2pNcclEngine source. <code>create_connect()</code> 의 <code>assert remote_address is not None</code><br>+ <code>ping</code> thread 가 <code>proxy_address != ""</code> 조건일 때만 start</td></tr>
+</table>
+
+<p><strong>RFC 차원</strong>: <a href="https://github.com/vllm-project/vllm/issues/10818">Issue #10818 — Disaggregated prefilling and KV cache transfer roadmap</a> 에 PDD 전반 design 명시. proxy/router 가 disagg serving 의 표준 컴포넌트.</p>
+
+<h4>ZMQ 가 뭐야 — 출처 + source 직접 인용</h4>
+
+<div class="note"><strong>⚠ 본 source 도 main 에서 사라짐</strong>: P2pNcclEngine 의 source <code>vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</code> 가 PR #18242 추가 이후 어느 시점에 main 에서 제거됨 (2026-06 기준 디렉토리 자체 404). 본 실험 image 안에는 존재 + 동작 확인. 출처 인용은 <strong><a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 의 file diff (영구 link)</a></strong> + <strong>image 안의 동일 source</strong>.</div>
+
+<p><strong>ZMQ 사용의 출처 — PR #18242 가 직접 명시</strong>:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+<strong><a href="https://github.com/vllm-project/vllm/pull/18242">vLLM PR #18242 (P2pNccl 원작자 Abatom)</a></strong> 의 design 섹션:<br><br>
+"This instance maintains a <strong>ZMQ Server</strong>, which runs a dedicated thread to listen on the <code>zmq_addr</code> address."<br><br>
+"These requests include requests to establish an <strong>NCCL connection</strong> and requests to send <strong>KVcache metadata</strong> (such as tensor shapes and data types). <strong>However, it does not actually transmit the KVcache data itself.</strong>"<br><br>
+"Both <strong>PUT and PUT_ASYNC</strong> involve the P instance actively sending KVcache to the D instance" <strong>via NCCL</strong>, while "control flow requests from other instances" and metadata exchange occur through ZMQ.
+</blockquote>
+
+<p>요약: <strong>ZMQ = handshake + metadata + control flow / NCCL = 실 KV cache tensor</strong>.</p>
+
+<p>그리고 <strong>source 코드 직접</strong> (image 안 + <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242 의 file</a> 동일):</p>
+
+<pre><code># ZMQ ROUTER socket bind (들어오는 metadata listen)
+self.context = zmq.Context()
+self.router_socket = self.context.socket(zmq.ROUTER)
+self.router_socket.bind(f"tcp://{self.zmq_address}")   # 예: 0.0.0.0:20001
+
+# peer 가 ZMQ DEALER 로 connect
+sock = self.context.socket(zmq.DEALER)
+sock.connect(f"tcp://{remote_address}")
+
+# NCCL handshake metadata (unique_id) 를 ZMQ 로 전달
+unique_id = self.nccl.ncclGetUniqueId()
+data = {"cmd": "NEW", "unique_id": bytes(unique_id.internal)}
+sock.send(msgpack.dumps(data))                          # ← ZMQ 로 보냄
+
+# 그 후 NCCL Comm init — 실 KV 는 ncclSend/Recv 로
+comm = self.nccl.ncclCommInitRank(2, unique_id, rank)</code></pre>
+
+<h4>ZMQ 가 뭐야?</h4>
+
+<p><strong>ZMQ (ZeroMQ)</strong> = 고성능 비동기 messaging 라이브러리. TCP socket 위에 <strong>message queue + addressing</strong> layer 자동 처리. 단순 socket 보다 high-level abstraction.</p>
+
+<table>
+<tr><th>특징</th><th>설명</th></tr>
+<tr><td>Message 단위</td><td>byte stream 아닌 message 단위 (자동 framing). 보낸 message 1개 = 받는 message 1개</td></tr>
+<tr><td>자동 reconnect</td><td>peer 가 잠시 죽었다가 다시 떠도 자동 재연결</td></tr>
+<tr><td>Pattern 다양</td><td>ROUTER/DEALER (req/rep multi-peer), PUB/SUB (broadcast), PUSH/PULL (load balance) 등</td></tr>
+<tr><td>비유</td><td>"socket 위의 <strong>우체국 layer</strong>" — 누가 어디로 보낼지만 신경 쓰면 됨, queueing/buffering/reconnect 자동</td></tr>
+</table>
+
+<h5>vLLM P2pNccl 의 ZMQ 사용</h5>
+<pre><code># 각 vLLM instance 가:
+self.router_socket = self.context.socket(zmq.ROUTER)
+self.router_socket.bind(f"tcp://{self.zmq_address}")  # 예: 0.0.0.0:20001
+
+# peer (다른 instance) 가 :
+sock = self.context.socket(zmq.DEALER)
+sock.connect(f"tcp://192.168.3.52:22001")             # 상대 ROUTER 로 connect
+
+# 이 ZMQ channel 위로 교환되는 것:
+# - NCCL unique_id (handshake 시작 시)
+# - KV tensor metadata (어느 layer 의 KV 보낼지)
+# - 실 KV bytes (PUT mode 면 ZMQ 로, NCCL P2P 면 따로 RCCL 로)</code></pre>
+
+<p>즉 ZMQ 는 <strong>control plane</strong> (handshake 메타 정보), 큰 KV byte 는 <strong>NCCL/RCCL data plane</strong> 으로. 둘이 분리.</p>
+
+<table>
+<tr><th>Channel</th><th>전송하는 것</th><th>왜 분리</th></tr>
+<tr><td><strong>ZMQ</strong> (port 20001/22001)</td><td>handshake metadata, NCCL unique_id, "어느 request 의 KV 입니다" 같은 routing 정보</td><td>TCP 기반, small message 빠르게. CPU memory 만</td></tr>
+<tr><td><strong>NCCL/RCCL</strong> (16 channels)</td><td>실 KV tensor (큰 bytes)</td><td>GPU-GPU 직접 transfer. ZMQ 보다 훨씬 빠름 (NVLink/XGMI 활용)</td></tr>
+</table>
+
+
 
 <h2 id="bench-old" style="display:none">7-구. PDD deploy + 모니터링 캡쳐 (실 결과)</h2>
 <div class="card">
