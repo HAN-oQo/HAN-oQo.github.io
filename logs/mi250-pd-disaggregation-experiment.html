@@ -48,32 +48,33 @@
 <div class="card toc">
 <strong>목차</strong>
 <ol>
-  <li><a href="#goal">1. 실험 목표 (사용자 4 가지 질문)</a></li>
+  <li><a href="#goal">1. 실험 목표</a></li>
   <li><a href="#env">2. 환경 점검 — mi250-052 노드</a></li>
-  <li><a href="#design">3. 실험 설계 — 4 GPU P / 4 GPU D</a></li>
-  <li><a href="#stack">4. Stack 선택 — vLLM + KV connector (MoRIIO / P2pNccl)</a></li>
-  <li><a href="#monitoring">5. 모니터링 setup (rocm-smi / latency / KV transfer)</a></li>
-  <li><a href="#deploy">6. Deploy — single baseline + P/D</a></li>
-  <li><a href="#success">7-bis. <strong>🎉 정통 PDD 성공 — P2pNccl + proxy (11번 시도)</strong></a></li>
-  <li><a href="#bench">7. PDD deploy 시도 + 모니터링 (initial)</a></li>
-  <li><a href="#kv-trace">8. KV cache 가 실제로 어디서 어떻게 전송되는가</a></li>
-  <li><a href="#issues">9. 만난 문제 + 진단 (11 attempts 전체)</a></li>
-  <li><a href="#analysis">10. P/D 효과 분석 + 결론</a></li>
-  <li><a href="#refs">11. 참고 + 용어 풀이</a></li>
+  <li><a href="#design">3. 실험 설계</a></li>
+  <li><a href="#stack">4. Stack 선택 + 모니터링 셋업</a></li>
+  <li><a href="#baseline">5. 실험 1 — Single Baseline 돌리기</a></li>
+  <li><a href="#success">6. 실험 2 — P/D 돌리기 (성공 버전)</a></li>
+  <li><a href="#qa">7. 돌리면서 생긴 질문들</a></li>
+  <li><a href="#kv-trace">8. KV cache 가 실제로 어떻게 전송되는가</a></li>
+  <li><a href="#issues">9. 만난 문제들 (토글)</a></li>
+  <li><a href="#analysis">10. 결론 — 고려 인자 + 이론적 P/D 효과 + 구현 문제점</a></li>
+  <li><a href="#next">11. 다음 실험 계획</a></li>
+  <li><a href="#refs">12. 참고 + 용어 풀이</a></li>
 </ol>
 </div>
 
 <h2 id="goal">1. 실험 목표</h2>
 <div class="card">
-<p>사용자가 명시한 4가지 질문에 답하기 위한 실험:</p>
+<p>본 실험에서 답할 3 가지 질문:</p>
 <ol>
 <li><strong>어떻게 돌릴 수 있는지</strong> — 명령어 / config / 두 instance 띄우는 절차 전부 기록</li>
 <li><strong>잘 도는지</strong> — 모니터링 로그 캡쳐 (rocm-smi, GPU util/memory/inter-GCD bandwidth, vLLM 메트릭)</li>
-<li><strong>내부 동작</strong> — 실 call 한 번 보내면 KV cache 가 어디서 (어느 GPU) 어떻게 (어떤 transport — RCCL/HIP IPC/CPU bounce) 어디로 (decode 의 어느 GPU) 전송되는지 추적. 현재 stack 의 문제도</li>
-<li><strong>P/D 효과</strong> — 단일 vLLM 8 GPU vs P/D (P 4 GPU + D 4 GPU) 비교. TTFT / TPOT / throughput / GPU util 차이</li>
+<li><strong>내부 동작 + 현재 stack 의 문제 파악</strong> — 실 call 한 번 보내면 KV cache 가 어디서 (어느 GPU) 어떻게 (어떤 transport — RCCL/PCIe) 어디로 (decode 의 어느 GPU) 전송되는지 추적. 그리고 만나는 problem 들</li>
 </ol>
 
-<div class="tip"><strong>기록 원칙</strong> (사용자 요청): 모든 명령어 / 실패 / 우회 / 성공 / 결과 그대로 기록. Apple Silicon vLLM PDD 시도 글 (<a href="pd-disaggregation-metal-tryout.html">참조</a>) 처럼 솔직히.</div>
+<div class="note"><strong>P/D 효과 정량 비교는 본 실험 범위 밖</strong>: TP=1+1 (2 GCD) 의 mechanism 검증까지만. 단일 vLLM TP=8 vs P/D TP=4+4 의 throughput 비교는 다음 실험 (§11) — 본 실험은 mechanism + 문제까지.</div>
+
+<div class="tip"><strong>기록 원칙</strong>: 모든 명령어 / 실패 / 우회 / 성공 / 결과 그대로 기록. Apple Silicon vLLM PDD 시도 글 (<a href="pd-disaggregation-metal-tryout.html">참조</a>) 처럼 솔직히.</div>
 </div>
 
 <h2 id="env">2. 환경 점검 — mi250-052 노드</h2>
@@ -257,7 +258,7 @@ GPU0..GPU7 모두 XGMI 로 직접 연결 (1 hop)</code></pre>
 
 </div>
 
-<h2 id="stack">4. Stack 선택 — vLLM + KV connector</h2>
+<h2 id="stack">4. Stack 선택 + 모니터링 셋업</h2>
 <div class="card">
 
 <h3>4-1. vLLM Docker image (pip X)</h3>
@@ -325,10 +326,9 @@ docker run -d --rm \
 
 </div>
 
-<h2 id="monitoring">5. 모니터링 setup</h2>
-<div class="card">
+<h3 id="monitoring">4-3. 모니터링 setup</h3>
 
-<h3>5-1. rocm-smi CSV 출력 형식 확인 (실 캡쳐)</h3>
+<h3>4-4. rocm-smi CSV 출력 형식 확인 (실 캡쳐)</h3>
 <pre><code>$ ssh mi250-052 rocm-smi --showuse --showmemuse --showpower --showtemp --csv | head -5
 
 device,Temperature (Sensor edge) (C),...,Average Graphics Package Power (W),GPU use (%),GFX Activity,GPU Memory Allocated (VRAM%),GPU Memory Read/Write Activity (%),Memory Activity,Avg. Memory Bandwidth
@@ -339,7 +339,7 @@ card3,31.0,38.0,45.0,45.0,43.0,43.0,44.0,N/A (Secondary die),0,5845578,0,0,63821
 
 <div class="note"><strong>실 finding</strong>: MI250 의 secondary die (card1/3/5/7) 의 Power 가 <code>N/A (Secondary die)</code>. <strong>같은 OAM 카드 안 두 GCD 중 primary 만 power 측정</strong> — secondary 도 같이 동작하지만 power sensor 는 카드 단위. 이건 P/D 분석 시 power 비교가 카드 단위로만 가능하다는 의미.</div>
 
-<h3>5-2. 1초 polling 모니터링 script</h3>
+<h3>4-5. 1초 polling 모니터링 script</h3>
 <pre><code>#!/bin/bash
 # ~/pd-experiment/monitor_rocm.sh
 OUT=${1:-monitor.csv}
@@ -354,7 +354,7 @@ while [ $SECONDS -lt $END ]; do
 done
 echo "saved $(wc -l &lt; $OUT) rows to $OUT"</code></pre>
 
-<h3>5-3. Idle baseline 캡쳐 (3 초)</h3>
+<h3>4-6. Idle baseline 캡쳐 (3 초)</h3>
 <pre><code>$ ~/pd-experiment/monitor_rocm.sh /tmp/test_mon.csv 3
 saved 17 rows to /tmp/test_mon.csv
 
@@ -369,7 +369,7 @@ ts,device,temp_c,power_w,gpu_use_pct,vram_pct,mem_activity
 
 <p>Idle 상태: 모든 GPU use=0%, VRAM=0%, power ~120W per OAM. temp 31-38°C — 정상.</p>
 
-<h3>5-4. XGMI bandwidth 실 측정 — <code>rocm-smi --shownodesbw</code></h3>
+<h3>4-7. XGMI bandwidth 실 측정 — <code>rocm-smi --shownodesbw</code></h3>
 
 <p><code>rocm-smi --showbw</code> 는 PCIe bandwidth 만 (XGMI 측정 X). XGMI bandwidth 는 별도 명령:</p>
 
@@ -432,10 +432,10 @@ GPU[7]		: XGMI Error count: 0</code></pre>
 
 </div>
 
-<h2 id="deploy">6. Deploy — baseline 단일 instance</h2>
+<h2 id="baseline">5. 실험 1 — Single Baseline 돌리기</h2>
 <div class="card">
 
-<h3>6-1. Image 검증 (실 stack trace)</h3>
+<h3>5-1. Image 검증 (실 stack trace)</h3>
 <pre><code>$ docker pull rocm/vllm:latest
 # → 30.7GB, 8분 download + extract. 6 months old.
 
@@ -446,7 +446,7 @@ $ docker run --rm --device=/dev/kfd --device=/dev/dri \
 
 <p>vLLM <strong>0.11.2.dev673 ROCm 7.0 build</strong>, host ROCm 6.2 — minor version mismatch 가능성 있음.</p>
 
-<h3>6-2. 첫 실패 — Worker proc 죽음 (실 stack trace)</h3>
+<h3>5-2. 첫 실패 — Worker proc 죽음 (실 stack trace)</h3>
 <pre><code>$ docker run -d --name vllm-baseline \
     -e HIP_VISIBLE_DEVICES=0,1,2,3 \
     rocm/vllm:latest \
@@ -464,14 +464,14 @@ RuntimeError: Engine core initialization failed. See root cause above. Failed co
 
 <p>가설: ROCm 7.0 빌드된 aiter 가 host ROCm 6.2 / gfx9010 (MI250) 에서 JIT compile fail. 또는 silent segfault.</p>
 
-<h3>6-3. TP=1 단순 시도 — 같은 fail</h3>
+<h3>5-3. TP=1 단순 시도 — 같은 fail</h3>
 <pre><code>$ docker run -d --name vllm-tp1 -e HIP_VISIBLE_DEVICES=0 \
     rocm/vllm:latest vllm serve ... --tensor-parallel-size 1 ...
 
 # 동일한 aiter module_rmsnorm import 후 EngineCore_DP0 cancellation.
 # → aiter 자체가 문제. TP 무관.</code></pre>
 
-<h3>6-4. <span class="status-ok">해결</span> — aiter 비활성화 + enforce-eager</h3>
+<h3>5-4. <span class="status-ok">해결</span> — aiter 비활성화 + enforce-eager</h3>
 
 <pre><code>$ docker run -d --name vllm-tp1 \
     --device=/dev/kfd --device=/dev/dri \
@@ -491,7 +491,7 @@ RuntimeError: Engine core initialization failed. See root cause above. Failed co
 
 <p>약 3분 후 server up. 환경변수 <code>VLLM_ROCM_USE_AITER=0</code> 가 aiter 의 fused kernel 사용을 끔. <code>--enforce-eager</code> 가 torch.compile graph capture 도 skip — 추가 안전망.</p>
 
-<h3>6-5. 첫 chat completion (실 결과)</h3>
+<h3>5-5. 첫 chat completion (실 결과)</h3>
 
 <pre><code>$ curl -s http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
@@ -509,7 +509,7 @@ content: The sky appears blue because of scattering of sunlight by air molecules
 usage: {'prompt_tokens': 26, 'total_tokens': 43, 'completion_tokens': 17}
 finish: stop</code></pre>
 
-<h3>6-6. 동시 모니터링 캡쳐 (실 데이터)</h3>
+<h3>5-6. 동시 모니터링 캡쳐 (실 데이터)</h3>
 <pre><code>$ ~/pd-experiment/monitor_rocm.sh /tmp/mon_baseline.csv 5 &amp;
 $ &lt;curl 호출&gt;
 $ wait
@@ -535,7 +535,7 @@ ts            device,temp,power,gpu%,vram%,mem_act
 
 </div>
 
-<h2 id="success">7-bis. 🎉 정통 PDD 성공 — P2pNccl + 공식 proxy (TEST 11, 11번 시도 끝에)</h2>
+<h2 id="success">6. 실험 2 — P/D 돌리기 (성공 버전, P2pNccl + 공식 proxy)</h2>
 <div class="card">
 
 <h3>7-bis-A. 11번 실패의 원인 분류</h3>
@@ -1419,7 +1419,27 @@ mi250-052:304:553 [0] NCCL INFO Trees [0] 1/-1/-1-&gt;0-&gt;-1 ...
 
 </div>
 
-<h2 id="bench">7. PDD deploy + 모니터링 캡쳐 (실 결과)</h2>
+<h2 id="qa">7. 돌리면서 생긴 질문들 (배경 / config / 동작 메커니즘)</h2>
+
+<div class="card">
+<p>실험 진행 중 자연스럽게 생긴 모든 질문에 대한 답을 한 곳에 모음. 위 §6 의 실험 결과 + 아래 §8 의 KV cache 전송 동작 과 cross-reference. 각 질문의 정답은 vLLM PR #18242, source code, 공식 docs 직접 인용으로 검증함.</p>
+
+<p><strong>주요 질문들 (이 section 안에서 모두 답)</strong>:</p>
+<ul>
+<li>Architecture — prefill / decode / proxy 가 어떻게 떠 있나? — §7-A</li>
+<li>Proxy 가 왜 필요한가? "예쁘게" 하려는 거? — §7-B</li>
+<li>Proxy 가 만드는 2 request 의 정확한 형식 + 흐름 — §7-C</li>
+<li>send_type (PUT / PUT_ASYNC / GET) 의 차이 + 우리가 PUT_ASYNC 선택한 이유 — §7-D</li>
+<li>kv_buffer_size — PUT_ASYNC 라 작은 거? PUT 으로 바꾸면? — §7-E</li>
+<li>nccl_num_channels — 키우면 빨라져? 한계? — §7-F</li>
+<li>ZMQ 가 뭐야? P2pNccl 안에서 어떤 역할? — §7-G</li>
+<li>이전 글 (NixlConnector READ-based, D pull) 과 본 실험 (PUT_ASYNC P push) 의 방향성 차이? — §7-H</li>
+</ul>
+
+<p>(아래 본문 — 옛 §7-bis 의 sub-section 들 + §7 (옛 PDD deploy) 의 monitoring 결과 모두 포함)</p>
+</div>
+
+<h2 id="bench-old" style="display:none">7-구. PDD deploy + 모니터링 캡쳐 (실 결과)</h2>
 <div class="card">
 
 <h3>7-1. PDD 두 instance deploy — 시도 history</h3>
@@ -1652,7 +1672,11 @@ ts             card,temp,power,gpu%,vram%,mem
 
 </div>
 
-<h2 id="issues">9. 만난 문제 + 진단</h2>
+<h2 id="issues">9. 만난 문제들 — 시도 history + 진단 (토글)</h2>
+
+<details>
+<summary style="cursor:pointer; padding:12px; background:var(--blue-bg); border-radius:8px; font-weight:600;">▶ 펼쳐서 보기 — 11 TEST + 4 문제 카테고리 + 진단 표</summary>
+
 <div class="card">
 
 <p>실 진행 순서로 만난 문제 4가지 + 진단:</p>
