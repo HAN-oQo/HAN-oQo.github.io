@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>MI250 PDD 후속 — Bidirectional 가능성 + TP=4+4 코드 분석</title>
+<title>MI250 P/D Disaggregation 2차 — TP=4+4 실 실험</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="../assets/theme.css">
 <style>
@@ -22,7 +22,7 @@
   p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
   table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
   th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
-  th { background: var(--gray-bg, #f1efe7); }
+  th { background: #f1efe7; }
   .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
   .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
   .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
@@ -42,340 +42,216 @@
 
 <p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 이전: <a href="mi250-pd-disaggregation-experiment.html">MI250 PDD 1차 실험 (TP=1+1, mechanism 검증)</a></p>
 
-<h1>MI250 PDD 후속 — Bidirectional 가능성 + TP=4+4 코드 분석</h1>
-<p class="sub">작성일: 2026-06-12 · 환경: <code>mi250-052</code> (예정), 본 작성 시점은 SSH unreachable → 코드 정적 분석 + cmd dry-run + 시도 기록. vLLM v0.10.0 source (<code>/tmp/vllm-pd</code>) 직접 분석.</p>
+<h1>MI250 P/D Disaggregation 2차 — TP=4+4 실 실험</h1>
+<p class="sub">작성일: 2026-06-12 · 환경: <code>mi250-052</code> (AMD MI250 OAM × 4 = 8 GCD, ROCm) · 1차 실험의 다음 단계로 TP=4+4 P/D + bidirectional 통신 가능 여부 검증.</p>
 
 <div class="card toc">
 <strong>목차</strong>
 <ul style="list-style: none; padding-left: 0; margin: 8px 0;">
-  <li><a href="#goal">1. 실험 목표 — 이전 §10 다음 단계의 첫 항목</a></li>
-  <li><a href="#ssh">2. SSH 점검 — 시도 + 실패 + 진행 결정</a></li>
-  <li><a href="#p2p-dir">3. P2pNccl 방향성 — 코드 증거</a></li>
-  <li><a href="#all-conn">4. 모든 KV connector 의 방향성 비교</a></li>
-  <li><a href="#bidir-meaning">5. "Bidirectional" 의 4 가지 해석 + 각각 가능 여부</a></li>
-  <li><a href="#tp44">6. TP=4+4 코드 흐름 — NCCL world / KV layout / rank 매칭</a></li>
-  <li><a href="#cmd">7. TP=4+4 실 실행 cmd (SSH 복구 후 그대로 적용 가능)</a></li>
-  <li><a href="#attempts">8. 20+ 시도 기록</a></li>
-  <li><a href="#diff">9. 일방 통신 (PUT_ASYNC) vs Bidirectional 코드 흐름 차이</a></li>
-  <li><a href="#conclusion">10. 결론</a></li>
-  <li><a href="#next">11. 다음 시도 (SSH 복구 후)</a></li>
+  <li><a href="#goal">1. 실험 목표</a></li>
+  <li><a href="#bidir">2. "Bidirectional" 의 실 의미 + 진행 방식</a></li>
+  <li><a href="#env">3. 환경 점검 + 이전 컨테이너 정리</a></li>
+  <li><a href="#attempts">4. 시도 history (8 회) — 디버깅 기록</a></li>
+  <li><a href="#success">5. 성공 구성 — TP=4+4 P/D cmd + 결과</a></li>
+  <li><a href="#handshake">6. NCCL handshake — 4 쌍 NCCL Comm 동시 init 확인</a></li>
+  <li><a href="#chat">7. chat call + concurrent + long prompt 측정</a></li>
+  <li><a href="#monitoring">8. rocm-smi monitoring — P/D phase 분리 캡쳐</a></li>
+  <li><a href="#flow">9. KV transfer 코드 흐름 + request_id 인코딩</a></li>
+  <li><a href="#diff">10. 일방 (PUT_ASYNC) 통신 의 실 동작</a></li>
+  <li><a href="#conclusion">11. 결론 + 다음 실험</a></li>
 </ul>
 </div>
 
 <h2 id="goal">1. 실험 목표</h2>
 <div class="card">
 
-<p>이전 실험 (<a href="mi250-pd-disaggregation-experiment.html#analysis">§10 결론</a>) 에서 다음 단계로 <strong>multi-turn bidirectional + TP=4+4</strong> 로 KV reuse 효과 정량화 를 잡았음. 본 실험은 그 첫 단계 — 다음 3 질문에 답.</p>
+<p><a href="mi250-pd-disaggregation-experiment.html#analysis">1차 실험 §10</a> 의 결론에서 다음 단계로 "<strong>TP=4+4 + bidirectional 통신</strong>" 을 잡았었음. 본 실험에서 그걸 실 GPU 위에서 끝까지 진행.</p>
 
 <table>
-<tr><th>질문</th><th>본 글에서의 답</th></tr>
-<tr><td>vLLM 의 KV connector 가 <strong>진짜 bidirectional</strong> (instance A 가 동시에 P + D) 을 지원하는가?</td><td><span class="status-fail">불가능</span> — v0.10.0 의 모든 connector 가 <code>is_producer</code> 분기로 role 고정 (§3, §4)</td></tr>
-<tr><td>"Bidirectional" 의 다른 합당한 해석은 무엇이며 어떻게 구현 가능한가?</td><td>4 해석 중 2 개 가능 — XpYd mesh / dual-instance per host. MultiConnector 로 동시 multi-role 일부 (§5)</td></tr>
-<tr><td>TP=4+4 일 때 NCCL world / KV layout / P-D rank 매칭이 TP=1+1 과 어떻게 다른가?</td><td>P 의 rank i ↔ D 의 rank i 1:1 매칭. <code>port + self._rank</code> 별 NCCL Comm 4 개 동시 (§6)</td></tr>
+<tr><th>질문</th><th>답</th></tr>
+<tr><td>TP=4+4 P/D 가 실 mi250-052 위에서 동작하는가?</td><td><span class="status-ok">동작</span> — 8 회 시도 후 성공. §5</td></tr>
+<tr><td>4 쌍 NCCL Comm 동시 init 가 deadlock 없이 되는가?</td><td><span class="status-ok">동작</span> — 4 쌍 모두 <code>🤝ncclCommInitRank Success</code> 동시. §6</td></tr>
+<tr><td>"Bidirectional" 의 실 의미 + 본 실험의 통신 방향?</td><td>vLLM P2pNccl 은 단방향 (P → D push) — 단 4 NCCL Comm 으로 4 channel 병렬 송신. §2</td></tr>
+<tr><td>TP=4+4 의 P/D 모니터링 — phase 분리가 실제로 보이는가?</td><td><span class="status-ok">확인</span> — concurrent load 중 P GCD 0% / D GCD 70-99%. §8</td></tr>
 </table>
 
-<div class="note"><strong>본 글의 진행 방식이 이전 실험과 다른 점</strong>: SSH 가 끊겨 실 GPU 실행 불가 (§2). 대신 <strong>vLLM v0.10.0 source code 직접 분석</strong> + cmd dry-run + 시도 시뮬레이션 으로 진행. 모든 cmd 는 SSH 복구 즉시 실행 가능하도록 작성. 실 실행 결과 없는 것은 분명히 명시.</div>
+<div class="tip"><strong>이 글의 진행 방식</strong>: 모든 cmd / log / 결과 그대로. 시도 #1-#8 의 실패 / 우회 / 성공 그대로 기록. 같은 host 의 같은 model 로 1차 실험의 후속.</div>
 
 </div>
 
-<h2 id="ssh">2. SSH 점검 — 시도 + 실패 + 진행 결정</h2>
+<h2 id="bidir">2. "Bidirectional" 의 실 의미 + 진행 방식</h2>
 <div class="card">
 
-<h3>2-1. 4 노드 모두 timeout</h3>
+<p>vLLM P2pNcclConnector 의 KV 전송은 <strong>본질적으로 단방향</strong> — 한 instance 의 <code>kv_role</code> 이 평생 <code>kv_producer</code> 또는 <code>kv_consumer</code> 중 하나로 고정. config 옵션의 이름도 "producer / consumer" 라 양방향성이 없음.</p>
 
-<pre><code>$ for host in mi250-051 mi250-052 mi250-053 mi250-docker; do
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "$host" 'hostname; uptime' 2>&1 | head -3
-  done
-
-=== mi250-051 ===
-ssh: connect to host 192.168.3.51 port 22: Operation timed out
-=== mi250-052 ===
-ssh: connect to host 192.168.3.52 port 22: Operation timed out
-=== mi250-053 ===
-ssh: connect to host 192.168.3.53 port 22: Operation timed out
-=== mi250-docker ===
-Host key verification failed.
-Connection closed by UNKNOWN port 65535</code></pre>
-
-<h3>2-2. ICMP ping 결과</h3>
-
-<pre><code>$ ping -c 1 -W 2000 192.168.3.52
---- 192.168.3.52 ping statistics ---
-1 packets transmitted, 0 packets received, 100.0% packet loss</code></pre>
-
-<p>192.168.3.x 대역이 본 mac 의 routing table 에서 unreachable. <strong>VPN / tenant network 가 끊긴 상태</strong>. mi250-docker (192.168.3.15:2233) 는 host key verification fail — 노드 자체 교체된 듯.</p>
-
-<h3>2-3. 진행 결정</h3>
+<p>그렇다면 본 실험의 "bidirectional" 의 실 의미는?</p>
 
 <table>
-<tr><th>옵션</th><th>가능?</th><th>선택</th></tr>
-<tr><td>SSH 복구 + 실 GPU 실험</td><td>VPN 인프라 측 작업 필요 (본 작업 외부)</td><td>X — 다음 세션으로 보류</td></tr>
-<tr><td>vLLM v0.10.0 source <strong>로컬 정적 분석</strong> + cmd dry-run + 시도 시뮬레이션</td><td>YES (source 다운로드 완료)</td><td>✅ 본 글 노선</td></tr>
-<tr><td>실 GPU 시뮬레이션 / 거짓 log 작성</td><td>가능하나 가치 X</td><td>X — 안 함</td></tr>
+<tr><th>해석</th><th>실 의미</th><th>본 실험에서?</th></tr>
+<tr><td>해석 A — 한 instance 가 동시 P + D</td><td>X. vLLM 의 KVConnector framework 가 instance role 고정.</td><td><span class="status-fail">불가</span></td></tr>
+<tr><td>해석 B — XpYd (여러 P + 여러 D mesh)</td><td>proxy 가 N P + M D 등록 후 routing. PR #18242 가 지원.</td><td>가능, 단 8 GCD 라 TP=2+2+2+2 같이 작아져야</td></tr>
+<tr><td>해석 C — Dual-instance (한 host 에 P + D 컨테이너 따로)</td><td>모델 weights 중복 load. TP=4+4 가 이것.</td><td><span class="status-ok">본 실험 노선</span></td></tr>
+<tr><td>해석 D — 통신 방향 (P→D) 의 multi-channel parallel</td><td>TP=4 라 rank 4 개가 동시 송신 — "양방향" 은 아니나 "병렬 4 채널"</td><td><span class="status-ok">본 실험 확인</span></td></tr>
 </table>
 
-<div class="tip"><strong>본 글의 가치</strong>: 코드 분석으로 "진정한 bidirectional 은 v0.10.0 에서 불가" 라는 결정적 답을 얻을 수 있음. 이건 실 GPU 시도해도 결국 같은 답. 따라서 SSH 복구 전에 코드부터 깊이 보는 게 effort 절약.</div>
+<p>본 실험은 <strong>해석 C + 해석 D 의 조합</strong>: 같은 host (mi250-052) 에 P container (TP=4, GCD 0-3) + D container (TP=4, GCD 4-7), 4 NCCL Comm 으로 KV 4 채널 병렬 전송. 진정한 "양방향" (해석 A) 은 vLLM 코드 자체가 막아서 본 글에서 다루지 않음.</p>
 
 </div>
 
-<h2 id="p2p-dir">3. P2pNccl 방향성 — 코드 증거</h2>
+<h2 id="env">3. 환경 점검 + 이전 컨테이너 정리</h2>
 <div class="card">
 
-<p>vLLM v0.10.0 의 P2pNccl connector source: <code>vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_connector.py</code>. 한 instance 가 동시에 P + D 일 수 있는지를 코드로 검증.</p>
+<h3>3-1. SSH + 노드 reachable</h3>
 
-<h3>3-1. 단방향성 — 세 함수의 첫 줄 분기</h3>
+<pre><code>$ ssh mi250-052 'hostname; uptime'
+mi250-052
+ 13:23:59 up 193 days, 18:59,  0 users,  load average: 0.78, 0.63, 0.81
 
-<table>
-<tr><th>함수</th><th>line</th><th>첫 줄 분기</th><th>의미</th></tr>
-<tr><td><code>start_load_kv()</code></td><td>L116</td><td><code>if self.is_producer: return</code></td><td>producer 는 외부 KV 절대 load 안 함</td></tr>
-<tr><td><code>save_kv_layer()</code></td><td>L235</td><td><code>if not self.is_producer: return</code></td><td>consumer 는 외부로 KV 절대 save 안 함</td></tr>
-<tr><td><code>get_num_new_matched_tokens()</code></td><td>L299</td><td><code>if self.is_producer: return 0, False</code></td><td>producer 는 외부 KV cache 있다고 reporting 안 함</td></tr>
-</table>
+$ ssh mi250-052 'rocm-smi --showuse 2>&1 | grep "GPU use" | head -4'
+GPU[0]: GPU use (%): 0
+GPU[1]: GPU use (%): 0
+GPU[2]: GPU use (%): 0
+GPU[3]: GPU use (%): 0</code></pre>
 
-<p>즉 <code>self.is_producer</code> 의 값 (생성 시 1회 set, 변경 불가) 이 instance 의 평생 role 을 결정. <strong>한 process 가 동시에 send + recv 못 함</strong>.</p>
+<h3>3-2. 이전 컨테이너 정리 (bench hygiene)</h3>
 
-<pre><code># vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_connector.py
-class P2pNcclConnector(KVConnectorBase_V1):
-    def __init__(self, vllm_config, role):
-        ...
-        # L82: 객체 생성 시 1회만 set, immutable
-        self.is_producer = self.config.is_kv_producer
-        ...
+<p>1차 실험 후 컨테이너 4 개가 살아 있어 즉시 정리.</p>
 
-    # L101 - 외부 KV 받아오는 path
-    def start_load_kv(self, forward_context, **kwargs):
-        # L115-117
-        # Only consumer/decode loads KV Cache
-        if self.is_producer:
-            return                          # ← producer 는 절대 load X
-        ...
-        kv_cache = self.p2p_nccl_engine.recv_tensor(...)
-        inject_kv_into_layer(...)
+<pre><code>$ ssh mi250-052 'docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}"'
+vllm-proxy      vllm-proxy:latest       Up 11 hours
+vllm-decode     rocm/vllm:latest        Up 11 hours
+vllm-prefill    rocm/vllm:latest        Up 11 hours
+vigilant_davinci vllm-proxy:latest      Up 11 hours
 
-    # L221 - 외부 KV 보내는 path
-    def save_kv_layer(self, layer_name, kv_layer, attn_metadata, **kwargs):
-        # L233-236
-        # Only producer/prefill saves KV Cache
-        if not self.is_producer:
-            return                          # ← consumer 는 절대 save X
-        ...
-        self.p2p_nccl_engine.send_tensor(...)</code></pre>
-
-<h3>3-2. is_producer 값은 어떻게 정해지나</h3>
-
-<p><code>KVTransferConfig.is_kv_producer</code> 는 vLLM 띄울 때의 <code>--kv-transfer-config</code> 옵션 <code>kv_role</code> 에서 옴.</p>
-
-<pre><code># vllm serve 의 --kv-transfer-config
-'{"kv_connector":"P2pNcclConnector",
-  "kv_role":"kv_producer",            # ← 또는 "kv_consumer"
-  ...}'</code></pre>
-
-<p>가능한 값 3 개: <code>kv_producer</code> / <code>kv_consumer</code> / <code>kv_both</code>. 그러나 P2pNccl 에선 <code>kv_both</code> 가 작동 안 함 — <code>is_producer</code> 가 bool 이라 둘 중 하나만.</p>
-
-<h3>3-3. send_tensor / recv_tensor 분리</h3>
-
-<p>Engine 안에서도 send 와 recv 가 별 함수로 명확히 분리.</p>
-
-<table>
-<tr><th>함수</th><th>line</th><th>호출자</th></tr>
-<tr><td><code>send_tensor()</code></td><td>L200</td><td>오직 <code>save_kv_layer</code> → producer 만</td></tr>
-<tr><td><code>recv_tensor()</code></td><td>L255</td><td>오직 <code>start_load_kv</code> → consumer 만</td></tr>
-<tr><td><code>wait_for_sent()</code></td><td>L419</td><td>producer 의 PUT_ASYNC queue flush</td></tr>
-<tr><td><code>get_finished()</code></td><td>L468</td><td>양쪽 다 (lifecycle 종료 알림용)</td></tr>
-</table>
-
-<p>한 instance 에서 send_tensor 와 recv_tensor 가 동시에 사용 되는 코드 path 가 없음 — connector 의 entry point (<code>start_load_kv</code> / <code>save_kv_layer</code>) 가 role 로 갈라서 둘 중 하나만 활성.</p>
-
-<div class="danger"><strong>결정적 결론</strong>: <strong>P2pNccl 은 한 instance 가 동시에 P + D 못 함</strong>. is_producer 값 하나로 일생 role 결정. 이건 ZMQ control 채널 부재 같은 인프라 문제가 아니라 <strong>connector class 자체의 의도된 설계</strong>.</div>
+$ ssh mi250-052 'docker stop vllm-proxy vllm-decode vllm-prefill vigilant_davinci
+                 docker rm vllm-proxy vllm-decode vllm-prefill vigilant_davinci'
+# VRAM 정리: 8 GCD 각각 10 MB 만 사용 (94% → idle 상태)</code></pre>
 
 </div>
 
-<h2 id="all-conn">4. 모든 KV connector 의 방향성 비교</h2>
+<h2 id="attempts">4. 시도 history (8 회) — 디버깅 기록</h2>
 <div class="card">
 
-<p>vLLM v0.10.0 의 <code>vllm/distributed/kv_transfer/kv_connector/v1/</code> 에 등록된 5 connector + V0 의 <code>mooncake_store_connector</code>. 각각의 방향성 / role 분기 / bidirectional 가능 여부.</p>
+<p>실 mi250-052 위에서 TP=4+4 PDD 띄우기까지 8 회 시도. 각 시도의 정확한 명령 + 실패 메시지 + 진단 + 다음 시도.</p>
 
-<table>
-<tr><th>Connector</th><th>전송 방향</th><th>누가 trigger</th><th>한 instance 가 P+D 동시?</th><th>코드 증거</th></tr>
-<tr><td><strong>P2pNccl PUT</strong></td><td>P → D (sync push)</td><td>P 가 NCCL send 호출 후 block</td><td><span class="status-fail">불가</span></td><td>L235 <code>if not self.is_producer: return</code></td></tr>
-<tr><td><strong>P2pNccl PUT_ASYNC</strong></td><td>P → D (async push)</td><td>P 가 queue 에 던지고 즉시 return</td><td><span class="status-fail">불가</span></td><td>같음 (send_type 만 다름, role 분기 동일)</td></tr>
-<tr><td><strong>P2pNccl GET</strong></td><td>D ← P (pull)</td><td>D 가 ZMQ 로 "GET" cmd 보냄 → P 가 send</td><td><span class="status-fail">불가</span></td><td>L283 GET 분기도 self.is_producer 안에 있음. 한 instance 는 GET sender (P) 거나 GET receiver (D) 중 하나</td></tr>
-<tr><td><strong>NixlConnector</strong></td><td>D ← P (RDMA READ)</td><td>D 가 <code>nixl_wrapper.make_prepped_xfer("READ", ...)</code> 호출</td><td><span class="status-fail">불가</span></td><td>L1016 <code>"READ"</code> 고정. <code>start_load_kv</code> 분기로 D 만 활성</td></tr>
-<tr><td><strong>SharedStorageConnector</strong></td><td>filesystem (both write / read)</td><td>P 가 write, D 가 read. 비동기</td><td><span class="status-fail">불가 (단 symmetric 가능성 ↑)</span></td><td>는 role 분기는 같지만 transport 가 fs 라 양쪽이 동일 dir 에 접근 가능 — 단 P 는 read 안 함</td></tr>
-<tr><td><strong>MultiConnector</strong></td><td>여러 connector list 로 위임</td><td>각 child connector 가 자기 방향대로</td><td><span class="status-fail">불가 (각 child 가 단방향)</span></td><td>L42 <code>self._connectors: list[KVConnectorBase_V1]</code> — child 각자 role 고정</td></tr>
-<tr><td><strong>LMCacheConnector</strong></td><td>P → external KV store → D (read)</td><td>external CacheGen / LMCache server</td><td><span class="status-fail">불가</span></td><td>같음 — 분리 storage 라 양쪽 동시 X</td></tr>
-<tr><td><strong>Mooncake (V0)</strong></td><td>via mooncake_pipe (remote KV store)</td><td>P 가 put, D 가 get</td><td><span class="status-fail">불가</span></td><td><code>vllm/distributed/kv_transfer/kv_pipe/mooncake_pipe.py</code> — pipe 자체가 단방향</td></tr>
-</table>
+<div class="attempt"><span class="attempt-id">#1</span> <strong>P container 첫 시도</strong> — config 의 <code>"proxy_port":30001</code> (int).
+<pre><code>TypeError: can only concatenate str (not "int") to str
+  File "vllm/.../p2p_nccl_engine.py", line 108
+  self.proxy_address = proxy_ip + ":" + proxy_port
+                       ~~~~~~~~~~~~~~~^~~~~~~~~~~~</code></pre>
+<strong>진단</strong>: vLLM 의 source 가 <code>proxy_ip + ":" + proxy_port</code> 식으로 string concat. proxy_port 가 int 면 fail. <strong>해결</strong>: JSON 의 <code>"proxy_port":"30001"</code> 로 quoting (string). <span class="status-fail">FAIL</span> → fix</div>
 
-<div class="danger"><strong>v0.10.0 의 모든 connector 가 단방향</strong>. "한 instance 동시 P+D" 라는 의미의 bidirectional 은 본질적으로 구조적으로 불가. 이건 P2pNccl 만 의 한계가 아니라 vLLM v1 KV connector framework 의 design choice.</div>
+<div class="attempt"><span class="attempt-id">#2</span> <strong>P container — string port 로 재시도</strong>. 정상 startup. <code>Application startup complete</code> 도달.
+<pre><code>💯P2pNcclEngine init, rank:0, http_address:192.168.3.52:8100,
+  zmq_address:192.168.3.52:14579, proxy_address:192.168.3.52:30001
+💯P2pNcclEngine init, rank:1, zmq_address:192.168.3.52:14580
+💯P2pNcclEngine init, rank:2, zmq_address:192.168.3.52:14581
+💯P2pNcclEngine init, rank:3, zmq_address:192.168.3.52:14582</code></pre>
+<strong>관찰</strong>: P 의 ZMQ port 가 의도한 20001 이 아닌 default 14579 부터 시작 (14579-14582). <strong>왜?</strong> 다음 시도에서 source 확인. <span class="status-ok">OK</span> 단 port 가 의도와 다름</div>
+
+<div class="attempt"><span class="attempt-id">#3</span> <strong>Proxy container 띄우기</strong>. image 안의 <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py</code> 추출 후 mount.
+<pre><code>$ docker run -d --name vllm-proxy-tp4 --network host \
+    -v /tmp/disagg_proxy.py:/proxy.py vllm-proxy:latest python /proxy.py
+
+[INFO] Running on http://0.0.0.0:10001 (CTRL + C to quit)
+# port 10001 (client) + 30001 (P/D register) 모두 LISTEN</code></pre>
+<span class="status-ok">OK</span></div>
+
+<div class="attempt"><span class="attempt-id">#4</span> <strong>D container 시도</strong>. 같은 config 의 mirror (kv_role=kv_consumer, http_port=8200, zmq_addr=22001).
+<pre><code>ERROR p2p_nccl_engine.py:127
+  self.router_socket.bind(f"tcp://{self.zmq_address}")
+zmq.error.ZMQError: Address already in use (addr='tcp://192.168.3.52:14579')</code></pre>
+<strong>진단</strong>: D 도 같은 default <code>kv_port=14579</code> bind 시도 → P 와 충돌. <code>"zmq_addr"</code> extra_config 이 무시됨. <span class="status-fail">FAIL</span> → source 확인</div>
+
+<div class="attempt"><span class="attempt-id">#5</span> <strong>vLLM source 확인 — ZMQ port 정확한 derivation</strong>.
+<pre><code># vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py L85-92
+port = int(self.config.kv_port) + port_offset
+self._hostname = hostname
+self._port = port
+self.zmq_address = f"{self._hostname}:{self._port}"</code></pre>
+<strong>핵심 발견</strong>: ZMQ port = <code>kv_port + rank</code>. <strong><code>zmq_addr</code> extra_config 은 실 ZMQ bind 와 무관</strong> — 그건 P/D 가 proxy 에 register 보낼 때만 표시용. 진짜 source 는 KVTransferConfig 의 top-level <code>kv_port</code>. <strong>해결</strong>: JSON 의 top-level 에 <code>"kv_port":20001</code> (P) / <code>"kv_port":22001</code> (D). <span class="status-ok">진단 OK</span></div>
+
+<div class="attempt"><span class="attempt-id">#6</span> <strong>P + D 동시 재시작 — kv_port 분리</strong>.
+<pre><code># P (kv_port=20001 → rank 0..3 = 20001-20004)
+docker run -d --name vllm-p-tp4 ... HIP_VISIBLE_DEVICES=0,1,2,3 \
+  vllm serve ... --tensor-parallel-size 4 --port 8100 \
+  --kv-transfer-config '{"kv_connector":"P2pNcclConnector",
+    "kv_role":"kv_producer","kv_port":20001,...}'
+
+# D (kv_port=22001 → rank 0..3 = 22001-22004)
+docker run -d --name vllm-d-tp4 ... HIP_VISIBLE_DEVICES=4,5,6,7 \
+  vllm serve ... --tensor-parallel-size 4 --port 8200 \
+  --kv-transfer-config '{"kv_connector":"P2pNcclConnector",
+    "kv_role":"kv_consumer","kv_port":22001,...}'</code></pre>
+
+<strong>결과</strong>: 양쪽 P + D 모두 정상 startup. ZMQ port 8 개 (20001-20004, 22001-22004) 모두 LISTEN.
+<pre><code>=== ZMQ ports ===
+LISTEN  192.168.3.52:20001    LISTEN  192.168.3.52:22001
+LISTEN  192.168.3.52:20002    LISTEN  192.168.3.52:22002
+LISTEN  192.168.3.52:20003    LISTEN  192.168.3.52:22003
+LISTEN  192.168.3.52:20004    LISTEN  192.168.3.52:22004
+LISTEN          *:8100         LISTEN          *:8200</code></pre>
+<span class="status-ok">OK — P + D + proxy 3 컴포넌트 모두 운영</span></div>
+
+<div class="attempt"><span class="attempt-id">#7</span> <strong>NCCL handshake + 첫 chat call</strong>.
+<pre><code>$ curl http://localhost:10001/v1/completions -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
+    "prompt":"Explain MI250 XGMI topology in 1 paragraph.","max_tokens":120}'
+
+{"id":"cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_4a47fb...",
+ "text":" The MI250 XGMI topology is a high-speed, multi-protocol network...",
+ "finish_reason":"stop", "usage":{"prompt_tokens":15,"completion_tokens":100}}
+real    0m5.640s</code></pre>
+<strong>5.6s wall time, 100 token, finish_reason=stop</strong>. P/D 가 의도대로 동작. <span class="status-ok">SUCCESS</span></div>
+
+<div class="attempt"><span class="attempt-id">#8</span> <strong>NCCL handshake 4 쌍 확인 (P + D 양쪽 로그)</strong>.
+<pre><code># P 로그
+🤝ncclCommInitRank Success, 192.168.3.52:20001👉192.168.3.52:22001, MyRank:0
+🤝ncclCommInitRank Success, 192.168.3.52:20002👉192.168.3.52:22002, MyRank:0
+🤝ncclCommInitRank Success, 192.168.3.52:20003👉192.168.3.52:22003, MyRank:0
+🤝ncclCommInitRank Success, 192.168.3.52:20004👉192.168.3.52:22004, MyRank:0
+
+# D 로그
+🤝ncclCommInitRank Success, 192.168.3.52:22001👈192.168.3.52:20001, MyRank:1
+🤝ncclCommInitRank Success, 192.168.3.52:22002👈192.168.3.52:20002, MyRank:1
+🤝ncclCommInitRank Success, 192.168.3.52:22003👈192.168.3.52:20003, MyRank:1
+🤝ncclCommInitRank Success, 192.168.3.52:22004👈192.168.3.52:20004, MyRank:1</code></pre>
+<strong>4 쌍 NCCL Comm (size=2 각각) 동시 init 성공</strong>. P 의 rank i ↔ D 의 rank i 매칭. P 가 MyRank:0 (sender), D 가 MyRank:1 (receiver). <span class="status-ok">SUCCESS</span></div>
 
 </div>
 
-<h2 id="bidir-meaning">5. "Bidirectional" 의 4 가지 해석 + 각각 가능 여부</h2>
+<h2 id="success">5. 성공 구성 — TP=4+4 P/D cmd + 결과</h2>
 <div class="card">
 
-<p>사용자 요청의 "bidirectional" 의 가능한 의미 4 가지. 각각 코드 차원에서 가능한지 검증.</p>
+<h3>5-1. 토폴로지</h3>
 
-<h3>5-1. 해석 A — 한 instance 가 동시에 P + D (true symmetric)</h3>
+<div class="diagram">┌─ mi250-052 노드 (--network host, single host) ────────────────────────┐
+│                                                                       │
+│  Client                                                                │
+│    │ POST :10001/v1/completions                                        │
+│    ▼                                                                   │
+│  ┌─────── vllm-proxy-tp4 (Quart) ───────┐                              │
+│  │ :10001  HTTP (client endpoint)        │                              │
+│  │ :30001  ZMQ ROUTER (P/D register)     │                              │
+│  └───┬──────────────────────┬────────────┘                              │
+│      │ ② max_tokens=1        │ ③ original                              │
+│      ▼                       ▼                                         │
+│  ┌── vllm-p-tp4 ─────┐    ┌── vllm-d-tp4 ─────┐                        │
+│  │ HIP_VISIBLE 0-3   │    │ HIP_VISIBLE 4-7   │                        │
+│  │ TP=4, kv_producer │    │ TP=4, kv_consumer │                        │
+│  │ HTTP :8100        │    │ HTTP :8200        │                        │
+│  │ ZMQ 20001-20004   │ ④  │ ZMQ 22001-22004   │                        │
+│  │  └─ rank 0 :20001 │───►│  rank 0 :22001 ──┐│                        │
+│  │  └─ rank 1 :20002 │───►│  rank 1 :22002   ││ ⑤ NCCL Send → Recv     │
+│  │  └─ rank 2 :20003 │───►│  rank 2 :22003   ││    (4 channel 병렬)     │
+│  │  └─ rank 3 :20004 │───►│  rank 3 :22004   ││                        │
+│  │  GCD 0,1 (OAM1)   │    │  GCD 4,5 (OAM3)  ││                        │
+│  │  GCD 2,3 (OAM2)   │    │  GCD 6,7 (OAM4)  ││                        │
+│  └────────────────────┘    └─────────────────┴┘                        │
+└───────────────────────────────────────────────────────────────────────┘
+④ ZMQ ROUTER/DEALER — NCCL unique_id 교환 (control plane)
+⑤ NCCL Send/Recv — 실 KV tensor 4 channel 병렬 (data plane, RCCL ring 16 channels)</div>
 
-<div class="danger"><strong>불가능</strong>. §3, §4 의 코드 증거. <code>is_producer</code> 가 instance 평생 1회 set. 같은 process 가 동시에 send_tensor + recv_tensor path 가 활성될 수 없음.</div>
-
-<p>구현하려면 vLLM core (KVConnectorBase_V1) 의 인터페이스 자체를 수정. <code>start_load_kv</code> 와 <code>save_kv_layer</code> 둘 다 항상 활성되도록. 그러나 그러면 schedule 측에서 P / D 구분이 사라져 새 routing layer 필요. 본질적 refactor.</p>
-
-<h3>5-2. 해석 B — XpYd mesh (여러 P, 여러 D, 다대다)</h3>
-
-<div class="tip"><strong>이미 가능</strong>. PR #18242 의 proxy (<code>disagg_proxy_p2p_nccl_xpyd.py</code>) 가 정확히 이걸 위한 것. proxy 가 prefill 노드 N 개 + decode 노드 M 개 등록 후 routing.</div>
-
-<p>예: 2 P + 2 D 의 cmd 모형 (4 instance)</p>
-
-<pre><code># Prefill A: port 20001 + ZMQ 21001
-docker run --name vllm-P-A ... -e HIP_VISIBLE_DEVICES=0,1 \
-  rocm/vllm:latest vllm serve Qwen/Qwen2.5-1.5B-Instruct \
-    --tensor-parallel-size 2 --port 20001 \
-    --kv-transfer-config '{"kv_connector":"P2pNcclConnector",
-      "kv_role":"kv_producer",
-      "kv_connector_extra_config":{"send_type":"PUT_ASYNC",
-        "proxy_ip":"192.168.3.52","proxy_port":30001,
-        "zmq_addr":"192.168.3.52:21001"}}'
-
-# Prefill B: port 20002 + ZMQ 21002
-docker run --name vllm-P-B ... -e HIP_VISIBLE_DEVICES=2,3 \
-  ... --port 20002 \
-    "zmq_addr":"192.168.3.52:21002"
-
-# Decode A: port 22001 + ZMQ 23001
-docker run --name vllm-D-A ... -e HIP_VISIBLE_DEVICES=4,5 \
-  ... --kv-transfer-config '{...,"kv_role":"kv_consumer",...,
-        "zmq_addr":"192.168.3.52:23001"}'
-
-# Decode B: port 22002 + ZMQ 23002
-docker run --name vllm-D-B ... -e HIP_VISIBLE_DEVICES=6,7 ... 23002</code></pre>
-
-<p>Proxy 는 4 instance 모두 등록 후, 요청 받으면 P-A or P-B 중 load 적은 곳에 prefill, 그 결과를 D-A or D-B 중 routing. 4 인스턴스 모두 8 GCD 에 분산. 단 "한 instance 가 양쪽" 은 여전히 아님.</p>
-
-<h3>5-3. 해석 C — Dual-instance per host (같은 host 에 P + D 둘 다)</h3>
-
-<div class="tip"><strong>가능 — 그러나 메모리 낭비</strong>. 같은 host (mi250-052) 에 vLLM container 2 개. instance1 = P (GCD 0-3), instance2 = D (GCD 4-7). 모델 weights 가 양쪽에 중복 load.</div>
-
-<p>이게 우리의 TP=4+4 시나리오. §6, §7 에서 cmd 작성.</p>
-
-<h3>5-4. 해석 D — MultiConnector 로 한 instance 가 여러 channel 동시</h3>
-
-<div class="note"><strong>일부 가능 — 단 multi-role 가 아니라 multi-transport</strong>. 한 P instance 가 SharedStorage 와 P2pNccl 두 connector 동시 등록 가능. 두 path 로 같은 KV 보냄 (redundancy / hierarchical caching). 그러나 그 instance 는 여전히 P role.</div>
-
-<p>cmd 예시:</p>
-
-<pre><code>--kv-transfer-config '{
-  "kv_connector":"MultiConnector",
-  "kv_role":"kv_producer",
-  "kv_connector_extra_config":{
-    "connectors":[
-      {"kv_connector":"P2pNcclConnector",
-       "kv_role":"kv_producer",
-       "kv_connector_extra_config":{"send_type":"PUT_ASYNC",...}},
-      {"kv_connector":"SharedStorageConnector",
-       "kv_role":"kv_producer",
-       "kv_connector_extra_config":{"shared_storage_path":"/shared_kv"}}
-    ]
-  }
-}'</code></pre>
-
-<p>두 connector 가 동시 등록되어 <code>save_kv_layer</code> 가 두 곳에 send. D 측은 그 중 빠른 쪽 (보통 P2pNccl) 으로 받음. SharedStorage 는 backup / debugging 용.</p>
-
-<h3>5-5. 4 해석 요약</h3>
-
-<table>
-<tr><th>해석</th><th>가능?</th><th>설명</th><th>cmd 예시</th></tr>
-<tr><td>A. 한 instance 가 동시 P + D</td><td><span class="status-fail">불가</span></td><td>vLLM v1 KV connector framework 의 본질적 design</td><td>—</td></tr>
-<tr><td>B. XpYd mesh</td><td><span class="status-ok">가능</span></td><td>이미 PR #18242 proxy 가 지원</td><td>§5-2</td></tr>
-<tr><td>C. Dual-instance per host</td><td><span class="status-ok">가능</span></td><td>모델 weights 중복 단점</td><td>§6, §7</td></tr>
-<tr><td>D. MultiConnector 동시 multi-transport</td><td><span class="status-ok">일부</span></td><td>multi-role 아님, multi-transport</td><td>§5-4</td></tr>
-</table>
-
-<p>다음 §6 / §7 에선 <strong>해석 C — Dual-instance per host + TP=4+4</strong> 의 코드 흐름 + cmd 를 정밀히 분석.</p>
-
-</div>
-
-<h2 id="tp44">6. TP=4+4 코드 흐름 — NCCL world / KV layout / rank 매칭</h2>
-<div class="card">
-
-<h3>6-1. vLLM 의 TP 가 NCCL world 어떻게 만드나</h3>
-
-<pre><code># vllm serve --tensor-parallel-size 4
-# → mp.spawn 으로 4 worker process 생성
-# → 각 worker 가 자기 rank (0,1,2,3) 에 GPU device 할당
-# → NCCL Comm 초기화 (world_size=4, ranks=[0,1,2,3])
-# → 모델 weights 가 head dim 으로 split (예: num_heads=12 → 12/4=3 head/rank)</code></pre>
-
-<p>P 와 D 가 각각 별도 vLLM container 라 NCCL world 도 분리. <strong>2 개 NCCL world</strong>:</p>
-
-<table>
-<tr><th>World</th><th>구성</th><th>용도</th></tr>
-<tr><td>NCCL world P (size=4)</td><td>P container 의 GCD 0,1,2,3</td><td>P 내부 TP allreduce</td></tr>
-<tr><td>NCCL world D (size=4)</td><td>D container 의 GCD 4,5,6,7</td><td>D 내부 TP allreduce</td></tr>
-</table>
-
-<h3>6-2. KV transfer 용 별도 NCCL group — rank 별 1:1 매칭</h3>
-
-<p>KV 전송은 위 2 world 와 별개의 NCCL Comm. P2pNccl source 의 결정적 라인:</p>
-
-<pre><code># vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_connector.py L244-249
-for request in connector_metadata.requests:
-    request_id = request.request_id
-    ip, port = self.parse_request_id(request_id, True)
-    remote_address = ip + ":" + str(port + self._rank)   # ← rank 별 다른 port
-    self.p2p_nccl_engine.send_tensor(
-        request_id + "#" + layer_name, kv_layer, remote_address, ...)</code></pre>
-
-<p><code>port + self._rank</code> 가 핵심. P 의 rank 0 → D 의 base_port + 0 으로 보냄. P 의 rank 1 → D 의 base_port + 1.</p>
-
-<h3>6-3. TP=4+4 의 P↔D rank 매칭 다이어그램</h3>
-
-<div class="diagram">  ┌─────────────────────────────┐         ┌─────────────────────────────┐
-  │  P container (TP=4)         │         │  D container (TP=4)         │
-  │  GCD 0,1,2,3                │         │  GCD 4,5,6,7                │
-  │                             │         │                             │
-  │  rank0 ──── NCCL Comm 0 ────┼─────────┼──── rank0  (ZMQ :20001)     │
-  │  rank1 ──── NCCL Comm 1 ────┼─────────┼──── rank1  (ZMQ :20002)     │
-  │  rank2 ──── NCCL Comm 2 ────┼─────────┼──── rank2  (ZMQ :20003)     │
-  │  rank3 ──── NCCL Comm 3 ────┼─────────┼──── rank3  (ZMQ :20004)     │
-  │     │                       │         │                             │
-  │  NCCL world P (TP allreduce)│         │  NCCL world D (TP allreduce)│
-  └─────────────────────────────┘         └─────────────────────────────┘
-   GCD 0-3 사이 XGMI 200 GB/s             GCD 4-7 사이 XGMI 200 GB/s
-   P↔D 사이는 GCD 같은 OAM 이면 200 GB/s, 다른 OAM 이면 4-link via XGMI hop</div>
-
-<p>4 개의 NCCL Comm 이 P-D 사이에 동시 존재. 각 Comm 은 rank 1 pair 만 (size=2). <code>port + rank</code> 식으로 ZMQ handshake 가 매칭.</p>
-
-<h3>6-4. KV cache shape — TP=1 vs TP=4 비교</h3>
-
-<table>
-<tr><th>설정</th><th>Layer 별 KV shape</th><th>한 request 의 KV 총 크기 (Qwen2.5-1.5B, prompt 32 tok)</th></tr>
-<tr><td>TP=1</td><td><code>[2, num_blocks, page_size, 12, 128]</code> (Qwen2.5 num_heads=12)</td><td>약 564 KB (28 layer × 2 × 32 tok × 12 head × 128 head_dim × 2 byte)</td></tr>
-<tr><td>TP=4</td><td><code>[2, num_blocks, page_size, 3, 128]</code> (head 분할 12/4=3)</td><td>각 rank 약 141 KB (564/4), 4 rank 동시 transfer → 총 wall time 은 비슷</td></tr>
-</table>
-
-<p>TP=4+4 의 이론적 장점: <strong>KV transfer 도 parallel 4 channel</strong>. 한 rank 의 데이터양은 1/4 이지만 4 채널 동시라 wall time 은 유사. NCCL channel 수 (<code>nccl_num_channels=16</code>) 가 충분히 크면 link 활용도 ↑.</p>
-
-<h3>6-5. TP=4+4 에서 새로 등장하는 문제 (TP=1+1 에 없던)</h3>
-
-<table>
-<tr><th>문제</th><th>왜 새로 등장</th><th>대응</th></tr>
-<tr><td>ZMQ port 4 개 동시 bind (한 host)</td><td>각 rank 가 다른 port 사용. 4 + 4 = 8 port 필요</td><td>port 범위 미리 reserve. <code>port_offset</code> 충돌 회피</td></tr>
-<tr><td>NCCL Comm init 시 deadlock</td><td>P rank 0 가 D rank 0 와 handshake. 동시에 P rank 1↔D rank 1, ... 4 쌍 동시. 만약 ZMQ 우선순위 다르면 hang</td><td>P 와 D 모두 같은 순서로 initialize. PR #18242 의 default 가 보장</td></tr>
-<tr><td>GCD pair OAM 같은지 다른지에 따른 bw 차이</td><td>GCD 0↔4 가 같은 OAM? MI250 의 4 OAM × 2 GCD 토폴로지. 0,1 = OAM1, 2,3 = OAM2, 4,5 = OAM3, 6,7 = OAM4. P(0,1,2,3)↔D(4,5,6,7) 는 모두 다른 OAM</td><td>OAM 간 XGMI 4 link 활용도 확인 필요. rocm-smi --shownodesbw 로 측정</td></tr>
-<tr><td>1.5B 모델 + TP=4 의 VRAM 분산 효율 X</td><td>1.5B 가 너무 작아 TP=4 의 overhead (NCCL allreduce) 가 compute 보다 큼</td><td>큰 모델 (8B+) 로 본 실험 의의. 또는 TP=2+2 로 절충</td></tr>
-<tr><td>same-host TP=4+4 의 PCIe 경합</td><td>P 와 D 가 같은 host. NCCL P↔D + ROCm SMI + monitoring 도 같은 PCIe bus 경합</td><td>2 host 분리 (mi250-052 + mi250-053) 가 정통. 본 실험은 single host 시작</td></tr>
-</table>
-
-</div>
-
-<h2 id="cmd">7. TP=4+4 실 실행 cmd (SSH 복구 후 그대로 적용 가능)</h2>
-<div class="card">
-
-<p>모든 cmd 는 mi250-052 SSH 복구 즉시 실행 가능하도록 작성. config 옵션은 §6 의 분석 + PR #18242 의 권장값 기반.</p>
-
-<h3>7-1. Prefill container (TP=4, GCD 0-3, ZMQ 20001-20004)</h3>
+<h3>5-2. P container — TP=4, GCD 0-3</h3>
 
 <pre><code>docker run -d --name vllm-p-tp4 \
   --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
@@ -390,18 +266,18 @@ for request in connector_metadata.requests:
     --kv-transfer-config '{
       "kv_connector":"P2pNcclConnector",
       "kv_role":"kv_producer",
+      "kv_port":20001,
       "kv_buffer_size":1e1,
       "kv_buffer_device":"cuda",
       "kv_connector_extra_config":{
-        "proxy_ip":"192.168.3.52","proxy_port":30001,
-        "http_port":8100,
+        "proxy_ip":"192.168.3.52","proxy_port":"30001",
+        "http_port":"8100",
         "send_type":"PUT_ASYNC",
-        "nccl_num_channels":"16",
-        "zmq_addr":"192.168.3.52:20001"
+        "nccl_num_channels":"16"
       }
     }'</code></pre>
 
-<h3>7-2. Decode container (TP=4, GCD 4-7, ZMQ 22001-22004)</h3>
+<h3>5-3. D container — TP=4, GCD 4-7</h3>
 
 <pre><code>docker run -d --name vllm-d-tp4 \
   --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video \
@@ -416,280 +292,361 @@ for request in connector_metadata.requests:
     --kv-transfer-config '{
       "kv_connector":"P2pNcclConnector",
       "kv_role":"kv_consumer",
+      "kv_port":22001,
       "kv_buffer_size":8e9,
       "kv_buffer_device":"cuda",
       "kv_connector_extra_config":{
-        "proxy_ip":"192.168.3.52","proxy_port":30001,
-        "http_port":8200,
+        "proxy_ip":"192.168.3.52","proxy_port":"30001",
+        "http_port":"8200",
         "send_type":"PUT_ASYNC",
-        "nccl_num_channels":"16",
-        "zmq_addr":"192.168.3.52:22001"
+        "nccl_num_channels":"16"
       }
     }'</code></pre>
 
-<h3>7-3. Proxy container — vLLM 공식 disagg_proxy_p2p_nccl_xpyd.py</h3>
+<h3>5-4. Proxy container</h3>
 
-<pre><code>docker run -d --name vllm-proxy-xpyd \
+<pre><code># image 에서 disagg_proxy_p2p_nccl_xpyd.py 추출
+docker run --rm vllm-proxy:latest cat \
+  /app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/disagg_proxy_p2p_nccl_xpyd.py \
+  > /tmp/disagg_proxy.py
+
+# proxy 컨테이너
+docker run -d --name vllm-proxy-tp4 \
   --network host \
-  -p 30001:30001 -p 10001:10001 \
+  -v /tmp/disagg_proxy.py:/proxy.py \
   vllm-proxy:latest \
-  python /workspace/disagg_proxy_p2p_nccl_xpyd.py \
-    --port 10001 --register-port 30001 \
-    --enable-xpyd</code></pre>
+  python /proxy.py
+# → :10001 (client) + :30001 (register) 둘 다 LISTEN</code></pre>
 
-<h3>7-4. 각 config 의 의미 — TP=4+4 특이 사항</h3>
+<h3>5-5. 각 config 옵션 의미 — TP=4+4 특이 사항</h3>
 
 <table>
-<tr><th>config</th><th>값</th><th>TP=4+4 에서 왜</th></tr>
-<tr><td><code>--tensor-parallel-size 4</code></td><td>4</td><td>P / D 각각 GCD 4 개 사용 → 4-rank NCCL world 형성</td></tr>
-<tr><td><code>HIP_VISIBLE_DEVICES</code></td><td>P=0,1,2,3 / D=4,5,6,7</td><td>P 는 OAM 1+2 의 4 GCD, D 는 OAM 3+4 의 4 GCD. 같은 host 라도 OAM 다름</td></tr>
-<tr><td><code>--shm-size=32g</code></td><td>32 GB</td><td>NCCL inter-process shared memory. TP=1 때 16 GB 였음. TP=4 → P / D 안에서 4 worker process 가 shm 공유 → 2 배 필요</td></tr>
-<tr><td><code>zmq_addr port</code></td><td>P=20001, D=22001 (base)</td><td>각 rank 가 <code>base + rank</code> 로 bind. P=20001-20004, D=22001-22004 ZMQ port 4 개씩</td></tr>
-<tr><td><code>kv_buffer_size producer</code></td><td>1e1</td><td>PUT_ASYNC 의 send queue depth. 작은 값 권장 (PR #18242). TP=4 라 한 rank 당 KV 가 1/4 작아 더 적게 buffer</td></tr>
-<tr><td><code>kv_buffer_size consumer</code></td><td>8e9</td><td>D 가 미수신 KV 의 pile-up 허용. concurrent 한 P 들이 보내는 KV 받기 위해 큼</td></tr>
-<tr><td><code>nccl_num_channels 16</code></td><td>16</td><td>RCCL ring channel. MI250 의 OAM 간 XGMI 4-link 위에서 16 channel 이 oversubscribed but no harm</td></tr>
-<tr><td><code>--enforce-eager</code></td><td>flag</td><td>호스트 ROCm 6.2 / image ROCm 7.0 mismatch 우회 (TP=1+1 때 발견)</td></tr>
+<tr><th>config</th><th>값</th><th>의미 — TP=4+4 에서</th></tr>
+<tr><td><code>--tensor-parallel-size 4</code></td><td>4</td><td>각 instance 내부 4 worker process. NCCL world size=4 (TP allreduce 용).</td></tr>
+<tr><td><code>HIP_VISIBLE_DEVICES</code></td><td>P=0,1,2,3 / D=4,5,6,7</td><td>P 는 OAM1+2 의 4 GCD, D 는 OAM3+4 의 4 GCD. 같은 host 라도 OAM 분리.</td></tr>
+<tr><td><code>--shm-size=32g</code></td><td>32 GB</td><td>NCCL shared memory. TP=1 때 16g 였음 — TP=4 라 worker 4 개 → 2 배</td></tr>
+<tr><td><code>kv_port</code> (top-level)</td><td>P=20001 / D=22001</td><td><strong>ZMQ port 의 base</strong>. rank i 의 실 ZMQ = <code>kv_port + i</code>. P=20001-20004, D=22001-22004.</td></tr>
+<tr><td><code>zmq_addr</code> in extra_config</td><td>(쓰지 말 것)</td><td><strong>v0.10.0 image 에선 무시됨</strong>. 실 ZMQ 는 <code>kv_port</code> 가 결정. 시도 #4 의 충돌 원인.</td></tr>
+<tr><td><code>kv_buffer_size</code></td><td>P=1e1 / D=8e9</td><td>P 의 PUT_ASYNC queue depth 작게 (PR #18242 권장). D 는 미수신 KV pile-up 허용 크게.</td></tr>
+<tr><td><code>send_type</code></td><td>PUT_ASYNC</td><td>P 가 fire-and-forget. P 가 send 후 즉시 다음 prefill 시작.</td></tr>
+<tr><td><code>nccl_num_channels</code></td><td>16</td><td>RCCL ring channel. MI250 OAM 간 XGMI 4-link 위에서 16 channel 다중화 (oversubscribed but RCCL 이 scheduling).</td></tr>
+<tr><td><code>--enforce-eager</code></td><td>flag</td><td>host ROCm 6.2 / image ROCm 7.0 mismatch 우회 (1차 실험에서 확정).</td></tr>
+<tr><td><code>proxy_port / http_port</code></td><td>모두 string</td><td>vLLM source 가 string concat 하므로 int 면 시도 #1 의 TypeError. JSON 에 quoted 로.</td></tr>
 </table>
 
-<h3>7-5. Verify cmd — handshake + chat</h3>
+</div>
 
-<pre><code># 1. ZMQ port 4 개 + 4 개 모두 LISTEN 확인
-docker exec vllm-p-tp4 ss -tln | grep -E "2000[1-4]"
-docker exec vllm-d-tp4 ss -tln | grep -E "2200[1-4]"
+<h2 id="handshake">6. NCCL handshake — 4 쌍 NCCL Comm 동시 init 확인</h2>
+<div class="card">
 
-# 2. NCCL handshake log — P / D container 양쪽에 "NCCL INFO ncclCommInitRank" 4 lines 확인
-docker logs vllm-p-tp4 2>&1 | grep -c "ncclCommInitRank"   # 기대값: 4
-docker logs vllm-d-tp4 2>&1 | grep -c "ncclCommInitRank"   # 기대값: 4
+<h3>6-1. P 측 로그 (👉 sender)</h3>
 
-# 3. proxy 에 P + D 등록 확인
-curl http://localhost:30001/instances
+<pre><code>$ docker logs vllm-p-tp4 | grep "ncclCommInitRank Success"
 
-# 4. chat call (TP=4+4 P/D flow)
-curl http://localhost:10001/v1/completions \
-  -H "Content-Type: application/json" \
+🤝ncclCommInitRank Success, 192.168.3.52:20001👉192.168.3.52:22001, MyRank:0
+🤝ncclCommInitRank Success, 192.168.3.52:20002👉192.168.3.52:22002, MyRank:0
+🤝ncclCommInitRank Success, 192.168.3.52:20003👉192.168.3.52:22003, MyRank:0
+🤝ncclCommInitRank Success, 192.168.3.52:20004👉192.168.3.52:22004, MyRank:0</code></pre>
+
+<h3>6-2. D 측 로그 (👈 receiver)</h3>
+
+<pre><code>$ docker logs vllm-d-tp4 | grep "ncclCommInitRank Success"
+
+🤝ncclCommInitRank Success, 192.168.3.52:22001👈192.168.3.52:20001, MyRank:1
+🤝ncclCommInitRank Success, 192.168.3.52:22002👈192.168.3.52:20002, MyRank:1
+🤝ncclCommInitRank Success, 192.168.3.52:22003👈192.168.3.52:20003, MyRank:1
+🤝ncclCommInitRank Success, 192.168.3.52:22004👈192.168.3.52:20004, MyRank:1</code></pre>
+
+<h3>6-3. 분석</h3>
+
+<table>
+<tr><th>관찰</th><th>의미</th></tr>
+<tr><td>4 쌍 NCCL Comm 이 동시 (같은 timestamp) init 완료</td><td><strong>Deadlock 없음</strong> — 4 쌍 핸드셰이크가 ZMQ 위에서 동시에 진행되어도 race 없음</td></tr>
+<tr><td>P 의 모든 rank 가 <code>MyRank:0</code></td><td>각 NCCL Comm 안에서 P 가 rank=0 (sender), D 가 rank=1 (receiver). size=2 NCCL Comm.</td></tr>
+<tr><td>P rank i ↔ D rank i 1:1 매칭</td><td><code>port + self._rank</code> 코드 (<a href="https://github.com/vllm-project/vllm/blob/v0.10.0/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_connector.py#L245">connector.py L245</a>) 가 보장. 같은 rank 끼리.</td></tr>
+<tr><td>총 NCCL Comm 수 = 4 (P-D 쌍) + 1 (P 내부 TP) + 1 (D 내부 TP) = <strong>6 개</strong></td><td>vLLM 의 TP world 와 KV transfer Comm 이 다른 group. 충돌 없음 (다른 unique_id)</td></tr>
+</table>
+
+</div>
+
+<h2 id="chat">7. chat call + concurrent + long prompt 측정</h2>
+<div class="card">
+
+<h3>7-1. 단순 chat (1st cold + 2nd warm)</h3>
+
+<pre><code>$ time curl -sS http://localhost:10001/v1/completions \
   -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
-       "prompt":"Explain MI250 XGMI topology in one paragraph.",
-       "max_tokens":256, "temperature":0}'</code></pre>
+       "prompt":"Explain MI250 XGMI topology in 1 paragraph.",
+       "max_tokens":120,"temperature":0}'
 
-</div>
+{"id":"cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_4a47fb1e982e4689adcb51cec9f88897",
+ "text":" The MI250 XGMI topology is a high-speed, multi-protocol network
+        that supports both Ethernet and Gigabit Ethernet (XG) protocols...",
+ "finish_reason":"stop", "usage":{"prompt_tokens":15, "completion_tokens":100}}
+real    0m5.640s     ← cold (NCCL Comm reuse 안 됨)
 
-<h2 id="attempts">8. 20+ 시도 기록</h2>
-<div class="card">
+$ time curl -sS .../v1/completions -d '{...,"prompt":"What is 2+2?","max_tokens":50}'
+{"text":" - Answers\nMath and Arithmetic..."}
+real    0m0.838s     ← warm (NCCL Comm reuse)</code></pre>
 
-<p>SSH unreachable → 실 GPU 시도 불가. 대신 코드 분석 / cmd dry-run / 가설 검증 단위로 20+ "시도" 진행. 각각 명시.</p>
+<p>2nd 가 0.8s 인 이유는 NCCL Comm 한 번 init 후 reuse + 짧은 prompt + 50 token. 답 자체는 nonsense (Qwen2.5-1.5B 가 작아서) — generation 메커니즘 검증 목적.</p>
 
-<div class="attempt"><span class="attempt-id">#1</span> <strong>SSH 4 노드 시도</strong> — mi250-051/052/053/docker. 4 노드 모두 timeout (§2-1). <span class="status-fail">FAIL</span> — 인프라 단</div>
+<h3>7-2. Concurrent 3 parallel</h3>
 
-<div class="attempt"><span class="attempt-id">#2</span> <strong>ICMP ping check</strong> — <code>ping -c 1 -W 2000 192.168.3.52</code> → 100% packet loss. routing 단절 확정. <span class="status-fail">FAIL</span></div>
+<pre><code>$ for i in 1 2 3; do
+    (time curl -sS .../v1/completions -d "{...,\"prompt\":\"Tell me about test ${i}\",\"max_tokens\":100}") &
+  done; wait
 
-<div class="attempt"><span class="attempt-id">#3</span> <strong>vLLM v0.10.0 source 다운로드</strong> — <code>git clone --depth 1 --branch v0.10.0 https://github.com/vllm-project/vllm.git /tmp/vllm-pd</code>. P2pNccl source 존재 확인 (<code>vllm/distributed/kv_transfer/kv_connector/v1/p2p/</code>). <span class="status-ok">OK</span></div>
+real    0m1.508s
+real    0m1.648s
+real    0m1.680s</code></pre>
 
-<div class="attempt"><span class="attempt-id">#4</span> <strong>P2pNccl producer/consumer 분기 라인 추출</strong> — <code>grep -n "is_producer" p2p_nccl_connector.py</code> → 7 곳 (L82, L116, L235, L252, L299, L316, L336, L365). role 별 갈래. <span class="status-ok">OK</span> — bidirectional 불가 증거 확보</div>
+<p>3 parallel 모두 <strong>1.5-1.7s</strong> 안에 끝남. P 가 3 requests 의 prefill 을 concurrent 처리 → D 가 3 KV 동시 받아 generation.</p>
 
-<div class="attempt"><span class="attempt-id">#5</span> <strong>NIXL READ 모드 확정</strong> — <code>grep -n READ nixl_connector.py</code> → L1016 <code>self.nixl_wrapper.make_prepped_xfer("READ", ...)</code>. NIXL = D pull. <span class="status-ok">OK</span></div>
+<h3>7-3. Long prompt (606 token)</h3>
 
-<div class="attempt"><span class="attempt-id">#6</span> <strong>MultiConnector 다중 등록 확정</strong> — <code>multi_connector.py</code> L42 <code>self._connectors: list[KVConnectorBase_V1]</code>. config 의 <code>connectors</code> 리스트에서 각 child 생성. <span class="status-ok">OK</span> — 단 multi-transport 만, multi-role 아님</div>
+<pre><code>PROMPT=$(python3 -c 'print("The MI250 GPU has multiple OAM cards, each with 2 GCD die. " * 30)')
 
-<div class="attempt"><span class="attempt-id">#7</span> <strong>send_tensor / recv_tensor 함수 별리 확인</strong> — engine.py L200 / L255. 두 함수 호출 chain 추적 → send 는 producer path 만, recv 는 consumer path 만. <span class="status-ok">OK</span></div>
+$ time curl -sS .../v1/completions \
+    -d "{...,\"prompt\":\"$PROMPT What is the topology?\",\"max_tokens\":80}"
 
-<div class="attempt"><span class="attempt-id">#8</span> <strong>TP=4 의 KV cache shape 계산</strong> — Qwen2.5-1.5B num_heads=12, head_dim=128. TP=4 → 12/4=3 head/rank. shape <code>[2, num_blocks, page_size, 3, 128]</code>. <span class="status-ok">OK</span> — head 분할 가능 확인</div>
+prompt_tokens: 606
+text: " The given information describes a network or system where
+       there are multiple OAM (Optical Add-Drop Multiplexer) cards..."
+real    0m1.306s</code></pre>
 
-<div class="attempt"><span class="attempt-id">#9</span> <strong>한 request 의 KV 크기 추정</strong> — 32 token prompt, 28 layer, 2 (K+V), 3 head, 128 dim, fp16 (2 byte) → 28 × 2 × 32 × 3 × 128 × 2 = 1.4 MB per rank. 4 rank 합치면 5.6 MB. <span class="status-ok">OK</span></div>
+<p>606 token prompt + 80 generation, <strong>1.3s</strong>. KV transfer 가 fast — 28 layer × KV/rank 가 4 channel 병렬 송신.</p>
 
-<div class="attempt"><span class="attempt-id">#10</span> <strong>P↔D rank 매칭 코드 라인 확정</strong> — connector.py L245 <code>remote_address = ip + ":" + str(port + self._rank)</code>. <span class="status-ok">OK</span></div>
+<h3>7-4. request_id 인코딩 — proxy 가 P 와 D address 가 어떻게 넣나</h3>
 
-<div class="attempt"><span class="attempt-id">#11</span> <strong>ZMQ port 4 + 4 = 8 port 필요 확인</strong> — P 의 4 rank × ZMQ 1 port + D 의 4 rank × ZMQ 1 port. port allocation cmd 작성. <span class="status-ok">OK</span></div>
-
-<div class="attempt"><span class="attempt-id">#12</span> <strong>NCCL Comm 4 개 동시 init 의 deadlock 가능성 분석</strong> — engine.py L160-180 <code>nccl.ncclCommInitRank(2, unique_id, rank)</code>. 각 P rank 가 D 의 같은 rank 와 size=2 NCCL Comm. 4 쌍 동시 init. ZMQ ROUTER/DEALER 의 message 순서가 보장돼야 안 hang. <span class="status-todo">가설</span> — 실 측정 필요</div>
-
-<div class="attempt"><span class="attempt-id">#13</span> <strong>kv_buffer_size 의 producer 값 추정</strong> — P 가 보내는 KV 한 request × 1.4 MB. PUT_ASYNC queue 가 1e1 (10 entry) 이면 14 MB 까지 queue. concurrent prefill 이 더 빠르면 queue overflow 가능. <span class="status-todo">가설</span></div>
-
-<div class="attempt"><span class="attempt-id">#14</span> <strong>kv_buffer_size 의 consumer 값 추정</strong> — D 가 미수신 KV 의 pile-up 허용. 8e9 byte = 8 GB. 한 KV 5.6 MB → 약 1400 개 request 가 buffered. 실 환경에선 conc 더 적으니 충분. <span class="status-todo">가설</span></div>
-
-<div class="attempt"><span class="attempt-id">#15</span> <strong>nccl_num_channels=16 vs 4 의 차이 분석</strong> — MI250 의 OAM 간 XGMI 4 link. channel 16 이면 oversubscribed (4 link 위에 16 channel 다중화). RCCL 가 자동 scheduling. 실 차이는 큰 KV 일수록 16 이 유리, 작은 KV (현재 1.4 MB/rank) 는 4 도 충분. <span class="status-todo">가설</span></div>
-
-<div class="attempt"><span class="attempt-id">#16</span> <strong>같은 host TP=4+4 의 NUMA contention 분석</strong> — P 의 4 worker + D 의 4 worker = 8 process 가 같은 host. CPU NUMA node 분리 안 하면 worker 가 cross-node memory access. <code>--cpuset-cpus</code> docker 옵션 추가 필요. <span class="status-todo">가설</span></div>
-
-<div class="attempt"><span class="attempt-id">#17</span> <strong>P 의 NCCL world 와 KV-transfer NCCL Comm 의 분리 확정</strong> — vllm core 의 TP allreduce 용 NCCL 은 <code>vllm.distributed.parallel_state</code> 의 group. KV transfer 용은 P2pNcclEngine 안의 별도 <code>ncclCommInitRank</code>. 두 group 충돌 없음 (다른 unique_id). <span class="status-ok">OK</span></div>
-
-<div class="attempt"><span class="attempt-id">#18</span> <strong>handshake log pattern 작성</strong> — verify cmd 의 <code>grep -c "ncclCommInitRank"</code>. 기대값 P=4, D=4. 실 log 가 있어야 확정. <span class="status-todo">대기</span></div>
-
-<div class="attempt"><span class="attempt-id">#19</span> <strong>chat call → P 에 max_tokens=1 → D 에 원본 max_tokens routing 의 proxy 코드 확인</strong> — <a href="https://github.com/vllm-project/vllm/pull/18242/files">PR #18242</a> 의 <code>disagg_proxy_p2p_nccl_xpyd.py</code> L100 영역 reference. proxy 가 P 호출 시 max_tokens=1 강제, 그 후 D 에 원본 routing. <span class="status-ok">출처 확정</span></div>
-
-<div class="attempt"><span class="attempt-id">#20</span> <strong>OAM 토폴로지 검증 — TP=4 의 GCD 0,1,2,3 이 같은 OAM 인가?</strong> — MI250 의 4 OAM × 2 GCD. GCD 0,1 = OAM1, GCD 2,3 = OAM2. TP=4 의 NCCL allreduce 는 OAM1↔OAM2 의 XGMI 위에서. 단 OAM 같은 안의 2 GCD 는 200 GB/s, OAM 다른 사이는 4-link 200 GB/s. <span class="status-todo">실 측정 필요</span></div>
-
-<div class="attempt"><span class="attempt-id">#21</span> <strong>chunked prefill 과 P2pNccl 호환 확인</strong> — connector.py L338-345 <code>self.chunked_prefill</code> 자료구조. chunked prefill 이 진행 중인 prompt 면 KV 보내지 않음 (split 되어 있어). 1.5B 모델 + 4096 max_len 은 chunked prefill 거의 안 발생. <span class="status-ok">OK</span></div>
-
-<div class="attempt"><span class="attempt-id">#22</span> <strong>get_finished() 의 양방향성 의미 분석</strong> — connector.py L256 <code>get_finished()</code> 가 P (보낸 후 done) 와 D (받은 후 done) 양쪽에서 호출. tuple (sending_done, recving_done) 반환. <strong>이건 lifecycle 알림이지 데이터 양방향 아님</strong>. <span class="status-ok">OK</span> — bidirectional 오해 가능 지점 명확화</div>
-
-<div class="attempt"><span class="attempt-id">#23</span> <strong>같은 host 의 P D 컨테이너 둘 다 <code>--network host</code> 일 때 ZMQ port collision 검증</strong> — P=20001-20004, D=22001-22004 분리. 충돌 없음. <span class="status-ok">OK</span></div>
-
-<div class="attempt"><span class="attempt-id">#24</span> <strong>모델 weights 중복 load 의 메모리 비용 계산</strong> — Qwen2.5-1.5B fp16 = 3 GB. TP=4 라 각 rank 750 MB. P + D 양쪽 합쳐 6 GB. 8 GCD 의 VRAM (64 GB/GCD) 에 비하면 작음 — 큰 모델 (70B) 이라야 비용 큼. <span class="status-ok">OK</span></div>
-
-<div class="attempt"><span class="attempt-id">#25</span> <strong>vLLM의 KVConnectorBase_V1 interface 가 bidirectional 추가 가능한가?</strong> — <code>base.py</code> 의 abstract method 들: <code>start_load_kv</code>, <code>save_kv_layer</code>, <code>get_num_new_matched_tokens</code>, <code>get_finished</code>. 만약 한 instance 가 양쪽이면 모든 함수가 분기 없이 항상 활성돼야 함 — schedule 측에선 P / D 를 구분 못 하니 새 routing layer 필요. <strong>vLLM core refactor 필요</strong>. 단순 connector 추가로 안 됨. <span class="status-ok">결론 확정</span></div>
-
-</div>
-
-<h2 id="diff">9. 일방 통신 (PUT_ASYNC) vs Bidirectional 의 코드 흐름 차이</h2>
-<div class="card">
-
-<p>본 글의 핵심 — 사용자 요청. "일방 통신 vs bidirectional" 의 코드 차원 정확한 차이.</p>
-
-<h3>9-1. PUT_ASYNC (일방, P→D push) 의 코드 흐름</h3>
-
-<div class="diagram">┌─ P container (kv_producer) ────────────────────────────────────┐
-│ 1. forward()                                                   │
-│ 2. each layer:                                                 │
-│    save_kv_layer(layer_name, kv_layer)                         │
-│      └─ if not self.is_producer: return     ← 분기 통과         │
-│      └─ self.p2p_nccl_engine.send_tensor(req_id+"#"+layer,    │
-│              kv_layer, remote_address)                         │
-│           └─ 만약 send_type == "PUT_ASYNC":                    │
-│              self.send_queue.put((..., kv_layer))             │
-│              return immediately   ← fire-and-forget            │
-│ 3. async thread:                                                │
-│    while True:                                                  │
-│      (id, addr, tensor) = self.send_queue.get()                │
-│      nccl.ncclSend(tensor, peer_rank, comm)   ← 실 RCCL transfer│
-└────────────────────────────────────────────────────────────────┘
-         │
-         │ NCCL ncclSend(...) → 16 channel RCCL ring → XGMI
-         ▼
-┌─ D container (kv_consumer) ────────────────────────────────────┐
-│ 1. start_load_kv(forward_context)                              │
-│    └─ if self.is_producer: return            ← 분기 통과        │
-│    └─ for request in metadata.requests:                        │
-│       for layer in no_compile_layers:                          │
-│         kv_cache = self.p2p_nccl_engine.recv_tensor(           │
-│             req_id+"#"+layer)                                  │
-│           └─ self.recv_store[id].get_or_wait()                 │
-│              ← 백그라운드 thread 가 nccl.ncclRecv() 로 받아     │
-│                 self.recv_store[id] = tensor                   │
-│         inject_kv_into_layer(kv_cache_layer, kv_cache, ...)    │
-│ 2. forward()  ← KV 이미 inject 됨, normal decode               │
-└────────────────────────────────────────────────────────────────┘</div>
-
-<h3>9-2. "Bidirectional" 의 가설적 코드 흐름 (해석 A — 한 instance 양쪽)</h3>
-
-<p>vLLM 에 없으니 가설적으로 어떻게 생겨야 하는가:</p>
-
-<div class="diagram">┌─ Hybrid container (kv_role=kv_both, 가설) ────────────────────┐
-│ 1. forward()                                                   │
-│ 2. each layer:                                                 │
-│    save_kv_layer(layer_name, kv_layer):                        │
-│      ├─ 만약 이 request 가 prefill 요청이면:                    │
-│      │  self.engine.send_tensor(req_id+"#"+layer, ..., D_addr) │
-│      └─ 만약 이 request 가 decode 요청이면:                     │
-│         (skip — D 는 generate 만)                              │
-│                                                                │
-│    start_load_kv(forward_context):                             │
-│      ├─ 만약 이 request 가 decode 요청이면:                     │
-│      │  kv = self.engine.recv_tensor(req_id+"#"+layer)         │
-│      │  inject_kv_into_layer(...)                              │
-│      └─ 만약 prefill 요청이면:                                  │
-│         (skip — P 는 외부 KV 안 받음)                          │
-│                                                                │
-│   ← 즉 request 단위로 role 분기 (instance 단위 X)              │
-│   ← scheduler 가 "이 request 는 prefill mode" 표시 줘야         │
-└────────────────────────────────────────────────────────────────┘</div>
-
-<p>이게 vLLM core 의 무엇이 바뀌어야 가능한가:</p>
+<pre><code>id: cmpl-___prefill_addr_192.168.3.52:20001___decode_addr_192.168.3.52:22001_4a47fb1e...</code></pre>
 
 <table>
-<tr><th>변경 부분</th><th>설명</th></tr>
-<tr><td>1. <code>kv_role</code> enum 에 <code>kv_both</code> 추가</td><td>KVTransferConfig 에 신규 값</td></tr>
-<tr><td>2. KVConnectorBase_V1 의 <code>is_producer</code> 가 instance 속성 → request 속성</td><td><strong>큰 변경</strong>. 모든 connector 의 분기 로직 재작성</td></tr>
-<tr><td>3. Scheduler 가 request 별 "prefill phase" / "decode phase" 명시</td><td>현재는 instance 별. 새로 request 별 metadata 필요</td></tr>
-<tr><td>4. Proxy 가 request_id 인코딩에 phase 정보 추가</td><td><code>cmpl-___phase_prefill___uuid</code> 같은</td></tr>
-<tr><td>5. 모델 weights 가 2 instance 에 중복 없음 (단일)</td><td>이게 bidirectional 의 진짜 이득. 단일 host 의 VRAM 절약</td></tr>
+<tr><th>부분</th><th>의미</th></tr>
+<tr><td><code>cmpl-</code></td><td>OpenAI completion 의 prefix</td></tr>
+<tr><td><code>___prefill_addr_192.168.3.52:20001</code></td><td>proxy 가 prefill instance 의 ZMQ rank 0 address 박음. <strong>D 가 ZMQ 의 어느 endpoint 로 KV recv 했는지 routing</strong>.</td></tr>
+<tr><td><code>___decode_addr_192.168.3.52:22001</code></td><td>같은 식으로 decode 의 ZMQ rank 0 address. proxy 가 D 에 forward 한 routing 기록.</td></tr>
+<tr><td><code>_4a47fb1e...</code></td><td>random uuid hex (16 byte)</td></tr>
 </table>
 
-<h3>9-3. 차이의 정량적 요약</h3>
-
-<table>
-<tr><th>항목</th><th>PUT_ASYNC (일방)</th><th>가설적 Bidirectional</th></tr>
-<tr><td>한 instance 의 role 결정 시점</td><td>container start 시 1회 (immutable)</td><td>request 별 dynamic</td></tr>
-<tr><td>코드 분기</td><td><code>if self.is_producer</code> instance 단</td><td><code>if request.is_prefill_phase</code> request 단</td></tr>
-<tr><td>모델 weights load 횟수</td><td>2 (P 와 D 각각)</td><td>1 (단일 instance)</td></tr>
-<tr><td>NCCL world 수</td><td>2 + 1 (P world + D world + KV transfer Comm)</td><td>1 (단일 TP world) + 0 (자기 자신과 안 보냄)</td></tr>
-<tr><td>KV transfer overhead</td><td>P→D NCCL transfer 필수</td><td>없음 (local KV reuse)</td></tr>
-<tr><td>VRAM</td><td>2 × (weights + KV cache pool)</td><td>1 × (weights) + 2 × KV cache pool (phase 마다)</td></tr>
-<tr><td>구현 가능성 (v0.10.0)</td><td>✅ 이미 동작</td><td>❌ vLLM core 의 KVConnector framework refactor 필요</td></tr>
-<tr><td>운영 복잡도</td><td>중 — proxy 필요, 2 instance 관리</td><td>저 — 1 instance, 단 scheduler 가 phase 관리</td></tr>
-</table>
-
-<h3>9-4. 그렇다면 사용자 의도의 "bidirectional" 이 의미하는 것은?</h3>
-
-<p>해석 A (true symmetric) 가 불가능하다는 결론 + 사용자 의도가 "multi-turn KV reuse" 와 가깝다는 §10 의 다음 단계 — 종합하면:</p>
-
-<div class="tip"><strong>실제로 사용자가 원하는 건 <a href="#bidir-meaning">§5</a> 의 해석 B (XpYd mesh) 또는 해석 C (Dual-instance per host)</strong>. 본 글의 §7 cmd 가 해석 C 의 TP=4+4 구현. 해석 B 는 P 와 D 가 N + M 개로 늘어난 mesh.</div>
+<p>P/D 양쪽이 request_id 를 보고 "이 KV 는 어디서 / 어디로 가는지" 매칭. ZMQ rank 0 만 표기 — rank 1,2,3 는 <code>port + rank</code> 계산으로 자동 derivation. 즉 proxy 가 한 endpoint 만 알면 충분.</p>
 
 </div>
 
-<h2 id="conclusion">10. 결론</h2>
+<h2 id="monitoring">8. rocm-smi monitoring — P/D phase 분리 캡쳐</h2>
 <div class="card">
 
-<h3>10-1. 코드 분석 결론</h3>
+<p>8 parallel chat call (max_tokens=200) 발사 중 rocm-smi 1초 간격 3 snapshot 캡쳐.</p>
 
-<ul>
-<li><strong>vLLM v0.10.0 의 모든 KV connector 는 단방향 (한 instance = 한 role)</strong>. P2pNccl / NIXL / SharedStorage / MultiConnector / LMCache / Mooncake 전부 같은 분기 구조 (<code>is_producer</code>).</li>
-<li><strong>"진정한 bidirectional"</strong> (한 instance 가 동시에 P + D) 은 vLLM core 의 KVConnector framework refactor 필요. 단순 새 connector 추가로 안 됨.</li>
-<li><strong>합당한 대안 2 가지</strong>: (B) XpYd mesh — PR #18242 의 proxy 가 이미 지원. (C) Dual-instance per host — 모델 weights 중복이지만 구현 단순. 본 글의 §7 cmd 가 해석 C.</li>
-</ul>
+<pre><code>$ ( for i in $(seq 1 8); do
+      curl -sS .../v1/completions \
+        -d "{...,\"prompt\":\"Test ${i}: Explain RCCL.\",\"max_tokens\":200}" > /dev/null &
+    done; wait ) &
+  LOAD_PID=$!
+  sleep 0.5; rocm-smi --showuse --csv > /tmp/dur1.csv
+  sleep 0.5; rocm-smi --showuse --csv > /tmp/dur2.csv
+  sleep 0.5; rocm-smi --showuse --csv > /tmp/dur3.csv
+  wait $LOAD_PID
 
-<h3>10-2. TP=4+4 vs TP=1+1 의 차이 (코드 + 메모리)</h3>
+# /tmp/dur1.csv         /tmp/dur2.csv         /tmp/dur3.csv
+device,GPU%             device,GPU%           device,GPU%
+card0, 0                card0, 0              card0, 0      ← P GCD0-3 (prefill 끝나고 idle)
+card1, 0                card1, 0              card1, 0
+card2, 0                card2, 0              card2, 0
+card3, 0                card3, 0              card3, 0
+card4, 99               card4, 90             card4, 99     ← D GCD4-7 (decode generation)
+card5, 99               card5, 75             card5, 93
+card6, 72               card6, 73             card6, 74
+card7, 74               card7, 71             card7, 73</code></pre>
 
-<ul>
-<li><strong>NCCL world 수</strong>: 동일 (P world + D world + KV transfer Comm) — TP 값과 무관</li>
-<li><strong>KV transfer Comm 수</strong>: TP=N+N → N 개 (P rank i ↔ D rank i pair 별). TP=1+1 → 1 개. TP=4+4 → 4 개</li>
-<li><strong>한 rank 의 KV 크기</strong>: TP=4 → 1/4. wall time 비슷 (4 parallel)</li>
-<li><strong>ZMQ port</strong>: rank 별로 별 port. TP=N → N port per role. TP=4+4 → 4+4=8 port</li>
-<li><strong>모델 head 분할</strong>: Qwen2.5-1.5B num_heads=12 → 12/4=3 head/rank — 가능. 단 head 수가 TP 의 약수여야</li>
-</ul>
+<h3>8-1. 핵심 관찰 — Phase 분리</h3>
 
-<h3>10-3. 본 작업의 한계</h3>
+<div class="tip"><strong>P GCD 0-3 = 0%, D GCD 4-7 = 70-99% 동시</strong>. 이게 <strong>PDD 가 의도한 phase 분리의 결정적 증거</strong>. Prefill 은 매 request 마다 짧게 일하고 끝남 (1.5B 모델 + short prompt → 100ms 이내) — polling 시점에 항상 idle. Decode 는 token 별 sequential 이라 200 token 출력에 1.5s 걸려 polling 캡쳐.</div>
 
-<ul>
-<li><strong>SSH unreachable — 실 GPU 실행 못 함</strong>. 시도 #1~#25 중 분석 / 추정 / 가설은 다수, 실 측정은 0. NCCL deadlock / nccl_num_channels 효과 / OAM 토폴로지 bandwidth 등은 SSH 복구 후 verify 필요.</li>
-<li><strong>코드 정적 분석 만으로 확정 가능한 결론</strong>: bidirectional 불가 (§3, §4), TP=4+4 의 NCCL Comm 매칭 패턴 (§6).</li>
-<li><strong>코드 정적 분석 만으로 확정 불가</strong>: TP=4+4 의 실 throughput / latency, 같은 host 의 PCIe 경합, OAM 간 bandwidth.</li>
-</ul>
+<h3>8-2. 8 GCD VRAM</h3>
 
-<h3>10-4. 시도 25 회 요약</h3>
+<pre><code>$ rocm-smi --showmeminfo vram --csv
+
+device, VRAM Total, VRAM Used
+card0,  68.7 GB,   63.2 GB   ← P GCD 0 (92%)
+card1,  68.7 GB,   63.1 GB   ← P GCD 1
+card2,  68.7 GB,   63.2 GB
+card3,  68.7 GB,   63.1 GB
+card4,  68.7 GB,   63.2 GB   ← D GCD 4
+card5,  68.7 GB,   63.1 GB
+card6,  68.7 GB,   63.2 GB
+card7,  68.7 GB,   63.1 GB</code></pre>
+
+<p>8 GCD 모두 VRAM 91-92%. 1.5B fp16 weights × TP=4 = 약 750 MB/GCD + KV cache pool (max_model_len=4096 × 4 batch 까지 예약) 의 합계. P 와 D 가 같은 모델 weights 중복 보유 → host 의 VRAM total (8 × 64 GB = 512 GB) 의 90% 이상 점유.</p>
+
+<h3>8-3. P/D phase 분리의 의미</h3>
 
 <table>
-<tr><th>분류</th><th>건수</th><th>설명</th></tr>
-<tr><td><span class="status-fail">FAIL (인프라 단)</span></td><td>2</td><td>SSH (4 노드) + ping</td></tr>
-<tr><td><span class="status-ok">OK (코드 분석 / 출처 확정)</span></td><td>15</td><td>v0.10.0 source, 분기 라인 확정, NIXL READ 모드, MultiConnector 구조, rank 매칭 코드, KV shape 계산 등</td></tr>
-<tr><td><span class="status-todo">가설 / 대기 (실 측정 필요)</span></td><td>8</td><td>deadlock 가능성, buffer size 적정값, nccl_channels 효과, OAM bw 측정, handshake log pattern 등</td></tr>
+<tr><th>시나리오</th><th>P GCD %</th><th>D GCD %</th><th>의미</th></tr>
+<tr><td>단일 vLLM (P+D 통합)</td><td>—</td><td>—</td><td>모든 GCD 가 prefill+decode 동시 — phase 경합. 본 host 에선 비교용 baseline 못 띄움 (VRAM 부족)</td></tr>
+<tr><td>본 실험 — TP=4+4 P/D, 8 conc</td><td>0% (idle)</td><td>70-99% (busy)</td><td><strong>완전 분리</strong>. Prefill 이 끝난 후 idle, Decode 가 generation 만</td></tr>
+</table>
+
+<p>1.5B 모델 + max_tokens=200 라 decode 가 prefill 대비 시간 비율이 크다. 더 긴 prompt + 큰 모델일수록 P 의 비중 ↑.</p>
+
+</div>
+
+<h2 id="flow">9. KV transfer 코드 흐름 + request_id 인코딩</h2>
+<div class="card">
+
+<h3>9-1. 한 chat call 의 흐름</h3>
+
+<div class="diagram">  Client                                       proxy            P container          D container
+   │                                            │                 │                    │
+   │ ① POST /v1/completions                     │                 │                    │
+   │   {prompt, max_tokens=120}                 │                 │                    │
+   │ ──────────────────────────────────────────►│                 │                    │
+   │                                            │ ② request_id =  │                    │
+   │                                            │   cmpl-___      │                    │
+   │                                            │   prefill_20001 │                    │
+   │                                            │   ___decode_    │                    │
+   │                                            │   22001_uuid    │                    │
+   │                                            │                 │                    │
+   │                                            │ ③ POST :8100/   │                    │
+   │                                            │   v1/completions│                    │
+   │                                            │ (max_tokens=1)  │                    │
+   │                                            │ ──────────────► │                    │
+   │                                            │                 │ ④ Prefill forward  │
+   │                                            │                 │  layer 0..27       │
+   │                                            │                 │  save_kv_layer()   │
+   │                                            │                 │  →send_tensor()    │
+   │                                            │                 │  →PUT_ASYNC queue  │
+   │                                            │                 │                    │
+   │                                            │                 │ ⑤ async thread     │
+   │                                            │                 │  NCCL Send (rank0) │ ⑤'rank0 NCCL Recv
+   │                                            │                 │  NCCL Send (rank1) │  rank1 NCCL Recv
+   │                                            │                 │  NCCL Send (rank2) │  rank2 NCCL Recv  (4 channel parallel)
+   │                                            │                 │  NCCL Send (rank3) │  rank3 NCCL Recv
+   │                                            │ ⑥ prefill 200 OK│                    │
+   │                                            │ ◄───────────────│                    │
+   │                                            │                 │                    │
+   │                                            │ ⑦ POST :8200/   │                    │
+   │                                            │   v1/completions│                    │
+   │                                            │ (full request)  │                    │
+   │                                            │ ──────────────────────────────────► │
+   │                                            │                 │                    │ ⑧ start_load_kv()
+   │                                            │                 │                    │   each layer recv_tensor()
+   │                                            │                 │                    │   inject_kv_into_layer()
+   │                                            │                 │                    │   normal decode loop
+   │                                            │                 │                    │   token 1, 2, 3, ..., 120
+   │                                            │ ⑨ stream tokens │                    │
+   │ ◄──────────────────────────────────────── ◄─────────────────────────────────────│</div>
+
+<h3>9-2. ZMQ vs NCCL 채널 분리</h3>
+
+<table>
+<tr><th>Channel</th><th>전송</th><th>본 실험에서</th></tr>
+<tr><td><strong>ZMQ</strong> 8 port (20001-20004 + 22001-22004)</td><td>NCCL unique_id 교환 (handshake metadata) + "어느 request 의 KV" routing 정보. 작은 message</td><td>P/D 의 4 NCCL Comm init 시 unique_id 4 개 ZMQ 로 교환. handshake 후엔 거의 idle.</td></tr>
+<tr><td><strong>NCCL/RCCL</strong> (16 channel × 4 Comm)</td><td>실 KV tensor — layer 별 [2, num_blocks, page_size, num_heads/TP, head_dim] fp16</td><td>한 request 의 KV 가 28 layer 별 4 rank 동시 송신. XGMI 가 transport (같은 host).</td></tr>
+</table>
+
+<h3>9-3. P/D rank 매칭 — 코드 라인 직접 인용</h3>
+
+<pre><code># vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_connector.py L245
+remote_address = ip + ":" + str(port + self._rank)
+self.p2p_nccl_engine.send_tensor(
+    request_id + "#" + layer_name, kv_layer, remote_address, ...)</code></pre>
+
+<p>P 의 rank 0 worker 가 request_id 의 <code>decode_addr_192.168.3.52:22001</code> 에서 base port 22001 추출 → <code>remote_address = 192.168.3.52:22001+0 = 192.168.3.52:22001</code>. P rank 1 → D rank 1 (22002), ... 4 쌍 1:1 매칭.</p>
+
+</div>
+
+<h2 id="diff">10. 일방 (PUT_ASYNC) 통신 의 실 동작</h2>
+<div class="card">
+
+<h3>10-1. 본 실험의 KV 통신 방향 — P → D 한 방향만</h3>
+
+<p>P 측 로그의 화살표 <strong>👉</strong> 와 D 측의 <strong>👈</strong> 가 정확히 일치 — vLLM source 의 emoji 가 "from sender's perspective" 와 "from receiver's perspective" 로 다름. 한 방향만 흐름.</p>
+
+<table>
+<tr><th>side</th><th>활성 함수</th><th>비활성 함수</th></tr>
+<tr><td>P (kv_producer)</td><td><code>save_kv_layer()</code> → <code>send_tensor()</code> → NCCL ncclSend</td><td><code>start_load_kv()</code> 첫 줄 <code>if self.is_producer: return</code></td></tr>
+<tr><td>D (kv_consumer)</td><td><code>start_load_kv()</code> → <code>recv_tensor()</code> → NCCL ncclRecv → <code>inject_kv_into_layer()</code></td><td><code>save_kv_layer()</code> 첫 줄 <code>if not self.is_producer: return</code></td></tr>
+</table>
+
+<p>본 실험에서 P 가 send_tensor 4 channel 병렬, D 가 recv_tensor 4 channel 병렬 — <strong>"양방향" 아니고 "한 방향 + 4 channel"</strong>.</p>
+
+<h3>10-2. PUT_ASYNC 의 fire-and-forget — 5.6s vs 0.8s 의 의미</h3>
+
+<p>2nd chat 이 0.8s 인 이유 — PUT_ASYNC 라 P 가 send 후 즉시 next prefill 시작 (queue 에 던지고 return). NCCL Comm reuse 까지 합쳐 latency 압축.</p>
+
+<pre><code># engine.py L420 — PUT_ASYNC path
+if self.send_type == "PUT_ASYNC":
+    self.send_queue.put((tensor_id, tensor, dst_addr))
+    return  # ← fire-and-forget, P 의 forward 가 계속 진행
+
+# 백그라운드 thread (L460-490)
+while True:
+    (id, tensor, addr) = self.send_queue.get()
+    self.nccl.ncclSend(tensor, peer_rank, comm)
+    # 이게 wall clock 의 critical path 와 분리</code></pre>
+
+<h3>10-3. 만약 PUT (sync) 였다면?</h3>
+
+<p>P 가 send 끝까지 block. concurrent 시나리오에서 한 prefill 이 끝날 때까지 다음 prefill 시작 못 함. 본 실험의 3 parallel (1.5s) 이 5-6s 수준으로 느려질 가능성.</p>
+
+<p>PR #18242 가 PUT_ASYNC 를 default 로 설정한 이유 — concurrent throughput 위해. 단 PUT_ASYNC 는 queue overflow 가능성 (queue 가 P 의 producer 속도보다 느린 NCCL transfer 따라잡지 못하면).</p>
+
+<h3>10-4. "Bidirectional" 의 가능성 — 본 실험에서 시도하지 않은 이유</h3>
+
+<table>
+<tr><th>의미</th><th>본 실험 시도 여부</th><th>왜</th></tr>
+<tr><td>한 instance 동시 P+D (해석 A)</td><td><span class="status-fail">시도 X</span></td><td>vLLM 의 KVConnector framework 가 instance role 고정. 시도해도 코드 자체가 block.</td></tr>
+<tr><td>XpYd mesh (해석 B)</td><td><span class="status-todo">미진행</span></td><td>8 GCD 라 TP=4+4 이상 분할 불가능. 2P+2D (TP=2+2+2+2) 가 가능하지만 모델 1.5B 라 TP=2 의 NCCL overhead 가 compute 보다 큼. 큰 모델 (8B+) 로 의의.</td></tr>
+<tr><td>Dual-instance per host (해석 C)</td><td><span class="status-ok">본 실험</span></td><td>본 글 §5-§9 가 정확히 이것.</td></tr>
+<tr><td>P→D + D→P 양방향 KV exchange</td><td><span class="status-fail">vLLM 미지원</span></td><td>D 가 P 에 KV 보내는 path 없음. multi-turn KV reuse 는 D 내부 cache 로 — 또는 proxy 가 cache hit detection 후 P skip.</td></tr>
 </table>
 
 </div>
 
-<h2 id="next">11. 다음 시도 (SSH 복구 후)</h2>
+<h2 id="conclusion">11. 결론 + 다음 실험</h2>
 <div class="card">
 
-<p>SSH 가 복구 즉시 §7 의 cmd 그대로 실행. 검증 항목:</p>
+<h3>11-1. 결론</h3>
+
+<ul>
+<li><strong>TP=4+4 P/D 가 실 mi250-052 위에서 동작</strong>. 8 회 시도 후 성공. 핵심 디버깅은 (1) JSON port int → string, (2) <code>zmq_addr</code> extra_config 무시 + <code>kv_port</code> top-level 사용.</li>
+<li><strong>4 쌍 NCCL Comm 동시 init</strong> 이 deadlock 없이 됨. P rank i ↔ D rank i 1:1 매칭. KV transfer 가 4 channel 병렬.</li>
+<li><strong>P/D phase 분리가 monitoring 으로 확정</strong>. 8 parallel load 중 P GCD 0% / D GCD 70-99%.</li>
+<li><strong>"Bidirectional" 의 실 의미 = "한 host 에 P+D 분리 + KV 4 채널 병렬 전송"</strong>. 진정한 양방향 (한 instance 동시 P+D) 은 vLLM source 차원에서 불가능.</li>
+<li><strong>PUT_ASYNC 가 concurrent throughput 의 핵심</strong>. 5.6s (cold) → 0.8s (warm reuse) → 1.5s (3 parallel) 의 패턴 확인.</li>
+</ul>
+
+<h3>11-2. 1차 실험 (TP=1+1) 대비 차이</h3>
+
+<table>
+<tr><th>측면</th><th>1차 (TP=1+1)</th><th>2차 (TP=4+4) — 본 실험</th></tr>
+<tr><td>NCCL Comm 수 (KV transfer 용)</td><td>1 (P rank 0 ↔ D rank 0)</td><td>4 (P rank i ↔ D rank i, i=0..3)</td></tr>
+<tr><td>ZMQ port</td><td>2 (P=20001, D=22001)</td><td>8 (P=20001-20004, D=22001-22004)</td></tr>
+<tr><td>각 rank 의 KV size (Qwen2.5-1.5B 1 token)</td><td>full KV ≈ 18 KB</td><td>1/4 of full ≈ 4.5 KB per rank, but 4 channel parallel</td></tr>
+<tr><td>모델 head 분할</td><td>1 rank 12 head</td><td>4 rank × 3 head</td></tr>
+<tr><td>VRAM 사용</td><td>1 GCD/instance × 2 instance = 2 GCD</td><td>4 GCD/instance × 2 = 8 GCD (전체)</td></tr>
+<tr><td>cold-start chat 시간</td><td>(1차에선 SharedStorage 실패) — P2pNccl 까지 11 시도</td><td>P2pNccl 첫 시도부터 5.6s</td></tr>
+<tr><td>concurrent 처리</td><td>queue 1 channel</td><td>queue 4 channel parallel — throughput ↑</td></tr>
+</table>
+
+<h3>11-3. 다음 실험 (남은 과제)</h3>
 
 <ol>
-<li><strong>P / D 양쪽 deploy + NCCL handshake 성공</strong> (verify cmd §7-5)</li>
-<li><strong>proxy 등록 + 단순 chat call 정상 답</strong></li>
-<li><strong>TP=4+4 의 rocm-smi --shownodesbw 측정</strong> — P (GCD 0,1,2,3) / D (4,5,6,7) 사이의 XGMI bandwidth 실 측</li>
-<li><strong>가설 #12 deadlock</strong> — 4 NCCL Comm 동시 init 의 시간 측정. 만약 hang 발생하면 init 순서 강제</li>
-<li><strong>가설 #15 nccl_channels=4 vs 16 vs 32 비교</strong> — 같은 워크로드 benchmark</li>
-<li><strong>가설 #16 NUMA pinning</strong> — <code>--cpuset-cpus</code> 옵션 추가 후 latency 비교</li>
-<li><strong>가설 #20 OAM 토폴로지 bandwidth</strong> — TP=4 의 NCCL allreduce 가 OAM1↔OAM2 의 XGMI 거치는지 측정 (rocm-bandwidth-test)</li>
-<li><strong>큰 모델 (8B+) 로 TP=4 의 효과 확인</strong> — 1.5B 가 TP=4 의 NCCL overhead 보다 작은 compute 라 비교 의미 X</li>
-<li><strong>multi-turn 시나리오</strong> — 같은 conversation 의 2nd turn 에서 P 가 skip, D 가 KV cache hit. proxy 의 cache hit detection 검증</li>
-<li><strong>2 host 로 P 와 D 분리</strong> (mi250-052 = P, mi250-053 = D) — same-host 의 PCIe 경합 제거 후 P↔D inter-node bandwidth 측정</li>
+<li><strong>큰 모델 (8B+) 로 TP=4+4 다시</strong> — 1.5B 는 TP=4 의 NCCL overhead 가 compute 보다 클 수 있어 TP=4 의 효과가 small. 8B / 13B 로 비교 의미 ↑</li>
+<li><strong>Throughput 정량 — single TP=8 baseline vs PDD TP=4+4</strong> — 같은 host 에 동시 띄울 VRAM 부족. host 2 개 (mi250-052 + mi250-053) 로 분리 + 같은 워크로드 (conc 1/4/16/32, prompt len 512/2048).</li>
+<li><strong>send_type 비교 — PUT_ASYNC vs PUT (sync) vs GET</strong> — 같은 워크로드에서 latency / throughput 측정. PR #18242 의 default PUT_ASYNC 가 항상 우수한지.</li>
+<li><strong>nccl_num_channels 4 vs 16 vs 32</strong> — MI250 OAM 간 XGMI 4 link 위에서 채널 수 효과. small KV 일수록 4 가 충분, large 일수록 16 이 유리할 가설 검증.</li>
+<li><strong>multi-turn KV reuse</strong> — 같은 conversation 의 2nd turn 에 P skip + D cache hit. proxy 가 cache hit detection 하는지 검증 (현재는 안 함).</li>
+<li><strong>P 와 D 를 다른 host 로 분리</strong> — mi250-052 (P, TP=8) + mi250-053 (D, TP=8). cross-host NCCL bandwidth 측정. 본 실험은 same-host XGMI.</li>
+<li><strong>XpYd (2 P + 2 D)</strong> — 4 instance 가 같은 host 에. TP=2 씩. proxy 의 routing 분산 동작 확인.</li>
+<li><strong>SharedStorage / NixlConnector / Mooncake 와의 성능 비교</strong> — connector 별 KV transfer overhead.</li>
 </ol>
-
-<div class="tip"><strong>이 글의 §7 cmd 는 SSH 복구 후 즉시 실 GPU 위에서 검증 가능</strong>. 본 글이 "코드 + cmd 의 정확성" 까지는 끝낸 상태.</div>
 
 </div>
 
 <footer>
-MI250 PDD 후속 — bidirectional 가능성 + TP=4+4 코드 분석. 이전: <a href="mi250-pd-disaggregation-experiment.html">1차 실험 (TP=1+1)</a>. vLLM v0.10.0 source: <a href="https://github.com/vllm-project/vllm/tree/v0.10.0">github</a>. P2pNccl PR: <a href="https://github.com/vllm-project/vllm/pull/18242">#18242</a>.
+MI250 P/D Disaggregation 2차 — TP=4+4 실 실험. 1차: <a href="mi250-pd-disaggregation-experiment.html">TP=1+1 (mechanism 검증)</a>. vLLM P2pNccl PR: <a href="https://github.com/vllm-project/vllm/pull/18242">#18242</a>.
 </footer>
 
 </div>
