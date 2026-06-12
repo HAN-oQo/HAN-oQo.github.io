@@ -630,6 +630,19 @@ ts            device,temp,power,gpu%,vram%,mem_act
 <tr><td>Proxy 의 HTTP 호출 순서</td><td><strong>Sequential</strong>: prefill HTTP 완료 (response 소비) → decode HTTP 호출. <code>async for _ in forward(prefill...): continue</code> 로 prefill response 다 소비 후 진행</td></tr>
 <tr><td>실 KV transfer</td><td><strong>Async background</strong>. <code>send_type=PUT_ASYNC</code> 라 prefill 가 KV 만들자마자 RCCL 로 즉시 send (HTTP response 와 무관). prefill HTTP 가 끝날 때쯤 KV 가 decode 에 거의 도착</td></tr>
 <tr><td>왜 prefill HTTP 가 필요한가</td><td>prefill 의 KV 생성을 트리거하기 위한 "신호". <code>max_tokens=1</code> 이라 첫 token 까지만 forward — 그게 prefill 단계의 일. 진짜 token generation 은 decode 가 함. prefill 의 1 token response 는 <strong>proxy 가 그대로 버림</strong></td></tr>
+<tr><td><strong>"Prefill done" 의 정확한 의미 — 2 단계로 갈림</strong></td><td>
+<table style="margin:4px 0; font-size:0.92em;">
+<tr><th>신호</th><th>의미</th></tr>
+<tr><td>① prefill HTTP response close<br>(= proxy 의 <code>async for _ in prefill_response: continue</code> 끝)</td><td>prefill 의 <strong>vLLM forward 완료</strong>. 모든 transformer layer 의 KV 가 prefill GPU 메모리에 존재 + 1 token output 반환. KV transfer 는 이 시점에 <strong>이미 PUT_ASYNC 로 send 진행 중</strong> 이지만 <strong>완료된 건 아님</strong></td></tr>
+<tr><td>② KV transfer 완료<br>(NCCL/RCCL 의 ncclSend/Recv 다 끝남)</td><td>decode 의 ZMQ channel 으로 metadata 도착 + RCCL data channel 으로 실 KV tensor 도착. HTTP 와 <strong>완전히 무관한 별도 channel</strong></td></tr>
+</table>
+즉 proxy 는 ① 만 보고 decode 호출 시작. ② 의 보장은 <strong>decode 의 vLLM 이 자기 forward 시작 시 KV 확인 단계에서 함</strong>:
+<ul style="margin:4px 0;">
+<li>decode 가 자기 ZMQ inbound 에서 "이 request_id 의 KV 받았나?" 확인</li>
+<li>안 받았으면 short wait (P2pNccl 의 wait queue)</li>
+<li>받았으면 그 KV 로 generation 진행 → stream response</li>
+</ul>
+보통 짧은 prompt + 빠른 RCCL channel 이면 ① 시점에 ② 도 거의 완료 → wait 무시할 수 있을 정도</td></tr>
 <tr><td>왜 같은 request_id?</td><td>decode 가 받은 KV 가 어느 request 의 것인지 매칭하려면 same key. prefill 가 send 할 때도 같은 ID 로 tag. decode 가 자기 ZMQ 로 받은 KV 의 ID 와 자기 HTTP request 의 ID 매칭</td></tr>
 </table>
 
