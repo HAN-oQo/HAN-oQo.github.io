@@ -1093,7 +1093,106 @@ docker run -d --name vllm-decode \
 
 <p><strong>한 줄</strong>: <code>nccl_num_channels=16</code> 이 대부분 환경의 sweet spot. MI250 에서는 16 보다 키워도 marginal. NVLink 의 H100 면 32 까지는 의미.</p>
 
-<h5>Hardware bound 확인 방법 — 내 GPU 의 link 수 어떻게 알아내나</h5>
+<h5>Hardware bound 확인 방법 — 실제 mi250-052 에서 명령 실행 + 캡쳐</h5>
+
+<p>아래 모두 본 실험 host (<code>mi250-052</code>) 에서 실제 실행한 결과:</p>
+
+<h6>① <code>rocm-smi --showbus</code> — PCI Bus 매핑</h6>
+<pre><code>$ ssh mi250-052 rocm-smi --showbus
+GPU[0]: PCI Bus: 0000:29:00.0   ← OAM 카드 0 (PCIe root complex 1)
+GPU[1]: PCI Bus: 0000:2C:00.0
+GPU[2]: PCI Bus: 0000:2F:00.0
+GPU[3]: PCI Bus: 0000:32:00.0
+GPU[4]: PCI Bus: 0000:AD:00.0   ← OAM 카드 2 (PCIe root complex 2)
+GPU[5]: PCI Bus: 0000:B0:00.0
+GPU[6]: PCI Bus: 0000:B3:00.0
+GPU[7]: PCI Bus: 0000:B6:00.0</code></pre>
+
+<p><strong>발견</strong>: GPU 0-3 의 bus 29-32 / GPU 4-7 의 bus AD-B6 — <strong>두 별개 PCIe root complex</strong>. XGMI 없는 쌍 (§5-4 의 0-0) 은 이 두 root 를 host CPU 통해 거쳐야 함.</p>
+
+<h6>② <code>rocm-smi --showhw</code> — 하드웨어 정보</h6>
+<pre><code>$ ssh mi250-052 rocm-smi --showhw
+GPU NODE DID    GUID  GFX VER  GFX RAS  SDMA RAS  UMC RAS  VBIOS           BUS
+0   2    0x740c 13025 gfx9010  ENABLED  ENABLED   ENABLED  113-D65209-073  0000:29:00.0
+1   3    0x740c 24866 gfx9010  ENABLED  ENABLED   ENABLED  113-D65209-073  0000:2C:00.0
+... (모든 GCD 동일)</code></pre>
+
+<p><strong>발견</strong>: <code>gfx9010</code> (MI250 architecture), ECC RAS 3종 모두 enabled, VBIOS 동일.</p>
+
+<h6>③ <code>/sys/bus/pci/devices/&lt;bus&gt;/</code> — PCIe link speed/width</h6>
+<pre><code>$ cat /sys/bus/pci/devices/0000:29:00.0/current_link_speed
+16.0 GT/s PCIe                                ← PCIe 4.0 (16 GT/s per lane)
+$ cat /sys/bus/pci/devices/0000:29:00.0/current_link_width
+16                                            ← x16 lanes
+$ cat /sys/bus/pci/devices/0000:29:00.0/max_link_speed
+16.0 GT/s PCIe                                ← 이 GPU 의 PCIe 최대 = 4.0
+$ cat /sys/bus/pci/devices/0000:29:00.0/max_link_width
+16                                            ← x16
+
+$ cat /sys/bus/pci/devices/0000:29:00.0/numa_node
+0                                             ← GPU 0 의 NUMA node
+$ cat /sys/bus/pci/devices/0000:AD:00.0/numa_node
+0                                             ← GPU 4 의 NUMA node (동일)</code></pre>
+
+<p><strong>발견</strong>: 각 GPU 가 <strong>PCIe 4.0 x16 = ~32 GB/s effective</strong>. XGMI 없는 쌍이 PCIe fallback 되면 32 GB/s 가 cap. 두 GPU 모두 NUMA node 0 (single-socket) — multi-socket overhead 없음.</p>
+
+<h6>④ <code>lspci -vv</code> — Capabilities 확인 (sudo 없으면 limited)</h6>
+<pre><code>$ ssh mi250-052 lspci -vv -s 29:00.0 | grep -iE 'LnkCap|LnkSta|kernel driver'
+Capabilities: &lt;access denied&gt;                ← sudo 없으면 link Cap 못 봄
+Kernel driver in use: amdgpu                  ← amdgpu kernel driver 정상</code></pre>
+
+<h6>⑤ NCCL/RCCL version + max channels — image 안 RCCL library 직접</h6>
+<pre><code>$ docker run --rm rocm/vllm:latest bash -c '
+    strings /opt/rocm/lib/librccl.so* | grep -iE "RCCL version|NCCL version"
+'
+<strong>RCCL version 2.26.6 compiled with ROCm "7.0.0.0-38-9428210"</strong>
+RCCL version : 2.26.6
+NCCL_MAX_P2P_NCHANNELS                        ← env 변수 명시 (자동 channel 수 cap)
+NCCL_MAX_NCHANNELS:%d is lesser than number of channels required by MSCCL...
+
+# strings 결과의 다른 env / option:
+NCCL_MAX_NCHANNELS  NCCL_MAX_P2P_NCHANNELS  NCCL_MIN_NCHANNELS</code></pre>
+
+<p><strong>발견</strong>: image 의 <strong>RCCL = 2.26.6 ROCm 7.0 build</strong>. 호스트 ROCm 6.2 와 minor mismatch — 이게 §9-1 의 aiter silent kill 원인 (이미 알려진 것 재확인).</p>
+
+<h6>⑥ <code>rocm-bandwidth-test</code> — 실측 P2P bandwidth (못 함)</h6>
+<pre><code>$ which rocm-bandwidth-test
+(empty)
+$ ls /opt/rocm/bin/ | grep -i bandwidth
+(empty)
+# → image 와 host 둘 다 install 안 됨. 별도 install 필요</code></pre>
+
+<h6>⑦ 종합 — 본 실험 host 의 hardware spec</h6>
+<table>
+<tr><th>항목</th><th>값</th><th>의미</th></tr>
+<tr><td>GPU 종류</td><td>8× MI250 GCD (gfx9010)</td><td>4 OAM × 2 die</td></tr>
+<tr><td>각 GCD VRAM</td><td>64GB HBM2e</td><td>총 512GB GPU memory</td></tr>
+<tr><td>PCIe link</td><td>4.0 x16 (16 GT/s × 16 lane = ~32 GB/s)</td><td>XGMI fallback 시 cap</td></tr>
+<tr><td>XGMI</td><td>같은 OAM 4 link (200 Gbps) / 가까운 OAM 2 link (100 Gbps) / 먼 OAM 1 link (50 Gbps) / 일부 쌍 직접 link 없음</td><td>§5-4 의 <code>--shownodesbw</code> 결과</td></tr>
+<tr><td>NUMA node</td><td>0 (single-socket)</td><td>multi-socket overhead 없음</td></tr>
+<tr><td>RCCL version</td><td>2.26.6 (ROCm 7.0 build, host 6.2)</td><td>aiter 호환 문제 원인</td></tr>
+<tr><td>PCIe root complex</td><td>2 개 (bus 29-32 / AD-B6)</td><td>XGMI 없는 GPU 쌍은 root 사이 통과</td></tr>
+<tr><td>amdgpu driver</td><td>사용 중</td><td>OK</td></tr>
+</table>
+
+<h6>NVIDIA 면 어떤 명령? (mi250 아니지만 참고용)</h6>
+<pre><code># NVLink topology
+nvidia-smi topo -m
+# 예시 output:
+#      GPU0 GPU1 GPU2 GPU3
+# GPU0  X   NV12 NV12 NV12   ← NV12 = 12 NVLink (full mesh)
+# GPU1 NV12  X   ...
+# (NV1..NV18, PIX, SYS 등 표시)
+
+# NVLink 상태
+nvidia-smi nvlink --status -i 0       # GPU 0 의 각 lane up/down
+nvidia-smi nvlink --capabilities -i 0 # max throughput
+
+# NCCL test
+cd nccl-tests && make
+./build/all_reduce_perf -b 8 -e 256M -f 2 -g 4   # 4 GPU AllReduce 측정</code></pre>
+
+<h5>위 명령은 docs 인용 (실 실행은 mi250-052 에서)</h5>
 
 <p><strong>AMD ROCm (MI250 등)</strong>:</p>
 <pre><code># 1. GPU 간 topology + link weight 확인
@@ -1112,8 +1211,9 @@ rocm-smi --showhw
 rocm-smi --showxgmierr
 
 # 4. 실측 bandwidth — XGMI bandwidth utilization
-rocm-smi --showbw                  # 일부 ROCm 버전만
-# 또는 rocm-bandwidth-test (별도 tool)
+rocm-smi --showbw                  # PCIe bandwidth 만
+rocm-smi --shownodesbw             # XGMI node 간 bandwidth (정확)
+# 또는 rocm-bandwidth-test (별도 tool, 우리 환경엔 없음)
 rocm-bandwidth-test                # peer-to-peer matrix 측정</code></pre>
 
 <p><strong>NVIDIA (H100 등)</strong>:</p>
