@@ -924,6 +924,46 @@ docker run -d --name vllm-decode \
   ④ NCCL/RCCL data plane            16 channels: prefill_gpu ↔ decode_gpu
                                      RCCL handshake 통해 만들어짐</div>
 
+<h4>send_type — PUT_ASYNC 가 선택된 이유 (Producer Push vs Consumer Pull)</h4>
+
+<div class="note"><strong>사용자 지적이 좋음</strong>: 일반 PDD 설명에서 "decode 가 prefill 의 KV 를 <strong>받아옴</strong>" 이라고 자주 말함. 그러나 누가 trigger 하느냐 (producer push vs consumer pull) 는 connector / 옵션 별 다름. vLLM P2pNccl 의 send_type 옵션 3가지가 정확히 이 trigger 방향을 결정.</div>
+
+<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 직접 인용:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+"<strong>PUT and PUT_ASYNC</strong>: Both PUT and PUT_ASYNC involve the <strong>P instance actively sending</strong> KVcache to the D instance. The difference is that PUT is a synchronous transfer method that blocks the main process, while PUT_ASYNC is an asynchronous transfer method."<br><br>
+"<strong>GET</strong>: In contrast, the GET method involves the <strong>P instance saving the KVcache to the memory buffer</strong> after computing the prefill. The <strong>D instance then actively retrieves</strong> the computed KVcache from the P instance once it has allocated space for the KVcache."<br><br>
+"Experimental results have shown that the performance of these methods, from highest to lowest, is as follows: <strong>PUT_ASYNC → GET → PUT</strong>." + "<strong>PUT_ASYNC offers the best performance and should be prioritized.</strong>"
+</blockquote>
+
+<table>
+<tr><th>send_type</th><th>방향</th><th>Trigger 누가</th><th>동작</th><th>장단점</th></tr>
+<tr><td><code>PUT_ASYNC</code> <strong>(우리 선택, default)</strong></td><td><strong>Producer Push</strong> 비동기</td><td>Prefill (P)</td><td>P 가 KV 만들자마자 별도 thread 로 비동기 send. main process block 안 됨</td><td>✅ <strong>최고 성능</strong> — P 의 forward 와 KV transfer 가 overlap. P 가 다음 request 즉시 받음</td></tr>
+<tr><td><code>PUT</code></td><td>Producer Push 동기</td><td>Prefill (P)</td><td>P 가 send 완료까지 wait (main process block)</td><td>❌ 가장 느림 — P 의 main process 가 transfer 끝까지 blocking</td></tr>
+<tr><td><code>GET</code></td><td><strong>Consumer Pull</strong></td><td>Decode (D)</td><td>P 가 KV 만들고 memory buffer 에 저장만. D 가 자기 차례에 P 의 buffer 에서 pull</td><td>⚠ 중간 성능 — D 가 buffer 할당 대기 + pull 시간 추가. 단 D 가 ready 되기 전 KV transfer 안 일어남 (memory 효율)</td></tr>
+</table>
+
+<h5>왜 PUT_ASYNC 가 default + 우리도 그것?</h5>
+<ol>
+<li><strong>vLLM 공식 예제의 default</strong>: <code>disagg_example_p2p_nccl_xpyd.sh</code> 가 그대로 PUT_ASYNC. PR #18242 도 "should be prioritized" 명시</li>
+<li><strong>Latency overlap</strong>: P 가 forward 끝나면 KV 가 이미 send 시작됨 (async thread). proxy 의 prefill HTTP response 가 돌아올 즘 KV 가 D 에 거의 도착. D 가 호출되면 즉시 generation 시작 가능 — <strong>"prefill HTTP 시간 = KV transfer 시간" 이 overlap</strong></li>
+<li><strong>P resource 빠른 회수</strong>: P 의 main process 가 block 안 되니 다음 request 즉시 받을 수 있음. P throughput ↑</li>
+<li><strong>GET 의 단점</strong>: D 가 trigger 라면 D 가 자기 forward 시작할 때 비로소 KV pull. 그 transfer 시간이 D 의 TTFT 에 직접 추가 (overlap X)</li>
+</ol>
+
+<h5>일반 PDD 설명의 "decode 받아옴" vs PUT_ASYNC 의 "prefill 보냄"</h5>
+
+<p>이전에 본 일반 PDD 설명 (LLMServingSim / Heimdall / Frontier 문서들) 의 "decode 가 KV 받아옴" 표현은 <strong>받는 측 (consumer) 시각</strong>. KV 가 D 에 도착한다는 사실은 똑같음. 단 <strong>"누가 trigger" 는 connector / 옵션 별 다름</strong>:</p>
+
+<table>
+<tr><th>설명 패턴</th><th>해당 connector / 옵션</th><th>본 실험</th></tr>
+<tr><td>"Decode 가 받아옴" (general)</td><td>모든 PDD — KV 가 P→D 로 흐른다는 사실만</td><td>본 실험도 KV 가 D 에 도착</td></tr>
+<tr><td>"Decode 가 pull (GET)"</td><td>P2pNccl 의 <code>send_type=GET</code>, 또는 LMCache 의 일부 mode</td><td>아님</td></tr>
+<tr><td>"Prefill 가 push" (PUT/PUT_ASYNC)</td><td>P2pNccl 의 default 옵션, NIXL 의 active send</td><td>✓ 본 실험 (PUT_ASYNC)</td></tr>
+</table>
+
+<p>즉 <strong>"PDD = decode 가 KV 받음" 은 결과 기준</strong>. <strong>"누가 trigger" 는 옵션 결정 사항</strong>. PR #18242 의 측정에서 <strong>PUT_ASYNC 이 가장 빠름</strong> 이라고 명시 (PUT_ASYNC > GET > PUT).</p>
+
 <p>4 종류 channel 다 살아있어야 PDD 동작. 어느 하나 broken (예: ZMQ port 충돌 / NCCL handshake fail / HTTP 못 받음) 면 garbage 또는 hang.</p>
 
 <h3>7-bis-2. Proxy server 직접 build + 실행 (간단 구현)</h3>
