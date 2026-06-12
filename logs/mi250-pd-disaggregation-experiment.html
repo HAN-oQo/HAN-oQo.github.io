@@ -1006,6 +1006,88 @@ docker run -d --name vllm-decode \
 
 <p><strong>한 줄</strong>: <code>nccl_num_channels=16</code> 이 대부분 환경의 sweet spot. MI250 에서는 16 보다 키워도 marginal. NVLink 의 H100 면 32 까지는 의미.</p>
 
+<h5>Hardware bound 확인 방법 — 내 GPU 의 link 수 어떻게 알아내나</h5>
+
+<p><strong>AMD ROCm (MI250 등)</strong>:</p>
+<pre><code># 1. GPU 간 topology + link weight 확인
+rocm-smi --showtopo
+# → Weight 매트릭스. 낮을수록 link 수 많음
+#   weight 15 = 4 XGMI link (best)
+#   weight 30 = 2 XGMI link
+#   weight 45 = 1 XGMI link (worst)
+
+# 2. Bus 종류 (XGMI / PCIe) 확인
+rocm-smi --showbus
+# 또는
+rocm-smi --showhw
+
+# 3. XGMI link error 카운터 (link 살아있는지)
+rocm-smi --showxgmierr
+
+# 4. 실측 bandwidth — XGMI bandwidth utilization
+rocm-smi --showbw                  # 일부 ROCm 버전만
+# 또는 rocm-bandwidth-test (별도 tool)
+rocm-bandwidth-test                # peer-to-peer matrix 측정</code></pre>
+
+<p><strong>NVIDIA (H100 등)</strong>:</p>
+<pre><code># 1. NVLink 토폴로지 + link 수
+nvidia-smi topo -m                 # GPU 간 connection 매트릭스
+# → NV1, NV2, ..., NV18: NVLink 의 link 수
+# → PIX: PCIe internal switch / SYS: PCIe through system
+
+# 2. NVLink 상태 (활성 link 수, throughput)
+nvidia-smi nvlink --status -i 0    # GPU 0 의 NVLink 각 lane 상태
+nvidia-smi nvlink --capabilities -i 0   # 지원하는 max throughput
+
+# 3. NVLink 활성 GPU 수 + bandwidth
+nvidia-smi nvlink --getcounters -i 0
+# → 누적 transfer 바이트, 현재 활용도
+
+# 4. 실측 — NCCL 자체 test
+cd nccl-tests
+./build/all_reduce_perf -b 8 -e 256M -f 2 -g &lt;n_gpus&gt;</code></pre>
+
+<p><strong>NCCL/RCCL 의 hard max 확인</strong>:</p>
+<pre><code># vLLM 실행 시 NCCL_DEBUG=INFO 켜면 자동으로 print
+# 본 실험 prefill log 에서 본 것:
+#   Channel 00/16 : 0 1
+#   Channel 01/16 : 0 1
+#   ...
+#   Channel 15/16 : 0 1
+# → 실제로 16 channel 사용 + 각 channel 이 GPU 0 ↔ GPU 1 연결
+
+# NCCL build 의 NCHANNELS 한계:
+# - NCCL 2.20+ : MAX_NCHANNELS = 32 (대부분 build)
+# - 특정 build 는 64 까지 지원
+# 환경변수로 override:
+NCCL_MAX_NCHANNELS=32 NCCL_MIN_NCHANNELS=16 vllm serve ...
+
+# 본 실험 image 의 NCCL/RCCL 한계 확인
+docker run --rm rocm/vllm:latest python3 -c "
+from torch.distributed.distributed_c10d import _get_default_group
+import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'default'))
+"</code></pre>
+
+<p><strong>본 실험에서 직접 확인한 MI250 의 link 수</strong> (§2-3 의 <code>rocm-smi --showtopo</code> 결과):</p>
+<table>
+<tr><th>쌍</th><th>Weight</th><th>Link 수 추정</th><th>해석</th></tr>
+<tr><td>GCD 0 ↔ 1 (같은 OAM)</td><td>15</td><td>4 XGMI link</td><td>Infinity Fabric, 가장 wide</td></tr>
+<tr><td>GCD 0 ↔ 4 (다른 OAM 가까운)</td><td>15</td><td>4 XGMI link</td><td>좋은 path</td></tr>
+<tr><td>GCD 0 ↔ 5 (다른 OAM 보통)</td><td>30</td><td>2 XGMI link</td><td>중간</td></tr>
+<tr><td>GCD 1 ↔ 5 (가장 먼)</td><td>45</td><td>1 XGMI link</td><td>최소 bandwidth</td></tr>
+</table>
+
+<p><strong>본 실험의 prefill GCD 0 ↔ decode GCD 4 = weight 15 = 4 link</strong>. 즉 가장 좋은 path 선택됨 — <code>nccl_num_channels=16</code> 의 16 channel 이 4 physical link 위 분산됨 (각 link 당 4 channel). 더 키워도 4 link 가 bottleneck.</p>
+
+<p><strong>요약</strong>: hardware link 수 보고 <code>nccl_num_channels</code> 결정:</p>
+<table>
+<tr><th>Link 수</th><th>권장 nccl_num_channels</th></tr>
+<tr><td>1-2 (MI250 의 다른 OAM, 또는 PCIe-only)</td><td>8</td></tr>
+<tr><td>4 (MI250 같은 OAM, 또는 NVLink 4-rate)</td><td><strong>16</strong> (default)</td></tr>
+<tr><td>8-12 (NVLink H100)</td><td>32</td></tr>
+<tr><td>18 (NVLink 4.0 full mesh)</td><td>32-64</td></tr>
+</table>
+
 <h5>일반 PDD 설명의 "decode 받아옴" vs PUT_ASYNC 의 "prefill 보냄"</h5>
 
 <p>이전에 본 일반 PDD 설명 (LLMServingSim / Heimdall / Frontier 문서들) 의 "decode 가 KV 받아옴" 표현은 <strong>받는 측 (consumer) 시각</strong>. KV 가 D 에 도착한다는 사실은 똑같음. 단 <strong>"누가 trigger" 는 connector / 옵션 별 다름</strong>:</p>
