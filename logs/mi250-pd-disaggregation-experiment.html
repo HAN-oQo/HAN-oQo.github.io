@@ -463,32 +463,7 @@ $ docker run --rm --device=/dev/kfd --device=/dev/dri \
 
 <p>vLLM <strong>0.11.2.dev673 ROCm 7.0 build</strong>, host ROCm 6.2 — minor version mismatch 가능성 있음.</p>
 
-<h3>5-2. 첫 실패 — Worker proc 죽음 (실 stack trace)</h3>
-<pre><code>$ docker run -d --name vllm-baseline \
-    -e HIP_VISIBLE_DEVICES=0,1,2,3 \
-    rocm/vllm:latest \
-    vllm serve Qwen/Qwen2.5-1.5B-Instruct --tensor-parallel-size 4 ...
-
-# 200초 후 container exited (1). docker logs:
-INFO 06-11 09:10:41 [gpu_model_runner.py:3567] Model loading took 0.8047 GiB memory and 87.119832 seconds
-(Worker_TP3 pid=456) [aiter] import [module_rmsnorm] under /usr/local/lib/python3.12/dist-packages/aiter/jit/module_rmsnorm.so
-ERROR 06-11 09:11:04 [multiproc_executor.py:233] Worker proc VllmWorker-3 died unexpectedly, shutting down executor.
-ERROR 06-11 09:11:08 [core.py:843] EngineCore failed to start.
-...
-RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}</code></pre>
-
-<p><strong>Root cause</strong>: AMD 의 <code>aiter</code> (AI Tensor library) 가 <code>module_rmsnorm.so</code> JIT compile 시 죽음. Worker-3 가 가장 먼저 죽으면서 cascade 종료. 다른 worker 들도 같은 module import 직후 종료.</p>
-
-<p>가설: ROCm 7.0 빌드된 aiter 가 host ROCm 6.2 / gfx9010 (MI250) 에서 JIT compile fail. 또는 silent segfault.</p>
-
-<h3>5-3. TP=1 단순 시도 — 같은 fail</h3>
-<pre><code>$ docker run -d --name vllm-tp1 -e HIP_VISIBLE_DEVICES=0 \
-    rocm/vllm:latest vllm serve ... --tensor-parallel-size 1 ...
-
-# 동일한 aiter module_rmsnorm import 후 EngineCore_DP0 cancellation.
-# → aiter 자체가 문제. TP 무관.</code></pre>
-
-<h3>5-4. <span class="status-ok">해결</span> — aiter 비활성화 + enforce-eager</h3>
+<h3>5-2. <span class="status-ok">해결</span> — aiter 비활성화 + enforce-eager</h3>
 
 <pre><code>$ docker run -d --name vllm-tp1 \
     --device=/dev/kfd --device=/dev/dri \
@@ -508,7 +483,7 @@ RuntimeError: Engine core initialization failed. See root cause above. Failed co
 
 <p>약 3분 후 server up. 환경변수 <code>VLLM_ROCM_USE_AITER=0</code> 가 aiter 의 fused kernel 사용을 끔. <code>--enforce-eager</code> 가 torch.compile graph capture 도 skip — 추가 안전망.</p>
 
-<h3>5-5. 첫 chat completion (실 결과)</h3>
+<h3>5-3. 첫 chat completion (실 결과)</h3>
 
 <pre><code>$ curl -s http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
@@ -526,7 +501,7 @@ content: The sky appears blue because of scattering of sunlight by air molecules
 usage: {'prompt_tokens': 26, 'total_tokens': 43, 'completion_tokens': 17}
 finish: stop</code></pre>
 
-<h3>5-6. 동시 모니터링 캡쳐 (실 데이터)</h3>
+<h3>5-4. 동시 모니터링 캡쳐 (실 데이터)</h3>
 <pre><code>$ ~/pd-experiment/monitor_rocm.sh /tmp/mon_baseline.csv 5 &amp;
 $ &lt;curl 호출&gt;
 $ wait
@@ -554,46 +529,6 @@ ts            device,temp,power,gpu%,vram%,mem_act
 
 <h2 id="success">6. 실험 2 — P/D 돌리기 (성공 버전, P2pNccl + 공식 proxy)</h2>
 <div class="card">
-
-<h3>6-A. 11번 실패의 원인 분류</h3>
-
-<p>왜 한 번에 안 됐나 — 각 시도가 어떤 부분에서 막혔는지:</p>
-
-<table>
-<tr><th>TEST</th><th>설정</th><th>결과</th><th>막힌 원인 (분류)</th></tr>
-<tr><td>1</td><td>SharedStorage + kv_both, TP=4</td><td>garbage</td><td><strong>(A) SharedStorage = debug 구현</strong>. source comment 가 "This is a debug implementation" 명시. KV layout (slot_mapping × num_blocks × head × dim) 의 정확한 production-grade serialization 보장 X. + 이전 시도의 KV 잔재가 dir 에 남아있어 stale load</td></tr>
-<tr><td>2</td><td>baseline NO kv-transfer-config, TP=4</td><td>✓ 정상</td><td>실패 아님 — KV connector 없으면 vLLM 자체는 정상 동작 확인용 (sanity check)</td></tr>
-<tr><td>3</td><td>SharedStorage + kv_both + <code>enable_permute_local_kv=true</code></td><td>garbage</td><td>(A) 와 동일 — permute 옵션이 KV head 차원 reorder 해주지만 underlying serialization broken 은 안 고침</td></tr>
-<tr><td>4</td><td>SharedStorage + <code>VLLM_USE_V1=0</code> (v0 engine)</td><td>garbage</td><td>v0 fallback 시도 — 그러나 env var 가 vLLM 0.11.2.dev 에선 무시되거나 v0 의 SharedStorage path 도 같은 debug 한계</td></tr>
-<tr><td>5</td><td>SharedStorage + TP=1 (multi-GPU partition 의심 검증)</td><td>shape mismatch error<br><code>RuntimeError: value tensor [2,32,128] cannot broadcast to [2,32,256]</code></td><td><strong>(B) 다른 TP 의 cache 잔재</strong>. 이전 TEST 가 TP=4 로 KV 저장 → 각 GCD partition shape [2,32,128]. TP=1 이 load 시도 → 전체 shape [2,32,256] 기대. <strong>host 의 docker volume permission 으로 host user 가 dir rm 못 함</strong> (docker 가 root 로 file 만듬). 정확한 진단 stack trace 얻음</td></tr>
-<tr><td>6</td><td>SharedStorage + TP=4 kv_producer only (load 안 함)</td><td>garbage</td><td>kv_producer 라도 prompt match 면 load 시도. 어제 TP=4 잔재 + TEST 5 broken state. clean 안 됐음</td></tr>
-<tr><td>7</td><td><strong>완전 clean dir</strong> + TP=4 kv_producer + 첫 호출 (cache miss)</td><td>✓ 정상</td><td>cache miss = normal forward = KV connector load path 우회. SharedStorage 안 거치면 정상</td></tr>
-<tr><td>8</td><td>위와 같은 instance, 같은 prompt 두번째 (cache hit)</td><td>✓ 정상, 350ms (18× 빠름)</td><td>같은 instance 가 자기 KV 저장 + 자기 load → shape/layout 일치 → 정상. <strong>SharedStorage 는 같은 instance 안에선 동작</strong> finding</td></tr>
-<tr><td>9</td><td>SharedStorage + 2 instance (prefill+decode), 같은 dir 공유</td><td>prefill 정상, decode garbage<br>log: "External Cache Hit!"</td><td><strong>(C) Cross-instance KV layout mismatch</strong>. 두 vLLM instance 가 다른 <code>engine_id</code> 로 init. KV cache 의 internal layout (block size, head order, dtype quirks) 가 instance 마다 약간 다름. 같은 prompt 의 KV 라도 다른 instance 가 load 하면 의미 깨짐. <strong>SharedStorage 의 debug 한계가 가장 명확히 드러난 부분</strong></td></tr>
-<tr><td>10</td><td>SharedStorage 2 instance + <code>kv_buffer_device=cpu</code></td><td>garbage</td><td>(C) 와 동일 — buffer device 가 cpu 든 cuda 든 SharedStorage cross-instance broken 은 안 고침</td></tr>
-<tr><td>11</td><td><strong>P2pNcclConnector + 공식 proxy + unique kv_port + 정확한 config</strong></td><td>✅ 성공</td><td>SharedStorage 포기. vLLM 공식 예제 (<code>disaggregated_serving_p2p_nccl_xpyd/</code>) 그대로 따라함. NCCL/RCCL handshake 성공 → 16 channel wired → KV 가 GPU-GPU 직접 transfer. <strong>production-grade connector 의 정통 PDD 동작</strong></td></tr>
-</table>
-
-<h4>한 시각 — 실패 원인을 3 categories 로 묶기</h4>
-<table>
-<tr><th>Category</th><th>해당 TEST</th><th>본질</th><th>해결책</th></tr>
-<tr><td><strong>(A) SharedStorage = production 용 아님</strong></td><td>1, 3, 4, 9, 10</td><td>source 가 명시한 "debug implementation". KV layout / engine_id / dtype 의 cross-instance round-trip 보장 X. prefix cache 공유 / mechanism 시연 용</td><td>P2pNccl / NIXL / Mooncake / LMCache 같은 production-grade connector 사용</td></tr>
-<tr><td><strong>(B) 환경 잔재 / 권한</strong></td><td>5, 6</td><td>이전 시도의 KV cache 가 host 의 dir 에 남음. docker volume 의 file 이 root 소유라 host user 가 rm 못 함. 다음 시도가 stale state load → shape mismatch</td><td>"매 시도 전 alpine container 로 강제 rm" workflow:<br><code>docker run --rm -v ...:/shared_kv alpine sh -c 'rm -rf /shared_kv/*'</code></td></tr>
-<tr><td><strong>(C) PDD 정통 setup 의 5 요소 복잡도</strong></td><td>TEST 11 (성공) — 그리고 어제 §6 에서 시도한 P2pNccl 첫 시도 (ZMQ port 14579 충돌, 다른 history)</td><td>PDD 가 단순히 "두 vLLM 띄움" 이 아님. (1) unique kv_port, (2) external proxy server 의 service discovery, (3) request_id 기반 KV routing, (4) NCCL/RCCL handshake, (5) dtype/seed/buffer 정확 매칭 — <strong>5 요소 모두 갖춰야 동작</strong></td><td>vLLM 공식 예제 (<code>disaggregated_serving_p2p_nccl_xpyd/</code>) 그대로 사용. 우리 환경 차이는 quart 의존성만 build (간단한 구현)</td></tr>
-</table>
-
-<h4>왜 11번이나 걸렸나 — 솔직히</h4>
-<ol>
-<li><strong>가설 검증의 시간 비용</strong>: 각 시도가 컨테이너 build / model load / inference 까지 ~ 90-180초. "이 옵션 바꾸면 될까?" hypothesis testing 이 자연스럽게 반복</li>
-<li><strong>SharedStorage 가 mechanism 보였다는 점이 함정</strong>: KV file 이 dir 에 정확히 생성됨 (28 layer safetensors!) → "mechanism 동작" 으로 보였지만 quality 가 깨짐 → 다양한 옵션 (permute / v0 / TP=1 / kv_buffer_device) 시도. 모두 같은 (A) 카테고리라 effort 낭비</li>
-<li><strong>공식 예제 위치를 늦게 알아냄</strong>: <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/</code> 의 존재를 8번째 즈음에 발견. 처음부터 알았다면 P2pNccl 정통 명령 (proxy + unique port) 바로 사용 가능했음</li>
-<li><strong>Proxy 가 quart 의존성 — image 에 없음</strong>: 정통 명령 알았어도 proxy script 가 quart 못 import. 간단 Dockerfile (3 줄) 으로 빌드. blinker conflict 도 만남 → <code>--ignore-installed</code> 추가</li>
-</ol>
-
-<p>요약: <strong>"SharedStorage 가 보이는 mechanism 시연에 속아서 정통 P2pNccl 까지 가는 데 시간 + 공식 예제 발견 후 의존성 패치 시간"</strong> 이 11번의 본질.</p>
-
-
-<div class="tip"><strong>핵심 finding</strong>: SharedStorageConnector 는 source comment 가 "debug implementation" 명시 + cross-instance quality 깨짐. <strong>정통 PDD 는 P2pNccl + 공식 proxy server</strong> + 정확한 kv_port / proxy_port / http_port config 필요. 11 번 시도 끝에 동작.</div>
 
 <h3>6-1. 아키텍처 — 3 컴포넌트가 어떻게 떠 있나</h3>
 
@@ -1695,6 +1630,79 @@ ts             card,temp,power,gpu%,vram%,mem
 <summary style="cursor:pointer; padding:12px; background:var(--blue-bg); border-radius:8px; font-weight:600;">▶ 펼쳐서 보기 — 11 TEST + 4 문제 카테고리 + 진단 표</summary>
 
 <div class="card">
+
+<h4>실험 1 (Baseline) 의 첫 두 실패 — Worker proc 죽음</h4>
+<pre><code>$ docker run -d --name vllm-baseline \
+    -e HIP_VISIBLE_DEVICES=0,1,2,3 \
+    rocm/vllm:latest \
+    vllm serve Qwen/Qwen2.5-1.5B-Instruct --tensor-parallel-size 4 ...
+
+# 200초 후 container exited (1). docker logs:
+INFO 06-11 09:10:41 [gpu_model_runner.py:3567] Model loading took 0.8047 GiB memory and 87.119832 seconds
+(Worker_TP3 pid=456) [aiter] import [module_rmsnorm] under /usr/local/lib/python3.12/dist-packages/aiter/jit/module_rmsnorm.so
+ERROR 06-11 09:11:04 [multiproc_executor.py:233] Worker proc VllmWorker-3 died unexpectedly, shutting down executor.
+ERROR 06-11 09:11:08 [core.py:843] EngineCore failed to start.
+...
+RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}</code></pre>
+
+<p><strong>Root cause</strong>: AMD 의 <code>aiter</code> (AI Tensor library) 가 <code>module_rmsnorm.so</code> JIT compile 시 죽음. Worker-3 가 가장 먼저 죽으면서 cascade 종료. 다른 worker 들도 같은 module import 직후 종료.</p>
+
+<p>가설: ROCm 7.0 빌드된 aiter 가 host ROCm 6.2 / gfx9010 (MI250) 에서 JIT compile fail. 또는 silent segfault.</p>
+
+<h5>그리고 TP=1 단순 시도 — 같은 fail</h5>
+<pre><code>$ docker run -d --name vllm-tp1 -e HIP_VISIBLE_DEVICES=0 \
+    rocm/vllm:latest vllm serve ... --tensor-parallel-size 1 ...
+
+# 동일한 aiter module_rmsnorm import 후 EngineCore_DP0 cancellation.
+# → aiter 자체가 문제. TP 무관.</code></pre>
+
+
+
+<h4>실험 2 (P/D 성공) 까지의 11번 실패 history + 원인 분류</h4>
+
+<p>왜 한 번에 안 됐나 — 각 시도가 어떤 부분에서 막혔는지:</p>
+
+<table>
+<tr><th>TEST</th><th>설정</th><th>결과</th><th>막힌 원인 (분류)</th></tr>
+<tr><td>1</td><td>SharedStorage + kv_both, TP=4</td><td>garbage</td><td><strong>(A) SharedStorage = debug 구현</strong>. source comment 가 "This is a debug implementation" 명시. KV layout (slot_mapping × num_blocks × head × dim) 의 정확한 production-grade serialization 보장 X. + 이전 시도의 KV 잔재가 dir 에 남아있어 stale load</td></tr>
+<tr><td>2</td><td>baseline NO kv-transfer-config, TP=4</td><td>✓ 정상</td><td>실패 아님 — KV connector 없으면 vLLM 자체는 정상 동작 확인용 (sanity check)</td></tr>
+<tr><td>3</td><td>SharedStorage + kv_both + <code>enable_permute_local_kv=true</code></td><td>garbage</td><td>(A) 와 동일 — permute 옵션이 KV head 차원 reorder 해주지만 underlying serialization broken 은 안 고침</td></tr>
+<tr><td>4</td><td>SharedStorage + <code>VLLM_USE_V1=0</code> (v0 engine)</td><td>garbage</td><td>v0 fallback 시도 — 그러나 env var 가 vLLM 0.11.2.dev 에선 무시되거나 v0 의 SharedStorage path 도 같은 debug 한계</td></tr>
+<tr><td>5</td><td>SharedStorage + TP=1 (multi-GPU partition 의심 검증)</td><td>shape mismatch error<br><code>RuntimeError: value tensor [2,32,128] cannot broadcast to [2,32,256]</code></td><td><strong>(B) 다른 TP 의 cache 잔재</strong>. 이전 TEST 가 TP=4 로 KV 저장 → 각 GCD partition shape [2,32,128]. TP=1 이 load 시도 → 전체 shape [2,32,256] 기대. <strong>host 의 docker volume permission 으로 host user 가 dir rm 못 함</strong> (docker 가 root 로 file 만듬). 정확한 진단 stack trace 얻음</td></tr>
+<tr><td>6</td><td>SharedStorage + TP=4 kv_producer only (load 안 함)</td><td>garbage</td><td>kv_producer 라도 prompt match 면 load 시도. 어제 TP=4 잔재 + TEST 5 broken state. clean 안 됐음</td></tr>
+<tr><td>7</td><td><strong>완전 clean dir</strong> + TP=4 kv_producer + 첫 호출 (cache miss)</td><td>✓ 정상</td><td>cache miss = normal forward = KV connector load path 우회. SharedStorage 안 거치면 정상</td></tr>
+<tr><td>8</td><td>위와 같은 instance, 같은 prompt 두번째 (cache hit)</td><td>✓ 정상, 350ms (18× 빠름)</td><td>같은 instance 가 자기 KV 저장 + 자기 load → shape/layout 일치 → 정상. <strong>SharedStorage 는 같은 instance 안에선 동작</strong> finding</td></tr>
+<tr><td>9</td><td>SharedStorage + 2 instance (prefill+decode), 같은 dir 공유</td><td>prefill 정상, decode garbage<br>log: "External Cache Hit!"</td><td><strong>(C) Cross-instance KV layout mismatch</strong>. 두 vLLM instance 가 다른 <code>engine_id</code> 로 init. KV cache 의 internal layout (block size, head order, dtype quirks) 가 instance 마다 약간 다름. 같은 prompt 의 KV 라도 다른 instance 가 load 하면 의미 깨짐. <strong>SharedStorage 의 debug 한계가 가장 명확히 드러난 부분</strong></td></tr>
+<tr><td>10</td><td>SharedStorage 2 instance + <code>kv_buffer_device=cpu</code></td><td>garbage</td><td>(C) 와 동일 — buffer device 가 cpu 든 cuda 든 SharedStorage cross-instance broken 은 안 고침</td></tr>
+<tr><td>11</td><td><strong>P2pNcclConnector + 공식 proxy + unique kv_port + 정확한 config</strong></td><td>✅ 성공</td><td>SharedStorage 포기. vLLM 공식 예제 (<code>disaggregated_serving_p2p_nccl_xpyd/</code>) 그대로 따라함. NCCL/RCCL handshake 성공 → 16 channel wired → KV 가 GPU-GPU 직접 transfer. <strong>production-grade connector 의 정통 PDD 동작</strong></td></tr>
+</table>
+
+<h4>한 시각 — 실패 원인을 3 categories 로 묶기</h4>
+<table>
+<tr><th>Category</th><th>해당 TEST</th><th>본질</th><th>해결책</th></tr>
+<tr><td><strong>(A) SharedStorage = production 용 아님</strong></td><td>1, 3, 4, 9, 10</td><td>source 가 명시한 "debug implementation". KV layout / engine_id / dtype 의 cross-instance round-trip 보장 X. prefix cache 공유 / mechanism 시연 용</td><td>P2pNccl / NIXL / Mooncake / LMCache 같은 production-grade connector 사용</td></tr>
+<tr><td><strong>(B) 환경 잔재 / 권한</strong></td><td>5, 6</td><td>이전 시도의 KV cache 가 host 의 dir 에 남음. docker volume 의 file 이 root 소유라 host user 가 rm 못 함. 다음 시도가 stale state load → shape mismatch</td><td>"매 시도 전 alpine container 로 강제 rm" workflow:<br><code>docker run --rm -v ...:/shared_kv alpine sh -c 'rm -rf /shared_kv/*'</code></td></tr>
+<tr><td><strong>(C) PDD 정통 setup 의 5 요소 복잡도</strong></td><td>TEST 11 (성공) — 그리고 어제 §6 에서 시도한 P2pNccl 첫 시도 (ZMQ port 14579 충돌, 다른 history)</td><td>PDD 가 단순히 "두 vLLM 띄움" 이 아님. (1) unique kv_port, (2) external proxy server 의 service discovery, (3) request_id 기반 KV routing, (4) NCCL/RCCL handshake, (5) dtype/seed/buffer 정확 매칭 — <strong>5 요소 모두 갖춰야 동작</strong></td><td>vLLM 공식 예제 (<code>disaggregated_serving_p2p_nccl_xpyd/</code>) 그대로 사용. 우리 환경 차이는 quart 의존성만 build (간단한 구현)</td></tr>
+</table>
+
+<h4>왜 11번이나 걸렸나 — 솔직히</h4>
+<ol>
+<li><strong>가설 검증의 시간 비용</strong>: 각 시도가 컨테이너 build / model load / inference 까지 ~ 90-180초. "이 옵션 바꾸면 될까?" hypothesis testing 이 자연스럽게 반복</li>
+<li><strong>SharedStorage 가 mechanism 보였다는 점이 함정</strong>: KV file 이 dir 에 정확히 생성됨 (28 layer safetensors!) → "mechanism 동작" 으로 보였지만 quality 가 깨짐 → 다양한 옵션 (permute / v0 / TP=1 / kv_buffer_device) 시도. 모두 같은 (A) 카테고리라 effort 낭비</li>
+<li><strong>공식 예제 위치를 늦게 알아냄</strong>: <code>/app/vllm/examples/online_serving/disaggregated_serving_p2p_nccl_xpyd/</code> 의 존재를 8번째 즈음에 발견. 처음부터 알았다면 P2pNccl 정통 명령 (proxy + unique port) 바로 사용 가능했음</li>
+<li><strong>Proxy 가 quart 의존성 — image 에 없음</strong>: 정통 명령 알았어도 proxy script 가 quart 못 import. 간단 Dockerfile (3 줄) 으로 빌드. blinker conflict 도 만남 → <code>--ignore-installed</code> 추가</li>
+</ol>
+
+<p>요약: <strong>"SharedStorage 가 보이는 mechanism 시연에 속아서 정통 P2pNccl 까지 가는 데 시간 + 공식 예제 발견 후 의존성 패치 시간"</strong> 이 11번의 본질.</p>
+
+
+<div class="tip"><strong>핵심 finding</strong>: SharedStorageConnector 는 source comment 가 "debug implementation" 명시 + cross-instance quality 깨짐. <strong>정통 PDD 는 P2pNccl + 공식 proxy server</strong> + 정확한 kv_port / proxy_port / http_port config 필요. 11 번 시도 끝에 동작.</div>
+
+
+
+<hr style="margin: 24px 0;">
+
+
 
 <p>실 진행 순서로 만난 문제 4가지 + 진단:</p>
 
