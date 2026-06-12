@@ -951,6 +951,61 @@ docker run -d --name vllm-decode \
 <li><strong>GET 의 단점</strong>: D 가 trigger 라면 D 가 자기 forward 시작할 때 비로소 KV pull. 그 transfer 시간이 D 의 TTFT 에 직접 추가 (overlap X)</li>
 </ol>
 
+<h5>kv_buffer_size — 정확한 의미 + 키우면?</h5>
+
+<p>본 실험 config: prefill <code>"kv_buffer_size":"1e1"</code> (=10), decode <code>"kv_buffer_size":"8e9"</code> (=8GB). 왜 이렇게 비대칭?</p>
+
+<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 직접 설명:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+<strong>역할</strong>: temporary GPU memory allocation for storing received KV cache data between instances.<br><br>
+<strong>Producer 작게 / Consumer 크게</strong>: "Prefill currently <strong>does not need to receive kvcache</strong>" → prefill (producer) 의 receive buffer 는 거의 0 (1e1=10 bytes) 으로 둠. Decode (consumer) 는 받은 KV 를 generation 시작까지 hold → 큰 buffer (8e9=8GB) 필요.<br><br>
+<strong>키우면? — Trade-off</strong>: "If it is too large, it will reduce the kvcache space available for normal inference by D instances, thereby <strong>decreasing the inference batch size</strong>." → buffer 가 클수록 KV cache 자체에 쓸 VRAM 줄어듦 → 동시 처리 가능한 sequence 수 ↓<br><br>
+<strong>권장 size</strong>: "<strong>5%~10% of the memory size</strong>" (GPU VRAM 의 5-10%). MI250 64GB GCD 면 약 3-6GB 정도가 권장.<br><br>
+<strong>Buffer 넘치면?</strong>: "KVcache can be directly stored in the Tensor memory pool" — 넘친 KV 는 host CPU memory 의 pool 로 spill. PCIe bandwidth 사용 → latency 증가 (traffic spike 때 일어남).
+</blockquote>
+
+<table>
+<tr><th>kv_buffer_size 변화</th><th>효과</th></tr>
+<tr><td>매우 작음 (decode 의 1e1)</td><td>받은 KV 임시 보관 공간 부족 → traffic spike 때 CPU pool 로 spill → PCIe latency ↑</td></tr>
+<tr><td>적정 (5-10% VRAM = 3-6GB on MI250)</td><td>✅ 권장. spike 흡수 + KV cache 본체 공간 충분</td></tr>
+<tr><td>매우 큼 (예: 50GB)</td><td>KV cache 본체 공간 부족 → max concurrent sequence ↓ → throughput ↓</td></tr>
+<tr><td>본 실험 8e9 (8GB) for decode</td><td>약간 큼 (12% of 64GB). 1.5B 모델 작아서 KV cache 자체 적게 필요 — 여유 있음</td></tr>
+<tr><td>본 실험 1e1 (10 bytes) for prefill</td><td>producer 는 receive 안 함 — 거의 0 으로 두는 게 정답</td></tr>
+</table>
+
+<h5>nccl_num_channels — 키우면 더 빨라져?</h5>
+
+<p>본 실험 <code>"nccl_num_channels":"16"</code>. 이걸 키우면?</p>
+
+<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 정량 정보:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+<strong>Memory 비용</strong>: "When <code>NCCL_MAX_NCHANNELS=16</code>, an NCCL group typically occupies <strong>100MB</strong>, while when <code>NCCL_MAX_NCHANNELS=8</code>, it usually takes up <strong>52MB</strong>."<br><br>
+즉 channel 1개 ≈ 6-7MB VRAM. 16 channel = 100MB 정도.<br><br>
+<strong>Scaling 한계</strong>: "For large-scale xPyD configurations—such as DeepSeek's 96P144D—this implementation is <strong>currently not feasible</strong>." (large-scale 시 한계 명시)
+</blockquote>
+
+<table>
+<tr><th>nccl_num_channels</th><th>특성</th></tr>
+<tr><td>1-4</td><td>적은 parallelism. 작은 KV 면 OK 이지만 큰 KV (긴 prompt) 면 transfer 시간 ↑</td></tr>
+<tr><td>8 (52MB)</td><td>중간. PR 의 기준점</td></tr>
+<tr><td>16 (100MB) <strong>← 우리 실험</strong></td><td>공식 예제 default. 균형점 — bandwidth ↑ 와 memory ↓ 적당함</td></tr>
+<tr><td>32+</td><td>이론상 bandwidth ↑. 단 hardware link 수가 적으면 saturation 일찍. AMD MI250 의 XGMI link 수 (같은 카드 4, 다른 카드 1-2) 고려 시 16 보다 큰 값 marginal. <strong>NCCL/RCCL 의 hard max 도 보통 32</strong> (build 마다 다름)</td></tr>
+<tr><td>매우 큼 (64+)</td><td>memory 낭비 + HW link 보다 많아서 의미 X</td></tr>
+</table>
+
+<h5>키우는 한계 — Hardware bound</h5>
+
+<p>NCCL/RCCL channel 수는 결국 <strong>hardware link 수에 bound</strong>:</p>
+<ul>
+<li><strong>NVIDIA NVLink 4.0 (H100)</strong>: 18 link/GPU → 32-64 channel 까지 의미 있음</li>
+<li><strong>AMD XGMI on MI250</strong>: 같은 OAM 안 4 link, 다른 OAM 1-2 link → 16 정도가 충분 (그 이상 marginal)</li>
+<li><strong>PCIe fallback</strong>: PCIe 5.0 x16 면 약 64GB/s — channel 많이 늘려도 bandwidth bound</li>
+</ul>
+
+<p><strong>한 줄</strong>: <code>nccl_num_channels=16</code> 이 대부분 환경의 sweet spot. MI250 에서는 16 보다 키워도 marginal. NVLink 의 H100 면 32 까지는 의미.</p>
+
 <h5>일반 PDD 설명의 "decode 받아옴" vs PUT_ASYNC 의 "prefill 보냄"</h5>
 
 <p>이전에 본 일반 PDD 설명 (LLMServingSim / Heimdall / Frontier 문서들) 의 "decode 가 KV 받아옴" 표현은 <strong>받는 측 (consumer) 시각</strong>. KV 가 D 에 도착한다는 사실은 똑같음. 단 <strong>"누가 trigger" 는 connector / 옵션 별 다름</strong>:</p>
