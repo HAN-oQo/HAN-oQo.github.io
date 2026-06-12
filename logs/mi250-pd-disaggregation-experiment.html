@@ -718,10 +718,42 @@ This encoding embeds both the prefill instance address and decode instance addre
 <tr><td><a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_demo.py">disagg_example_p2p_nccl_xpyd.sh</a></td><td>공식 demo script. proxy 명령이 vllm serve 명령들과 함께 한 sh 안에 있음 (proxy 없이 띄우는 패턴 X)</td></tr>
 <tr><td><a href="https://github.com/vllm-project/vllm/issues/16253">Issue #16253: [Usage] How to use xPyD disaggregated prefilling</a></td><td>사용자가 "demo 가 불명확해서 shell script 더 명확히 해달라" 요청 → 그 결과로 위 sh 가 추가됨. PDD 사용 = sh 따라가는 것</td></tr>
 <tr><td><a href="https://github.com/vllm-project/vllm/issues/21712">Issue #21712: P2PNcclConnector Assertion Error</a></td><td>사용자가 proxy 없이 chat completion 호출 시 만나는 assertion error 보고. 정확히 "remote_address None" 관련</td></tr>
-<tr><td>p2p_nccl_engine.py source<br>(image 안)</td><td><code>create_connect()</code> 의 <code>assert remote_address is not None</code><br>+ <code>ping</code> thread 가 <code>proxy_address != ""</code> 조건일 때만 start</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/blob/main/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py">vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</a></td><td>P2pNcclEngine source. <code>create_connect()</code> 의 <code>assert remote_address is not None</code><br>+ <code>ping</code> thread 가 <code>proxy_address != ""</code> 조건일 때만 start</td></tr>
 </table>
 
 <p><strong>RFC 차원</strong>: <a href="https://github.com/vllm-project/vllm/issues/10818">Issue #10818 — Disaggregated prefilling and KV cache transfer roadmap</a> 에 PDD 전반 design 명시. proxy/router 가 disagg serving 의 표준 컴포넌트.</p>
+
+<h4>ZMQ 가 뭐야 — 출처 + source 직접 인용</h4>
+
+<p><strong>ZMQ 사용의 출처 — PR #18242 가 직접 명시</strong>:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+<strong><a href="https://github.com/vllm-project/vllm/pull/18242">vLLM PR #18242 (P2pNccl 원작자 Abatom)</a></strong> 의 design 섹션:<br><br>
+"This instance maintains a <strong>ZMQ Server</strong>, which runs a dedicated thread to listen on the <code>zmq_addr</code> address."<br><br>
+"These requests include requests to establish an <strong>NCCL connection</strong> and requests to send <strong>KVcache metadata</strong> (such as tensor shapes and data types). <strong>However, it does not actually transmit the KVcache data itself.</strong>"<br><br>
+"Both <strong>PUT and PUT_ASYNC</strong> involve the P instance actively sending KVcache to the D instance" <strong>via NCCL</strong>, while "control flow requests from other instances" and metadata exchange occur through ZMQ.
+</blockquote>
+
+<p>요약: <strong>ZMQ = handshake + metadata + control flow / NCCL = 실 KV cache tensor</strong>.</p>
+
+<p>그리고 <strong>source 코드 직접</strong> (<a href="https://github.com/vllm-project/vllm/blob/main/vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py">vllm/distributed/kv_transfer/kv_connector/v1/p2p/p2p_nccl_engine.py</a>):</p>
+
+<pre><code># ZMQ ROUTER socket bind (들어오는 metadata listen)
+self.context = zmq.Context()
+self.router_socket = self.context.socket(zmq.ROUTER)
+self.router_socket.bind(f"tcp://{self.zmq_address}")   # 예: 0.0.0.0:20001
+
+# peer 가 ZMQ DEALER 로 connect
+sock = self.context.socket(zmq.DEALER)
+sock.connect(f"tcp://{remote_address}")
+
+# NCCL handshake metadata (unique_id) 를 ZMQ 로 전달
+unique_id = self.nccl.ncclGetUniqueId()
+data = {"cmd": "NEW", "unique_id": bytes(unique_id.internal)}
+sock.send(msgpack.dumps(data))                          # ← ZMQ 로 보냄
+
+# 그 후 NCCL Comm init — 실 KV 는 ncclSend/Recv 로
+comm = self.nccl.ncclCommInitRank(2, unique_id, rank)</code></pre>
 
 <h4>ZMQ 가 뭐야?</h4>
 
