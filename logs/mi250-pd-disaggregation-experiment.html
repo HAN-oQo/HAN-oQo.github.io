@@ -201,12 +201,15 @@ GPU0..GPU7 모두 XGMI 로 직접 연결 (1 hop)</code></pre>
 <h2 id="design">3. 실험 설계 — 4 GPU P / 4 GPU D</h2>
 <div class="card">
 
-<h3>3-1. 설계 결정</h3>
+<h3>3-1. 설계 결정 (사전 plan)</h3>
+
+<div class="note"><strong>⚠ 설계 vs 실 진행 — TP=4 plan 했지만 TP=1 로만 검증</strong>: 아래 표는 본 실험의 <strong>처음 plan</strong>. 실제로는 SharedStorage 시도 (TP=4, TEST 1-10) 가 모두 quality 실패 → TEST 11 의 P2pNccl 성공은 <strong>공식 예제 default 인 TP=1+TP=1</strong> (2 GCD 만 사용) 으로 mechanism 검증까지만. 8 GCD 활용한 TP=4+TP=4 정통 PDD 는 다음 실험으로. 자세한 어긋남 history 는 §7-bis-A 참조.</div>
+
 <table>
-<tr><th>결정</th><th>값</th><th>이유</th></tr>
-<tr><td>Prefill GPU</td><td>GCD 0-3 (카드 0, 1)</td><td>같은 OAM 카드 안 GCD 쌍 (0+1 / 2+3) 은 Infinity Fabric 400 GB/s — TP=4 시 fastest path</td></tr>
-<tr><td>Decode GPU</td><td>GCD 4-7 (카드 2, 3)</td><td>Prefill 그룹과 다른 카드 → KV transfer 가 카드 간 (100 GB/s) 발생, real PDD 시뮬레이션</td></tr>
-<tr><td>TP / PP</td><td>TP=4 (각 instance)</td><td>한 instance 가 4 GPU 사용 — 작은 모델이라 TP=4 면 거의 여유</td></tr>
+<tr><th>결정</th><th>값 (plan)</th><th>이유 (plan 시점)</th><th>실 진행</th></tr>
+<tr><td>Prefill GPU</td><td>GCD 0-3 (카드 0, 1)</td><td>같은 OAM 카드 안 GCD 쌍 (0+1 / 2+3) 은 Infinity Fabric 400 GB/s — TP=4 시 fastest path</td><td><strong>GCD 0 만</strong> (TP=1)</td></tr>
+<tr><td>Decode GPU</td><td>GCD 4-7 (카드 2, 3)</td><td>Prefill 그룹과 다른 카드 → KV transfer 가 카드 간 (100 GB/s) 발생, real PDD 시뮬레이션</td><td><strong>GCD 4 만</strong> (TP=1)</td></tr>
+<tr><td>TP / PP</td><td>TP=4 (각 instance)</td><td>한 instance 가 4 GPU 사용 — 작은 모델이라 TP=4 면 거의 여유</td><td><strong>TP=1+TP=1</strong> — 공식 예제 default, 우선 mechanism 검증</td></tr>
 <tr><td>모델 선택</td><td>Qwen2.5-7B-Instruct (또는 1.5B 작은)</td><td>4 × 64GB = 256GB 면 70B 도 가능. 7B 로 부하 시나리오 / 1.5B 로 작은 시작. 후보 둘 다 시도</td></tr>
 <tr><td>KV connector</td><td>PyNcclConnector 또는 MoRIIOConnector</td><td>AMD ROCm 환경 — NCCL → RCCL 자동 매핑. MoRIIO 는 ROCm only 명시</td></tr>
 <tr><td>비교 baseline</td><td>vLLM 단일 (TP=8 또는 TP=4 + replica 2)</td><td>같은 자원에서 PDD vs no-PDD throughput 측정</td></tr>
@@ -1555,7 +1558,26 @@ ts             card,temp,power,gpu%,vram%,mem
 <li><strong>quality 검증</strong>: 동일 prompt + temperature=0 → baseline output == PDD output 인지 확인</li>
 </ol>
 
-<h3>10-6. 다음 실험 — Multi-turn Bidirectional KV Transfer (PDD 의 확장)</h3>
+<h3>10-6-a. 다음 실험 — TP=4+TP=4 정통 8 GCD 활용</h3>
+
+<p>본 실험은 TP=1+TP=1 (2 GCD) 로 mechanism 검증까지만. 다음 단계는 <strong>설계 plan 대로 TP=4+TP=4</strong>:</p>
+<ul>
+<li>Prefill instance: TP=4, GCD 0-3 (카드 0, 1) — 카드 안 Infinity Fabric 4-link 활용</li>
+<li>Decode instance: TP=4, GCD 4-7 (카드 2, 3) — 별도 카드</li>
+<li>P↔D KV transfer 가 <strong>다른 OAM 카드 간 XGMI link</strong> 사용 — 진짜 multi-node 시뮬레이션</li>
+<li>NCCL handshake 가 P 의 4 GCD ↔ D 의 4 GCD 사이 다 일어남 — 16 channel × 16 NCCL groups = memory 사용 ↑</li>
+<li>kv_buffer_size 권장값 (5-10% VRAM) 다시 검증 — TP=4 면 각 GCD 가 KV partition 의 1/4 만 들고 있어 buffer 도 1/4 정도면 OK</li>
+<li>벤치마크: TP=1+TP=1 vs TP=4+TP=4 의 latency / throughput 비교</li>
+</ul>
+
+<p>주의 사항:</p>
+<ol>
+<li>kv_port 가 instance 별 unique 인 것 + worker (TP rank) 별 <code>port_offset</code> 가 추가됨. 즉 prefill TP=4 면 kv_port 20001 / 20002 / 20003 / 20004 를 worker 4개가 사용. decode TP=4 면 22001-22004. 두 instance 의 port range 겹치지 않게</li>
+<li>TP=4 면 worker 사이 NCCL all_reduce 도 일어남 — KV transfer 의 P2P NCCL group 와 다른 group. NCCL channel memory 두 배로</li>
+<li>kv_buffer_size 가 작으면 spill 가능 — 8GB 가 적정한지 다시 측정</li>
+</ol>
+
+<h3>10-6-b. 다음 실험 — Multi-turn Bidirectional KV Transfer (PDD 의 확장)</h3>
 
 <p>본 실험은 <strong>single-turn 1P1D</strong> (1 prefill + 1 decode, 한 round 의 chat). 그러나 production 의 LLM chatbot 은 <strong>multi-turn 대화</strong> (Q1 → A1 → Q2 → A2 → ...). 단순 PDD 는 multi-turn 에 비효율 — 이걸 해결하는 게 <a href="https://github.com/vllm-project/vllm/blob/main/examples/disaggregated/disaggregated_serving/disagg_proxy_multiturn.py">disagg_proxy_multiturn.py</a>.</p>
 
