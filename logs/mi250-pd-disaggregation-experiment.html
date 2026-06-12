@@ -692,358 +692,7 @@ docker run -d --name vllm-decode \
   ④ NCCL/RCCL data plane            16 channels: prefill_gpu ↔ decode_gpu
                                      RCCL handshake 통해 만들어짐</div>
 
-<h4>send_type — PUT_ASYNC 가 선택된 이유 (Producer Push vs Consumer Pull)</h4>
-
-<div class="note"><strong>사용자 지적이 좋음</strong>: 일반 PDD 설명에서 "decode 가 prefill 의 KV 를 <strong>받아옴</strong>" 이라고 자주 말함. 그러나 누가 trigger 하느냐 (producer push vs consumer pull) 는 connector / 옵션 별 다름. vLLM P2pNccl 의 send_type 옵션 3가지가 정확히 이 trigger 방향을 결정.</div>
-
-<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 직접 인용:</p>
-
-<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
-"<strong>PUT and PUT_ASYNC</strong>: Both PUT and PUT_ASYNC involve the <strong>P instance actively sending</strong> KVcache to the D instance. The difference is that PUT is a synchronous transfer method that blocks the main process, while PUT_ASYNC is an asynchronous transfer method."<br><br>
-"<strong>GET</strong>: In contrast, the GET method involves the <strong>P instance saving the KVcache to the memory buffer</strong> after computing the prefill. The <strong>D instance then actively retrieves</strong> the computed KVcache from the P instance once it has allocated space for the KVcache."<br><br>
-"Experimental results have shown that the performance of these methods, from highest to lowest, is as follows: <strong>PUT_ASYNC → GET → PUT</strong>." + "<strong>PUT_ASYNC offers the best performance and should be prioritized.</strong>"
-</blockquote>
-
-<table>
-<tr><th>send_type</th><th>방향</th><th>Trigger 누가</th><th>동작</th><th>장단점</th></tr>
-<tr><td><code>PUT_ASYNC</code> <strong>(우리 선택, default)</strong></td><td><strong>Producer Push</strong> 비동기</td><td>Prefill (P)</td><td>P 가 KV 만들자마자 별도 thread 로 비동기 send. main process block 안 됨</td><td>✅ <strong>최고 성능</strong> — P 의 forward 와 KV transfer 가 overlap. P 가 다음 request 즉시 받음</td></tr>
-<tr><td><code>PUT</code></td><td>Producer Push 동기</td><td>Prefill (P)</td><td>P 가 send 완료까지 wait (main process block)</td><td>❌ 가장 느림 — P 의 main process 가 transfer 끝까지 blocking</td></tr>
-<tr><td><code>GET</code></td><td><strong>Consumer Pull</strong></td><td>Decode (D)</td><td>P 가 KV 만들고 memory buffer 에 저장만. D 가 자기 차례에 P 의 buffer 에서 pull</td><td>⚠ 중간 성능 — D 가 buffer 할당 대기 + pull 시간 추가. 단 D 가 ready 되기 전 KV transfer 안 일어남 (memory 효율)</td></tr>
-</table>
-
-<h5>왜 PUT_ASYNC 가 default + 우리도 그것?</h5>
-<ol>
-<li><strong>vLLM 공식 예제의 default</strong>: <code>disagg_example_p2p_nccl_xpyd.sh</code> 가 그대로 PUT_ASYNC. PR #18242 도 "should be prioritized" 명시</li>
-<li><strong>Latency overlap</strong>: P 가 forward 끝나면 KV 가 이미 send 시작됨 (async thread). proxy 의 prefill HTTP response 가 돌아올 즘 KV 가 D 에 거의 도착. D 가 호출되면 즉시 generation 시작 가능 — <strong>"prefill HTTP 시간 = KV transfer 시간" 이 overlap</strong></li>
-<li><strong>P resource 빠른 회수</strong>: P 의 main process 가 block 안 되니 다음 request 즉시 받을 수 있음. P throughput ↑</li>
-<li><strong>GET 의 단점</strong>: D 가 trigger 라면 D 가 자기 forward 시작할 때 비로소 KV pull. 그 transfer 시간이 D 의 TTFT 에 직접 추가 (overlap X)</li>
-</ol>
-
-<h5>PUT_ASYNC + KV cache hit 시 어떻게 되는가</h5>
-
-<div class="note"><strong>두 종류의 cache 가 별개 layer</strong>:
-<ul style="margin:4px 0;">
-<li><strong>vLLM 의 in-engine prefix cache</strong>: 한 instance 안의 VRAM block table. 같은 prefix 의 다음 request 면 KV 재사용. <code>enable_prefix_caching=True</code> default</li>
-<li><strong>P2pNccl 의 KV transfer</strong>: P → D 의 inter-instance KV 이동. 매 request 의 prompt forward 후 RCCL send</li>
-</ul>
-두 cache 는 <strong>독립</strong> — 한 쪽이 hit 라도 다른 쪽에는 영향 없음.</div>
-
-<table>
-<tr><th>시나리오</th><th>P 의 prefix cache</th><th>D 의 prefix cache</th><th>RCCL transfer</th></tr>
-<tr><td>둘 다 miss (첫 요청)</td><td>P 가 전체 forward → 모든 layer KV 생성</td><td>D 가 받은 KV install + generation</td><td>매 layer KV 전체 push (PUT_ASYNC 의 send_queue 사용)</td></tr>
-<tr><td><strong>P hit / D miss</strong></td><td>P forward skip — <strong>compute 시간 줄어듦</strong></td><td>D 는 모르고 받음</td><td><strong>여전히 일어남</strong> — P 의 cached KV 가 그대로 RCCL send</td></tr>
-<tr><td>P miss / D hit</td><td>P 가 forward + KV 생성 → send</td><td>D 가 자기 cache 갖고 있어도 받은 KV install</td><td>일어남 (redundant 하지만 P2pNccl 가 D cache 모름)</td></tr>
-<tr><td>둘 다 hit</td><td>P forward skip</td><td>D 가 받을 필요 없는데 받음</td><td>여전히 일어남</td></tr>
-</table>
-
-<p><strong>핵심</strong>: <strong>P2pNccl 은 D 의 cache 상태 모름</strong>. 매 request 마다 무조건 push. D cache hit 라도 transfer 일어남 — 정확성 보장. 더 똑똑한 protocol (ZMQ control 로 D cache 사전 확인) 은 미래 최적화.</p>
-
-<p><strong>Buffer 영향</strong>: P cache hit 라도 send buffer 사용 (KV 자체는 옮김). D cache hit 라도 receive buffer 사용. 즉 <strong>cache hit 와 buffer 사용은 무관</strong> — buffer 의 영향은 transfer rate 와 backpressure 에만.</p>
-
-<p><strong>한 줄</strong>: PUT_ASYNC + cache hit 라도 <strong>RCCL transfer 그대로 일어남</strong>. cache hit 의 이점은 P forward compute 시간 줄임만. transfer overhead 줄지 않음.</p>
-
-<h5>kv_buffer_size 가 send_type 별로 적용되는 곳이 다름</h5>
-
-<p>사용자 질문: "PUT 이면 kv_buffer_size 어떻게? PUT_ASYNC 와 다른지?" — <a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 직접 인용:</p>
-
-<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
-<strong>P (producer) instance 의 buffer</strong>:<br>
-"For P instances, the memory buffer <strong>is not required in PUT and PUT_ASYNC modes</strong>." → sender 가 buffer 필요 없음 (보내고 끝).<br>
-"For P instances in <strong>GET</strong> mode, the memory buffer <strong>should also not be too large</strong>." → GET 면 sender 가 consumer pull 까지 hold 해야 함 → buffer 필요. 단 너무 크면 GPU memory 낭비.<br><br>
-<strong>D (consumer) instance 의 buffer</strong>:<br>
-"For D instances, a memory buffer is needed <strong>in all three modes</strong>." → receiver 는 PUT / PUT_ASYNC / GET 모두 buffer 필요 (받은 KV 임시 hold)
-</blockquote>
-
-<table>
-<tr><th>send_type</th><th>Producer (P) buffer</th><th>Consumer (D) buffer</th></tr>
-<tr><td><code>PUT</code> (sync)</td><td><strong>안 필요</strong>. main 이 block 이라 send queue 안 쌓임</td><td>필요. 받은 KV → generation 까지 hold</td></tr>
-<tr><td><code>PUT_ASYNC</code> (우리 선택)</td><td><strong>안 필요</strong> — async send thread 가 보내고 끝. 단 PR 의 말로는 "not required"</td><td>필요 (동일)</td></tr>
-<tr><td><code>GET</code></td><td><strong>필요</strong>. consumer 가 pull 할 때까지 P 가 KV 들고 있어야</td><td>필요 (allocate 후 P 에서 pull)</td></tr>
-</table>
-
-<p><strong>결론</strong>:</p>
-<ul>
-<li>본 실험의 prefill kv_buffer_size=1e1 (10 bytes) 는 producer (P) 의 buffer — PUT_ASYNC 면 안 필요해서 거의 0. <strong>PUT 으로 바꿔도 동일</strong> (10 bytes 그대로)</li>
-<li>본 실험의 decode kv_buffer_size=8e9 (8GB) 는 consumer (D) 의 buffer — 모든 mode 에서 필요. <strong>PUT 으로 바꿔도 동일 8GB</strong> 유지</li>
-<li>차이가 있는 경우: <strong>GET 으로 바꿀 때만</strong> producer (P) buffer 도 늘려야 — D 가 pull 할 때까지 P 가 KV 들고 있어야 하므로</li>
-</ul>
-
-<h5>kv_buffer_size — 정확한 의미 + 키우면?</h5>
-
-<p>본 실험 config: prefill <code>"kv_buffer_size":"1e1"</code> (=10), decode <code>"kv_buffer_size":"8e9"</code> (=8GB). 왜 이렇게 비대칭?</p>
-
-<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 직접 설명:</p>
-
-<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
-<strong>역할</strong>: temporary GPU memory allocation for storing received KV cache data between instances.<br><br>
-<strong>Producer 작게 / Consumer 크게</strong>: "Prefill currently <strong>does not need to receive kvcache</strong>" → prefill (producer) 의 receive buffer 는 거의 0 (1e1=10 bytes) 으로 둠. Decode (consumer) 는 받은 KV 를 generation 시작까지 hold → 큰 buffer (8e9=8GB) 필요.<br><br>
-<strong>키우면? — Trade-off</strong>: "If it is too large, it will reduce the kvcache space available for normal inference by D instances, thereby <strong>decreasing the inference batch size</strong>." → buffer 가 클수록 KV cache 자체에 쓸 VRAM 줄어듦 → 동시 처리 가능한 sequence 수 ↓<br><br>
-<strong>권장 size</strong>: "<strong>5%~10% of the memory size</strong>" (GPU VRAM 의 5-10%). MI250 64GB GCD 면 약 3-6GB 정도가 권장.<br><br>
-<strong>Buffer 넘치면?</strong>: "KVcache can be directly stored in the Tensor memory pool" — 넘친 KV 는 host CPU memory 의 pool 로 spill. PCIe bandwidth 사용 → latency 증가 (traffic spike 때 일어남).
-</blockquote>
-
-<table>
-<tr><th>kv_buffer_size 변화</th><th>효과</th></tr>
-<tr><td>매우 작음 (decode 의 1e1)</td><td>받은 KV 임시 보관 공간 부족 → traffic spike 때 CPU pool 로 spill → PCIe latency ↑</td></tr>
-<tr><td>적정 (5-10% VRAM = 3-6GB on MI250)</td><td>✅ 권장. spike 흡수 + KV cache 본체 공간 충분</td></tr>
-<tr><td>매우 큼 (예: 50GB)</td><td>KV cache 본체 공간 부족 → max concurrent sequence ↓ → throughput ↓</td></tr>
-<tr><td>본 실험 8e9 (8GB) for decode</td><td>약간 큼 (12% of 64GB). 1.5B 모델 작아서 KV cache 자체 적게 필요 — 여유 있음</td></tr>
-<tr><td>본 실험 1e1 (10 bytes) for prefill</td><td>producer 는 receive 안 함 — 거의 0 으로 두는 게 정답</td></tr>
-</table>
-
-<h5>nccl_num_channels — 키우면 더 빨라져?</h5>
-
-<p>본 실험 <code>"nccl_num_channels":"16"</code>. 이걸 키우면?</p>
-
-<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 정량 정보:</p>
-
-<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
-<strong>Memory 비용</strong>: "When <code>NCCL_MAX_NCHANNELS=16</code>, an NCCL group typically occupies <strong>100MB</strong>, while when <code>NCCL_MAX_NCHANNELS=8</code>, it usually takes up <strong>52MB</strong>."<br><br>
-즉 channel 1개 ≈ 6-7MB VRAM. 16 channel = 100MB 정도.<br><br>
-<strong>Scaling 한계</strong>: "For large-scale xPyD configurations—such as DeepSeek's 96P144D—this implementation is <strong>currently not feasible</strong>." (large-scale 시 한계 명시)
-</blockquote>
-
-<table>
-<tr><th>nccl_num_channels</th><th>특성</th></tr>
-<tr><td>1-4</td><td>적은 parallelism. 작은 KV 면 OK 이지만 큰 KV (긴 prompt) 면 transfer 시간 ↑</td></tr>
-<tr><td>8 (52MB)</td><td>중간. PR 의 기준점</td></tr>
-<tr><td>16 (100MB) <strong>← 우리 실험</strong></td><td>공식 예제 default. 균형점 — bandwidth ↑ 와 memory ↓ 적당함</td></tr>
-<tr><td>32+</td><td>이론상 bandwidth ↑. 단 hardware link 수가 적으면 saturation 일찍. AMD MI250 의 XGMI link 수 (같은 카드 4, 다른 카드 1-2) 고려 시 16 보다 큰 값 marginal. <strong>NCCL/RCCL 의 hard max 도 보통 32</strong> (build 마다 다름)</td></tr>
-<tr><td>매우 큼 (64+)</td><td>memory 낭비 + HW link 보다 많아서 의미 X</td></tr>
-</table>
-
-<h5>키우는 한계 — Hardware bound</h5>
-
-<p>NCCL/RCCL channel 수는 결국 <strong>hardware link 수에 bound</strong>:</p>
-<ul>
-<li><strong>NVIDIA NVLink 4.0 (H100)</strong>: 18 link/GPU → 32-64 channel 까지 의미 있음</li>
-<li><strong>AMD XGMI on MI250</strong>: 같은 OAM 안 4 link, 다른 OAM 1-2 link → 16 정도가 충분 (그 이상 marginal)</li>
-<li><strong>PCIe fallback</strong>: PCIe 5.0 x16 면 약 64GB/s — channel 많이 늘려도 bandwidth bound</li>
-</ul>
-
-<p><strong>한 줄</strong>: <code>nccl_num_channels=16</code> 이 대부분 환경의 sweet spot. MI250 에서는 16 보다 키워도 marginal. NVLink 의 H100 면 32 까지는 의미.</p>
-
-<h5>Hardware bound 확인 방법 — 실제 mi250-052 에서 명령 실행 + 캡쳐</h5>
-
-<p>아래 모두 본 실험 host (<code>mi250-052</code>) 에서 실제 실행한 결과:</p>
-
-<h6>① <code>rocm-smi --showbus</code> — PCI Bus 매핑</h6>
-<pre><code>$ ssh mi250-052 rocm-smi --showbus
-GPU[0]: PCI Bus: 0000:29:00.0   ← OAM 카드 0 (PCIe root complex 1)
-GPU[1]: PCI Bus: 0000:2C:00.0
-GPU[2]: PCI Bus: 0000:2F:00.0
-GPU[3]: PCI Bus: 0000:32:00.0
-GPU[4]: PCI Bus: 0000:AD:00.0   ← OAM 카드 2 (PCIe root complex 2)
-GPU[5]: PCI Bus: 0000:B0:00.0
-GPU[6]: PCI Bus: 0000:B3:00.0
-GPU[7]: PCI Bus: 0000:B6:00.0</code></pre>
-
-<p><strong>발견</strong>: GPU 0-3 의 bus 29-32 / GPU 4-7 의 bus AD-B6 — <strong>두 별개 PCIe root complex</strong>. XGMI 없는 쌍 (§5-4 의 0-0) 은 이 두 root 를 host CPU 통해 거쳐야 함.</p>
-
-<h6>② <code>rocm-smi --showhw</code> — 하드웨어 정보</h6>
-<pre><code>$ ssh mi250-052 rocm-smi --showhw
-GPU NODE DID    GUID  GFX VER  GFX RAS  SDMA RAS  UMC RAS  VBIOS           BUS
-0   2    0x740c 13025 gfx9010  ENABLED  ENABLED   ENABLED  113-D65209-073  0000:29:00.0
-1   3    0x740c 24866 gfx9010  ENABLED  ENABLED   ENABLED  113-D65209-073  0000:2C:00.0
-... (모든 GCD 동일)</code></pre>
-
-<p><strong>발견</strong>: <code>gfx9010</code> (MI250 architecture), ECC RAS 3종 모두 enabled, VBIOS 동일.</p>
-
-<h6>③ <code>/sys/bus/pci/devices/&lt;bus&gt;/</code> — PCIe link speed/width</h6>
-<pre><code>$ cat /sys/bus/pci/devices/0000:29:00.0/current_link_speed
-16.0 GT/s PCIe                                ← PCIe 4.0 (16 GT/s per lane)
-$ cat /sys/bus/pci/devices/0000:29:00.0/current_link_width
-16                                            ← x16 lanes
-$ cat /sys/bus/pci/devices/0000:29:00.0/max_link_speed
-16.0 GT/s PCIe                                ← 이 GPU 의 PCIe 최대 = 4.0
-$ cat /sys/bus/pci/devices/0000:29:00.0/max_link_width
-16                                            ← x16
-
-$ cat /sys/bus/pci/devices/0000:29:00.0/numa_node
-0                                             ← GPU 0 의 NUMA node
-$ cat /sys/bus/pci/devices/0000:AD:00.0/numa_node
-0                                             ← GPU 4 의 NUMA node (동일)</code></pre>
-
-<p><strong>발견</strong>: 각 GPU 가 <strong>PCIe 4.0 x16 = ~32 GB/s effective</strong>. XGMI 없는 쌍이 PCIe fallback 되면 32 GB/s 가 cap. 두 GPU 모두 NUMA node 0 (single-socket) — multi-socket overhead 없음.</p>
-
-<h6>④ <code>lspci -vv</code> — Capabilities 확인 (sudo 없으면 limited)</h6>
-<pre><code>$ ssh mi250-052 lspci -vv -s 29:00.0 | grep -iE 'LnkCap|LnkSta|kernel driver'
-Capabilities: &lt;access denied&gt;                ← sudo 없으면 link Cap 못 봄
-Kernel driver in use: amdgpu                  ← amdgpu kernel driver 정상</code></pre>
-
-<h6>⑤ NCCL/RCCL version + max channels — image 안 RCCL library 직접</h6>
-<pre><code>$ docker run --rm rocm/vllm:latest bash -c '
-    strings /opt/rocm/lib/librccl.so* | grep -iE "RCCL version|NCCL version"
-'
-<strong>RCCL version 2.26.6 compiled with ROCm "7.0.0.0-38-9428210"</strong>
-RCCL version : 2.26.6
-NCCL_MAX_P2P_NCHANNELS                        ← env 변수 명시 (자동 channel 수 cap)
-NCCL_MAX_NCHANNELS:%d is lesser than number of channels required by MSCCL...
-
-# strings 결과의 다른 env / option:
-NCCL_MAX_NCHANNELS  NCCL_MAX_P2P_NCHANNELS  NCCL_MIN_NCHANNELS</code></pre>
-
-<p><strong>발견</strong>: image 의 <strong>RCCL = 2.26.6 ROCm 7.0 build</strong>. 호스트 ROCm 6.2 와 minor mismatch — 이게 §9-1 의 aiter silent kill 원인 (이미 알려진 것 재확인).</p>
-
-<h6>⑥ <code>rocm-bandwidth-test</code> — 실측 P2P bandwidth (못 함)</h6>
-<pre><code>$ which rocm-bandwidth-test
-(empty)
-$ ls /opt/rocm/bin/ | grep -i bandwidth
-(empty)
-# → image 와 host 둘 다 install 안 됨. 별도 install 필요</code></pre>
-
-<h6>⑦ 종합 — 본 실험 host 의 hardware spec</h6>
-<table>
-<tr><th>항목</th><th>값</th><th>의미</th></tr>
-<tr><td>GPU 종류</td><td>8× MI250 GCD (gfx9010)</td><td>4 OAM × 2 die</td></tr>
-<tr><td>각 GCD VRAM</td><td>64GB HBM2e</td><td>총 512GB GPU memory</td></tr>
-<tr><td>PCIe link</td><td>4.0 x16 (16 GT/s × 16 lane = ~32 GB/s)</td><td>XGMI fallback 시 cap</td></tr>
-<tr><td>XGMI</td><td>같은 OAM 4 link (200 Gbps) / 가까운 OAM 2 link (100 Gbps) / 먼 OAM 1 link (50 Gbps) / 일부 쌍 직접 link 없음</td><td>§5-4 의 <code>--shownodesbw</code> 결과</td></tr>
-<tr><td>NUMA node</td><td>0 (single-socket)</td><td>multi-socket overhead 없음</td></tr>
-<tr><td>RCCL version</td><td>2.26.6 (ROCm 7.0 build, host 6.2)</td><td>aiter 호환 문제 원인</td></tr>
-<tr><td>PCIe root complex</td><td>2 개 (bus 29-32 / AD-B6)</td><td>XGMI 없는 GPU 쌍은 root 사이 통과</td></tr>
-<tr><td>amdgpu driver</td><td>사용 중</td><td>OK</td></tr>
-</table>
-
-<h6>NVIDIA 면 어떤 명령? (mi250 아니지만 참고용)</h6>
-<pre><code># NVLink topology
-nvidia-smi topo -m
-# 예시 output:
-#      GPU0 GPU1 GPU2 GPU3
-# GPU0  X   NV12 NV12 NV12   ← NV12 = 12 NVLink (full mesh)
-# GPU1 NV12  X   ...
-# (NV1..NV18, PIX, SYS 등 표시)
-
-# NVLink 상태
-nvidia-smi nvlink --status -i 0       # GPU 0 의 각 lane up/down
-nvidia-smi nvlink --capabilities -i 0 # max throughput
-
-# NCCL test
-cd nccl-tests && make
-./build/all_reduce_perf -b 8 -e 256M -f 2 -g 4   # 4 GPU AllReduce 측정</code></pre>
-
-<h5>위 명령은 docs 인용 (실 실행은 mi250-052 에서)</h5>
-
-<p><strong>AMD ROCm (MI250 등)</strong>:</p>
-<pre><code># 1. GPU 간 topology + link weight 확인
-rocm-smi --showtopo
-# → Weight 매트릭스. 낮을수록 link 수 많음
-#   weight 15 = 4 XGMI link (best)
-#   weight 30 = 2 XGMI link
-#   weight 45 = 1 XGMI link (worst)
-
-# 2. Bus 종류 (XGMI / PCIe) 확인
-rocm-smi --showbus
-# 또는
-rocm-smi --showhw
-
-# 3. XGMI link error 카운터 (link 살아있는지)
-rocm-smi --showxgmierr
-
-# 4. 실측 bandwidth — XGMI bandwidth utilization
-rocm-smi --showbw                  # PCIe bandwidth 만
-rocm-smi --shownodesbw             # XGMI node 간 bandwidth (정확)
-# 또는 rocm-bandwidth-test (별도 tool, 우리 환경엔 없음)
-rocm-bandwidth-test                # peer-to-peer matrix 측정</code></pre>
-
-<p><strong>NVIDIA (H100 등)</strong>:</p>
-<pre><code># 1. NVLink 토폴로지 + link 수
-nvidia-smi topo -m                 # GPU 간 connection 매트릭스
-# → NV1, NV2, ..., NV18: NVLink 의 link 수
-# → PIX: PCIe internal switch / SYS: PCIe through system
-
-# 2. NVLink 상태 (활성 link 수, throughput)
-nvidia-smi nvlink --status -i 0    # GPU 0 의 NVLink 각 lane 상태
-nvidia-smi nvlink --capabilities -i 0   # 지원하는 max throughput
-
-# 3. NVLink 활성 GPU 수 + bandwidth
-nvidia-smi nvlink --getcounters -i 0
-# → 누적 transfer 바이트, 현재 활용도
-
-# 4. 실측 — NCCL 자체 test
-cd nccl-tests
-./build/all_reduce_perf -b 8 -e 256M -f 2 -g &lt;n_gpus&gt;</code></pre>
-
-<p><strong>NCCL/RCCL 의 hard max 확인</strong>:</p>
-<pre><code># vLLM 실행 시 NCCL_DEBUG=INFO 켜면 자동으로 print
-# 본 실험 prefill log 에서 본 것:
-#   Channel 00/16 : 0 1
-#   Channel 01/16 : 0 1
-#   ...
-#   Channel 15/16 : 0 1
-# → 실제로 16 channel 사용 + 각 channel 이 GPU 0 ↔ GPU 1 연결
-
-# NCCL build 의 NCHANNELS 한계:
-# - NCCL 2.20+ : MAX_NCHANNELS = 32 (대부분 build)
-# - 특정 build 는 64 까지 지원
-# 환경변수로 override:
-NCCL_MAX_NCHANNELS=32 NCCL_MIN_NCHANNELS=16 vllm serve ...
-
-# 본 실험 image 의 NCCL/RCCL 한계 확인
-docker run --rm rocm/vllm:latest python3 -c "
-from torch.distributed.distributed_c10d import _get_default_group
-import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'default'))
-"</code></pre>
-
-<p><strong>본 실험에서 직접 확인한 MI250 의 link 수</strong> (§2-3 의 <code>rocm-smi --showtopo</code> 결과):</p>
-<table>
-<tr><th>쌍</th><th>Weight</th><th>Link 수 추정</th><th>해석</th></tr>
-<tr><td>GCD 0 ↔ 1 (같은 OAM)</td><td>15</td><td>4 XGMI link</td><td>Infinity Fabric, 가장 wide</td></tr>
-<tr><td>GCD 0 ↔ 4 (다른 OAM 가까운)</td><td>15</td><td>4 XGMI link</td><td>좋은 path</td></tr>
-<tr><td>GCD 0 ↔ 5 (다른 OAM 보통)</td><td>30</td><td>2 XGMI link</td><td>중간</td></tr>
-<tr><td>GCD 1 ↔ 5 (가장 먼)</td><td>45</td><td>1 XGMI link</td><td>최소 bandwidth</td></tr>
-</table>
-
-<p><strong>본 실험의 prefill GCD 0 ↔ decode GCD 4 = weight 15 = 4 link</strong>. 즉 가장 좋은 path 선택됨 — <code>nccl_num_channels=16</code> 의 16 channel 이 4 physical link 위 분산됨 (각 link 당 4 channel). 더 키워도 4 link 가 bottleneck.</p>
-
-<p><strong>요약</strong>: hardware link 수 보고 <code>nccl_num_channels</code> 결정:</p>
-<table>
-<tr><th>Link 수</th><th>권장 nccl_num_channels</th></tr>
-<tr><td>1-2 (MI250 의 다른 OAM, 또는 PCIe-only)</td><td>8</td></tr>
-<tr><td>4 (MI250 같은 OAM, 또는 NVLink 4-rate)</td><td><strong>16</strong> (default)</td></tr>
-<tr><td>8-12 (NVLink H100)</td><td>32</td></tr>
-<tr><td>18 (NVLink 4.0 full mesh)</td><td>32-64</td></tr>
-</table>
-
-<h5>본 실험 (P2pNccl PUT_ASYNC = P push) vs 이전 글 (NIXL = D pull) — 같은 PDD 인데 방향성 왜 다른가</h5>
-
-<div class="note"><strong>이전 본인 글 <a href="https://han-oqo.github.io/study/vllm_pd_disagg_flow.html">vllm_pd_disagg_flow.html</a> 와 본 글의 방향성 차이</strong>: 이전 글은 "<strong>NixlConnector is 'READ'-based. Prefill (P) doesn't push KV; instead, Decode (D) pulls P's KV blocks directly (pull)</strong>" 라고 묘사. 본 실험은 "P가 push (PUT_ASYNC)" 라고 적음. 둘이 충돌이 아니라 <strong>connector 별로 다른 방향성</strong>:</div>
-
-<table>
-<tr><th>Connector / send_type</th><th>방향</th><th>Trigger</th><th>이전 글 / 본 실험</th></tr>
-<tr><td><strong>NixlConnector</strong> (READ-based)</td><td><strong>Decode pulls</strong></td><td>D 가 forward 직전 NIXL READ async 호출 → P 의 KV block 가져옴</td><td>이전 글 (vllm_pd_disagg_flow.html) 의 시각 — NIXL 만 묘사</td></tr>
-<tr><td><strong>P2pNccl GET</strong></td><td>Decode pulls</td><td>D 가 P 의 send_store 에서 가져옴. NIXL 의 READ 와 같은 방향</td><td>우리 안 선택 (성능 중간)</td></tr>
-<tr><td><strong>P2pNccl PUT_ASYNC</strong> (우리 실험)</td><td><strong>Prefill pushes</strong></td><td>P 가 KV 만들자마자 async send queue 에 넣음. 별도 thread 가 D 로 push</td><td>본 실험 (성능 best)</td></tr>
-<tr><td><strong>P2pNccl PUT</strong></td><td>Prefill pushes (sync)</td><td>P 가 send 완료까지 main 이 block</td><td>(성능 worst)</td></tr>
-</table>
-
-<h6>왜 NIXL 은 D pull 인데 P2pNccl PUT_ASYNC 는 P push?</h6>
-
-<table>
-<tr><th>측면</th><th>NIXL (D pull)</th><th>P2pNccl PUT_ASYNC (P push)</th></tr>
-<tr><td><strong>Memory locality</strong></td><td>D 가 자기 ready 된 후 trigger → D 의 receive buffer overflow 위험 적음</td><td>P 가 즉시 push → D 의 receive buffer 가 충분히 커야 (5-10% VRAM 권장)</td></tr>
-<tr><td><strong>P resource 회수</strong></td><td>D 가 pull 끝까지 P 가 KV 들고 있어야 → P 의 다음 request 받는 게 늦어짐</td><td>P 가 send queue 에 넣자마자 main 진행 → 다음 request 즉시 받음. P throughput ↑</td></tr>
-<tr><td><strong>Latency overlap</strong></td><td>D 의 first forward 시작 직전에 pull → transfer 시간이 D 의 TTFT 에 추가</td><td>P 의 forward 끝나면서 즉시 send 시작 → D 가 호출될 즘 KV 이미 도착 (overlap)</td></tr>
-<tr><td><strong>Hardware 가정</strong></td><td>NVIDIA NIXL — RDMA primitives 가 D 측 trigger 의 native operation</td><td>NCCL/RCCL — 일반 collective 인데 PUT_ASYNC 가 latency overlap 에 잘 맞음</td></tr>
-<tr><td><strong>성능 (PR #18242 의 측정)</strong></td><td>중간 (P2pNccl GET 과 같은 카테고리)</td><td><strong>가장 빠름</strong> — "PUT_ASYNC should be prioritized"</td></tr>
-</table>
-
-<p><strong>결론</strong>: 둘 다 valid pattern. <strong>connector 가 다르면 KV 방향성도 다른 게 정상</strong>. 본 실험은 ROCm MI250 에서 NIXL 사용 불가 (NVIDIA 전용) → P2pNccl 선택 → 그 안의 best 성능인 PUT_ASYNC 사용 → 결과적으로 "P push" 방향. 이전 글의 "D pull" 은 NIXL 의 자체 design 시각.</p>
-
-<h5>일반 PDD 설명의 "decode 받아옴" vs PUT_ASYNC 의 "prefill 보냄"</h5>
-
-<p>이전에 본 일반 PDD 설명 (LLMServingSim / Heimdall / Frontier 문서들) 의 "decode 가 KV 받아옴" 표현은 <strong>받는 측 (consumer) 시각</strong>. KV 가 D 에 도착한다는 사실은 똑같음. 단 <strong>"누가 trigger" 는 connector / 옵션 별 다름</strong>:</p>
-
-<table>
-<tr><th>설명 패턴</th><th>해당 connector / 옵션</th><th>본 실험</th></tr>
-<tr><td>"Decode 가 받아옴" (general)</td><td>모든 PDD — KV 가 P→D 로 흐른다는 사실만</td><td>본 실험도 KV 가 D 에 도착</td></tr>
-<tr><td>"Decode 가 pull (GET)"</td><td>P2pNccl 의 <code>send_type=GET</code>, 또는 LMCache 의 일부 mode</td><td>아님</td></tr>
-<tr><td>"Prefill 가 push" (PUT/PUT_ASYNC)</td><td>P2pNccl 의 default 옵션, NIXL 의 active send</td><td>✓ 본 실험 (PUT_ASYNC)</td></tr>
-</table>
-
-<p>즉 <strong>"PDD = decode 가 KV 받음" 은 결과 기준</strong>. <strong>"누가 trigger" 는 옵션 결정 사항</strong>. PR #18242 의 측정에서 <strong>PUT_ASYNC 이 가장 빠름</strong> 이라고 명시 (PUT_ASYNC > GET > PUT).</p>
-
-<p>4 종류 channel 다 살아있어야 PDD 동작. 어느 하나 broken (예: ZMQ port 충돌 / NCCL handshake fail / HTTP 못 받음) 면 garbage 또는 hang.</p>
+<p>아래 config 옵션의 깊은 질문들 (send_type 비교, kv_buffer_size, nccl_num_channels, ZMQ, direction) 은 <a href="#qa">§7. 돌리면서 생긴 질문들</a> 참조.</p>
 
 <h3>6-4. Proxy server 직접 build + 실행 (간단 구현)</h3>
 
@@ -1417,6 +1066,361 @@ sock.connect(f"tcp://192.168.3.52:22001")             # 상대 ROUTER 로 connec
 <tr><td><strong>ZMQ</strong> (port 20001/22001)</td><td>handshake metadata, NCCL unique_id, "어느 request 의 KV 입니다" 같은 routing 정보</td><td>TCP 기반, small message 빠르게. CPU memory 만</td></tr>
 <tr><td><strong>NCCL/RCCL</strong> (16 channels)</td><td>실 KV tensor (큰 bytes)</td><td>GPU-GPU 직접 transfer. ZMQ 보다 훨씬 빠름 (NVLink/XGMI 활용)</td></tr>
 </table>
+
+
+
+<h3>7-2. send_type 옵션 (PUT / PUT_ASYNC / GET) + 왜 PUT_ASYNC?</h3>
+
+<div class="note"><strong>사용자 지적이 좋음</strong>: 일반 PDD 설명에서 "decode 가 prefill 의 KV 를 <strong>받아옴</strong>" 이라고 자주 말함. 그러나 누가 trigger 하느냐 (producer push vs consumer pull) 는 connector / 옵션 별 다름. vLLM P2pNccl 의 send_type 옵션 3가지가 정확히 이 trigger 방향을 결정.</div>
+
+<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 직접 인용:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+"<strong>PUT and PUT_ASYNC</strong>: Both PUT and PUT_ASYNC involve the <strong>P instance actively sending</strong> KVcache to the D instance. The difference is that PUT is a synchronous transfer method that blocks the main process, while PUT_ASYNC is an asynchronous transfer method."<br><br>
+"<strong>GET</strong>: In contrast, the GET method involves the <strong>P instance saving the KVcache to the memory buffer</strong> after computing the prefill. The <strong>D instance then actively retrieves</strong> the computed KVcache from the P instance once it has allocated space for the KVcache."<br><br>
+"Experimental results have shown that the performance of these methods, from highest to lowest, is as follows: <strong>PUT_ASYNC → GET → PUT</strong>." + "<strong>PUT_ASYNC offers the best performance and should be prioritized.</strong>"
+</blockquote>
+
+<table>
+<tr><th>send_type</th><th>방향</th><th>Trigger 누가</th><th>동작</th><th>장단점</th></tr>
+<tr><td><code>PUT_ASYNC</code> <strong>(우리 선택, default)</strong></td><td><strong>Producer Push</strong> 비동기</td><td>Prefill (P)</td><td>P 가 KV 만들자마자 별도 thread 로 비동기 send. main process block 안 됨</td><td>✅ <strong>최고 성능</strong> — P 의 forward 와 KV transfer 가 overlap. P 가 다음 request 즉시 받음</td></tr>
+<tr><td><code>PUT</code></td><td>Producer Push 동기</td><td>Prefill (P)</td><td>P 가 send 완료까지 wait (main process block)</td><td>❌ 가장 느림 — P 의 main process 가 transfer 끝까지 blocking</td></tr>
+<tr><td><code>GET</code></td><td><strong>Consumer Pull</strong></td><td>Decode (D)</td><td>P 가 KV 만들고 memory buffer 에 저장만. D 가 자기 차례에 P 의 buffer 에서 pull</td><td>⚠ 중간 성능 — D 가 buffer 할당 대기 + pull 시간 추가. 단 D 가 ready 되기 전 KV transfer 안 일어남 (memory 효율)</td></tr>
+</table>
+
+<h5>왜 PUT_ASYNC 가 default + 우리도 그것?</h5>
+<ol>
+<li><strong>vLLM 공식 예제의 default</strong>: <code>disagg_example_p2p_nccl_xpyd.sh</code> 가 그대로 PUT_ASYNC. PR #18242 도 "should be prioritized" 명시</li>
+<li><strong>Latency overlap</strong>: P 가 forward 끝나면 KV 가 이미 send 시작됨 (async thread). proxy 의 prefill HTTP response 가 돌아올 즘 KV 가 D 에 거의 도착. D 가 호출되면 즉시 generation 시작 가능 — <strong>"prefill HTTP 시간 = KV transfer 시간" 이 overlap</strong></li>
+<li><strong>P resource 빠른 회수</strong>: P 의 main process 가 block 안 되니 다음 request 즉시 받을 수 있음. P throughput ↑</li>
+<li><strong>GET 의 단점</strong>: D 가 trigger 라면 D 가 자기 forward 시작할 때 비로소 KV pull. 그 transfer 시간이 D 의 TTFT 에 직접 추가 (overlap X)</li>
+</ol>
+
+<h5>PUT_ASYNC + KV cache hit 시 어떻게 되는가</h5>
+
+<div class="note"><strong>두 종류의 cache 가 별개 layer</strong>:
+<ul style="margin:4px 0;">
+<li><strong>vLLM 의 in-engine prefix cache</strong>: 한 instance 안의 VRAM block table. 같은 prefix 의 다음 request 면 KV 재사용. <code>enable_prefix_caching=True</code> default</li>
+<li><strong>P2pNccl 의 KV transfer</strong>: P → D 의 inter-instance KV 이동. 매 request 의 prompt forward 후 RCCL send</li>
+</ul>
+두 cache 는 <strong>독립</strong> — 한 쪽이 hit 라도 다른 쪽에는 영향 없음.</div>
+
+<table>
+<tr><th>시나리오</th><th>P 의 prefix cache</th><th>D 의 prefix cache</th><th>RCCL transfer</th></tr>
+<tr><td>둘 다 miss (첫 요청)</td><td>P 가 전체 forward → 모든 layer KV 생성</td><td>D 가 받은 KV install + generation</td><td>매 layer KV 전체 push (PUT_ASYNC 의 send_queue 사용)</td></tr>
+<tr><td><strong>P hit / D miss</strong></td><td>P forward skip — <strong>compute 시간 줄어듦</strong></td><td>D 는 모르고 받음</td><td><strong>여전히 일어남</strong> — P 의 cached KV 가 그대로 RCCL send</td></tr>
+<tr><td>P miss / D hit</td><td>P 가 forward + KV 생성 → send</td><td>D 가 자기 cache 갖고 있어도 받은 KV install</td><td>일어남 (redundant 하지만 P2pNccl 가 D cache 모름)</td></tr>
+<tr><td>둘 다 hit</td><td>P forward skip</td><td>D 가 받을 필요 없는데 받음</td><td>여전히 일어남</td></tr>
+</table>
+
+<p><strong>핵심</strong>: <strong>P2pNccl 은 D 의 cache 상태 모름</strong>. 매 request 마다 무조건 push. D cache hit 라도 transfer 일어남 — 정확성 보장. 더 똑똑한 protocol (ZMQ control 로 D cache 사전 확인) 은 미래 최적화.</p>
+
+<p><strong>Buffer 영향</strong>: P cache hit 라도 send buffer 사용 (KV 자체는 옮김). D cache hit 라도 receive buffer 사용. 즉 <strong>cache hit 와 buffer 사용은 무관</strong> — buffer 의 영향은 transfer rate 와 backpressure 에만.</p>
+
+<p><strong>한 줄</strong>: PUT_ASYNC + cache hit 라도 <strong>RCCL transfer 그대로 일어남</strong>. cache hit 의 이점은 P forward compute 시간 줄임만. transfer overhead 줄지 않음.</p>
+
+<h5>kv_buffer_size 가 send_type 별로 적용되는 곳이 다름</h5>
+
+<p>사용자 질문: "PUT 이면 kv_buffer_size 어떻게? PUT_ASYNC 와 다른지?" — <a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 직접 인용:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+<strong>P (producer) instance 의 buffer</strong>:<br>
+"For P instances, the memory buffer <strong>is not required in PUT and PUT_ASYNC modes</strong>." → sender 가 buffer 필요 없음 (보내고 끝).<br>
+"For P instances in <strong>GET</strong> mode, the memory buffer <strong>should also not be too large</strong>." → GET 면 sender 가 consumer pull 까지 hold 해야 함 → buffer 필요. 단 너무 크면 GPU memory 낭비.<br><br>
+<strong>D (consumer) instance 의 buffer</strong>:<br>
+"For D instances, a memory buffer is needed <strong>in all three modes</strong>." → receiver 는 PUT / PUT_ASYNC / GET 모두 buffer 필요 (받은 KV 임시 hold)
+</blockquote>
+
+<table>
+<tr><th>send_type</th><th>Producer (P) buffer</th><th>Consumer (D) buffer</th></tr>
+<tr><td><code>PUT</code> (sync)</td><td><strong>안 필요</strong>. main 이 block 이라 send queue 안 쌓임</td><td>필요. 받은 KV → generation 까지 hold</td></tr>
+<tr><td><code>PUT_ASYNC</code> (우리 선택)</td><td><strong>안 필요</strong> — async send thread 가 보내고 끝. 단 PR 의 말로는 "not required"</td><td>필요 (동일)</td></tr>
+<tr><td><code>GET</code></td><td><strong>필요</strong>. consumer 가 pull 할 때까지 P 가 KV 들고 있어야</td><td>필요 (allocate 후 P 에서 pull)</td></tr>
+</table>
+
+<p><strong>결론</strong>:</p>
+<ul>
+<li>본 실험의 prefill kv_buffer_size=1e1 (10 bytes) 는 producer (P) 의 buffer — PUT_ASYNC 면 안 필요해서 거의 0. <strong>PUT 으로 바꿔도 동일</strong> (10 bytes 그대로)</li>
+<li>본 실험의 decode kv_buffer_size=8e9 (8GB) 는 consumer (D) 의 buffer — 모든 mode 에서 필요. <strong>PUT 으로 바꿔도 동일 8GB</strong> 유지</li>
+<li>차이가 있는 경우: <strong>GET 으로 바꿀 때만</strong> producer (P) buffer 도 늘려야 — D 가 pull 할 때까지 P 가 KV 들고 있어야 하므로</li>
+</ul>
+
+<h5>kv_buffer_size — 정확한 의미 + 키우면?</h5>
+
+<p>본 실험 config: prefill <code>"kv_buffer_size":"1e1"</code> (=10), decode <code>"kv_buffer_size":"8e9"</code> (=8GB). 왜 이렇게 비대칭?</p>
+
+<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 직접 설명:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+<strong>역할</strong>: temporary GPU memory allocation for storing received KV cache data between instances.<br><br>
+<strong>Producer 작게 / Consumer 크게</strong>: "Prefill currently <strong>does not need to receive kvcache</strong>" → prefill (producer) 의 receive buffer 는 거의 0 (1e1=10 bytes) 으로 둠. Decode (consumer) 는 받은 KV 를 generation 시작까지 hold → 큰 buffer (8e9=8GB) 필요.<br><br>
+<strong>키우면? — Trade-off</strong>: "If it is too large, it will reduce the kvcache space available for normal inference by D instances, thereby <strong>decreasing the inference batch size</strong>." → buffer 가 클수록 KV cache 자체에 쓸 VRAM 줄어듦 → 동시 처리 가능한 sequence 수 ↓<br><br>
+<strong>권장 size</strong>: "<strong>5%~10% of the memory size</strong>" (GPU VRAM 의 5-10%). MI250 64GB GCD 면 약 3-6GB 정도가 권장.<br><br>
+<strong>Buffer 넘치면?</strong>: "KVcache can be directly stored in the Tensor memory pool" — 넘친 KV 는 host CPU memory 의 pool 로 spill. PCIe bandwidth 사용 → latency 증가 (traffic spike 때 일어남).
+</blockquote>
+
+<table>
+<tr><th>kv_buffer_size 변화</th><th>효과</th></tr>
+<tr><td>매우 작음 (decode 의 1e1)</td><td>받은 KV 임시 보관 공간 부족 → traffic spike 때 CPU pool 로 spill → PCIe latency ↑</td></tr>
+<tr><td>적정 (5-10% VRAM = 3-6GB on MI250)</td><td>✅ 권장. spike 흡수 + KV cache 본체 공간 충분</td></tr>
+<tr><td>매우 큼 (예: 50GB)</td><td>KV cache 본체 공간 부족 → max concurrent sequence ↓ → throughput ↓</td></tr>
+<tr><td>본 실험 8e9 (8GB) for decode</td><td>약간 큼 (12% of 64GB). 1.5B 모델 작아서 KV cache 자체 적게 필요 — 여유 있음</td></tr>
+<tr><td>본 실험 1e1 (10 bytes) for prefill</td><td>producer 는 receive 안 함 — 거의 0 으로 두는 게 정답</td></tr>
+</table>
+
+<h5>nccl_num_channels — 키우면 더 빨라져?</h5>
+
+<p>본 실험 <code>"nccl_num_channels":"16"</code>. 이걸 키우면?</p>
+
+<p><a href="https://github.com/vllm-project/vllm/pull/18242">PR #18242</a> 의 정량 정보:</p>
+
+<blockquote style="background:var(--blue-bg); border-left:4px solid var(--blue); margin:12px 0; padding:8px 14px; font-size:0.88rem;">
+<strong>Memory 비용</strong>: "When <code>NCCL_MAX_NCHANNELS=16</code>, an NCCL group typically occupies <strong>100MB</strong>, while when <code>NCCL_MAX_NCHANNELS=8</code>, it usually takes up <strong>52MB</strong>."<br><br>
+즉 channel 1개 ≈ 6-7MB VRAM. 16 channel = 100MB 정도.<br><br>
+<strong>Scaling 한계</strong>: "For large-scale xPyD configurations—such as DeepSeek's 96P144D—this implementation is <strong>currently not feasible</strong>." (large-scale 시 한계 명시)
+</blockquote>
+
+<table>
+<tr><th>nccl_num_channels</th><th>특성</th></tr>
+<tr><td>1-4</td><td>적은 parallelism. 작은 KV 면 OK 이지만 큰 KV (긴 prompt) 면 transfer 시간 ↑</td></tr>
+<tr><td>8 (52MB)</td><td>중간. PR 의 기준점</td></tr>
+<tr><td>16 (100MB) <strong>← 우리 실험</strong></td><td>공식 예제 default. 균형점 — bandwidth ↑ 와 memory ↓ 적당함</td></tr>
+<tr><td>32+</td><td>이론상 bandwidth ↑. 단 hardware link 수가 적으면 saturation 일찍. AMD MI250 의 XGMI link 수 (같은 카드 4, 다른 카드 1-2) 고려 시 16 보다 큰 값 marginal. <strong>NCCL/RCCL 의 hard max 도 보통 32</strong> (build 마다 다름)</td></tr>
+<tr><td>매우 큼 (64+)</td><td>memory 낭비 + HW link 보다 많아서 의미 X</td></tr>
+</table>
+
+<h5>키우는 한계 — Hardware bound</h5>
+
+<p>NCCL/RCCL channel 수는 결국 <strong>hardware link 수에 bound</strong>:</p>
+<ul>
+<li><strong>NVIDIA NVLink 4.0 (H100)</strong>: 18 link/GPU → 32-64 channel 까지 의미 있음</li>
+<li><strong>AMD XGMI on MI250</strong>: 같은 OAM 안 4 link, 다른 OAM 1-2 link → 16 정도가 충분 (그 이상 marginal)</li>
+<li><strong>PCIe fallback</strong>: PCIe 5.0 x16 면 약 64GB/s — channel 많이 늘려도 bandwidth bound</li>
+</ul>
+
+<p><strong>한 줄</strong>: <code>nccl_num_channels=16</code> 이 대부분 환경의 sweet spot. MI250 에서는 16 보다 키워도 marginal. NVLink 의 H100 면 32 까지는 의미.</p>
+
+<h5>Hardware bound 확인 방법 — 실제 mi250-052 에서 명령 실행 + 캡쳐</h5>
+
+<p>아래 모두 본 실험 host (<code>mi250-052</code>) 에서 실제 실행한 결과:</p>
+
+<h6>① <code>rocm-smi --showbus</code> — PCI Bus 매핑</h6>
+<pre><code>$ ssh mi250-052 rocm-smi --showbus
+GPU[0]: PCI Bus: 0000:29:00.0   ← OAM 카드 0 (PCIe root complex 1)
+GPU[1]: PCI Bus: 0000:2C:00.0
+GPU[2]: PCI Bus: 0000:2F:00.0
+GPU[3]: PCI Bus: 0000:32:00.0
+GPU[4]: PCI Bus: 0000:AD:00.0   ← OAM 카드 2 (PCIe root complex 2)
+GPU[5]: PCI Bus: 0000:B0:00.0
+GPU[6]: PCI Bus: 0000:B3:00.0
+GPU[7]: PCI Bus: 0000:B6:00.0</code></pre>
+
+<p><strong>발견</strong>: GPU 0-3 의 bus 29-32 / GPU 4-7 의 bus AD-B6 — <strong>두 별개 PCIe root complex</strong>. XGMI 없는 쌍 (§5-4 의 0-0) 은 이 두 root 를 host CPU 통해 거쳐야 함.</p>
+
+<h6>② <code>rocm-smi --showhw</code> — 하드웨어 정보</h6>
+<pre><code>$ ssh mi250-052 rocm-smi --showhw
+GPU NODE DID    GUID  GFX VER  GFX RAS  SDMA RAS  UMC RAS  VBIOS           BUS
+0   2    0x740c 13025 gfx9010  ENABLED  ENABLED   ENABLED  113-D65209-073  0000:29:00.0
+1   3    0x740c 24866 gfx9010  ENABLED  ENABLED   ENABLED  113-D65209-073  0000:2C:00.0
+... (모든 GCD 동일)</code></pre>
+
+<p><strong>발견</strong>: <code>gfx9010</code> (MI250 architecture), ECC RAS 3종 모두 enabled, VBIOS 동일.</p>
+
+<h6>③ <code>/sys/bus/pci/devices/&lt;bus&gt;/</code> — PCIe link speed/width</h6>
+<pre><code>$ cat /sys/bus/pci/devices/0000:29:00.0/current_link_speed
+16.0 GT/s PCIe                                ← PCIe 4.0 (16 GT/s per lane)
+$ cat /sys/bus/pci/devices/0000:29:00.0/current_link_width
+16                                            ← x16 lanes
+$ cat /sys/bus/pci/devices/0000:29:00.0/max_link_speed
+16.0 GT/s PCIe                                ← 이 GPU 의 PCIe 최대 = 4.0
+$ cat /sys/bus/pci/devices/0000:29:00.0/max_link_width
+16                                            ← x16
+
+$ cat /sys/bus/pci/devices/0000:29:00.0/numa_node
+0                                             ← GPU 0 의 NUMA node
+$ cat /sys/bus/pci/devices/0000:AD:00.0/numa_node
+0                                             ← GPU 4 의 NUMA node (동일)</code></pre>
+
+<p><strong>발견</strong>: 각 GPU 가 <strong>PCIe 4.0 x16 = ~32 GB/s effective</strong>. XGMI 없는 쌍이 PCIe fallback 되면 32 GB/s 가 cap. 두 GPU 모두 NUMA node 0 (single-socket) — multi-socket overhead 없음.</p>
+
+<h6>④ <code>lspci -vv</code> — Capabilities 확인 (sudo 없으면 limited)</h6>
+<pre><code>$ ssh mi250-052 lspci -vv -s 29:00.0 | grep -iE 'LnkCap|LnkSta|kernel driver'
+Capabilities: &lt;access denied&gt;                ← sudo 없으면 link Cap 못 봄
+Kernel driver in use: amdgpu                  ← amdgpu kernel driver 정상</code></pre>
+
+<h6>⑤ NCCL/RCCL version + max channels — image 안 RCCL library 직접</h6>
+<pre><code>$ docker run --rm rocm/vllm:latest bash -c '
+    strings /opt/rocm/lib/librccl.so* | grep -iE "RCCL version|NCCL version"
+'
+<strong>RCCL version 2.26.6 compiled with ROCm "7.0.0.0-38-9428210"</strong>
+RCCL version : 2.26.6
+NCCL_MAX_P2P_NCHANNELS                        ← env 변수 명시 (자동 channel 수 cap)
+NCCL_MAX_NCHANNELS:%d is lesser than number of channels required by MSCCL...
+
+# strings 결과의 다른 env / option:
+NCCL_MAX_NCHANNELS  NCCL_MAX_P2P_NCHANNELS  NCCL_MIN_NCHANNELS</code></pre>
+
+<p><strong>발견</strong>: image 의 <strong>RCCL = 2.26.6 ROCm 7.0 build</strong>. 호스트 ROCm 6.2 와 minor mismatch — 이게 §9-1 의 aiter silent kill 원인 (이미 알려진 것 재확인).</p>
+
+<h6>⑥ <code>rocm-bandwidth-test</code> — 실측 P2P bandwidth (못 함)</h6>
+<pre><code>$ which rocm-bandwidth-test
+(empty)
+$ ls /opt/rocm/bin/ | grep -i bandwidth
+(empty)
+# → image 와 host 둘 다 install 안 됨. 별도 install 필요</code></pre>
+
+<h6>⑦ 종합 — 본 실험 host 의 hardware spec</h6>
+<table>
+<tr><th>항목</th><th>값</th><th>의미</th></tr>
+<tr><td>GPU 종류</td><td>8× MI250 GCD (gfx9010)</td><td>4 OAM × 2 die</td></tr>
+<tr><td>각 GCD VRAM</td><td>64GB HBM2e</td><td>총 512GB GPU memory</td></tr>
+<tr><td>PCIe link</td><td>4.0 x16 (16 GT/s × 16 lane = ~32 GB/s)</td><td>XGMI fallback 시 cap</td></tr>
+<tr><td>XGMI</td><td>같은 OAM 4 link (200 Gbps) / 가까운 OAM 2 link (100 Gbps) / 먼 OAM 1 link (50 Gbps) / 일부 쌍 직접 link 없음</td><td>§5-4 의 <code>--shownodesbw</code> 결과</td></tr>
+<tr><td>NUMA node</td><td>0 (single-socket)</td><td>multi-socket overhead 없음</td></tr>
+<tr><td>RCCL version</td><td>2.26.6 (ROCm 7.0 build, host 6.2)</td><td>aiter 호환 문제 원인</td></tr>
+<tr><td>PCIe root complex</td><td>2 개 (bus 29-32 / AD-B6)</td><td>XGMI 없는 GPU 쌍은 root 사이 통과</td></tr>
+<tr><td>amdgpu driver</td><td>사용 중</td><td>OK</td></tr>
+</table>
+
+<h6>NVIDIA 면 어떤 명령? (mi250 아니지만 참고용)</h6>
+<pre><code># NVLink topology
+nvidia-smi topo -m
+# 예시 output:
+#      GPU0 GPU1 GPU2 GPU3
+# GPU0  X   NV12 NV12 NV12   ← NV12 = 12 NVLink (full mesh)
+# GPU1 NV12  X   ...
+# (NV1..NV18, PIX, SYS 등 표시)
+
+# NVLink 상태
+nvidia-smi nvlink --status -i 0       # GPU 0 의 각 lane up/down
+nvidia-smi nvlink --capabilities -i 0 # max throughput
+
+# NCCL test
+cd nccl-tests && make
+./build/all_reduce_perf -b 8 -e 256M -f 2 -g 4   # 4 GPU AllReduce 측정</code></pre>
+
+<h5>위 명령은 docs 인용 (실 실행은 mi250-052 에서)</h5>
+
+<p><strong>AMD ROCm (MI250 등)</strong>:</p>
+<pre><code># 1. GPU 간 topology + link weight 확인
+rocm-smi --showtopo
+# → Weight 매트릭스. 낮을수록 link 수 많음
+#   weight 15 = 4 XGMI link (best)
+#   weight 30 = 2 XGMI link
+#   weight 45 = 1 XGMI link (worst)
+
+# 2. Bus 종류 (XGMI / PCIe) 확인
+rocm-smi --showbus
+# 또는
+rocm-smi --showhw
+
+# 3. XGMI link error 카운터 (link 살아있는지)
+rocm-smi --showxgmierr
+
+# 4. 실측 bandwidth — XGMI bandwidth utilization
+rocm-smi --showbw                  # PCIe bandwidth 만
+rocm-smi --shownodesbw             # XGMI node 간 bandwidth (정확)
+# 또는 rocm-bandwidth-test (별도 tool, 우리 환경엔 없음)
+rocm-bandwidth-test                # peer-to-peer matrix 측정</code></pre>
+
+<p><strong>NVIDIA (H100 등)</strong>:</p>
+<pre><code># 1. NVLink 토폴로지 + link 수
+nvidia-smi topo -m                 # GPU 간 connection 매트릭스
+# → NV1, NV2, ..., NV18: NVLink 의 link 수
+# → PIX: PCIe internal switch / SYS: PCIe through system
+
+# 2. NVLink 상태 (활성 link 수, throughput)
+nvidia-smi nvlink --status -i 0    # GPU 0 의 NVLink 각 lane 상태
+nvidia-smi nvlink --capabilities -i 0   # 지원하는 max throughput
+
+# 3. NVLink 활성 GPU 수 + bandwidth
+nvidia-smi nvlink --getcounters -i 0
+# → 누적 transfer 바이트, 현재 활용도
+
+# 4. 실측 — NCCL 자체 test
+cd nccl-tests
+./build/all_reduce_perf -b 8 -e 256M -f 2 -g &lt;n_gpus&gt;</code></pre>
+
+<p><strong>NCCL/RCCL 의 hard max 확인</strong>:</p>
+<pre><code># vLLM 실행 시 NCCL_DEBUG=INFO 켜면 자동으로 print
+# 본 실험 prefill log 에서 본 것:
+#   Channel 00/16 : 0 1
+#   Channel 01/16 : 0 1
+#   ...
+#   Channel 15/16 : 0 1
+# → 실제로 16 channel 사용 + 각 channel 이 GPU 0 ↔ GPU 1 연결
+
+# NCCL build 의 NCHANNELS 한계:
+# - NCCL 2.20+ : MAX_NCHANNELS = 32 (대부분 build)
+# - 특정 build 는 64 까지 지원
+# 환경변수로 override:
+NCCL_MAX_NCHANNELS=32 NCCL_MIN_NCHANNELS=16 vllm serve ...
+
+# 본 실험 image 의 NCCL/RCCL 한계 확인
+docker run --rm rocm/vllm:latest python3 -c "
+from torch.distributed.distributed_c10d import _get_default_group
+import os; print('NCCL_MAX_NCHANNELS:', os.environ.get('NCCL_MAX_NCHANNELS', 'default'))
+"</code></pre>
+
+<p><strong>본 실험에서 직접 확인한 MI250 의 link 수</strong> (§2-3 의 <code>rocm-smi --showtopo</code> 결과):</p>
+<table>
+<tr><th>쌍</th><th>Weight</th><th>Link 수 추정</th><th>해석</th></tr>
+<tr><td>GCD 0 ↔ 1 (같은 OAM)</td><td>15</td><td>4 XGMI link</td><td>Infinity Fabric, 가장 wide</td></tr>
+<tr><td>GCD 0 ↔ 4 (다른 OAM 가까운)</td><td>15</td><td>4 XGMI link</td><td>좋은 path</td></tr>
+<tr><td>GCD 0 ↔ 5 (다른 OAM 보통)</td><td>30</td><td>2 XGMI link</td><td>중간</td></tr>
+<tr><td>GCD 1 ↔ 5 (가장 먼)</td><td>45</td><td>1 XGMI link</td><td>최소 bandwidth</td></tr>
+</table>
+
+<p><strong>본 실험의 prefill GCD 0 ↔ decode GCD 4 = weight 15 = 4 link</strong>. 즉 가장 좋은 path 선택됨 — <code>nccl_num_channels=16</code> 의 16 channel 이 4 physical link 위 분산됨 (각 link 당 4 channel). 더 키워도 4 link 가 bottleneck.</p>
+
+<p><strong>요약</strong>: hardware link 수 보고 <code>nccl_num_channels</code> 결정:</p>
+<table>
+<tr><th>Link 수</th><th>권장 nccl_num_channels</th></tr>
+<tr><td>1-2 (MI250 의 다른 OAM, 또는 PCIe-only)</td><td>8</td></tr>
+<tr><td>4 (MI250 같은 OAM, 또는 NVLink 4-rate)</td><td><strong>16</strong> (default)</td></tr>
+<tr><td>8-12 (NVLink H100)</td><td>32</td></tr>
+<tr><td>18 (NVLink 4.0 full mesh)</td><td>32-64</td></tr>
+</table>
+
+<h3>7-3. NIXL (D pull) vs P2pNccl PUT_ASYNC (P push) — 방향성 차이</h3>
+
+<div class="note"><strong>이전 본인 글 <a href="https://han-oqo.github.io/study/vllm_pd_disagg_flow.html">vllm_pd_disagg_flow.html</a> 와 본 글의 방향성 차이</strong>: 이전 글은 "<strong>NixlConnector is 'READ'-based. Prefill (P) doesn't push KV; instead, Decode (D) pulls P's KV blocks directly (pull)</strong>" 라고 묘사. 본 실험은 "P가 push (PUT_ASYNC)" 라고 적음. 둘이 충돌이 아니라 <strong>connector 별로 다른 방향성</strong>:</div>
+
+<table>
+<tr><th>Connector / send_type</th><th>방향</th><th>Trigger</th><th>이전 글 / 본 실험</th></tr>
+<tr><td><strong>NixlConnector</strong> (READ-based)</td><td><strong>Decode pulls</strong></td><td>D 가 forward 직전 NIXL READ async 호출 → P 의 KV block 가져옴</td><td>이전 글 (vllm_pd_disagg_flow.html) 의 시각 — NIXL 만 묘사</td></tr>
+<tr><td><strong>P2pNccl GET</strong></td><td>Decode pulls</td><td>D 가 P 의 send_store 에서 가져옴. NIXL 의 READ 와 같은 방향</td><td>우리 안 선택 (성능 중간)</td></tr>
+<tr><td><strong>P2pNccl PUT_ASYNC</strong> (우리 실험)</td><td><strong>Prefill pushes</strong></td><td>P 가 KV 만들자마자 async send queue 에 넣음. 별도 thread 가 D 로 push</td><td>본 실험 (성능 best)</td></tr>
+<tr><td><strong>P2pNccl PUT</strong></td><td>Prefill pushes (sync)</td><td>P 가 send 완료까지 main 이 block</td><td>(성능 worst)</td></tr>
+</table>
+
+<h6>왜 NIXL 은 D pull 인데 P2pNccl PUT_ASYNC 는 P push?</h6>
+
+<table>
+<tr><th>측면</th><th>NIXL (D pull)</th><th>P2pNccl PUT_ASYNC (P push)</th></tr>
+<tr><td><strong>Memory locality</strong></td><td>D 가 자기 ready 된 후 trigger → D 의 receive buffer overflow 위험 적음</td><td>P 가 즉시 push → D 의 receive buffer 가 충분히 커야 (5-10% VRAM 권장)</td></tr>
+<tr><td><strong>P resource 회수</strong></td><td>D 가 pull 끝까지 P 가 KV 들고 있어야 → P 의 다음 request 받는 게 늦어짐</td><td>P 가 send queue 에 넣자마자 main 진행 → 다음 request 즉시 받음. P throughput ↑</td></tr>
+<tr><td><strong>Latency overlap</strong></td><td>D 의 first forward 시작 직전에 pull → transfer 시간이 D 의 TTFT 에 추가</td><td>P 의 forward 끝나면서 즉시 send 시작 → D 가 호출될 즘 KV 이미 도착 (overlap)</td></tr>
+<tr><td><strong>Hardware 가정</strong></td><td>NVIDIA NIXL — RDMA primitives 가 D 측 trigger 의 native operation</td><td>NCCL/RCCL — 일반 collective 인데 PUT_ASYNC 가 latency overlap 에 잘 맞음</td></tr>
+<tr><td><strong>성능 (PR #18242 의 측정)</strong></td><td>중간 (P2pNccl GET 과 같은 카테고리)</td><td><strong>가장 빠름</strong> — "PUT_ASYNC should be prioritized"</td></tr>
+</table>
+
+<p><strong>결론</strong>: 둘 다 valid pattern. <strong>connector 가 다르면 KV 방향성도 다른 게 정상</strong>. 본 실험은 ROCm MI250 에서 NIXL 사용 불가 (NVIDIA 전용) → P2pNccl 선택 → 그 안의 best 성능인 PUT_ASYNC 사용 → 결과적으로 "P push" 방향. 이전 글의 "D pull" 은 NIXL 의 자체 design 시각.</p>
+
+<h3>7-4. 일반 PDD 설명의 "decode 받아옴" vs PUT_ASYNC 의 "prefill 보냄"</h3>
+
+<p>이전에 본 일반 PDD 설명 (LLMServingSim / Heimdall / Frontier 문서들) 의 "decode 가 KV 받아옴" 표현은 <strong>받는 측 (consumer) 시각</strong>. KV 가 D 에 도착한다는 사실은 똑같음. 단 <strong>"누가 trigger" 는 connector / 옵션 별 다름</strong>:</p>
+
+<table>
+<tr><th>설명 패턴</th><th>해당 connector / 옵션</th><th>본 실험</th></tr>
+<tr><td>"Decode 가 받아옴" (general)</td><td>모든 PDD — KV 가 P→D 로 흐른다는 사실만</td><td>본 실험도 KV 가 D 에 도착</td></tr>
+<tr><td>"Decode 가 pull (GET)"</td><td>P2pNccl 의 <code>send_type=GET</code>, 또는 LMCache 의 일부 mode</td><td>아님</td></tr>
+<tr><td>"Prefill 가 push" (PUT/PUT_ASYNC)</td><td>P2pNccl 의 default 옵션, NIXL 의 active send</td><td>✓ 본 실험 (PUT_ASYNC)</td></tr>
+</table>
+
+<p>즉 <strong>"PDD = decode 가 KV 받음" 은 결과 기준</strong>. <strong>"누가 trigger" 는 옵션 결정 사항</strong>. PR #18242 의 측정에서 <strong>PUT_ASYNC 이 가장 빠름</strong> 이라고 명시 (PUT_ASYNC > GET > PUT).</p>
+
+<p>4 종류 channel 다 살아있어야 PDD 동작. 어느 하나 broken (예: ZMQ port 충돌 / NCCL handshake fail / HTTP 못 받음) 면 garbage 또는 hang.</p>
 
 
 
