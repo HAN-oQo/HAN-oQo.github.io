@@ -139,6 +139,92 @@
   </div>
 </div>
 
+<!-- ============ 0. ORIENTATION ============ -->
+<section id="s0">
+  <h2>🗺️
+    <span class="en">Before we start — what exactly leaks, and why would it ever hurt?</span>
+    <span class="ko">시작 전에 — 정확히 뭐가 새고, 그게 왜 문제가 되나?</span>
+  </h2>
+
+  <p class="en">"Memory leak in LLM serving" sounds like a GPU problem. It isn't — and getting this picture right makes the whole paper click. When you run <code class="inl">vllm serve</code>, what actually starts is <b>a Python process on the Linux host</b>. The model weights and the KV-cache live in GPU VRAM, but the process that drives the GPU lives in ordinary host RAM (the CPU side):</p>
+  <p class="ko">"LLM 서빙에서 메모리 누수"라고 하면 GPU 문제처럼 들리지만, 아닙니다 — 그리고 이 그림 하나만 제대로 잡으면 논문 전체가 술술 읽힙니다. <code class="inl">vllm serve</code>를 실행하면 실제로 뜨는 것은 <b>리눅스 호스트 위의 Python 프로세스 하나</b>입니다. 모델 가중치와 KV-cache는 GPU VRAM에 있지만, 그 GPU를 부리는 프로세스 자체는 호스트의 일반 RAM(CPU 쪽)에서 삽니다:</p>
+
+  <svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="One server machine: the vLLM Python process in host RAM (which leaks) drives the GPU whose VRAM holds model weights and KV-cache (which stays flat)">
+    <defs>
+      <marker id="ar0" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0c447c"/></marker>
+      <marker id="ar0g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b6a63"/></marker>
+    </defs>
+    <!-- machine -->
+    <rect x="20" y="26" width="840" height="216" rx="14" fill="#ffffff" stroke="#c2c0b6" stroke-width="1.6" stroke-dasharray="7 4"/>
+    <text x="450" y="50" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a3934">서버 머신 한 대</text>
+    <!-- client -->
+    <text x="48" y="136" font-size="11" fill="#6b6a63">요청</text>
+    <line x1="40" y1="148" x2="86" y2="148" stroke="#6b6a63" stroke-width="1.5" marker-end="url(#ar0g)"/>
+    <!-- host RAM -->
+    <rect x="92" y="66" width="360" height="156" rx="12" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.8"/>
+    <text x="272" y="90" text-anchor="middle" font-size="12" font-weight="700" fill="#0c447c">호스트 RAM — vLLM 파이썬 프로세스</text>
+    <g font-size="10.5" fill="#0c447c">
+      <text x="112" y="114">· 스케줄러 · 요청 큐 · 배칭 루프</text>
+      <text x="112" y="134">· HTTP 서버 · 토크나이저 · 로깅</text>
+      <text x="112" y="154">· CUDA 런타임의 호스트 쪽 장부</text>
+    </g>
+    <text x="112" y="186" font-size="11" font-weight="700" fill="#6f2a12">⬆ 논문이 잰 곳 = 여기 (USS)</text>
+    <text x="112" y="204" font-size="10" fill="#6f2a12">전 구성에서 시간당 수십~수백 KB씩 증가</text>
+    <!-- arrow -->
+    <line x1="452" y1="144" x2="520" y2="144" stroke="#0c447c" stroke-width="1.8" marker-end="url(#ar0)"/>
+    <text x="486" y="132" text-anchor="middle" font-size="10" fill="#0c447c">지휘</text>
+    <text x="486" y="162" text-anchor="middle" font-size="9.5" fill="#6b6a63">커널 런치·배칭</text>
+    <!-- GPU -->
+    <rect x="524" y="66" width="312" height="156" rx="12" fill="#eaf3de" stroke="#97c459" stroke-width="1.8"/>
+    <text x="680" y="90" text-anchor="middle" font-size="12" font-weight="700" fill="#27500a">GPU VRAM (L40S 46 GB)</text>
+    <g font-size="10.5" fill="#27500a">
+      <text x="544" y="114">· 모델 가중치 (Qwen2.5-7B, bf16)</text>
+      <text x="544" y="134">· KV-cache (요청별, paged)</text>
+      <text x="544" y="154">· CUDA 커널 실행</text>
+    </g>
+    <text x="544" y="186" font-size="11" font-weight="700" fill="#27500a">✓ 36시간 내내 평탄 — 무죄</text>
+    <text x="544" y="204" font-size="10" fill="#27500a">모든 배포에서 VRAM 추세 없음 (§IV-C·E)</text>
+    <!-- bottom -->
+    <text x="450" y="272" text-anchor="middle" font-size="11" fill="#6b6a63">"프로세스 메모리 누수" = 왼쪽 파란 상자(호스트 RAM 속 파이썬 프로세스)가 천천히 부푸는 것. GPU는 멀쩡하다.</text>
+    <text x="450" y="292" text-anchor="middle" font-size="10" fill="#8a8f98">CPU 사용률 자체도 평탄 (§IV-C) — 연산이 느려지는 게 아니라, 프로세스가 차지한 RAM이 늘어나는 문제</text>
+  </svg>
+  <p class="figcap"><span class="en">Where the leak actually lives. The paper's USS metric measures the blue box; the green box stayed flat in every run.</span><span class="ko">누수가 실제로 사는 곳. 논문의 USS 지표가 재는 건 파란 상자이고, 초록 상자는 모든 런에서 평탄했다.</span></p>
+
+  <h3><span class="en">Which part of the blue box leaks?</span>
+      <span class="ko">파란 상자 안에서도 "어떤 부분"이 새나?</span></h3>
+  <p class="en">The paper's detective logic: all three deployments run the <b>same model and the same inference math</b> (same CUDA kernels). If the inference path were leaking, all three would leak at a similar rate. Instead they differ ~100× — so the leak must live in the <b>wrapping</b>: the scheduler and request-lifecycle code (why old V0 leaks 7–27× more than V1), the queue/batcher/frontend layers Triton adds (why wrapping amplifies both engines), and the CUDA runtime's host-side bookkeeping (why the PyTorch runs kept <i>reserving</i> address space). Which exact data structure? Unknown — that needs heap profiling, which the paper leaves as future work.</p>
+  <p class="ko">논문의 추리는 이렇습니다: 세 배포는 <b>같은 모델, 같은 추론 연산</b>(같은 CUDA 커널)을 돌립니다. 추론 경로가 새는 거라면 셋의 누수 속도가 비슷해야 하는데, 실제로는 ~100배 차이가 났죠. 그러니 누수는 <b>포장</b>에 사는 겁니다 — 스케줄러와 요청 수명주기 코드(구형 V0가 V1보다 7~27배 더 새는 이유), Triton이 얹는 큐/배처/프론트엔드 계층(래핑이 두 엔진 모두를 증폭시키는 이유), CUDA 런타임의 호스트 쪽 장부(PyTorch 런들이 주소 공간을 계속 <i>예약</i>만 하던 이유). 정확히 어느 자료구조인지는? 미상 — 힙 프로파일링이 필요하고, 논문은 그걸 후속 과제로 남겼습니다.</p>
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">analogy</span><span class="ko">비유</span></span>
+    <span class="en">The kitchen (GPU) is spotless and cooking at full speed. But the front counter (host process) keeps a receipt from time to time and never throws it away. Service speed doesn't change one bit — until the day the counter is buried.</span>
+    <span class="ko">주방(GPU)은 깨끗하고 풀스피드로 요리 중입니다. 그런데 카운터(호스트 프로세스)에 영수증이 가끔 한 장씩 쌓이고, 아무도 버리지 않아요. 손님 응대 속도는 조금도 안 변합니다 — 카운터가 파묻히는 날까지는.</span>
+  </div>
+
+  <h3><span class="en">And how does host RAM ever hurt LLM inference performance?</span>
+      <span class="ko">호스트 RAM이 대체 어떻게 LLM 추론 성능을 해치나?</span></h3>
+  <p class="en">Within the 36-hour runs: <b>it didn't, at all</b> — latency and throughput stayed flat (§IV-B). That's exactly the danger. A leak like this doesn't degrade performance gradually; it ends in a <b>cliff</b>:</p>
+  <p class="ko">36시간 실험 안에서는: <b>전혀 안 해쳤습니다</b> — 레이턴시와 스루풋이 끝까지 평탄했어요(§IV-B). 그런데 바로 그게 위험한 지점입니다. 이런 누수는 성능을 서서히 깎는 게 아니라 <b>절벽</b>으로 끝납니다:</p>
+  <div class="grid3">
+    <div class="mini">
+      <h4><span class="en">① RAM fills up → swapping</span><span class="ko">① RAM이 차면 → 스왑</span></h4>
+      <p><span class="en">The OS starts paging the Python orchestrator to disk. The GPU is fine, but the conductor stutters — batching slows, tail latency explodes.</span><span class="ko">OS가 파이썬 오케스트레이터를 디스크로 내리기 시작. GPU는 멀쩡한데 지휘자가 버벅임 — 배칭이 늦어지고 tail latency가 폭발.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">② Or: OOM kill → outage</span><span class="ko">② 또는: OOM kill → 장애</span></h4>
+      <p><span class="en">The kernel kills the serving process. Restart = minutes of model reloading, and every KV-cache on the GPU evaporates.</span><span class="ko">커널이 서빙 프로세스를 죽임. 재시작 = 수 분짜리 모델 재로딩, GPU에 쌓아둔 KV-cache 전부 증발.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">③ In k8s: OOMKilled loop</span><span class="ko">③ k8s라면: OOMKilled 반복</span></h4>
+      <p><span class="en">With a container memory limit, a leaking process eventually hits it → restart → leak again → restart. Availability blips and cold starts on a schedule you didn't choose.</span><span class="ko">컨테이너 메모리 리밋이 있으면 새는 프로세스는 언젠가 리밋에 닿음 → 재시작 → 또 샘 → 또 재시작. 내가 정하지 않은 주기로 가용성 구멍과 콜드 스타트 발생.</span></p>
+    </div>
+  </div>
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">the shape of the risk</span><span class="ko">위험의 모양</span></span>
+    <span class="en">Not "slowly getting worse" but <b>fine → fine → fine → bang</b> — and the dashboard (latency, throughput, errors) shows nothing until just before the bang. That's why the paper's bottom line is "monitor the process memory itself". To be fair on magnitude: the measured rates (worst ≈ 110 MB/month) buy you months of headroom — the one genuinely scary pattern is E2's staircase (§3.5), because nobody knows when it jumps or by how much.</span>
+    <span class="ko">"서서히 나빠짐"이 아니라 <b>멀쩡 → 멀쩡 → 멀쩡 → 쾅</b>입니다 — 그리고 대시보드(레이턴시·스루풋·에러율)에는 쾅 직전까지 아무것도 안 보입니다. 논문의 결론이 "프로세스 메모리 자체를 모니터링하라"인 이유죠. 규모는 공정하게 말하면: 측정된 속도(최악 ≈ 월 110 MB)면 몇 달은 여유가 있습니다 — 진짜 무서운 건 언제 얼마나 점프할지 모르는 E2의 계단 패턴(§3.5) 하나입니다.</span>
+  </div>
+</section>
+
 <!-- ============ 1. PROBLEM ============ -->
 <section id="s1">
   <h2><span class="num">1</span>
