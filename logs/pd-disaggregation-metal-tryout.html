@@ -44,45 +44,45 @@
 <body>
 <div class="wrap">
 
-<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 관련: <a href="local-llm-cpu-cluster-tryout.html">CPU + 작은 모델로 vLLM/llm-d/Dynamo 따라하기</a></p>
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <span class="en">Related:</span><span class="ko">관련:</span> <a href="local-llm-cpu-cluster-tryout.html"><span class="en">Following vLLM/llm-d/Dynamo with CPU + small models</span><span class="ko">CPU + 작은 모델로 vLLM/llm-d/Dynamo 따라하기</span></a></p>
 
-<h1>Apple Silicon 에서 vLLM PD Disaggregation 시도</h1>
-<p class="sub">작성일: 2026-06-11 · 환경: macOS Apple Silicon, vllm-metal 0.3.0.dev · 결론: <strong>vllm-metal 의 KV connector handshake 미구현 → mechanism 시연도 불가</strong></p>
+<h1><span class="en">Trying vLLM PD Disaggregation on Apple Silicon</span><span class="ko">Apple Silicon 에서 vLLM PD Disaggregation 시도</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-11 · Environment: macOS Apple Silicon, vllm-metal 0.3.0.dev · Conclusion: <strong>vllm-metal's KV connector handshake is not implemented → even a mechanism demo is impossible</strong></span><span class="ko">작성일: 2026-06-11 · 환경: macOS Apple Silicon, vllm-metal 0.3.0.dev · 결론: <strong>vllm-metal 의 KV connector handshake 미구현 → mechanism 시연도 불가</strong></span></p>
 
 <div class="card toc">
-<strong>목차</strong>
+<strong><span class="en">Table of Contents</span><span class="ko">목차</span></strong>
 <ol>
-  <li><a href="#what">1. PD Disaggregation 이 무엇인가</a></li>
-  <li><a href="#why-try">2. Apple Silicon 에서 시도하는 이유</a></li>
-  <li><a href="#kv-connectors">3. KV transfer connector 9 종 검토</a></li>
-  <li><a href="#try">4. ExampleConnector 로 실 시도</a></li>
-  <li><a href="#result">5. 결과 — handshake 미구현</a></li>
-  <li><a href="#patch">6. <strong>3줄 monkey-patch 로 동작 확인</strong> ← 업데이트</a></li>
-  <li><a href="#analysis">7. 분석 — 다른 경로 + 다음 단계</a></li>
-  <li><a href="#wrap">8. 결론 + 다음 단계 (NVIDIA Linux 에서 무엇을 해야)</a></li>
-  <li><a href="#refs">9. 참고 자료 + 용어 풀이</a></li>
+  <li><a href="#what"><span class="en">1. What is PD Disaggregation</span><span class="ko">1. PD Disaggregation 이 무엇인가</span></a></li>
+  <li><a href="#why-try"><span class="en">2. Why try it on Apple Silicon</span><span class="ko">2. Apple Silicon 에서 시도하는 이유</span></a></li>
+  <li><a href="#kv-connectors"><span class="en">3. Review of 9 KV transfer connectors</span><span class="ko">3. KV transfer connector 9 종 검토</span></a></li>
+  <li><a href="#try"><span class="en">4. Actual attempt with ExampleConnector</span><span class="ko">4. ExampleConnector 로 실 시도</span></a></li>
+  <li><a href="#result"><span class="en">5. Result — handshake not implemented</span><span class="ko">5. 결과 — handshake 미구현</span></a></li>
+  <li><a href="#patch"><span class="en">6. <strong>Verified working with a 3-line monkey-patch</strong> ← update</span><span class="ko">6. <strong>3줄 monkey-patch 로 동작 확인</strong> ← 업데이트</span></a></li>
+  <li><a href="#analysis"><span class="en">7. Analysis — alternative paths + next steps</span><span class="ko">7. 분석 — 다른 경로 + 다음 단계</span></a></li>
+  <li><a href="#wrap"><span class="en">8. Conclusion + next steps (what to do on NVIDIA Linux)</span><span class="ko">8. 결론 + 다음 단계 (NVIDIA Linux 에서 무엇을 해야)</span></a></li>
+  <li><a href="#refs"><span class="en">9. References + glossary</span><span class="ko">9. 참고 자료 + 용어 풀이</span></a></li>
 </ol>
 </div>
 
-<h2 id="what">1. PD Disaggregation 이 무엇인가</h2>
+<h2 id="what"><span class="en">1. What is PD Disaggregation</span><span class="ko">1. PD Disaggregation 이 무엇인가</span></h2>
 <div class="card">
 
-<p>LLM 추론은 두 단계로 나뉨 — 둘의 compute 특성이 완전히 다름:</p>
+<p><span class="en">LLM inference splits into two stages — their compute characteristics are completely different:</span><span class="ko">LLM 추론은 두 단계로 나뉨 — 둘의 compute 특성이 완전히 다름:</span></p>
 
 <table>
-<tr><th>단계</th><th>하는 일</th><th>특성</th><th>GPU 적합</th></tr>
-<tr><td><strong>Prefill</strong></td><td>prompt 전체 token 을 한 번에 forward → KV cache 생성. 한 사용자의 첫 응답 토큰까지가 여기 포함</td><td><strong>compute-bound</strong> (matmul 무거움)</td><td>H100 / B100 같이 compute 강한 GPU</td></tr>
-<tr><td><strong>Decode</strong></td><td>한 token 씩 autoregressive 생성. KV cache 를 재사용해서 새 token 1개씩 produce</td><td><strong>memory-bound</strong> (KV cache 읽기 위주)</td><td>A10 / L40 같이 memory bandwidth 위주의 저렴한 GPU</td></tr>
+<tr><th><span class="en">Stage</span><span class="ko">단계</span></th><th><span class="en">What it does</span><span class="ko">하는 일</span></th><th><span class="en">Characteristic</span><span class="ko">특성</span></th><th><span class="en">Suitable GPU</span><span class="ko">GPU 적합</span></th></tr>
+<tr><td><strong>Prefill</strong></td><td><span class="en">Forward the entire prompt's tokens at once → generate KV cache. Covers up to the first response token for a user</span><span class="ko">prompt 전체 token 을 한 번에 forward → KV cache 생성. 한 사용자의 첫 응답 토큰까지가 여기 포함</span></td><td><span class="en"><strong>compute-bound</strong> (heavy matmul)</span><span class="ko"><strong>compute-bound</strong> (matmul 무거움)</span></td><td><span class="en">Compute-strong GPUs like H100 / B100</span><span class="ko">H100 / B100 같이 compute 강한 GPU</span></td></tr>
+<tr><td><strong>Decode</strong></td><td><span class="en">Autoregressively generate one token at a time. Reuse KV cache to produce one new token at a time</span><span class="ko">한 token 씩 autoregressive 생성. KV cache 를 재사용해서 새 token 1개씩 produce</span></td><td><span class="en"><strong>memory-bound</strong> (mostly KV cache reads)</span><span class="ko"><strong>memory-bound</strong> (KV cache 읽기 위주)</span></td><td><span class="en">Cheaper memory-bandwidth-oriented GPUs like A10 / L40</span><span class="ko">A10 / L40 같이 memory bandwidth 위주의 저렴한 GPU</span></td></tr>
 </table>
 
-<p>같은 GPU 에 P 와 D 를 같이 두면 비효율:</p>
+<p><span class="en">Placing P and D on the same GPU is inefficient:</span><span class="ko">같은 GPU 에 P 와 D 를 같이 두면 비효율:</span></p>
 <ul>
-<li>P 가 GPU compute 100% 점유하면 D 가 못 돌아감</li>
-<li>D 가 KV cache 자주 읽으면 memory bandwidth 잡아먹음</li>
-<li>고가 GPU (H100) 가 memory-bound D 만 돌리면 compute 자원 낭비</li>
+<li><span class="en">If P fully occupies 100% of GPU compute, D cannot run</span><span class="ko">P 가 GPU compute 100% 점유하면 D 가 못 돌아감</span></li>
+<li><span class="en">If D frequently reads the KV cache, it eats into memory bandwidth</span><span class="ko">D 가 KV cache 자주 읽으면 memory bandwidth 잡아먹음</span></li>
+<li><span class="en">Running only memory-bound D on an expensive GPU (H100) wastes compute resources</span><span class="ko">고가 GPU (H100) 가 memory-bound D 만 돌리면 compute 자원 낭비</span></li>
 </ul>
 
-<p><strong>PD Disaggregation</strong> 의 아이디어: P 와 D 를 다른 instance / 다른 GPU 에 분리. Prefill instance 가 KV cache 만들면 <strong>그 KV 만</strong> Decode instance 로 transfer. P 끝나면 P GPU 는 다음 요청 받음.</p>
+<p><span class="en">The idea of <strong>PD Disaggregation</strong>: separate P and D onto different instances / different GPUs. Once the prefill instance produces the KV cache, <strong>only that KV</strong> is transferred to the decode instance. When P finishes, the P GPU takes the next request.</span><span class="ko"><strong>PD Disaggregation</strong> 의 아이디어: P 와 D 를 다른 instance / 다른 GPU 에 분리. Prefill instance 가 KV cache 만들면 <strong>그 KV 만</strong> Decode instance 로 transfer. P 끝나면 P GPU 는 다음 요청 받음.</span></p>
 
 <div class="diagram">  사용자 요청 (긴 prompt)
        ↓
@@ -101,58 +101,58 @@
            ↓
   응답 stream</div>
 
-<p>NVIDIA Dynamo, llm-d, vLLM 자체 (experimental) 모두 PDD 지원. Meta / Hugging Face 가 production 에서 사용 중.</p>
+<p><span class="en">NVIDIA Dynamo, llm-d, and vLLM itself (experimental) all support PDD. Meta / Hugging Face use it in production.</span><span class="ko">NVIDIA Dynamo, llm-d, vLLM 자체 (experimental) 모두 PDD 지원. Meta / Hugging Face 가 production 에서 사용 중.</span></p>
 
 </div>
 
-<h2 id="why-try">2. Apple Silicon 에서 시도하는 이유</h2>
+<h2 id="why-try"><span class="en">2. Why try it on Apple Silicon</span><span class="ko">2. Apple Silicon 에서 시도하는 이유</span></h2>
 <div class="card">
 
-<p>Apple Silicon 의 vllm-metal 으로 두 vLLM instance 띄우고 PDD mechanism 동작 확인:</p>
+<p><span class="en">Bring up two vLLM instances on Apple Silicon's vllm-metal and verify that the PDD mechanism works:</span><span class="ko">Apple Silicon 의 vllm-metal 으로 두 vLLM instance 띄우고 PDD mechanism 동작 확인:</span></p>
 <ul>
-<li><strong>학습 의도</strong>: PDD 가 어떻게 두 instance 를 연결하는지, KV cache 가 실제로 어떻게 transfer 되는지 손으로 보기</li>
-<li><strong>구조 검증</strong>: vLLM 의 KV transfer config 가 어떻게 생겼는지 (yaml/JSON 형태 + producer/consumer role)</li>
-<li><strong>성능 측정은 부수적</strong>: Apple Silicon 의 single host Metal 자원 공유로 의미 있는 throughput 비교는 어려움 — production NVIDIA H100 cluster 와는 다른 시나리오</li>
+<li><span class="en"><strong>Learning intent</strong>: see hands-on how PDD wires up two instances and how the KV cache is actually transferred</span><span class="ko"><strong>학습 의도</strong>: PDD 가 어떻게 두 instance 를 연결하는지, KV cache 가 실제로 어떻게 transfer 되는지 손으로 보기</span></li>
+<li><span class="en"><strong>Structure check</strong>: see what vLLM's KV transfer config looks like (yaml/JSON form + producer/consumer role)</span><span class="ko"><strong>구조 검증</strong>: vLLM 의 KV transfer config 가 어떻게 생겼는지 (yaml/JSON 형태 + producer/consumer role)</span></li>
+<li><span class="en"><strong>Performance measurement is secondary</strong>: meaningful throughput comparisons are hard given Apple Silicon's single-host Metal resource sharing — a different scenario from a production NVIDIA H100 cluster</span><span class="ko"><strong>성능 측정은 부수적</strong>: Apple Silicon 의 single host Metal 자원 공유로 의미 있는 throughput 비교는 어려움 — production NVIDIA H100 cluster 와는 다른 시나리오</span></li>
 </ul>
 
-<div class="note"><strong>전제</strong>: 같은 host 의 두 instance 가 Metal GPU 자원 공유라 throughput 향상 보장 X. PDD 의 진짜 가치는 <strong>서로 다른 GPU 형</strong> (compute-bound vs memory-bound) 사이 분담. 본 시도는 mechanism 학습 한정.</div>
+<div class="note"><span class="en"><strong>Premise</strong>: with two instances on the same host sharing Metal GPU resources, throughput gains are not guaranteed. The real value of PDD is splitting between <strong>different GPU types</strong> (compute-bound vs memory-bound). This attempt is limited to mechanism learning.</span><span class="ko"><strong>전제</strong>: 같은 host 의 두 instance 가 Metal GPU 자원 공유라 throughput 향상 보장 X. PDD 의 진짜 가치는 <strong>서로 다른 GPU 형</strong> (compute-bound vs memory-bound) 사이 분담. 본 시도는 mechanism 학습 한정.</span></div>
 
 </div>
 
-<h2 id="kv-connectors">3. KV transfer connector 9 종 검토</h2>
+<h2 id="kv-connectors"><span class="en">3. Review of 9 KV transfer connectors</span><span class="ko">3. KV transfer connector 9 종 검토</span></h2>
 <div class="card">
 
-<p>vLLM 의 PDD 는 두 instance 사이 KV cache 를 어떻게 옮기느냐의 backend 가 핵심. 공식 docs 에서 9개 connector 지원:</p>
+<p><span class="en">vLLM's PDD hinges on the backend that moves the KV cache between two instances. The official docs list 9 supported connectors:</span><span class="ko">vLLM 의 PDD 는 두 instance 사이 KV cache 를 어떻게 옮기느냐의 backend 가 핵심. 공식 docs 에서 9개 connector 지원:</span></p>
 
 <table>
-<tr><th>Connector</th><th>방식</th><th>Apple Silicon 가능?</th><th>이유</th></tr>
-<tr><td><code>NixlConnector</code></td><td>NVIDIA NIXL 라이브러리 (NVLink/InfiniBand RDMA)</td><td>✗</td><td>NVIDIA GPU + NIXL driver 필요</td></tr>
-<tr><td><code>LMCacheConnectorV1</code></td><td>LMCache 별도 서버를 통해 KV 저장/조회</td><td>⚠</td><td>LMCache 자체가 GPU 가정 강함. CPU mode 가 있긴 하지만 docs 가 NVIDIA 중심</td></tr>
-<tr><td><code>MooncakeConnector</code></td><td>Mooncake transfer engine (kimi-AI 의 KV cache pool)</td><td>✗</td><td>CUDA + InfiniBand 가정</td></tr>
-<tr><td><code>MoRIIOConnector</code></td><td>AMD ROCm 전용</td><td>✗</td><td>ROCm only 라고 명시</td></tr>
-<tr><td><code>ExampleConnector</code></td><td>shared filesystem 으로 KV blob 저장/조회</td><td>✓</td><td><strong>유일하게 GPU 무관</strong>. 학습용 / offline batch 용. 시도 가능 후보</td></tr>
-<tr><td><code>OffloadingConnector</code></td><td>CPU memory 로 KV 일부 offload</td><td>⚠</td><td>vllm-metal 의 GPU↔CPU offload path 미숙 가능성</td></tr>
-<tr><td><code>MultiConnector</code></td><td>여러 connector 조합</td><td>위에 의존</td><td>—</td></tr>
-<tr><td><code>FlexKVConnectorV1</code></td><td>유연한 KV 관리</td><td>?</td><td>NVIDIA 가정 추정</td></tr>
-<tr><td><code>ExampleHiddenStatesConnector</code></td><td>hidden states 도 transfer</td><td>?</td><td>—</td></tr>
+<tr><th>Connector</th><th><span class="en">Method</span><span class="ko">방식</span></th><th><span class="en">Apple Silicon possible?</span><span class="ko">Apple Silicon 가능?</span></th><th><span class="en">Reason</span><span class="ko">이유</span></th></tr>
+<tr><td><code>NixlConnector</code></td><td><span class="en">NVIDIA NIXL library (NVLink/InfiniBand RDMA)</span><span class="ko">NVIDIA NIXL 라이브러리 (NVLink/InfiniBand RDMA)</span></td><td>✗</td><td><span class="en">Requires NVIDIA GPU + NIXL driver</span><span class="ko">NVIDIA GPU + NIXL driver 필요</span></td></tr>
+<tr><td><code>LMCacheConnectorV1</code></td><td><span class="en">Stores/retrieves KV via a separate LMCache server</span><span class="ko">LMCache 별도 서버를 통해 KV 저장/조회</span></td><td>⚠</td><td><span class="en">LMCache itself heavily assumes a GPU. It has a CPU mode, but the docs are NVIDIA-centric</span><span class="ko">LMCache 자체가 GPU 가정 강함. CPU mode 가 있긴 하지만 docs 가 NVIDIA 중심</span></td></tr>
+<tr><td><code>MooncakeConnector</code></td><td><span class="en">Mooncake transfer engine (Kimi-AI's KV cache pool)</span><span class="ko">Mooncake transfer engine (kimi-AI 의 KV cache pool)</span></td><td>✗</td><td><span class="en">Assumes CUDA + InfiniBand</span><span class="ko">CUDA + InfiniBand 가정</span></td></tr>
+<tr><td><code>MoRIIOConnector</code></td><td><span class="en">AMD ROCm only</span><span class="ko">AMD ROCm 전용</span></td><td>✗</td><td><span class="en">Explicitly stated as ROCm only</span><span class="ko">ROCm only 라고 명시</span></td></tr>
+<tr><td><code>ExampleConnector</code></td><td><span class="en">Store/retrieve KV blobs via a shared filesystem</span><span class="ko">shared filesystem 으로 KV blob 저장/조회</span></td><td>✓</td><td><span class="en"><strong>The only GPU-agnostic one</strong>. For learning / offline batch use. A viable candidate</span><span class="ko"><strong>유일하게 GPU 무관</strong>. 학습용 / offline batch 용. 시도 가능 후보</span></td></tr>
+<tr><td><code>OffloadingConnector</code></td><td><span class="en">Offload part of the KV to CPU memory</span><span class="ko">CPU memory 로 KV 일부 offload</span></td><td>⚠</td><td><span class="en">vllm-metal's GPU↔CPU offload path may be immature</span><span class="ko">vllm-metal 의 GPU↔CPU offload path 미숙 가능성</span></td></tr>
+<tr><td><code>MultiConnector</code></td><td><span class="en">Combine multiple connectors</span><span class="ko">여러 connector 조합</span></td><td><span class="en">Depends on the above</span><span class="ko">위에 의존</span></td><td>—</td></tr>
+<tr><td><code>FlexKVConnectorV1</code></td><td><span class="en">Flexible KV management</span><span class="ko">유연한 KV 관리</span></td><td>?</td><td><span class="en">Presumed to assume NVIDIA</span><span class="ko">NVIDIA 가정 추정</span></td></tr>
+<tr><td><code>ExampleHiddenStatesConnector</code></td><td><span class="en">Also transfers hidden states</span><span class="ko">hidden states 도 transfer</span></td><td>?</td><td>—</td></tr>
 </table>
 
-<p><strong>결정</strong>: <code>ExampleConnector</code> 만 GPU 무관. 가장 가벼움. 단 production 용 X — vLLM 공식 예제 (<code>examples/disaggregated/example_connector/</code>) 의 offline batch mode 이고 실제 serve 두 instance 는 아님.</p>
+<p><span class="en"><strong>Decision</strong>: only <code>ExampleConnector</code> is GPU-agnostic. The lightest option. However, not for production — it's vLLM's official example (<code>examples/disaggregated/example_connector/</code>) in offline batch mode, not two actual serving instances.</span><span class="ko"><strong>결정</strong>: <code>ExampleConnector</code> 만 GPU 무관. 가장 가벼움. 단 production 용 X — vLLM 공식 예제 (<code>examples/disaggregated/example_connector/</code>) 의 offline batch mode 이고 실제 serve 두 instance 는 아님.</span></p>
 
 </div>
 
-<h2 id="try">4. ExampleConnector 로 실 시도</h2>
+<h2 id="try"><span class="en">4. Actual attempt with ExampleConnector</span><span class="ko">4. ExampleConnector 로 실 시도</span></h2>
 <div class="card">
 
-<h3>4-1. 환경 + 모델</h3>
+<h3><span class="en">4-1. Environment + model</span><span class="ko">4-1. 환경 + 모델</span></h3>
 <pre><code># vllm-metal 0.3.0.dev 환경 (이전 글에서 install 완료)
 source ~/.venv-vllm-metal/bin/activate
 python -c "import vllm; print(vllm.__version__)"
 # → 0.22.1</code></pre>
 
-<p>모델: <code>Qwen/Qwen2.5-0.5B-Instruct</code> (공식 예제의 Llama-3.2-1B 는 HF gated 라 token 필요. 0.5B 가 더 가볍).</p>
+<p><span class="en">Model: <code>Qwen/Qwen2.5-0.5B-Instruct</code> (the official example's Llama-3.2-1B is HF-gated and requires a token. 0.5B is lighter).</span><span class="ko">모델: <code>Qwen/Qwen2.5-0.5B-Instruct</code> (공식 예제의 Llama-3.2-1B 는 HF gated 라 token 필요. 0.5B 가 더 가볍).</span></p>
 
-<h3>4-2. prefill_example.py 가져옴</h3>
+<h3><span class="en">4-2. Grab prefill_example.py</span><span class="ko">4-2. prefill_example.py 가져옴</span></h3>
 <pre><code>mkdir /tmp/pdd-test &amp;&amp; cd /tmp/pdd-test
 curl -s -o prefill_example.py \
   "https://raw.githubusercontent.com/vllm-project/vllm/main/examples/disaggregated/example_connector/prefill_example.py"
@@ -160,7 +160,7 @@ curl -s -o decode_example.py \
   "https://raw.githubusercontent.com/vllm-project/vllm/main/examples/disaggregated/example_connector/decode_example.py"
 sed -i.bak 's|meta-llama/Llama-3.2-1B-Instruct|Qwen/Qwen2.5-0.5B-Instruct|g' prefill_example.py decode_example.py</code></pre>
 
-<p>핵심 코드 (prefill_example.py):</p>
+<p><span class="en">Core code (prefill_example.py):</span><span class="ko">핵심 코드 (prefill_example.py):</span></p>
 <pre><code>from vllm import LLM, SamplingParams
 from vllm.config import KVTransferConfig
 
@@ -181,12 +181,12 @@ outputs = llm.generate(prompts, sampling_params)
 
 # decode_example.py 가 같은 storage 에서 KV 읽고 generation 이어감</code></pre>
 
-<h3>4-3. 실행</h3>
+<h3><span class="en">4-3. Run</span><span class="ko">4-3. 실행</span></h3>
 <pre><code>VLLM_ENABLE_V1_MULTIPROCESSING=0 python prefill_example.py</code></pre>
 
 </div>
 
-<h2 id="result">5. 결과 — handshake 미구현</h2>
+<h2 id="result"><span class="en">5. Result — handshake not implemented</span><span class="ko">5. 결과 — handshake 미구현</span></h2>
 <div class="card">
 
 <pre><code>Traceback (most recent call last):
@@ -206,28 +206,28 @@ outputs = llm.generate(prompts, sampling_params)
     raise NotImplementedError(
 NotImplementedError: Method 'get_kv_connector_handshake_metadata' is not implemented.</code></pre>
 
-<p><strong>핵심</strong>: vLLM 의 worker abstraction 이 KV connector handshake metadata API 를 노출해야 하는데, vllm-metal 의 <strong>Metal/MLX worker</strong> 가 이 method 를 override 안 함. <code>NotImplementedError</code> 로 init 단계에서 실패.</p>
+<p><span class="en"><strong>Core issue</strong>: vLLM's worker abstraction needs to expose the KV connector handshake metadata API, but vllm-metal's <strong>Metal/MLX worker</strong> does not override this method. It fails at init time with <code>NotImplementedError</code>.</span><span class="ko"><strong>핵심</strong>: vLLM 의 worker abstraction 이 KV connector handshake metadata API 를 노출해야 하는데, vllm-metal 의 <strong>Metal/MLX worker</strong> 가 이 method 를 override 안 함. <code>NotImplementedError</code> 로 init 단계에서 실패.</span></p>
 
 <table>
-<tr><th>호출 chain</th><th>위치</th><th>상태</th></tr>
-<tr><td><code>LLM(kv_transfer_config=...)</code></td><td>사용자 코드</td><td>OK (config 받음)</td></tr>
+<tr><th><span class="en">Call chain</span><span class="ko">호출 chain</span></th><th><span class="en">Location</span><span class="ko">위치</span></th><th><span class="en">Status</span><span class="ko">상태</span></th></tr>
+<tr><td><code>LLM(kv_transfer_config=...)</code></td><td><span class="en">User code</span><span class="ko">사용자 코드</span></td><td><span class="en">OK (config received)</span><span class="ko">OK (config 받음)</span></td></tr>
 <tr><td><code>LLMEngine.from_engine_args(...)</code></td><td>vllm/v1/engine/llm_engine.py:170</td><td>OK</td></tr>
-<tr><td><code>EngineCore.__init__</code></td><td>vllm/v1/engine/core.py:174</td><td>OK — init 진입</td></tr>
-<tr><td><code>get_kv_connector_handshake_metadata()</code></td><td>vllm/v1/executor/abstract.py:207</td><td>collective_rpc 호출</td></tr>
-<tr><td><code>collective_rpc("get_kv_connector_handshake_metadata")</code></td><td>vllm/v1/executor/uniproc_executor.py:93</td><td>worker 에 위임</td></tr>
-<tr><td><code>worker.get_kv_connector_handshake_metadata()</code></td><td>vllm-metal 의 Metal worker</td><td><strong>✗ NotImplementedError</strong></td></tr>
+<tr><td><code>EngineCore.__init__</code></td><td>vllm/v1/engine/core.py:174</td><td><span class="en">OK — init entered</span><span class="ko">OK — init 진입</span></td></tr>
+<tr><td><code>get_kv_connector_handshake_metadata()</code></td><td>vllm/v1/executor/abstract.py:207</td><td><span class="en">Calls collective_rpc</span><span class="ko">collective_rpc 호출</span></td></tr>
+<tr><td><code>collective_rpc("get_kv_connector_handshake_metadata")</code></td><td>vllm/v1/executor/uniproc_executor.py:93</td><td><span class="en">Delegates to worker</span><span class="ko">worker 에 위임</span></td></tr>
+<tr><td><code>worker.get_kv_connector_handshake_metadata()</code></td><td><span class="en">vllm-metal's Metal worker</span><span class="ko">vllm-metal 의 Metal worker</span></td><td><strong>✗ NotImplementedError</strong></td></tr>
 </table>
 
-<p>즉 vLLM 의 core 는 KV connector 사용 가능한데, <strong>vllm-metal 의 worker layer 가 이 신호를 안 받음</strong>. ExampleConnector 가 NVIDIA 무관해도 worker 자체가 못 받으면 동작 X.</p>
+<p><span class="en">In other words, vLLM core can use the KV connector, but <strong>vllm-metal's worker layer doesn't receive this signal</strong>. Even though ExampleConnector is NVIDIA-agnostic, it can't work if the worker itself can't receive it.</span><span class="ko">즉 vLLM 의 core 는 KV connector 사용 가능한데, <strong>vllm-metal 의 worker layer 가 이 신호를 안 받음</strong>. ExampleConnector 가 NVIDIA 무관해도 worker 자체가 못 받으면 동작 X.</span></p>
 
 </div>
 
-<h2 id="patch">6. <span class="status-ok">3줄 monkey-patch 로 동작 확인</span></h2>
+<h2 id="patch"><span class="status-ok"><span class="en">6. Verified working with a 3-line monkey-patch</span><span class="ko">6. 3줄 monkey-patch 로 동작 확인</span></span></h2>
 <div class="card">
 
-<div class="tip"><strong>업데이트 — 사용자 질문 "그냥 CPU 로 전송하면 안되는거야?" + "간단히 구현해서 해볼 수는?" 에 대한 답</strong>: <strong>YES. 둘 다 가능</strong>. 정통 GPU worker 의 method 한 개를 MetalWorker 에 monkey-patch 로 추가하니 ExampleConnector (CPU buffer + filesystem) 가 그대로 동작.</div>
+<div class="tip"><span class="en"><strong>Update — answer to the user's questions "can't we just transfer over CPU?" + "can we hack a simple implementation?"</strong>: <strong>YES. Both possible</strong>. Monkey-patching the one method that the canonical GPU worker has into MetalWorker makes ExampleConnector (CPU buffer + filesystem) work as-is.</span><span class="ko"><strong>업데이트 — 사용자 질문 "그냥 CPU 로 전송하면 안되는거야?" + "간단히 구현해서 해볼 수는?" 에 대한 답</strong>: <strong>YES. 둘 다 가능</strong>. 정통 GPU worker 의 method 한 개를 MetalWorker 에 monkey-patch 로 추가하니 ExampleConnector (CPU buffer + filesystem) 가 그대로 동작.</span></div>
 
-<h3>6-1. 정통 GPU worker 의 reference 구현</h3>
+<h3><span class="en">6-1. Reference implementation in the canonical GPU worker</span><span class="ko">6-1. 정통 GPU worker 의 reference 구현</span></h3>
 <pre><code># vllm/v1/worker/gpu_worker.py
 def get_kv_connector_handshake_metadata(self) -&gt; dict | None:
     """Get KV connector metadata from this worker if available."""
@@ -239,9 +239,9 @@ def get_kv_connector_handshake_metadata(self) -&gt; dict | None:
     tp_rank = get_tp_group().rank_in_group
     return {tp_rank: metadata}</code></pre>
 
-<p>vllm-metal 의 <code>MetalWorker</code> (vllm_metal/v1/worker.py) 가 이 method 만 override 안 함. 모방해서 monkey-patch 작성:</p>
+<p><span class="en">vllm-metal's <code>MetalWorker</code> (vllm_metal/v1/worker.py) is the only one that doesn't override this method. Mimic it and write a monkey-patch:</span><span class="ko">vllm-metal 의 <code>MetalWorker</code> (vllm_metal/v1/worker.py) 가 이 method 만 override 안 함. 모방해서 monkey-patch 작성:</span></p>
 
-<h3>6-2. patch script (3줄 핵심)</h3>
+<h3><span class="en">6-2. Patch script (3-line core)</span><span class="ko">6-2. patch script (3줄 핵심)</span></h3>
 <pre><code># /tmp/pdd-test/patch_metal_worker.py
 from vllm_metal.v1.worker import MetalWorker
 
@@ -255,11 +255,11 @@ def get_kv_connector_handshake_metadata(self):
 
 MetalWorker.get_kv_connector_handshake_metadata = get_kv_connector_handshake_metadata</code></pre>
 
-<p>prefill_example.py / decode_example.py 상단에 <code>import patch_metal_worker</code> 한 줄 추가.</p>
+<p><span class="en">Add one line <code>import patch_metal_worker</code> at the top of prefill_example.py / decode_example.py.</span><span class="ko">prefill_example.py / decode_example.py 상단에 <code>import patch_metal_worker</code> 한 줄 추가.</span></p>
 
-<h3>6-3. 실행 + 결과</h3>
+<h3><span class="en">6-3. Run + result</span><span class="ko">6-3. 실행 + 결과</span></h3>
 
-<h4>Phase 1: Prefill</h4>
+<h4><span class="en">Phase 1: Prefill</span><span class="ko">Phase 1: Prefill</span></h4>
 <pre><code>VLLM_ENABLE_V1_MULTIPROCESSING=0 python prefill_patched.py
 # ...
 # [factory.py:62] Creating v1 connector with name: ExampleConnector
@@ -275,14 +275,14 @@ MetalWorker.get_kv_connector_handshake_metadata = get_kv_connector_handshake_met
 # Processed prompts: 100% [00:47, 11.91s/it]
 # Saved 4 prompts to output.txt</code></pre>
 
-<p>핵심 동작:</p>
+<p><span class="en">Core behavior:</span><span class="ko">핵심 동작:</span></p>
 <ul>
-<li><code>kv_buffer_device='cpu'</code> — KV cache 가 Metal GPU 메모리에서 <strong>CPU 메모리로 dump</strong> 됨</li>
-<li><code>shared_storage_path='local_storage'</code> — CPU buffer 가 filesystem 으로 flush</li>
-<li>다른 process (decode) 가 같은 filesystem 읽어서 KV 복원</li>
+<li><code>kv_buffer_device='cpu'</code> — <span class="en">the KV cache is <strong>dumped from Metal GPU memory into CPU memory</strong></span><span class="ko">KV cache 가 Metal GPU 메모리에서 <strong>CPU 메모리로 dump</strong> 됨</span></li>
+<li><code>shared_storage_path='local_storage'</code> — <span class="en">the CPU buffer is flushed to the filesystem</span><span class="ko">CPU buffer 가 filesystem 으로 flush</span></li>
+<li><span class="en">A different process (decode) reads the same filesystem and restores the KV</span><span class="ko">다른 process (decode) 가 같은 filesystem 읽어서 KV 복원</span></li>
 </ul>
 
-<h4>Phase 2: Decode</h4>
+<h4><span class="en">Phase 2: Decode</span><span class="ko">Phase 2: Decode</span></h4>
 <pre><code>VLLM_ENABLE_V1_MULTIPROCESSING=0 python decode_patched.py
 # ...
 # [example_connector.py:108] Shared storage path is local_storage  ← 같은 path
@@ -291,94 +291,94 @@ MetalWorker.get_kv_connector_handshake_metadata = get_kv_connector_handshake_met
 # Prompt: 'Hi Hi ... Hello, my name is hi'   ← prefill 의 input + 첫 token
 # Generated text: ' Hi HiHi HiHi HiHi HiHi Hi'  ← decode 가 이어서 generation</code></pre>
 
-<p><strong>mechanism path 가 작동</strong>:</p>
+<p><span class="en"><strong>The mechanism path works</strong>:</span><span class="ko"><strong>mechanism path 가 작동</strong>:</span></p>
 <ol>
-<li>✅ MetalWorker 의 KV connector handshake (patch 한 method)</li>
-<li>✅ ExampleConnector init (factory)</li>
-<li>✅ Prefill 의 KV → CPU buffer → filesystem (<code>local_storage/</code>)</li>
-<li>✅ Decode 가 같은 filesystem 에서 KV 읽고 generation 이어감</li>
+<li>✅ <span class="en">MetalWorker's KV connector handshake (the patched method)</span><span class="ko">MetalWorker 의 KV connector handshake (patch 한 method)</span></li>
+<li>✅ <span class="en">ExampleConnector init (factory)</span><span class="ko">ExampleConnector init (factory)</span></li>
+<li>✅ <span class="en">Prefill's KV → CPU buffer → filesystem (<code>local_storage/</code>)</span><span class="ko">Prefill 의 KV → CPU buffer → filesystem (<code>local_storage/</code>)</span></li>
+<li>✅ <span class="en">Decode reads the KV from the same filesystem and continues generation</span><span class="ko">Decode 가 같은 filesystem 에서 KV 읽고 generation 이어감</span></li>
 </ol>
 
-<h3>6-4. Quality 는 별개 — 동작 vs 정확도 구분</h3>
+<h3><span class="en">6-4. Quality is a separate matter — separate working vs accuracy</span><span class="ko">6-4. Quality 는 별개 — 동작 vs 정확도 구분</span></h3>
 
-<p>generation quality 는 의미 없는 token 반복 (<code>"hi Hi Hi Hi..."</code>). 이건 mechanism 의 작동 여부와 별개 이슈:</p>
+<p><span class="en">Generation quality is meaningless token repetition (<code>"hi Hi Hi Hi..."</code>). This is a separate issue from whether the mechanism works:</span><span class="ko">generation quality 는 의미 없는 token 반복 (<code>"hi Hi Hi Hi..."</code>). 이건 mechanism 의 작동 여부와 별개 이슈:</span></p>
 <ul>
-<li>ExampleConnector 가 <strong>학습용 예제</strong> — production-grade KV serialization 이 아님. KV blob 의 dtype / layout 가 normal vs disaggregated 사이 정확히 일치 안 할 수도</li>
-<li>vllm-metal 0.3.0.dev 의 KV cache layout 이 vLLM core 의 reference 와 다를 수 있음</li>
-<li>같은 모델을 두 process 가 각자 load → 두 process 의 random init 결과 (weights 외 LoRA 등) 가 같은지 검증 필요</li>
-<li>prefill 의 <code>max_tokens=1</code> + decode 의 <code>max_tokens=10</code> 가 정상 generation 시나리오 아님 (실 PDD 는 prefill 이 prompt 끝까지 forward 만, decode 가 generation 다 함)</li>
+<li><span class="en">ExampleConnector is a <strong>learning example</strong> — not production-grade KV serialization. The KV blob's dtype / layout may not exactly match between normal vs disaggregated</span><span class="ko">ExampleConnector 가 <strong>학습용 예제</strong> — production-grade KV serialization 이 아님. KV blob 의 dtype / layout 가 normal vs disaggregated 사이 정확히 일치 안 할 수도</span></li>
+<li><span class="en">vllm-metal 0.3.0.dev's KV cache layout may differ from vLLM core's reference</span><span class="ko">vllm-metal 0.3.0.dev 의 KV cache layout 이 vLLM core 의 reference 와 다를 수 있음</span></li>
+<li><span class="en">Two processes each load the same model → need to verify whether the random-init results of the two processes (LoRA etc. beyond weights) are identical</span><span class="ko">같은 모델을 두 process 가 각자 load → 두 process 의 random init 결과 (weights 외 LoRA 등) 가 같은지 검증 필요</span></li>
+<li><span class="en">prefill's <code>max_tokens=1</code> + decode's <code>max_tokens=10</code> is not a normal generation scenario (in actual PDD, prefill only forwards through the prompt, and decode does all the generation)</span><span class="ko">prefill 의 <code>max_tokens=1</code> + decode 의 <code>max_tokens=10</code> 가 정상 generation 시나리오 아님 (실 PDD 는 prefill 이 prompt 끝까지 forward 만, decode 가 generation 다 함)</span></li>
 </ul>
 
-<div class="note"><strong>핵심 finding</strong>: vllm-metal 의 KV connector 미구현은 <strong>method 하나만 빠진 작은 누락</strong>이었음. 3줄 patch 로 mechanism 동작. CPU 거쳐 KV transfer 하는 path 가 Apple Silicon 에서도 작동 가능. 단 quality 는 dev preview 의 한계 + ExampleConnector 의 학습용 simplification 으로 인해 실 운영에는 못 씀. <strong>실 production 은 여전히 NVIDIA + NIXL 환경 필수</strong>.</div>
+<div class="note"><span class="en"><strong>Key finding</strong>: vllm-metal's missing KV connector was <strong>a small gap of one missing method</strong>. A 3-line patch makes the mechanism work. A path that goes through CPU for KV transfer can work on Apple Silicon too. However, quality is unusable for real operations due to dev-preview limits + ExampleConnector's learning-oriented simplification. <strong>Real production still requires the NVIDIA + NIXL environment</strong>.</span><span class="ko"><strong>핵심 finding</strong>: vllm-metal 의 KV connector 미구현은 <strong>method 하나만 빠진 작은 누락</strong>이었음. 3줄 patch 로 mechanism 동작. CPU 거쳐 KV transfer 하는 path 가 Apple Silicon 에서도 작동 가능. 단 quality 는 dev preview 의 한계 + ExampleConnector 의 학습용 simplification 으로 인해 실 운영에는 못 씀. <strong>실 production 은 여전히 NVIDIA + NIXL 환경 필수</strong>.</span></div>
 
-<h3>6-5. 시도 의의</h3>
+<h3><span class="en">6-5. Significance of the attempt</span><span class="ko">6-5. 시도 의의</span></h3>
 <ul>
-<li>"이론적으론 가능, 실 안 됨" 가설이 <strong>틀렸음</strong>. monkey-patch 시도해보니 실 동작.</li>
-<li>upstream vllm-metal 에 PR 보내면 받아질 가능성 높은 작은 fix (정통 GPU worker 의 method 그대로 가져옴).</li>
-<li><strong>"동작 vs quality" 구분</strong>이 중요 — mechanism 작동 검증 ≠ production 품질 보장.</li>
-<li>사용자가 정확히 직관적으로 답한 "CPU 로 transfer" 가 실제 vLLM 의 ExampleConnector 가 하는 일.</li>
+<li><span class="en">The hypothesis "theoretically possible, doesn't actually work" turned out to be <strong>wrong</strong>. Trying the monkey-patch made it actually work.</span><span class="ko">"이론적으론 가능, 실 안 됨" 가설이 <strong>틀렸음</strong>. monkey-patch 시도해보니 실 동작.</span></li>
+<li><span class="en">A small fix that would likely be accepted as an upstream PR to vllm-metal (just borrows the canonical GPU worker's method as-is).</span><span class="ko">upstream vllm-metal 에 PR 보내면 받아질 가능성 높은 작은 fix (정통 GPU worker 의 method 그대로 가져옴).</span></li>
+<li><span class="en"><strong>Distinguishing "working vs quality"</strong> matters — verifying the mechanism works ≠ guaranteeing production quality.</span><span class="ko"><strong>"동작 vs quality" 구분</strong>이 중요 — mechanism 작동 검증 ≠ production 품질 보장.</span></li>
+<li><span class="en">The "CPU transfer" the user intuitively guessed is exactly what vLLM's ExampleConnector does.</span><span class="ko">사용자가 정확히 직관적으로 답한 "CPU 로 transfer" 가 실제 vLLM 의 ExampleConnector 가 하는 일.</span></li>
 </ul>
 
 </div>
 
-<h2 id="analysis">7. 분석 — 다른 경로 + 다음 단계</h2>
+<h2 id="analysis"><span class="en">7. Analysis — alternative paths + next steps</span><span class="ko">7. 분석 — 다른 경로 + 다음 단계</span></h2>
 <div class="card">
 
-<h3>6-1. 왜 vllm-metal worker 가 미구현인가</h3>
+<h3><span class="en">6-1. Why is the vllm-metal worker unimplemented</span><span class="ko">6-1. 왜 vllm-metal worker 가 미구현인가</span></h3>
 <ul>
-<li>vllm-metal 0.3.0.dev — <strong>아직 dev preview</strong>. README 가 명시: "experimental, FP32/FP16 만 지원"</li>
-<li>Apple Silicon 의 Metal/MLX backend 는 NVIDIA GPU 와 메모리 모델 다름. KV cache 의 page 단위 transfer mechanism 이 NVIDIA NIXL 기반이라 그대로 적용 어려움</li>
-<li>vLLM core team 의 PDD 자체가 experimental — production 에선 Meta/HF 가 NVIDIA stack 으로 운영. Apple Silicon 우선순위 낮음 추정</li>
+<li><span class="en">vllm-metal 0.3.0.dev — <strong>still a dev preview</strong>. README states: "experimental, FP32/FP16 only"</span><span class="ko">vllm-metal 0.3.0.dev — <strong>아직 dev preview</strong>. README 가 명시: "experimental, FP32/FP16 만 지원"</span></li>
+<li><span class="en">Apple Silicon's Metal/MLX backend has a different memory model from NVIDIA GPUs. The page-level KV cache transfer mechanism is based on NVIDIA NIXL and isn't directly applicable</span><span class="ko">Apple Silicon 의 Metal/MLX backend 는 NVIDIA GPU 와 메모리 모델 다름. KV cache 의 page 단위 transfer mechanism 이 NVIDIA NIXL 기반이라 그대로 적용 어려움</span></li>
+<li><span class="en">PDD itself is experimental for the vLLM core team — in production, Meta/HF run it on the NVIDIA stack. Apple Silicon likely has low priority</span><span class="ko">vLLM core team 의 PDD 자체가 experimental — production 에선 Meta/HF 가 NVIDIA stack 으로 운영. Apple Silicon 우선순위 낮음 추정</span></li>
 </ul>
 
-<h3>6-2. 다른 경로</h3>
+<h3><span class="en">6-2. Alternative paths</span><span class="ko">6-2. 다른 경로</span></h3>
 
-<h4>(A) Docker 안 Linux vLLM + Rosetta amd64 emulation</h4>
-<p>Apple Silicon Docker Desktop 에서 amd64 emulation 으로 정통 Linux vLLM 두 컨테이너 띄움. 가능하지만:</p>
+<h4><span class="en">(A) Linux vLLM inside Docker + Rosetta amd64 emulation</span><span class="ko">(A) Docker 안 Linux vLLM + Rosetta amd64 emulation</span></h4>
+<p><span class="en">Bring up two canonical Linux vLLM containers with amd64 emulation on Apple Silicon Docker Desktop. Possible, but:</span><span class="ko">Apple Silicon Docker Desktop 에서 amd64 emulation 으로 정통 Linux vLLM 두 컨테이너 띄움. 가능하지만:</span></p>
 <ul>
-<li>vLLM CPU build image 필요 (또는 정통 GPU image 가 amd64 만)</li>
-<li>Rosetta emulation 의 큰 성능 패널티 (3-5×)</li>
-<li>CUDA backend 가 없으니 KV cache 가 CPU 에서 동작. PDD 의 의미 가 옅어짐 (KV 가 GPU 메모리 사이 빠른 transfer 가 핵심인데 둘 다 CPU 면 그냥 process 간 통신)</li>
+<li><span class="en">Need a vLLM CPU build image (or the canonical GPU image is amd64-only)</span><span class="ko">vLLM CPU build image 필요 (또는 정통 GPU image 가 amd64 만)</span></li>
+<li><span class="en">Heavy performance penalty from Rosetta emulation (3-5×)</span><span class="ko">Rosetta emulation 의 큰 성능 패널티 (3-5×)</span></li>
+<li><span class="en">Without a CUDA backend, the KV cache runs on CPU. The point of PDD weakens (its essence is fast transfer between GPU memories — if both sides are CPU, it's just inter-process communication)</span><span class="ko">CUDA backend 가 없으니 KV cache 가 CPU 에서 동작. PDD 의 의미 가 옅어짐 (KV 가 GPU 메모리 사이 빠른 transfer 가 핵심인데 둘 다 CPU 면 그냥 process 간 통신)</span></li>
 </ul>
 
-<h4>(B) LMCache 의 CPU mode</h4>
-<p>LMCache 는 별도 KV cache 서버. CPU mode 가 있긴 하지만:</p>
+<h4><span class="en">(B) LMCache's CPU mode</span><span class="ko">(B) LMCache 의 CPU mode</span></h4>
+<p><span class="en">LMCache is a separate KV cache server. It has a CPU mode, but:</span><span class="ko">LMCache 는 별도 KV cache 서버. CPU mode 가 있긴 하지만:</span></p>
 <ul>
-<li>LMCache 자체의 macOS arm64 wheel 확실치 않음</li>
-<li>vllm-metal worker 의 handshake 미구현 문제는 동일</li>
+<li><span class="en">macOS arm64 wheel for LMCache itself is uncertain</span><span class="ko">LMCache 자체의 macOS arm64 wheel 확실치 않음</span></li>
+<li><span class="en">The vllm-metal worker handshake not-implemented issue is the same</span><span class="ko">vllm-metal worker 의 handshake 미구현 문제는 동일</span></li>
 </ul>
 
-<h4>(C) vLLM source build + Metal worker fork 수정</h4>
-<p>이론적으론 가능. vllm-metal 의 worker 에 <code>get_kv_connector_handshake_metadata</code> 구현 추가. 단:</p>
+<h4><span class="en">(C) vLLM source build + Metal worker fork patch</span><span class="ko">(C) vLLM source build + Metal worker fork 수정</span></h4>
+<p><span class="en">Theoretically possible. Add a <code>get_kv_connector_handshake_metadata</code> implementation in the vllm-metal worker. However:</span><span class="ko">이론적으론 가능. vllm-metal 의 worker 에 <code>get_kv_connector_handshake_metadata</code> 구현 추가. 단:</span></p>
 <ul>
-<li>vLLM core 와 worker abstraction 깊은 이해 필요</li>
-<li>upstream PR 보낼 수도 있는 작업 — 본 학습 범위 초과</li>
+<li><span class="en">Requires deep understanding of vLLM core and worker abstractions</span><span class="ko">vLLM core 와 worker abstraction 깊은 이해 필요</span></li>
+<li><span class="en">Work that may warrant an upstream PR — beyond the scope of this learning</span><span class="ko">upstream PR 보낼 수도 있는 작업 — 본 학습 범위 초과</span></li>
 </ul>
 
-<h4>(D) NVIDIA Linux 환경 (cloud)</h4>
-<p>가장 의미 있는 평가. AWS p4 / GCP A100 / Lambda Labs H100 등에서 vLLM 두 instance + NIXL connector. PDD 의 진짜 효과 (P/D 분리, KV transfer 시간, throughput 향상) 측정 가능.</p>
+<h4><span class="en">(D) NVIDIA Linux environment (cloud)</span><span class="ko">(D) NVIDIA Linux 환경 (cloud)</span></h4>
+<p><span class="en">The most meaningful evaluation. Two vLLM instances + NIXL connector on AWS p4 / GCP A100 / Lambda Labs H100, etc. Measurable real effects of PDD (P/D split, KV transfer time, throughput gains).</span><span class="ko">가장 의미 있는 평가. AWS p4 / GCP A100 / Lambda Labs H100 등에서 vLLM 두 instance + NIXL connector. PDD 의 진짜 효과 (P/D 분리, KV transfer 시간, throughput 향상) 측정 가능.</span></p>
 
 </div>
 
-<h2 id="wrap">8. 결론 + 다음 단계</h2>
+<h2 id="wrap"><span class="en">8. Conclusion + next steps</span><span class="ko">8. 결론 + 다음 단계</span></h2>
 <div class="card">
 
-<h3>7-1. 한 줄 결론</h3>
-<p><strong>Apple Silicon 에서 PDD = mechanism 시연도 불가</strong>. vllm-metal dev 미숙 (KV connector handshake 미구현) + KV connector backend 들의 NVIDIA/Linux 가정. 시도해본 결과 자체가 finding.</p>
+<h3><span class="en">7-1. One-line conclusion</span><span class="ko">7-1. 한 줄 결론</span></h3>
+<p><span class="en"><strong>On Apple Silicon, PDD = even a mechanism demo is impossible</strong>. vllm-metal's dev immaturity (KV connector handshake not implemented) + KV connector backends assume NVIDIA/Linux. The result of trying is itself the finding.</span><span class="ko"><strong>Apple Silicon 에서 PDD = mechanism 시연도 불가</strong>. vllm-metal dev 미숙 (KV connector handshake 미구현) + KV connector backend 들의 NVIDIA/Linux 가정. 시도해본 결과 자체가 finding.</span></p>
 
-<h3>7-2. 무엇을 배웠나</h3>
+<h3><span class="en">7-2. What was learned</span><span class="ko">7-2. 무엇을 배웠나</span></h3>
 <ul>
-<li>vLLM 의 PDD는 <strong>9 가지 KV connector 중 환경에 맞는 걸 선택</strong>해야 함. 대부분이 NVIDIA 또는 ROCm 가정.</li>
-<li>KV transfer 자체가 PDD 의 핵심 — connector backend 가 동작 안 하면 mechanism 자체가 깨짐.</li>
-<li>vllm-metal 의 dev 단계가 <strong>core feature 가 모두 working 한 게 아님</strong>. install 되고 단일 추론 되더라도 advanced feature 는 아직 미구현 가능.</li>
-<li>실 PDD 평가는 <strong>NVIDIA H100 + Linux + NIXL</strong> 인프라가 사실상 필수. Meta/HF 같은 big tech 가 production 에서 쓰는 이유.</li>
+<li><span class="en">vLLM's PDD requires <strong>picking one of the 9 KV connectors that fits the environment</strong>. Most assume NVIDIA or ROCm.</span><span class="ko">vLLM 의 PDD는 <strong>9 가지 KV connector 중 환경에 맞는 걸 선택</strong>해야 함. 대부분이 NVIDIA 또는 ROCm 가정.</span></li>
+<li><span class="en">KV transfer itself is the core of PDD — if the connector backend doesn't work, the whole mechanism breaks.</span><span class="ko">KV transfer 자체가 PDD 의 핵심 — connector backend 가 동작 안 하면 mechanism 자체가 깨짐.</span></li>
+<li><span class="en">vllm-metal's dev stage means <strong>not all core features are working</strong>. Even if it installs and single inference works, advanced features may still be unimplemented.</span><span class="ko">vllm-metal 의 dev 단계가 <strong>core feature 가 모두 working 한 게 아님</strong>. install 되고 단일 추론 되더라도 advanced feature 는 아직 미구현 가능.</span></li>
+<li><span class="en">Real PDD evaluation effectively requires <strong>NVIDIA H100 + Linux + NIXL</strong> infra. That's why big tech like Meta/HF runs it in production.</span><span class="ko">실 PDD 평가는 <strong>NVIDIA H100 + Linux + NIXL</strong> 인프라가 사실상 필수. Meta/HF 같은 big tech 가 production 에서 쓰는 이유.</span></li>
 </ul>
 
-<h3>7-3. NVIDIA Linux 환경에서 할 것 (시간/자원 있을 때)</h3>
+<h3><span class="en">7-3. What to do on an NVIDIA Linux environment (when time/resources permit)</span><span class="ko">7-3. NVIDIA Linux 환경에서 할 것 (시간/자원 있을 때)</span></h3>
 <ol>
-<li><strong>cloud GPU 인스턴스 빌림</strong> (Lambda Labs / RunPod / AWS p4) — H100 1개 또는 2개</li>
-<li><strong>vLLM 정통 install</strong> (pip install vllm — Linux 에선 즉시 wheel)</li>
-<li><strong>2 instance 띄움</strong>:
+<li><span class="en"><strong>Rent a cloud GPU instance</strong> (Lambda Labs / RunPod / AWS p4) — 1 or 2 H100s</span><span class="ko"><strong>cloud GPU 인스턴스 빌림</strong> (Lambda Labs / RunPod / AWS p4) — H100 1개 또는 2개</span></li>
+<li><span class="en"><strong>Install vLLM canonically</strong> (pip install vllm — wheel installs immediately on Linux)</span><span class="ko"><strong>vLLM 정통 install</strong> (pip install vllm — Linux 에선 즉시 wheel)</span></li>
+<li><span class="en"><strong>Bring up 2 instances</strong>:</span><span class="ko"><strong>2 instance 띄움</strong>:</span>
 <pre><code># Prefill (producer)
 vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8100 \
   --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer",...}'
@@ -387,46 +387,46 @@ vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8100 \
 vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8200 \
   --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer",...}'</code></pre>
 </li>
-<li><strong>proxy script</strong> 로 client → prefill → decode 라우팅 (vLLM 공식 예제 의 disagg_proxy.py 같은)</li>
-<li><strong>벤치마크</strong>: 같은 워크로드를 (a) 단일 instance vs (b) PDD 두 instance 비교. throughput / TTFT / TPOT / KV transfer time 측정 → PDD 의 실 이점 정량화</li>
+<li><span class="en"><strong>Proxy script</strong> for client → prefill → decode routing (like vLLM's official disagg_proxy.py example)</span><span class="ko"><strong>proxy script</strong> 로 client → prefill → decode 라우팅 (vLLM 공식 예제 의 disagg_proxy.py 같은)</span></li>
+<li><span class="en"><strong>Benchmark</strong>: compare (a) single instance vs (b) PDD two instances on the same workload. Measure throughput / TTFT / TPOT / KV transfer time → quantify PDD's real benefit</span><span class="ko"><strong>벤치마크</strong>: 같은 워크로드를 (a) 단일 instance vs (b) PDD 두 instance 비교. throughput / TTFT / TPOT / KV transfer time 측정 → PDD 의 실 이점 정량화</span></li>
 </ol>
 
 </div>
 
-<h2 id="refs">9. 참고 자료 + 용어 풀이</h2>
+<h2 id="refs"><span class="en">9. References + glossary</span><span class="ko">9. 참고 자료 + 용어 풀이</span></h2>
 <div class="card">
 
-<h3>출처 (확인한 자료)</h3>
+<h3><span class="en">Sources (checked materials)</span><span class="ko">출처 (확인한 자료)</span></h3>
 <ul>
-<li><a href="https://docs.vllm.ai/en/latest/features/disagg_prefill/">vLLM Docs: Disaggregated Prefilling (experimental)</a> — 9 connector 목록 + 설정 방식</li>
-<li><a href="https://docs.vllm.ai/en/latest/examples/offline_inference/disaggregated_prefill/">vLLM Docs: Disaggregated Prefill 예제 (offline)</a></li>
-<li><a href="https://github.com/vllm-project/vllm/tree/main/examples/disaggregated/example_connector">vllm-project/vllm: examples/disaggregated/example_connector/</a> — ExampleConnector 의 prefill_example.py + decode_example.py</li>
-<li><a href="https://github.com/vllm-project/vllm-metal">vllm-project/vllm-metal</a> — 본 시도의 vLLM Metal plugin (v0.3.0.dev)</li>
-<li><a href="https://docs.lmcache.ai/getting_started/quickstart/disaggregated_prefill.html">LMCache Docs: Disaggregated Prefill 예제</a></li>
-<li><a href="https://groundy.com/articles/prefill-decode-disaggregation-the-architecture-shift-redefining-llm-serving-at-scale/">Groundy Blog: PDD Architecture Shift (2026)</a> — Meta/HF production 사용</li>
-<li><a href="https://www.spheron.network/blog/prefill-decode-disaggregation-gpu-cloud/">Spheron Blog: PDD on GPU Cloud — Split LLM Inference for 2x Throughput</a></li>
+<li><a href="https://docs.vllm.ai/en/latest/features/disagg_prefill/"><span class="en">vLLM Docs: Disaggregated Prefilling (experimental)</span><span class="ko">vLLM Docs: Disaggregated Prefilling (experimental)</span></a> — <span class="en">9-connector list + configuration</span><span class="ko">9 connector 목록 + 설정 방식</span></li>
+<li><a href="https://docs.vllm.ai/en/latest/examples/offline_inference/disaggregated_prefill/"><span class="en">vLLM Docs: Disaggregated Prefill example (offline)</span><span class="ko">vLLM Docs: Disaggregated Prefill 예제 (offline)</span></a></li>
+<li><a href="https://github.com/vllm-project/vllm/tree/main/examples/disaggregated/example_connector">vllm-project/vllm: examples/disaggregated/example_connector/</a> — <span class="en">ExampleConnector's prefill_example.py + decode_example.py</span><span class="ko">ExampleConnector 의 prefill_example.py + decode_example.py</span></li>
+<li><a href="https://github.com/vllm-project/vllm-metal">vllm-project/vllm-metal</a> — <span class="en">the vLLM Metal plugin used in this attempt (v0.3.0.dev)</span><span class="ko">본 시도의 vLLM Metal plugin (v0.3.0.dev)</span></li>
+<li><a href="https://docs.lmcache.ai/getting_started/quickstart/disaggregated_prefill.html"><span class="en">LMCache Docs: Disaggregated Prefill example</span><span class="ko">LMCache Docs: Disaggregated Prefill 예제</span></a></li>
+<li><a href="https://groundy.com/articles/prefill-decode-disaggregation-the-architecture-shift-redefining-llm-serving-at-scale/"><span class="en">Groundy Blog: PDD Architecture Shift (2026)</span><span class="ko">Groundy Blog: PDD Architecture Shift (2026)</span></a> — <span class="en">Meta/HF production use</span><span class="ko">Meta/HF production 사용</span></li>
+<li><a href="https://www.spheron.network/blog/prefill-decode-disaggregation-gpu-cloud/"><span class="en">Spheron Blog: PDD on GPU Cloud — Split LLM Inference for 2x Throughput</span><span class="ko">Spheron Blog: PDD on GPU Cloud — Split LLM Inference for 2x Throughput</span></a></li>
 </ul>
 
-<h3>용어 풀이</h3>
+<h3><span class="en">Glossary</span><span class="ko">용어 풀이</span></h3>
 <table>
-<tr><th>용어</th><th>풀이</th></tr>
-<tr><td><strong>Prefill</strong></td><td>LLM 추론의 첫 단계. prompt 전체 token 을 한 번에 forward. KV cache 가 이때 생성. compute 무거움</td></tr>
-<tr><td><strong>Decode</strong></td><td>LLM 추론의 둘째 단계. 한 token 씩 autoregressive 생성. KV cache 를 매번 읽음. memory bandwidth 가 병목</td></tr>
-<tr><td><strong>KV cache</strong></td><td>각 layer 의 attention 의 Key/Value tensor. prefill 에서 만들어지고 decode 에서 재사용. 큰 모델일수록 크기 큼 (GB 단위)</td></tr>
-<tr><td><strong>PD Disaggregation (PDD)</strong></td><td>Prefill 과 Decode 를 서로 다른 instance 에 분리하는 아키텍처. P 가 KV 만들면 D 로 transfer</td></tr>
-<tr><td><strong>KV connector</strong></td><td>P instance 와 D instance 사이 KV cache 를 어떻게 옮길지 정의하는 vLLM 의 plugin. 9 가지 backend</td></tr>
-<tr><td><strong>NIXL</strong></td><td>NVIDIA InterConnect Library. NVLink/InfiniBand RDMA 통해 GPU 간 직접 데이터 transfer</td></tr>
-<tr><td><strong>LMCache</strong></td><td>오픈소스 KV cache pool 서버. vLLM 들이 LMCache 통해 KV 공유</td></tr>
-<tr><td><strong>kv_role</strong></td><td>vLLM instance 의 역할 — <code>kv_producer</code> (prefill 전용, KV 만듬), <code>kv_consumer</code> (decode 전용, KV 받음), <code>kv_both</code> (둘 다)</td></tr>
-<tr><td><strong>collective_rpc</strong></td><td>vLLM 의 worker 들에게 RPC 호출. uniproc / multiproc / multinode 모두 같은 API</td></tr>
-<tr><td><strong>handshake metadata</strong></td><td>KV connector init 시 두 instance 가 서로 어떻게 연결할지 negotiate 하는 metadata 교환</td></tr>
-<tr><td><strong>vllm-metal</strong></td><td>Apple Silicon 의 Metal GPU 위에서 vLLM 을 돌리는 공식 plugin. MLX backend 사용. 현재 0.3.0.dev preview</td></tr>
+<tr><th><span class="en">Term</span><span class="ko">용어</span></th><th><span class="en">Definition</span><span class="ko">풀이</span></th></tr>
+<tr><td><strong>Prefill</strong></td><td><span class="en">First stage of LLM inference. Forwards all prompt tokens at once. KV cache is created here. Compute-heavy</span><span class="ko">LLM 추론의 첫 단계. prompt 전체 token 을 한 번에 forward. KV cache 가 이때 생성. compute 무거움</span></td></tr>
+<tr><td><strong>Decode</strong></td><td><span class="en">Second stage of LLM inference. Autoregressively generates one token at a time. Reads the KV cache every time. Memory bandwidth is the bottleneck</span><span class="ko">LLM 추론의 둘째 단계. 한 token 씩 autoregressive 생성. KV cache 를 매번 읽음. memory bandwidth 가 병목</span></td></tr>
+<tr><td><strong>KV cache</strong></td><td><span class="en">Each layer's attention Key/Value tensors. Created in prefill and reused in decode. Larger models means larger sizes (GBs)</span><span class="ko">각 layer 의 attention 의 Key/Value tensor. prefill 에서 만들어지고 decode 에서 재사용. 큰 모델일수록 크기 큼 (GB 단위)</span></td></tr>
+<tr><td><strong>PD Disaggregation (PDD)</strong></td><td><span class="en">Architecture that splits Prefill and Decode onto different instances. P makes KV, then transfers to D</span><span class="ko">Prefill 과 Decode 를 서로 다른 instance 에 분리하는 아키텍처. P 가 KV 만들면 D 로 transfer</span></td></tr>
+<tr><td><strong>KV connector</strong></td><td><span class="en">vLLM plugin that defines how the KV cache moves between the P and D instances. 9 backends</span><span class="ko">P instance 와 D instance 사이 KV cache 를 어떻게 옮길지 정의하는 vLLM 의 plugin. 9 가지 backend</span></td></tr>
+<tr><td><strong>NIXL</strong></td><td><span class="en">NVIDIA InterConnect Library. Direct GPU-to-GPU data transfer over NVLink/InfiniBand RDMA</span><span class="ko">NVIDIA InterConnect Library. NVLink/InfiniBand RDMA 통해 GPU 간 직접 데이터 transfer</span></td></tr>
+<tr><td><strong>LMCache</strong></td><td><span class="en">Open-source KV cache pool server. vLLM instances share KVs through LMCache</span><span class="ko">오픈소스 KV cache pool 서버. vLLM 들이 LMCache 통해 KV 공유</span></td></tr>
+<tr><td><strong>kv_role</strong></td><td><span class="en">A vLLM instance's role — <code>kv_producer</code> (prefill only, makes KV), <code>kv_consumer</code> (decode only, receives KV), <code>kv_both</code> (both)</span><span class="ko">vLLM instance 의 역할 — <code>kv_producer</code> (prefill 전용, KV 만듬), <code>kv_consumer</code> (decode 전용, KV 받음), <code>kv_both</code> (둘 다)</span></td></tr>
+<tr><td><strong>collective_rpc</strong></td><td><span class="en">RPC call to vLLM workers. Same API across uniproc / multiproc / multinode</span><span class="ko">vLLM 의 worker 들에게 RPC 호출. uniproc / multiproc / multinode 모두 같은 API</span></td></tr>
+<tr><td><strong>handshake metadata</strong></td><td><span class="en">Metadata exchange where the two instances negotiate how to connect at KV connector init</span><span class="ko">KV connector init 시 두 instance 가 서로 어떻게 연결할지 negotiate 하는 metadata 교환</span></td></tr>
+<tr><td><strong>vllm-metal</strong></td><td><span class="en">Official plugin that runs vLLM on Apple Silicon's Metal GPU. Uses MLX backend. Currently 0.3.0.dev preview</span><span class="ko">Apple Silicon 의 Metal GPU 위에서 vLLM 을 돌리는 공식 plugin. MLX backend 사용. 현재 0.3.0.dev preview</span></td></tr>
 </table>
 
 </div>
 
 <footer>
-작성: hankyu.jang@moreh.io · 마지막 갱신: 2026-06-11
+<span class="en">Author: hankyu.jang@moreh.io · Last updated: 2026-06-11</span><span class="ko">작성: hankyu.jang@moreh.io · 마지막 갱신: 2026-06-11</span>
 </footer>
 
 </div>
