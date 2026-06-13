@@ -70,8 +70,8 @@
     <span class="ko">vLLM KV-cache 커넥터 — 전송 방향 지도</span>
   </h1>
   <p class="lede">
-    <span class="en">Every KV connector registered in vLLM's current <code>main</code> branch, and which transfer pattern each one does: <b>push</b> (prefill→decode), <b>pull</b> (decode→prefill), <b>bidirectional</b> (<code>kv_both</code>), or neither (store-mediated / intra-instance offload). Classified by reading the source, with a permalink per row.</span>
-    <span class="ko">vLLM 현재 <code>main</code> 브랜치에 등록된 모든 KV 커넥터와, 각각이 하는 전송 패턴: <b>push</b>(prefill→decode), <b>pull</b>(decode→prefill), <b>양방향</b>(<code>kv_both</code>), 또는 그 외(스토어 경유 / 인스턴스 내 오프로드). 소스를 직접 읽어 분류했고 행마다 permalink를 답니다.</span>
+    <span class="en">Every KV connector registered in vLLM's current <code>main</code> branch, and which transfer pattern each one does: <b>push</b> (prefill→decode), <b>pull</b> (decode→prefill), <b>bidirectional</b> (<code>kv_both</code>), or neither (store-mediated / intra-instance offload). Classified by reading the source, with a permalink per row — plus <b>§4 on the speed differences</b> between transports, with published numbers and honest caveats.</span>
+    <span class="ko">vLLM 현재 <code>main</code> 브랜치에 등록된 모든 KV 커넥터와, 각각이 하는 전송 패턴: <b>push</b>(prefill→decode), <b>pull</b>(decode→prefill), <b>양방향</b>(<code>kv_both</code>), 또는 그 외(스토어 경유 / 인스턴스 내 오프로드). 소스를 직접 읽어 분류, 행마다 permalink — 그리고 <b>§4에서 전송 수단별 속도 차이</b>를 공개 수치와 솔직한 단서와 함께.</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://github.com/vllm-project/vllm/blob/17ee5b1ac5dd61fa89bc4321ef54b0a790a45db3/vllm/distributed/kv_transfer/kv_connector/factory.py">factory.py (registry)</a></span>
@@ -283,9 +283,88 @@
   </table>
 </section>
 
-<!-- ============ 4 ============ -->
+<!-- ============ 4 SPEED ============ -->
 <section id="s4">
-  <h2><span class="num">4</span><span class="en">Notes &amp; what changed</span><span class="ko">메모 · 달라진 점</span></h2>
+  <h2><span class="num">4</span><span class="en">Speed — what actually determines it</span><span class="ko">속도 — 무엇이 실제로 좌우하나</span></h2>
+
+  <p class="en"><b>The transfer is bandwidth-bound:</b> <code class="inl">transfer_time ≈ KV_bytes / link_bandwidth</code>. So for the <i>direct</i> connectors (§1) the dominant factor is the <b>interconnect</b>, not the connector code — a good connector just saturates the link. vLLM's own docs say the overhead "depends on … the interconnect or network bandwidth, size of KV cache, the prefill/decode instance configurations" (<a href="https://docs.vllm.ai/en/stable/features/disagg_prefill/">disagg_prefill docs</a>). DistServe's worked example: one 512-token request on OPT-66B ≈ <b>1.13 GB</b> of KV, so 10 rps needs ~90 Gbps to stay invisible; intra-node over NVLink (600 GB/s on A100) it's "negligible" — measured at <b>&lt;0.1% of total latency</b> on OPT-175B (<a href="https://arxiv.org/html/2401.09670v3">DistServe, OSDI'24 §3.3/§6.3</a>).</p>
+  <p class="ko"><b>전송은 대역폭에 묶입니다:</b> <code class="inl">전송시간 ≈ KV바이트 / 링크대역폭</code>. 그래서 <i>직접</i> 커넥터(§1)에서 지배 요인은 커넥터 코드가 아니라 <b>인터커넥트</b>입니다 — 좋은 커넥터는 그 링크를 꽉 채울 뿐. vLLM 문서도 오버헤드가 "인터커넥트/네트워크 대역폭, KV 캐시 크기, prefill/decode 인스턴스 구성에 달렸다"고 합니다(<a href="https://docs.vllm.ai/en/stable/features/disagg_prefill/">disagg_prefill 문서</a>). DistServe 예시: OPT-66B의 512토큰 요청 하나가 KV ≈ <b>1.13 GB</b>, 10 rps면 ~90 Gbps 있어야 안 보임; 노드 내 NVLink(A100 600 GB/s)에선 "무시 가능" — OPT-175B에서 <b>총 지연의 &lt;0.1%</b>로 실측(<a href="https://arxiv.org/html/2401.09670v3">DistServe, OSDI'24 §3.3/§6.3</a>).</p>
+
+  <svg class="fig" viewBox="0 0 900 196" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Interconnect bandwidth ladder (log scale): NVLink 5 1800 GB/s, NVLink 4 900, PCIe 5 ~64, InfiniBand NDR ~50, RoCE 400GbE ~34 effective, TCP fallback single GB/s">
+    <text x="20" y="20" font-size="12" font-weight="700" fill="#1f1e1b">Interconnect bandwidth — the real ceiling on direct KV transfer (log scale, GB/s)</text>
+    <text x="20" y="46" font-size="11" fill="#27500a">NVLink 5 (Blackwell)</text>
+    <rect x="220" y="34" width="640" height="15" rx="3" fill="#eaf3de" stroke="#97c459" stroke-width="1.2"/><text x="866" y="46" font-size="10.5" font-weight="700" fill="#27500a">~1800</text>
+    <text x="20" y="70" font-size="11" fill="#27500a">NVLink 4 (H100)</text>
+    <rect x="220" y="58" width="566" height="15" rx="3" fill="#eaf3de" stroke="#97c459" stroke-width="1.2"/><text x="792" y="70" font-size="10.5" font-weight="700" fill="#27500a">~900</text>
+    <text x="20" y="94" font-size="11" fill="#0c447c">PCIe Gen5 ×16</text>
+    <rect x="220" y="82" width="300" height="15" rx="3" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.2"/><text x="526" y="94" font-size="10.5" font-weight="700" fill="#0c447c">~64</text>
+    <text x="20" y="118" font-size="11" fill="#0c447c">InfiniBand NDR (400G/port)</text>
+    <rect x="220" y="106" width="285" height="15" rx="3" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.2"/><text x="511" y="118" font-size="10.5" font-weight="700" fill="#0c447c">~50</text>
+    <text x="20" y="142" font-size="11" fill="#6b4a06">RoCE 400GbE (effective)</text>
+    <rect x="220" y="130" width="262" height="15" rx="3" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.2"/><text x="488" y="142" font-size="10.5" font-weight="700" fill="#6b4a06">~34</text>
+    <text x="20" y="166" font-size="11" fill="#6f2a12">TCP fallback</text>
+    <rect x="220" y="154" width="70" height="15" rx="3" fill="#fce6dd" stroke="#ef9f86" stroke-width="1.2"/><text x="296" y="166" font-size="10.5" font-weight="700" fill="#6f2a12">single-digit</text>
+    <text x="20" y="190" font-size="9.5" fill="#8a8f98">Intra-node NVLink dwarfs inter-node fabric — keeping P&amp;D on one NVLink domain makes transfer ~free; crossing nodes is where the connector/transport matters. Sources in table below.</text>
+  </svg>
+  <p class="figcap"><span class="en">Bars are approximate, log-scaled. NVLink specs: NVIDIA; IB/RoCE/PCIe: vendor docs &amp; third-party guides (links in table).</span><span class="ko">막대는 근사·로그 스케일. NVLink는 NVIDIA 스펙, IB/RoCE/PCIe는 벤더 문서·제3자 가이드(표에 링크).</span></p>
+
+  <h3><span class="en">Published transport numbers (almost all vendor-claimed)</span><span class="ko">공개된 전송 수단 수치 (거의 전부 vendor 주장)</span></h3>
+  <table>
+    <tr><th><span class="en">Transport</span><span class="ko">전송 수단</span></th><th><span class="en">Published number</span><span class="ko">공개 수치</span></th><th><span class="en">Condition / caveat</span><span class="ko">조건 / 단서</span></th><th><span class="en">Source</span><span class="ko">출처</span></th></tr>
+    <tr>
+      <td><b>Mooncake</b> TransferEngine</td>
+      <td><b>87 GB/s</b> (4×200G), <b>190 GB/s</b> (8×400G RoCE); 2.4–4.6× vs TCP; vLLM TTFT −25% vs TCP</td>
+      <td>40 GB test (70B@128k KV); no abs. latency, no topology detail · <span class="d-store">vendor</span></td>
+      <td><a href="https://github.com/kvcache-ai/Mooncake">kvcache-ai/Mooncake</a></td>
+    </tr>
+    <tr>
+      <td><b>MoRI-IO</b> (AMD)</td>
+      <td><b>~48 GB/s</b> (1 MB msg)</td>
+      <td>MI300X + Thor2, GPUDirect-RDMA READ, "preview" · <span class="d-store">vendor</span></td>
+      <td><a href="https://github.com/ROCm/mori">ROCm/mori</a></td>
+    </tr>
+    <tr>
+      <td><b>NIXL / UCX</b> (NixlConnector, Dynamo)</td>
+      <td><span class="muted">no isolated P2P GB/s published.</span> Storage-GDS: WEKA <b>252 GB/s/node</b>; VAST ~198 Gbps → <b>TTFT 11s→1.5s (~10×)</b></td>
+      <td>those are GPUDirect-Storage offload numbers, <i>not</i> the P2P transport · <span class="d-store">vendor (storage)</span></td>
+      <td><a href="https://www.weka.io/article/weka-accelerates-ai-inference-with-nvidia-dynamo-and-nvidia-nixl">WEKA</a> · <a href="https://www.vastdata.com/blog/accelerating-inference">VAST</a></td>
+    </tr>
+    <tr>
+      <td><b>RDMA vs TCP</b> (any transport)</td>
+      <td>TTFT <b>~8.5×</b> better (6785→796 ms); throughput <b>~1.8×</b> (307→568 tok/s)</td>
+      <td>2000-in/500-out, conc 8, K8s · <span class="d-pull">3rd-party measured</span></td>
+      <td><a href="https://medium.com/@owumifestus/why-rdma-kv-cache-transfer-broke-in-kubernetes-dd31fd66fe9a">field report</a></td>
+    </tr>
+    <tr>
+      <td><b>LMCache</b> (CPU/store load)</td>
+      <td>CPU load <b>400 Gbps</b> vs vLLM-native <b>88 Gbps</b> (chunk- vs page-wise); vs NIXL-PD <b>1.53–1.84×</b> lower TTFT</td>
+      <td>H100 + NVLink · <span class="d-store">vendor / authors</span></td>
+      <td><a href="https://arxiv.org/html/2510.09665v2">LMCache arXiv §8.5–8.6</a></td>
+    </tr>
+  </table>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">push vs pull — a latency difference, NOT a bandwidth one</span><span class="ko">push vs pull — 대역폭이 아니라 지연 차이</span></span>
+    <span class="en">Same link, same bytes → same bandwidth. What differs is who initiates and whether the decode-side memory registration overlaps prefill compute. Push removes a proxy round-trip from the critical path. vLLM's own measurement (AWS P5en): <b>"KV push mode showed 1.2× – 3.0× improvements over pull mode"</b> on TTFT (e.g. TP4 512/128 conc8: 2948 ms → 1212 ms; P99 740 ms → 100 ms). <a href="https://github.com/vllm-project/vllm/issues/36923">vLLM RFC #36923</a></span>
+    <span class="ko">같은 링크·같은 바이트 → 같은 대역폭. 다른 건 누가 시작하느냐, 그리고 decode 측 메모리 등록이 prefill 연산과 겹치느냐입니다. push는 임계경로에서 프록시 왕복을 없앱니다. vLLM 실측(AWS P5en): TTFT에서 <b>"push 모드가 pull 대비 1.2×–3.0× 개선"</b>(예: TP4 512/128 conc8: 2948 ms → 1212 ms; P99 740 ms → 100 ms). <a href="https://github.com/vllm-project/vllm/issues/36923">vLLM RFC #36923</a></span>
+  </div>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">store-mediated: slower per transfer, but that's not the point</span><span class="ko">스토어 경유: 전송당 느리지만, 그게 핵심이 아님</span></span>
+    <span class="en">Putting a store/filesystem (and the host CPU) in the data path is higher-latency than RDMA P2P (which keeps the host out and goes zero-copy at hardware speed — <a href="https://uccl-project.github.io/posts/kv-transfer-engine/">UCCL</a>). The payoff is <b>reuse</b>: Mooncake Store in vLLM showed 46× lower P50 TTFT — but that came from cache hit rate <b>1.7% → 92.2%</b>, i.e. prefix reuse, <i>not</i> faster bytes (<a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vLLM blog</a>). So store-mediated wins when requests share prefixes, loses on a one-shot handoff.</span>
+    <span class="ko">스토어/파일시스템(과 호스트 CPU)을 데이터 경로에 두면 RDMA P2P(호스트를 빼고 하드웨어 속도로 zero-copy — <a href="https://uccl-project.github.io/posts/kv-transfer-engine/">UCCL</a>)보다 지연이 큽니다. 대신 얻는 건 <b>재사용</b>: vLLM의 Mooncake Store는 P50 TTFT 46× 개선을 보였지만, 그건 캐시 적중률 <b>1.7% → 92.2%</b>(prefix 재사용)에서 온 것이지 <i>바이트가 빨라서</i>가 아닙니다(<a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vLLM 블로그</a>). 즉 요청들이 prefix를 공유할 때 이기고, 일회성 핸드오프에선 집니다.</span>
+  </div>
+
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">honesty flag — read these numbers carefully</span><span class="ko">정직 단서 — 이 수치들 조심해서 읽기</span></span>
+    <span class="en">Almost everything above is <b>vendor/first-party</b>, and there is <b>no independent three-way NixlConnector vs Mooncake vs LMCache benchmark</b>. The numbers use different models, workloads, and baselines — Mooncake's 46× and the 252 GB/s storage figures are <b>not</b> like-for-like with NIXL P2P transport. The connectors are also partly <i>layered, not competing</i>: "Both LMCache and Mooncake can use NIXL under the hood" (<a href="https://docs.vllm.ai/en/stable/features/disagg_prefill/">vLLM docs</a>). For a real comparison you must benchmark on your own hardware.</span>
+    <span class="ko">위 수치는 거의 전부 <b>vendor/1차 출처</b>이고, <b>NixlConnector vs Mooncake vs LMCache 독립 3자 벤치마크는 없습니다</b>. 모델·워크로드·기준이 제각각 — Mooncake의 46×나 252 GB/s 스토리지 수치는 NIXL P2P 전송과 <b>동일 조건이 아닙니다</b>. 커넥터들은 <i>경쟁이 아니라 계층적으로 겹치기도</i> 합니다: "LMCache와 Mooncake 모두 내부적으로 NIXL을 쓸 수 있다"(<a href="https://docs.vllm.ai/en/stable/features/disagg_prefill/">vLLM 문서</a>). 진짜 비교는 본인 하드웨어에서 직접 측정해야 합니다.</span>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section id="s5">
+  <h2><span class="num">5</span><span class="en">Notes &amp; what changed</span><span class="ko">메모 · 달라진 점</span></h2>
   <div class="callout c-coral">
     <span class="tag"><span class="en">removed since earlier versions</span><span class="ko">이전 버전에서 제거됨</span></span>
     <span class="en"><b>P2pNcclConnector</b> (the one-way P→D-push NCCL connector from PR #18242, present in v0.10/v0.11) is <b>gone from <code>main</code></b> — no longer in the factory or the tree. Its direct-P2P role is now served by the NIXL Push/Pull connectors and MoRIIO. <b>SharedStorageConnector</b> is also gone — superseded by <code>ExampleConnector</code> (same filesystem-safetensors demo).</span>
