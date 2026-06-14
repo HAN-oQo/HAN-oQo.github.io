@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic RL ② — 코드 에이전트 (테스트실행 보상, MI250)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .win { border-left: 4px solid var(--green-bd); background: var(--green-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--green-ink); }
+  figure { margin: 18px 0; } figcaption { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+  .status-ok { color: #2a8a3e; font-weight: 600; } .status-fail { color: #c5302a; font-weight: 600; }
+  .ser { display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px;
+         background:var(--purple-bg); color:var(--purple-ink); border:1px solid var(--purple-bd); }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 시리즈: <a href="agentic-a-tool-math.html">A</a> · B · <a href="agentic-c-rag.html">C</a> · <a href="agentic-d-genrm.html">D</a> · <a href="agentic-e-disagg.html">E</a></p>
+
+<p><span class="ser">Agentic RL 시리즈 ② / 5</span></p>
+<h1>코드 에이전트 — 유닛테스트 통과 보상 (RLVR, MI250)</h1>
+<p class="sub">환경: <code>mi250-052</code> (MI250, ROCm 7.2.3) · Docker 전용 · verl 0.8.0 GRPO · Qwen2.5-0.5B-Instruct · MBPP · 커스텀 테스트실행 보상 · 2 GCD</p>
+<p class="post-meta"><time datetime="2026-06-14">2026-06-14</time></p>
+
+<div class="card">
+<p><strong>한 줄 요약.</strong> 보상을 "규칙 일치"가 아니라 <strong>유닛테스트 실행 결과</strong>로 바꾼 코드 RL. MBPP 문제를 풀게 하고, 모델이 쓴 코드를 서브프로세스로 실행해 테스트가 통과하면 보상 1. MI250에서 4스텝 완주, <strong>0.5B가 일부 통과 코드를 실제로 작성</strong>(score max 1.0). 핵심 발견: <strong>테스트실행 보상이 스텝의 14~24%를 차지하는 실재 비용</strong>이 된다 — A의 규칙 보상이 ≈0이던 것과 정반대. "보상이 외부 실행이 되는 순간 reward 단계가 1급 비용"이라는 걸 시간으로 확인했다.</p>
+</div>
+
+<div class="card toc">
+<strong>목차</strong>
+<ul style="list-style: none; padding-left: 0; margin: 8px 0;">
+  <li><a href="#goal">1. 목표 — 테스트가 보상이 될 때</a></li>
+  <li><a href="#how">2. 구성 — MBPP · 커스텀 테스트실행 보상</a></li>
+  <li><a href="#result">3. 결과 — reward 단계가 비싸진다</a></li>
+  <li><a href="#concl">4. 결론 + 다음(C)</a></li>
+  <li><a href="#repro">5. 재현 — 명령 전부</a></li>
+</ul>
+</div>
+
+<h2 id="goal">1. 목표 — 테스트가 보상이 될 때</h2>
+<div class="card">
+<p>A(수학)에선 보상이 "정수 정답 일치"라 거의 공짜였다. 코드는 다르다 — 정답인지 알려면 <strong>코드를 실제로 실행해 테스트를 돌려봐야</strong> 한다. 이건 RLVR(검증가능 보상 RL)의 전형이자, 보상이 처음으로 <em>계산 비용을 갖는</em> 사례다.</p>
+<p>측정 목표: <strong>(a)</strong> 0.5B가 테스트를 통과하는 코드를 쓰는가, <strong>(b)</strong> 테스트실행 보상이 단계 시간에서 차지하는 비중 — A의 규칙 보상(≈0)과 얼마나 다른가.</p>
+<div class="note"><strong>단일턴 vs 멀티턴.</strong> 이상적 코드 에이전트는 "작성→테스트→실패 보고→수정"의 멀티턴이다. 하지만 A에서 봤듯 <strong>미학습 0.5B는 도구(중간 테스트)를 거의 안 쓴다</strong>. 그래서 여기선 <strong>단일턴 생성 + 테스트실행 보상</strong>으로 잡았다 — 멀티턴 자체보다 "테스트가 보상이 될 때의 비용"이 측정 핵심이기 때문. 멀티턴 self-debug 버전은 SFT 워밍업이 전제(A의 결론과 동일).</div>
+</div>
+
+<h2 id="how">2. 구성 — MBPP · 커스텀 테스트실행 보상</h2>
+<div class="card">
+<p>verl 내장 코드 보상 <code>prime_code</code>는 APPS식 stdin/stdout 테스트만 받아 MBPP의 <code>assert</code> 스타일과 안 맞는다. 그래서 <strong>커스텀 보상 함수</strong>(<code>custom_reward_function</code>)를 썼다 — verl이 매 응답에 <code>compute_score(data_source, solution_str, ground_truth, extra_info)</code>를 호출한다.</p>
+<pre><code># reward_code.py — 모델 코드 + 테스트를 서브프로세스로 실행 (6s timeout)
+def compute_score(data_source, solution_str, ground_truth, extra_info=None):
+    gt = json.loads(ground_truth)                 # {"tests":[assert...], "setup":...}
+    code = _extract(solution_str)                 # ```python ...``` 블록 추출
+    prog = gt["setup"] + "\n" + code + "\n" + "\n".join(gt["tests"])
+    p = subprocess.run([sys.executable, tmpfile], capture_output=True, timeout=6)
+    return 1.0 if p.returncode == 0 else 0.0      # 테스트 전부 통과 = 1</code></pre>
+<p>MBPP(374 train / 500 test)를 verl parquet으로 전처리 — 프롬프트는 "자기완결 함수를 ```python``` 블록으로", <code>ground_truth</code>=테스트 asserts(+setup). 모델 Qwen2.5-0.5B, GRPO, n=8, batch 16, 4스텝, 2 GCD, vLLM async.</p>
+<div class="note"><strong>안전.</strong> 모델이 생성한 코드를 실행하므로 격리 필요 — 본 실험은 공유 노드의 <strong>Docker 컨테이너 안 + 6초 timeout</strong>으로 한정. 실제 운영은 전용 샌드박스(seccomp/네트워크 차단)가 필수.</div>
+</div>
+
+<h2 id="result">3. 결과 — reward 단계가 비싸진다</h2>
+<div class="card">
+<p>정상 스텝(step 4) 기준:</p>
+<table>
+<tr><th>단계</th><th>시간 (s)</th><th>비중</th><th>비고</th></tr>
+<tr><td><code>gen</code></td><td>3.68</td><td>~37%</td><td>코드 생성(vLLM)</td></tr>
+<tr><td><code>update_actor</code></td><td>2.61</td><td>~26%</td><td>backward + optimizer</td></tr>
+<tr><td><code>reward</code> (테스트 실행)</td><td><strong>1.44</strong> (스텝별 1.4~2.3)</td><td><strong>~14~24%</strong></td><td><strong>서브프로세스로 유닛테스트 128건 실행</strong></td></tr>
+<tr><td><code>update_weights</code></td><td>1.41</td><td>~14%</td><td>weight-sync → vLLM (async)</td></tr>
+<tr><td><code>ref</code></td><td>1.14</td><td>~11%</td><td>reference forward (KL)</td></tr>
+<tr><td colspan="2"><strong>step 합</strong></td><td colspan="2"><strong>9.99s</strong> (warmup step1 27.7s)</td></tr>
+</table>
+
+<figure>
+<svg viewBox="0 0 660 170" width="100%" role="img" aria-label="A vs B reward 비교">
+  <text x="30" y="22" font-size="11" fill="var(--muted)">reward 단계 비교 — 같은 GRPO 루프, 보상만 다름</text>
+  <!-- A -->
+  <text x="30" y="58" font-size="11.5" font-weight="700" fill="var(--ink)">A · gsm8k 규칙 일치</text>
+  <rect x="180" y="44" width="6" height="20" fill="var(--amber-bd)"/>
+  <text x="196" y="59" font-size="11" fill="var(--muted)">reward ≈ 0.00s (거의 공짜)</text>
+  <!-- B -->
+  <text x="30" y="100" font-size="11.5" font-weight="700" fill="var(--ink)">B · 유닛테스트 실행</text>
+  <rect x="180" y="86" width="230" height="20" fill="var(--green-bd)"/>
+  <text x="420" y="101" font-size="11" fill="var(--green-ink)">reward ≈ 1.4~2.3s (테스트 128건 실행)</text>
+  <line x1="180" y1="120" x2="180" y2="130" stroke="var(--line)"/>
+  <text x="30" y="148" font-size="10.5" fill="var(--ink)">→ 보상이 "외부 실행"이 되는 순간 reward 가 0 → 14~24%로 점프. 검증기 비용이 RL 루프의 1급 항목이 된다.</text>
+</svg>
+<figcaption>그림 1 — 보상 종류에 따른 reward 단계 비용. 규칙 일치(A)는 ≈0, 테스트 실행(B)은 1.4~2.3s. (본 실험 verl <code>timing_s/reward</code>)</figcaption>
+</figure>
+
+<div class="win"><strong>핵심 — 검증기(verifier)가 비용이다.</strong> A의 gsm8k 규칙 채점은 <code>timing_s/reward≈0</code>. B는 같은 루프인데 보상만 "테스트 실행"으로 바꿨더니 <strong>1.4~2.3s(14~24%)</strong>. 게다가 스텝마다 출렁인다(step2 2.35s vs step4 1.44s) — <strong>실패하는 코드가 timeout까지 매달릴수록 보상이 느려진다</strong>. 대규모/무거운 테스트면 reward 가 gen 과 맞먹는 병목이 될 수 있다 → verifier 병렬화·격리 샌드박스 풀이 실전 과제.</div>
+
+<p><strong>0.5B가 실제로 푼다.</strong> step 4에서 <code>critic/score/max=1.0</code>, rewards 평균 0.047 — 미학습 0.5B도 일부 MBPP를 테스트 통과로 풀었다(수학 도구 사용보다 코드 직생성이 0.5B엔 더 쉬운 듯). 응답 길이 ~297 토큰.</p>
+</div>
+
+<h2 id="concl">4. 결론 + 다음(C)</h2>
+<div class="card">
+<ol>
+<li><strong>테스트실행 보상 RLVR이 MI250에서 작동</strong> — MBPP, 커스텀 reward, 4스텝, 일부 통과(score 1.0).</li>
+<li><strong>보상이 외부 실행이 되면 reward 단계가 1급 비용</strong>(0 → 14~24%)이고, 실패-timeout이 많을수록 더 출렁인다. A에서 ≈0이던 것과 대비.</li>
+<li><strong>단계 지형</strong>: gen 37% / update_actor 26% / reward 14% / weight-sync 14% / ref 11% — gen·train·reward·sync 네 갈래로 분산.</li>
+</ol>
+<p><strong>다음(C — 검색 에이전트):</strong> 보상은 다시 가벼운 EM(정답 일치)로 돌아가되, 도구가 <strong>검색(retriever)</strong>이 된다. 도구 호출이 외부 I/O(검색 지연)라 <em>rollout</em> 쪽에 비용이 실리는 사례 — B(보상 쪽 비용)와 대비된다.</p>
+</div>
+
+<h2 id="repro">5. 재현 — 명령 전부</h2>
+<div class="card">
+<pre><code># 1) MBPP 전처리 (preprocess_mbpp.py): prompt + ground_truth=json{tests,setup}, data_source=mbpp_custom
+python preprocess_mbpp.py        # → /work/data/mbpp/{train,test}.parquet (374/500)
+
+# 2) reward_code.py: compute_score 가 코드+테스트를 subprocess 실행(6s timeout) → 통과 시 1.0
+
+# 3) verl GRPO + 커스텀 보상 (단일턴, vLLM async)
+HIP_VISIBLE_DEVICES=0,1 VLLM_ROCM_USE_AITER=0 python3 -m verl.trainer.main_ppo \
+  algorithm.adv_estimator=grpo \
+  data.train_files=/work/data/mbpp/train.parquet data.val_files=/work/data/mbpp/test.parquet \
+  data.train_batch_size=16 data.max_prompt_length=512 data.max_response_length=512 \
+  actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+  actor_rollout_ref.actor.ppo_mini_batch_size=8 actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
+  actor_rollout_ref.actor.use_kl_loss=True \
+  actor_rollout_ref.rollout.name=vllm actor_rollout_ref.rollout.mode=async \
+  actor_rollout_ref.rollout.n=8 actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+  actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+  actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
+  custom_reward_function.path=/work/reward_code.py custom_reward_function.name=compute_score \
+  trainer.logger=[console] trainer.n_gpus_per_node=2 trainer.nnodes=1 \
+  trainer.val_before_train=False trainer.total_training_steps=4
+</code></pre>
+</div>
+
+<footer>
+작성일 2026-06-14 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · 모든 수치는 본 세션 직접 측정값. ·
+시리즈: <a href="agentic-a-tool-math.html">A 도구수학</a> · B(현재) · <a href="agentic-c-rag.html">C 검색</a> · <a href="agentic-d-genrm.html">D 보상모델</a> · <a href="agentic-e-disagg.html">E 멀티노드</a>
+</footer>
+
+</div>
+</body>
+</html>
