@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic RL ③ — 검색(RAG) 에이전트 (verl + BM25, MI250)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .win { border-left: 4px solid var(--green-bd); background: var(--green-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--green-ink); }
+  figure { margin: 18px 0; } figcaption { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+  .status-ok { color: #2a8a3e; font-weight: 600; } .status-fail { color: #c5302a; font-weight: 600; }
+  .ser { display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px;
+         background:var(--purple-bg); color:var(--purple-ink); border:1px solid var(--purple-bd); }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 시리즈: <a href="agentic-a-tool-math.html">A</a> · <a href="agentic-b-code.html">B</a> · C · <a href="agentic-d-genrm.html">D</a> · <a href="agentic-e-disagg.html">E</a></p>
+
+<p><span class="ser">Agentic RL 시리즈 ③ / 5</span></p>
+<h1>검색(RAG) 에이전트 — 검색 도구 + EM 보상 (MI250)</h1>
+<p class="sub">환경: <code>mi250-052</code> (MI250, ROCm 7.2.3) · Docker 전용 · verl 0.8.0 ToolAgentLoop + vLLM(hermes) · Qwen2.5-0.5B · HotpotQA · 로컬 BM25 검색 · EM 보상 · 2 GCD</p>
+<p class="post-meta"><time datetime="2026-06-14">2026-06-14</time></p>
+
+<div class="card">
+<p><strong>한 줄 요약.</strong> A의 도구 인프라를 재사용하되 도구를 <strong>검색(BM25 retriever)</strong>으로 바꿨다. 모델이 질문을 받아 <code>search</code> 도구로 로컬 문서를 검색하고, 읽고, <code>&lt;answer&gt;</code>로 답하면 EM(정답 일치) 보상. MI250에서 4스텝 완주, <strong>검색 에이전트는 A(수학)보다 더 멀티턴</strong>(num_turns 2.6 vs 2.1)으로 돌며 도구를 실제로 호출한다. 그러나 두 가지 정직한 결과: <strong>(1) 로컬 BM25 검색은 매우 싸서(~7ms) rollout 병목을 못 바꾼다</strong> — 실제 dense/웹 검색이라야 비용이 실린다. <strong>(2) 미학습 0.5B는 HotpotQA 멀티홉을 못 풀어 EM=0</strong> — 인프라는 되지만 과제가 모델보다 크다.</p>
+</div>
+
+<div class="card toc">
+<strong>목차</strong>
+<ul style="list-style: none; padding-left: 0; margin: 8px 0;">
+  <li><a href="#goal">1. 목표 — 도구가 외부 검색일 때</a></li>
+  <li><a href="#how">2. 구성 — BM25 검색도구 · HotpotQA · EM</a></li>
+  <li><a href="#result">3. 결과 — 더 멀티턴, 그러나 검색은 싸고 EM은 0</a></li>
+  <li><a href="#debug">4. 디버깅 — agent 경로의 보상 라우팅 함정</a></li>
+  <li><a href="#concl">5. 결론 + 다음(D)</a></li>
+</ul>
+</div>
+
+<h2 id="goal">1. 목표 — 도구가 외부 검색일 때</h2>
+<div class="card">
+<p>A의 도구는 코드 실행, B의 비용은 보상(테스트). C에서는 <strong>도구가 검색(retriever)</strong>이다 — 외부 지식을 가져오는 I/O. 멀티홉 QA(HotpotQA)를 주고, 모델이 검색→읽기→답을 반복하게 한다. 측정 목표: <strong>(a)</strong> 검색 에이전트가 도구를 정말 쓰는가(턴 수), <strong>(b)</strong> 검색 도구 지연이 rollout에 얼마나 실리는가 — B(보상 쪽 비용)와 대비되는 "도구 쪽 비용" 사례.</p>
+</div>
+
+<h2 id="how">2. 구성 — BM25 검색도구 · HotpotQA · EM</h2>
+<div class="card">
+<p>Search-R1의 정통 스택은 <code>&lt;tool_call&gt;</code> 텍스트 태그 + 별도 retrieval 서버라 무겁다. 대신 <strong>A의 검증된 hermes 도구 경로를 그대로 재사용</strong>하고 도구만 검색으로 교체 — 인프라 위험을 줄였다.</p>
+<table>
+<tr><th>조각</th><th>무엇</th></tr>
+<tr><td><strong>코퍼스</strong></td><td>HotpotQA(train 512 + val 128)의 context 문단을 모아 dedup → <strong>6,292 docs</strong></td></tr>
+<tr><td><strong>검색도구</strong></td><td><code>SearchTool(BaseTool)</code> — <code>rank_bm25</code>로 BM25 인덱스(인프로세스, 별도 서버 불필요), query→top-3 문단. A의 sandbox와 달리 외부 서버 없음</td></tr>
+<tr><td><strong>보상</strong></td><td>verl 내장 <code>searchR1_hotpotqa</code> 라우팅 → <code>search_r1_like_qa_em</code>: <code>&lt;answer&gt;</code> 추출 후 EM(정규화 일치)</td></tr>
+<tr><td><strong>롤아웃</strong></td><td>A와 동일: vLLM async + tool_agent loop + hermes 파서</td></tr>
+</table>
+<p>데이터는 tool_agent 포맷(<code>agent_name=tool_agent</code>), 시스템 프롬프트가 "검색 도구로 찾고 <code>&lt;answer&gt;</code>로 답"하도록 지시, <code>ground_truth={"target":[answer]}</code>.</p>
+</div>
+
+<h2 id="result">3. 결과 — 더 멀티턴, 그러나 검색은 싸고 EM은 0</h2>
+<div class="card">
+<p>정상 스텝(step 4) 기준:</p>
+<table>
+<tr><th>지표</th><th>값</th><th>해석</th></tr>
+<tr><td>num_turns (평균/최대)</td><td><strong>2.59 / 4</strong></td><td>A(수학) 2.1보다 높음 — 검색 에이전트가 도구를 더 적극적으로 호출</td></tr>
+<tr><td><code>tool_calls</code> 시간</td><td>평균 0.008s (max 0.088s)</td><td><strong>검색이 매우 싸다</strong> — 로컬 BM25 6.3k docs</td></tr>
+<tr><td><code>gen</code></td><td>2.56s</td><td>여전히 최대 단계</td></tr>
+<tr><td><code>update_weights</code></td><td>1.47s</td><td>weight-sync (async)</td></tr>
+<tr><td>응답 길이</td><td>~110 토큰</td><td>짧음 — <code>&lt;answer&gt;</code> 위주</td></tr>
+<tr><td>EM 보상</td><td><strong>0.0</strong></td><td><strong>0.5B가 멀티홉을 못 풂</strong></td></tr>
+<tr><td>step 합</td><td>8.47s</td><td></td></tr>
+</table>
+
+<div class="win"><strong>핵심 ① — 도구 비용은 도구 나름.</strong> B에서 보상(테스트 실행)이 1.5s였던 것과 달리, C의 검색 도구는 <strong>~7ms</strong>다. 로컬 BM25(인메모리, 6.3k docs)라 사실상 공짜 → rollout은 그대로 생성 지배. <strong>도구가 rollout 병목을 만들려면</strong> dense 임베딩 검색(수백만 docs)·웹 API·원격 retrieval 서버처럼 진짜 I/O/연산이 있어야 한다. "agentic = 느리다"가 아니라 "어떤 도구냐"가 비용을 정한다.</div>
+
+<div class="note"><strong>핵심 ② — 인프라 성공 ≠ 과제 성공.</strong> 검색 루프는 완벽히 돌지만(턴 2.6, 도구 호출됨) <strong>EM=0</strong>. HotpotQA는 두 문서를 연결하는 멀티홉 추론이라 미학습 0.5B에겐 너무 크다. A(수학, 일부 정답)·B(코드, score 1.0)와 달리 C는 <strong>모델 용량이 과제에 못 미치는</strong> 사례 — agentic RL에서 "되게 만들기"와 "풀게 만들기"는 별개이고, 후자는 모델 크기·SFT·보상 설계가 좌우한다.</div>
+
+<p>턴 수 대비: <strong>A 수학 2.1 → C 검색 2.6.</strong> 같은 0.5B인데 검색 에이전트가 도구를 더 자주 부른다(질문에 답하려면 검색이 거의 필수라 프롬프트 유도가 잘 먹힌 듯). 도구 호출 자체는 A보다 활발하지만(tool_calls 0.008 vs A 0.0005), 절대 비용은 여전히 미미.</p>
+</div>
+
+<h2 id="debug">4. 디버깅 — agent 경로의 보상 라우팅 함정 (5회)</h2>
+<div class="card">
+<p>C는 가장 많이 막혔다(5회). 핵심은 <strong>agent_loop(async) 경로의 보상이 단일턴 경로와 다르게 동작</strong>한다는 점:</p>
+<ol>
+<li><code>ConfigAttributeError: Missing key type</code> — tool_config의 <code>config</code>에 <code>"type":"native"</code> 누락. → 추가.</li>
+<li><code>NotImplementedError: Reward function is not implemented for data_source='custom_hotpot'</code> — <strong>agent_loop는 <code>RewardLoopWorker</code>가 data_source로 보상을 라우팅하며 <code>custom_reward_function</code>을 무시</strong>한다(B의 단일턴 경로는 존중했음). → 내장 EM이 걸린 <code>data_source=searchR1_hotpotqa</code>로 변경.</li>
+<li><code>TypeError: string indices must be integers</code> — <code>search_r1_like_qa_em</code>이 <code>ground_truth["target"]</code>로 dict를 인덱싱. → <code>ground_truth={"target":[answer]}</code>로 변경. <span class="status-ok">성공</span></li>
+</ol>
+<div class="tip"><strong>교훈.</strong> verl에서 <strong>단일턴 경로(B: custom_reward_function)와 agent_loop 경로(C: data_source 라우팅 + RewardLoopWorker)는 보상 메커니즘이 다르다.</strong> agentic 보상은 내장 reward_score 레지스트리에 등록하거나 그 형식(예: <code>{"target":[...]}</code>)을 맞춰야 한다.</div>
+</div>
+
+<h2 id="concl">5. 결론 + 다음(D)</h2>
+<div class="card">
+<ol>
+<li><strong>검색 에이전트 RL이 MI250에서 작동</strong> — BM25 도구 + EM, 4스텝, 턴 2.6(시리즈 최다). A의 hermes 경로 재사용이 주효.</li>
+<li><strong>도구 비용은 도구가 정한다.</strong> 로컬 BM25는 ~7ms라 rollout을 못 바꾼다 — 진짜 비용은 dense/웹/원격 retrieval에서 온다.</li>
+<li><strong>인프라 ✓, 과제 ✗</strong>: 0.5B는 HotpotQA 멀티홉 불가(EM=0). 모델 용량·SFT·보상 설계가 다음 레버.</li>
+<li><strong>agent 경로 보상 라우팅은 단일턴과 다르다</strong> — 5회 디버깅의 핵심 교훈.</li>
+</ol>
+<p><strong>다음(D — GenRM):</strong> 보상을 규칙/EM이 아니라 <strong>LLM-as-judge(별도 모델 추론)</strong>로 바꾼다. C에서 검색 도구가 싸서 비용이 안 실렸다면, D는 <strong>보상이 모델 forward가 되어 reward 단계가 비싸지는</strong> 사례 — B(테스트 실행)보다 더 무거운 검증기.</p>
+</div>
+
+<footer>
+작성일 2026-06-14 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · 모든 수치는 본 세션 직접 측정값. ·
+시리즈: <a href="agentic-a-tool-math.html">A 도구수학</a> · <a href="agentic-b-code.html">B 코드</a> · C(현재) · <a href="agentic-d-genrm.html">D 보상모델</a> · <a href="agentic-e-disagg.html">E 멀티노드</a>
+</footer>
+
+</div>
+</body>
+</html>
