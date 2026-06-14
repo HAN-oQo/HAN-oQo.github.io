@@ -172,7 +172,7 @@ def check_staticrypt_lockscreen(path, content, tokens):
 
 def check_index_linkage(tree, paths):
     """study/logs/infra 의 콘텐츠 페이지는 해당 섹션 index.html 에 링크돼야 한다."""
-    for section in ("study", "logs", "infra"):
+    for section in ("study", "logs", "infra", "briefings"):
         index = f"{section}/index.html"
         idx_content = tree.read(index)
         if idx_content is None:
@@ -211,7 +211,7 @@ def check_postmeta(tree, paths):
       - 페이지 hero 의 post-meta 날짜가 index 카드의 날짜와 일치해야 한다 (드리프트 차단)
     규약: 카드는 '최초 작성일' 순서를 유지하고, 페이지를 고치면 updated 를 단다.
     """
-    for section in ("study", "logs", "infra"):
+    for section in ("study", "logs", "infra", "briefings"):
         index = f"{section}/index.html"
         idx = tree.read(index)
         if idx is None:
@@ -262,7 +262,7 @@ def bump_check(base, head, today=None):
         if not p.endswith(".html") or p.endswith(".unencrypted.html"):
             continue
         seg = p.split("/")
-        if len(seg) != 2 or seg[0] not in ("study", "logs", "infra") or seg[1] == "index.html":
+        if len(seg) != 2 or seg[0] not in ("study", "logs", "infra", "briefings") or seg[1] == "index.html":
             continue
         b, h = bt.read(p), ht.read(p)
         if b is None or h is None or b == h:

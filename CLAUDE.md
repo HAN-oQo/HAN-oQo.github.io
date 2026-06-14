@@ -79,6 +79,13 @@ A 와 같되 `<html lang="ko">`, i18n 링크/스크립트와 en/ko span 없이 �
 `theme.css` 링크는 동일하게 필수. 코드 블록은 `--code-bg/--code-ink` 또는
 기존 logs 페이지의 pre 스타일을 따른다.
 
+### 섹션 구조
+
+top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리포트), `infra/`(인프라),
+`logs/`(작업 로그), `briefings/`(매일의 AI 모닝 브리핑 — 타입 C 자체완결, EN/KO).
+각 섹션은 자체 `index.html`(카드 목록)을 갖고 루트 `index.html` 에서 링크된다.
+새 섹션을 추가하면 `check_theme.py` 의 섹션 튜플 3곳에도 추가한다.
+
 ### C. 자체 내장 페이지 (study/ai-briefing-*.html 류)
 
 외부 asset 링크 없이 단일 파일로 완결되어야 할 때만 사용. 조건:
@@ -209,7 +216,7 @@ A 와 같되 `<html lang="ko">`, i18n 링크/스크립트와 en/ko span 없이 �
 | i18n | en/ko span 을 쓰면 i18n 장치(링크 또는 인라인) 필수 |
 | font | body font-family 는 `-apple-system` 시작 스택만 |
 | lockscreen | StatiCrypt 잠금 화면은 `#faf9f5`/`#1f1e1b` 템플릿 색 |
-| index-link | study/logs/infra 콘텐츠 페이지는 섹션 index 에 링크 필수 |
+| index-link | study/logs/infra/briefings 콘텐츠 페이지는 섹션 index 에 링크 필수 |
 | post-meta | 카드에 created `<time>` 필수, created ≤ updated, **페이지 hero 날짜 = 카드 날짜** |
 | post-meta-bump | (pre-push) 원격에 있던 콘텐츠 페이지를 고쳤으면 `.post-meta`(갱신일)도 바뀌어야 함 |
 | unencrypted | `*.unencrypted.html` 커밋/push 금지 |
