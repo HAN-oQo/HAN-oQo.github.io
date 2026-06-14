@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RL 루프 속도 해부 — vLLM rollout · Unsloth · veRL (MI250)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  h4 { font-size: 0.95rem; margin-top: 18px; color: var(--blue); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc ol { margin: 8px 0; }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .win { border-left: 4px solid var(--green-bd); background: var(--green-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--green-ink); }
+  .diagram { background: var(--gray-bg); padding: 18px 22px; border-radius: 8px; font-family: "SF Mono", Menlo, monospace;
+             font-size: 0.78rem; line-height: 1.45; white-space: pre; overflow-x: auto; border: 1px solid var(--line); }
+  figure { margin: 18px 0; }
+  figcaption { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+  .status-ok { color: #2a8a3e; font-weight: 600; }
+  .status-fail { color: #c5302a; font-weight: 600; }
+  details { margin: 10px 0; border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; background: var(--card); }
+  details summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+  .big { font-size: 1.5rem; font-weight: 700; color: var(--blue); }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 관련: <a href="../post-training/frameworks-survey.html">포스트트레이닝 프레임워크 조사</a> · <a href="mi250-pd-disaggregation-experiment.html">MI250 P/D 실험</a></p>
+
+<h1>RL 루프 속도 해부 — vLLM rollout · Unsloth · veRL (MI250)</h1>
+<p class="sub">작성일: 2026-06-14 · 환경: <code>mi250-052</code> (AMD INSTINCT MI250 OAM, ROCm 7.2.3) · Docker 전용 · 작은 모델(Qwen2.5-0.5B)로 GRPO 한 스텝을 분해 측정</p>
+
+<div class="card">
+<p><strong>한 줄 요약.</strong> RL(GRPO) 루프에서 <strong>vLLM rollout 을 켜는 것이 거의 유일한 큰 레버</strong>다 — 생성 처리량이 단일 GCD에서 <span class="big">4.4×</span> (517 → 2,280 tok/s), 루프 전체는 3.7× 빨라졌다. 반면 <strong>Unsloth 는 full-parameter 토글에선 사실상 무효과</strong>(생성 병목을 건드리지 못함). veRL 로 옮기면 빠른 롤아웃 엔진이 <em>기본값</em>이라 생성은 더 이상 지배적 단계가 아니고, KL/reference forward·reward 계산이 비등하게 비용을 차지한다. 모든 명령·config·실패·코드 흐름을 그대로 기록한다.</p>
+</div>
+
+<div class="card toc">
+<strong>목차</strong>
+<ul style="list-style: none; padding-left: 0; margin: 8px 0;">
+  <li><a href="#goal">1. 궁금했던 것 — 무엇을 측정하나</a></li>
+  <li><a href="#env">2. 환경 — 노드·도커·버전 핀 고정</a></li>
+  <li><a href="#design">3. 실험 설계 — 2×2, 그리고 무엇을 어떻게 잰다</a></li>
+  <li><a href="#flow">4. 코드 흐름 — RL 한 스텝의 해부</a></li>
+  <li><a href="#trl">5. 결과 ① — TRL GRPO 2×2 (vLLM × Unsloth)</a></li>
+  <li><a href="#verl">6. 결과 ② — veRL 로 확장: 단계별 분해</a></li>
+  <li><a href="#debug">7. 만난 문제들 — 디버깅 로그 (실패 포함)</a></li>
+  <li><a href="#concl">8. 결론 — 레버와 병목</a></li>
+  <li><a href="#repro">9. 재현 — 명령 전부</a></li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="goal">1. 궁금했던 것 — 무엇을 측정하나</h2>
+<div class="card">
+<p>출발 질문은 하나였다: <strong>"RL(GRPO) 학습에서 vLLM rollout 이 실제로 루프를 빠르게 하는가? 얼마나? 병목은 어디인가?"</strong> 여기에 한 가지를 더 얹었다 — <strong>Unsloth on/off</strong>. 그래서 옵션 2개를 교차한 2×2를 본다:</p>
+<ol>
+<li><strong>vLLM rollout on/off</strong> — 생성(rollout) 을 vLLM(paged-attention, continuous batching)로 할지, 평범한 HuggingFace <code>model.generate()</code> 로 할지.</li>
+<li><strong>Unsloth on/off</strong> — Unsloth 의 커널 패칭(어텐션·옵티마이저 등 in-place 패치)을 입힐지 말지.</li>
+</ol>
+<p>그다음 <strong>veRL</strong>(대규모 RL 프레임워크)로 같은 작업을 옮겨, TRL 의 단일 프로세스 colocate 방식과 veRL 의 Ray 기반 단계 분리(disaggregated) 방식에서 시간 분포가 어떻게 달라지는지 본다.</p>
+
+<div class="note"><strong>용어 빨리 풀기.</strong> <strong>GRPO</strong> = 한 프롬프트에 응답을 G개 뽑아(rollout), 규칙 기반 보상으로 채점하고, 그룹 내 상대 우위(advantage)로 정책을 업데이트하는 RL. <strong>rollout</strong> = 모델이 응답을 생성하는 단계(추론). <strong>colocate</strong> = 학습 모델과 생성 엔진이 같은 GPU·같은 프로세스에 공존. <strong>weight-sync</strong> = 한 스텝 업데이트한 정책 가중치를 생성 엔진(vLLM)에 다시 밀어넣는 것.</div>
+
+<div class="tip"><strong>기록 원칙.</strong> 모든 명령·config·실패·우회·코드 흐름을 그대로. 공유 GPU 노드라 <strong>호스트에 pip 금지 → 전부 Docker 안에서</strong>. 실행 후 컨테이너 즉시 정리, GPU 반납.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="env">2. 환경 — 노드·도커·버전 핀 고정</h2>
+<div class="card">
+<p>mi250-052 에 이미 빌드돼 있던 <strong>최신 vLLM-ROCm 이미지</strong>(<code>vllm-022-rocm:latest</code>, vLLM 0.22.1+rocm723)를 베이스로 썼다. 두 노드(mi250-052/053) 모두 8 GCD 유휴 상태를 사전 확인했고, 실험은 052 한 노드에서 끝났다(0.5B 모델이라 단일·소수 GCD로 충분).</p>
+
+<table>
+<tr><th>구성요소</th><th>버전 (핀 고정)</th></tr>
+<tr><td>GPU</td><td>AMD INSTINCT MI250 (MCM) OAM — 8 GCD (gfx90a)</td></tr>
+<tr><td>ROCm</td><td><strong>7.2.3</strong></td></tr>
+<tr><td>PyTorch</td><td>2.10.0 (ROCm)</td></tr>
+<tr><td>vLLM</td><td><strong>0.22.1+rocm723</strong></td></tr>
+<tr><td>transformers</td><td>5.11.0</td></tr>
+<tr><td>TRL</td><td>1.6.0</td></tr>
+<tr><td>Unsloth</td><td>2026.6.7 (unsloth_zoo 2026.6.5)</td></tr>
+<tr><td>veRL</td><td>0.8.0 · Ray 2.55.1 · tensordict 0.10.0</td></tr>
+<tr><td>모델 / 데이터</td><td>Qwen/Qwen2.5-0.5B-Instruct · openai/gsm8k (main)</td></tr>
+</table>
+
+<h3>2-1. 컨테이너 기동 (ROCm passthrough)</h3>
+<pre><code># 영속 컨테이너 1개 띄워 그 안에서 반복 실행 (재현성↑, 매번 새로 안 띄움)
+docker run -d --name rlbench --network host \
+  --device=/dev/kfd --device=/dev/dri --group-add video \
+  --ipc=host --shm-size 32G --security-opt seccomp=unconfined \
+  -e VLLM_ROCM_USE_AITER=0 \           # MI250(gfx90a)은 aiter 미지원 → 끈다
+  -e HF_HOME=/work/hf \                # 모델 캐시를 마운트 볼륨에 보존
+  -v ~/rlbench:/work \
+  --entrypoint sleep vllm-022-rocm:latest infinity
+
+docker exec rlbench pip install -q trl   # → trl 1.6.0</code></pre>
+<div class="note"><strong>왜 <code>VLLM_ROCM_USE_AITER=0</code>?</strong> aiter 는 MI300+ 용 커널 라이브러리다. MI250(gfx90a)에서 켜져 있으면 vLLM 초기화가 깨진다 — 이전 P/D 실험에서 확인한 동일한 함정.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="design">3. 실험 설계 — 2×2, 그리고 무엇을 어떻게 잰다</h2>
+<div class="card">
+<h3>3-1. 고정 조건 (apple-to-apple)</h3>
+<table>
+<tr><th>항목</th><th>값</th><th>의미</th></tr>
+<tr><td>model</td><td>Qwen2.5-0.5B-Instruct</td><td>작고 빠른 — mechanism 측정용</td></tr>
+<tr><td>dataset</td><td>gsm8k (초등 수학)</td><td>규칙 채점 가능(정답 정수 일치)</td></tr>
+<tr><td>num_generations (G)</td><td>8</td><td>프롬프트당 응답 8개</td></tr>
+<tr><td>per_device batch</td><td>16</td><td>= 프롬프트 2 × G 8 = 한 스텝 16개 시퀀스</td></tr>
+<tr><td>max_completion_length</td><td>256</td><td>생성 길이 상한</td></tr>
+<tr><td>steps</td><td>6</td><td>첫 스텝(warmup) 제외하고 평균</td></tr>
+<tr><td>GPU</td><td><code>HIP_VISIBLE_DEVICES=0</code> (1 GCD)</td><td>네 조건 모두 동일 단일 GCD</td></tr>
+<tr><td>KL(beta)</td><td>0.0</td><td>TRL 측은 reference forward 생략 → 학습부를 backward로 단순화</td></tr>
+</table>
+<p>네 조건 모두 생성 토큰 수가 정확히 같았다(24,576 = 16×256×6 — 모든 응답이 256 상한까지 감, gsm8k CoT가 길어 EOS 전 절단). 그래서 <strong>tok/s 가 깨끗한 비교 지표</strong>가 된다.</p>
+
+<h3>3-2. 어떻게 단계별로 시간을 쪼개나</h3>
+<p>TRL <code>GRPOTrainer</code> 는 루프를 추상화해 버려서, 직접 두 군데를 계측했다:</p>
+<ul>
+<li><strong>rollout+채점 단계</strong>: <code>GRPOTrainer._generate_and_score_completions()</code> 를 monkeypatch 로 감싸 시간 측정. 이 함수가 "생성 → 보상 → logprob" 묶음을 담당한다.</li>
+<li><strong>스텝 전체</strong>: <code>TrainerCallback.on_step_begin/on_step_end</code> 로 스텝 벽시계. <em>전체 − rollout = 학습(backward/optimizer)</em>.</li>
+</ul>
+<pre><code># 핵심 계측 (grpo_bench.py 발췌)
+orig = trainer._generate_and_score_completions
+def timed(inputs):
+    t = time.time(); r = orig(inputs); state["roll"] += time.time() - t
+    state["gen_tok"] += sum(len(x) for x in r["completion_ids"])
+    return r
+trainer._generate_and_score_completions = timed   # rollout 시간·생성 토큰 집계</code></pre>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="flow">4. 코드 흐름 — RL 한 스텝의 해부</h2>
+<div class="card">
+<p>"vLLM 이 어디를 빠르게 하나"를 알려면 한 스텝이 실제로 어떤 코드 경로를 타는지를 봐야 한다. TRL 1.6.0 <code>grpo_trainer.py</code> 기준:</p>
+
+<figure>
+<svg viewBox="0 0 980 250" width="100%" role="img" aria-label="GRPO 한 스텝 코드 흐름">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#7a7468"/></marker>
+  </defs>
+  <!-- boxes -->
+  <rect x="10"  y="70" width="150" height="64" rx="9" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="85" y="95" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--blue-ink)">① rollout</text>
+  <text x="85" y="113" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">생성 (vLLM / HF)</text>
+  <text x="85" y="127" text-anchor="middle" font-size="9.5" fill="var(--muted)">_generate_single_turn</text>
+
+  <rect x="185" y="70" width="135" height="64" rx="9" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="252" y="98" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--amber)">② reward</text>
+  <text x="252" y="116" text-anchor="middle" font-size="10.5" fill="var(--amber)">규칙 채점</text>
+
+  <rect x="345" y="70" width="150" height="64" rx="9" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  <text x="420" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--gray-ink)">③ logprob/ref</text>
+  <text x="420" y="110" text-anchor="middle" font-size="10" fill="var(--gray-ink)">old_log_prob + KL</text>
+  <text x="420" y="124" text-anchor="middle" font-size="9.5" fill="var(--muted)">(beta=0이면 생략)</text>
+
+  <rect x="520" y="70" width="120" height="64" rx="9" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  <text x="580" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="var(--gray-ink)">④ advantage</text>
+  <text x="580" y="116" text-anchor="middle" font-size="10" fill="var(--gray-ink)">그룹 정규화</text>
+
+  <rect x="665" y="70" width="150" height="64" rx="9" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="740" y="92" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--green-ink)">⑤ train</text>
+  <text x="740" y="110" text-anchor="middle" font-size="10.5" fill="var(--green-ink)">backward+optim</text>
+  <text x="740" y="124" text-anchor="middle" font-size="9.5" fill="var(--muted)">compute_loss</text>
+
+  <rect x="840" y="70" width="130" height="64" rx="9" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+  <text x="905" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--purple-ink)">⑥ weight-sync</text>
+  <text x="905" y="110" text-anchor="middle" font-size="10" fill="var(--purple-ink)">→ vLLM 적재</text>
+  <text x="905" y="124" text-anchor="middle" font-size="9.5" fill="var(--muted)">sync_weights()</text>
+
+  <!-- arrows -->
+  <line x1="160" y1="102" x2="183" y2="102" stroke="#7a7468" marker-end="url(#ah)"/>
+  <line x1="320" y1="102" x2="343" y2="102" stroke="#7a7468" marker-end="url(#ah)"/>
+  <line x1="495" y1="102" x2="518" y2="102" stroke="#7a7468" marker-end="url(#ah)"/>
+  <line x1="640" y1="102" x2="663" y2="102" stroke="#7a7468" marker-end="url(#ah)"/>
+  <line x1="815" y1="102" x2="838" y2="102" stroke="#7a7468" marker-end="url(#ah)"/>
+  <!-- loop back -->
+  <path d="M905,134 L905,180 L85,180 L85,136" fill="none" stroke="#7a7468" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+  <text x="495" y="197" text-anchor="middle" font-size="10.5" fill="var(--muted)">다음 스텝 — 동기화된 가중치로 다시 생성</text>
+
+  <!-- accelerator tags -->
+  <rect x="20" y="20" width="180" height="26" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="110" y="37" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">vLLM 이 빠르게 하는 곳 →①</text>
+  <rect x="660" y="20" width="180" height="26" rx="6" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="750" y="37" text-anchor="middle" font-size="10.5" fill="var(--green-ink)">Unsloth 가 노리는 곳 →⑤</text>
+</svg>
+<figcaption>그림 1 — GRPO 한 스텝의 6단계와 각 도구가 노리는 지점. vLLM 은 ①생성, Unsloth 는 ⑤backward 를 겨냥한다. (TRL 1.6.0 <code>grpo_trainer.py</code> 코드 경로 기준, 직접 작성)</figcaption>
+</figure>
+
+<h4>①에서 vLLM vs HF 가 갈리는 분기</h4>
+<pre><code># grpo_trainer.py · _generate_single_turn()  (line ~1353)
+if self.use_vllm:
+    if self.state.global_step != self._last_loaded_step:
+        with profiling_context(self, "sync_weights"):
+            self.vllm_generation.sync_weights()      # ⑥ 갱신 가중치를 vLLM에 적재
+        self._last_loaded_step = self.state.global_step
+    # → vLLM 엔진으로 생성 (paged-attention, continuous batching)
+else:
+    with ..., torch.no_grad(), self._dist.summon_full_params(...):
+        prompt_completion_ids = unwrapped_model.generate(   # ← 평범한 HF 자기회귀 생성
+            **generate_inputs, generation_config=self.generation_config)</code></pre>
+<p>핵심은 두 가지다. (1) <strong>HF 경로</strong>는 FSDP 파라미터를 <code>summon_full_params</code> 로 모은 뒤 <code>model.generate()</code> 를 도는 단순 자기회귀 디코딩 — KV 페이징도, continuous batching 도 없다. 그래서 느리다(측정값 ~520 tok/s). (2) <strong>vLLM colocate 경로</strong>는 같은 GPU·같은 프로세스 안의 vLLM 엔진에 토큰을 넘긴다. 매 스텝 생성 직전 <code>sync_weights()</code> 로 가중치를 vLLM 으로 밀어넣는데(⑥), <strong>colocate 라 네트워크 전송이 아니라 in-process state_dict 적재</strong>라서 싸다 — 이게 분산 RL 의 weight-sync 와 결정적으로 다른 점이다.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="trl">5. 결과 ① — TRL GRPO 2×2 (vLLM × Unsloth)</h2>
+<div class="card">
+<table>
+<tr><th>조건</th><th>backend</th><th>vLLM</th><th>total (s)</th><th>s/step (정상)</th><th>rollout (s)</th><th>생성 tok/s</th><th>rollout 비중</th></tr>
+<tr><td>A</td><td>HF</td><td>off</td><td>51.73</td><td>7.885</td><td>47.49</td><td>517.5</td><td>91.8%</td></tr>
+<tr><td><strong>B</strong></td><td>HF</td><td><strong>on</strong></td><td><strong>13.96</strong></td><td><strong>1.694</strong></td><td>10.78</td><td><strong>2,279.6</strong></td><td>77.2%</td></tr>
+<tr><td>C</td><td>Unsloth</td><td>off</td><td>48.07</td><td>7.235</td><td>44.13</td><td>556.9</td><td>91.8%</td></tr>
+<tr><td>D</td><td>Unsloth</td><td><strong>on</strong></td><td>13.44</td><td>1.602</td><td>10.83</td><td>2,269.0</td><td>80.6%</td></tr>
+</table>
+
+<figure>
+<svg viewBox="0 0 640 290" width="100%" role="img" aria-label="조건별 생성 처리량 막대">
+  <!-- axes -->
+  <line x1="60" y1="20" x2="60" y2="230" stroke="var(--line)"/>
+  <line x1="60" y1="230" x2="620" y2="230" stroke="var(--line)"/>
+  <!-- gridlines + labels (max ~2400) -->
+  <g font-size="10" fill="var(--muted)">
+    <line x1="60" y1="230" x2="620" y2="230" stroke="var(--line)"/>
+    <line x1="60" y1="187" x2="620" y2="187" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="190" text-anchor="end">600</text>
+    <line x1="60" y1="144" x2="620" y2="144" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="147" text-anchor="end">1200</text>
+    <line x1="60" y1="101" x2="620" y2="101" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="104" text-anchor="end">1800</text>
+    <line x1="60" y1="58"  x2="620" y2="58"  stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="61" text-anchor="end">2400</text>
+    <text x="20" y="130" text-anchor="middle" transform="rotate(-90 20 130)" fill="var(--muted)">생성 tok/s</text>
+  </g>
+  <!-- bars: scale 1 tok/s = 0.0717 px (600->43px) ; y=230 - val*0.0717 -->
+  <!-- A 517.5 -> 37 -->
+  <rect x="95"  y="193" width="80" height="37"  rx="3" fill="var(--gray-bd)"/>
+  <text x="135" y="186" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">517</text>
+  <text x="135" y="246" text-anchor="middle" font-size="10.5" fill="var(--muted)">A · HF</text>
+  <text x="135" y="259" text-anchor="middle" font-size="9.5" fill="var(--muted)">vLLM off</text>
+  <!-- B 2279.6 -> 163 -->
+  <rect x="225" y="67"  width="80" height="163" rx="3" fill="var(--blue)"/>
+  <text x="265" y="60"  text-anchor="middle" font-size="11" font-weight="700" fill="var(--blue-ink)">2,280</text>
+  <text x="265" y="246" text-anchor="middle" font-size="10.5" fill="var(--muted)">B · HF</text>
+  <text x="265" y="259" text-anchor="middle" font-size="9.5" fill="var(--blue-ink)">vLLM on</text>
+  <!-- C 556.9 -> 40 -->
+  <rect x="355" y="190" width="80" height="40"  rx="3" fill="var(--gray-bd)"/>
+  <text x="395" y="183" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">557</text>
+  <text x="395" y="246" text-anchor="middle" font-size="10.5" fill="var(--muted)">C · Unsloth</text>
+  <text x="395" y="259" text-anchor="middle" font-size="9.5" fill="var(--muted)">vLLM off</text>
+  <!-- D 2269 -> 163 -->
+  <rect x="485" y="68"  width="80" height="162" rx="3" fill="var(--blue)"/>
+  <text x="525" y="61"  text-anchor="middle" font-size="11" font-weight="700" fill="var(--blue-ink)">2,269</text>
+  <text x="525" y="246" text-anchor="middle" font-size="10.5" fill="var(--muted)">D · Unsloth</text>
+  <text x="525" y="259" text-anchor="middle" font-size="9.5" fill="var(--blue-ink)">vLLM on</text>
+  <!-- speedup bracket -->
+  <text x="330" y="280" text-anchor="middle" font-size="11" fill="var(--green-ink)">vLLM on/off = 4.4× (생성), 3.7× (루프 전체)</text>
+</svg>
+<figcaption>그림 2 — 조건별 생성 처리량. vLLM 켜짐(파랑)이 4.4×. Unsloth(A↔C, B↔D)는 막대 높이를 거의 바꾸지 못한다. (본 실험 측정값)</figcaption>
+</figure>
+
+<h3>5-1. 읽기 — 세 가지가 보인다</h3>
+<div class="win"><strong>① vLLM rollout 이 거의 전부다.</strong> HF→vLLM 으로 켜는 것만으로 생성 4.40× (517→2,280 tok/s), 스텝당 4.66×, 루프 전체 3.71×. 이유는 그림 1 그대로 — rollout 이 루프의 <strong>91.8%</strong>를 먹고 있었으니, 그걸 빠르게 하면 전체가 빨라진다.</div>
+
+<p><strong>② Unsloth 는 (이 토글에선) 거의 무효과.</strong> vLLM off 끼리(A↔C) 517→557 tok/s, +7.6%. vLLM on 끼리(B↔D)는 사실상 동률(2,280 vs 2,269, 노이즈 범위). 왜? Unsloth 의 커널 패칭은 <strong>backward/옵티마이저(⑤)</strong>를 노리는데, 생성이 80~92%인 이 루프에선 거기를 아무리 깎아도 총시간이 안 움직인다. 실제로 학습부만 보면 — B 의 비-rollout 시간 0.530 s/step → D 0.435 s/step 으로 <strong>backward 는 ~18% 빨라졌다</strong>. 다만 그게 루프의 작은 조각이라 묻힌 것.</p>
+
+<div class="note"><strong>Unsloth 에게 공정한가?</strong> 아니다 — 의도적으로 그렇게 설계했다. 우리는 A/B 와 apple-to-apple 을 위해 <strong>full-parameter, LoRA 없음, <code>fast_inference=False</code></strong> 로 Unsloth 를 "커널 패칭만" 상태로 토글했다. Unsloth 의 진짜 강점은 (a) LoRA/4-bit 학습 메모리·속도, (b) 자체 vLLM 추론 경로다 — 둘 다 이 토글이 끈 영역. 즉 본 결과는 "Unsloth 가 나쁘다"가 아니라 <strong>"생성이 병목인 루프에서 학습부 커널 최적화는 지렛대가 못 된다"</strong>는 뜻이다.</div>
+
+<p><strong>③ vLLM 을 켜도 rollout 은 여전히 최대 단계(77~81%)다.</strong> 4.4× 빨라졌어도 생성이 제일 크다 → "그럼 생성을 학습과 떼어 비동기로 돌리면?"이 자연스러운 다음 질문이고, 그게 veRL 의 설계 동기다.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="verl">6. 결과 ② — veRL 로 확장: 단계별 분해</h2>
+<div class="card">
+<p>veRL 0.8.0 을 같은 모델·데이터로 돌렸다. 구성: <strong>FSDP(학습) + vLLM(rollout) colocate, Ray 오케스트레이션, 2 GCD, n=8, KL loss on</strong>. veRL 은 친절하게도 단계별 <code>timing_s/*</code> 를 매 스텝 로깅해 — 우리가 TRL 에서 손으로 계측한 분해를 공짜로 준다.</p>
+
+<table>
+<tr><th>단계</th><th>의미</th><th>시간 (대표 스텝)</th><th>비중</th></tr>
+<tr><td><code>gen</code></td><td>vLLM rollout (생성)</td><td>2.36 s</td><td>~27%</td></tr>
+<tr><td><code>reward</code></td><td>gsm8k 규칙 채점 (128 시퀀스, CPU)</td><td>1.93 s</td><td>~24%</td></tr>
+<tr><td><code>update_actor</code></td><td>backward + optimizer</td><td>2.50 s</td><td>~28%</td></tr>
+<tr><td><code>ref</code></td><td>reference 모델 forward (KL용)</td><td>1.15 s</td><td>~13%</td></tr>
+<tr><td><code>old_log_prob</code></td><td>현재 정책으로 rollout logprob 재계산</td><td>0.75 s</td><td>~8%</td></tr>
+<tr><td><code>adv</code></td><td>그룹 정규화 (GRPO advantage)</td><td>0.003 s</td><td>~0%</td></tr>
+<tr><td colspan="2"><strong>step 총합 (정상 스텝)</strong></td><td colspan="2"><strong>~8.2–8.7 s</strong></td></tr>
+</table>
+
+<figure>
+<svg viewBox="0 0 640 150" width="100%" role="img" aria-label="veRL 스텝 단계 분해 누적막대">
+  <!-- stacked bar, total width 580 from x=30, scaled to shares -->
+  <!-- shares: gen .267 reward .218 update .283 ref .130 oldlp .085 adv .0 -> px of 580 -->
+  <g font-size="10.5" font-weight="700">
+    <rect x="30"  y="40" width="155" height="48" fill="var(--blue)"/>
+    <text x="107" y="69" text-anchor="middle" fill="#fff">gen 27%</text>
+    <rect x="185" y="40" width="126" height="48" fill="var(--amber-bd)"/>
+    <text x="248" y="69" text-anchor="middle" fill="#fff">reward 24%</text>
+    <rect x="311" y="40" width="164" height="48" fill="var(--green-bd)"/>
+    <text x="393" y="69" text-anchor="middle" fill="#fff">update_actor 28%</text>
+    <rect x="475" y="40" width="75"  height="48" fill="var(--gray-ink)"/>
+    <text x="512" y="69" text-anchor="middle" fill="#fff">ref 13%</text>
+    <rect x="550" y="40" width="50"  height="48" fill="var(--purple)"/>
+    <text x="575" y="64" text-anchor="middle" font-size="8.5" fill="#fff">olp</text>
+    <text x="575" y="76" text-anchor="middle" font-size="8.5" fill="#fff">8%</text>
+  </g>
+  <text x="30" y="28" font-size="11" fill="var(--muted)">veRL GRPO · 한 스텝 ≈ 8.4 s (FSDP + vLLM colocate, 2 GCD)</text>
+  <text x="30" y="112" font-size="11" fill="var(--ink)">→ 생성(gen)은 27%뿐. update_actor·reward·ref 가 비등하게 나눠 가진다.</text>
+  <text x="30" y="130" font-size="10" fill="var(--muted)">cf. TRL-B(vLLM on, KL off)는 rollout 이 77%. 차이의 핵심은 KL/ref forward + reward 비용.</text>
+</svg>
+<figcaption>그림 3 — veRL 한 스텝의 단계 분해(대표 스텝). 단계 합이 step 총시간과 약간 다른 건 Ray async 파이프라이닝으로 일부 겹치기 때문. (veRL <code>timing_s/*</code> 로그)</figcaption>
+</figure>
+
+<h3>6-1. TRL 과 정반대인 시간 분포 — 왜?</h3>
+<p>TRL-B 에선 rollout 이 77%였는데 veRL 에선 gen 이 27%다. 같은 모델·데이터인데 왜 뒤집혔나? 세 가지가 합쳐진 결과다(그리고 셋 다 교훈이다):</p>
+<ol>
+<li><strong>KL/reference 를 켰다.</strong> TRL 측은 <code>beta=0</code> 으로 reference forward 를 통째로 생략했지만, veRL 은 <code>use_kl_loss=True</code> → <code>ref</code>(1.15s) + <code>old_log_prob</code>(0.75s) 두 번의 추가 forward 가 붙는다. <strong>KL 제어 한 줄이 학습부에 forward 두 개를 더한다</strong>는 걸 시간으로 본 셈.</li>
+<li><strong>reward 가 생각보다 비싸다(1.9s).</strong> gsm8k 규칙 채점을 128개 시퀀스에 대해 CPU 파이썬으로 도는 비용. 작은 모델일수록 생성이 싸지니 <strong>reward 가 상대적으로 큰 단계</strong>가 된다 — 대규모에선 verifier 병렬화가 필요하다는 실전 신호.</li>
+<li><strong>generate_sequences(순수 생성)는 1.3s, gen(2.36s)과의 차이</strong> ≈ vLLM 엔진 wake/sleep + 가중치 reshard 오버헤드. colocate 라 학습과 생성이 같은 GPU 메모리를 번갈아 쓰며 깨우고 재우는 비용이 여기 숨어 있다.</li>
+</ol>
+
+<div class="win"><strong>이게 핵심 통찰이다.</strong> "vLLM rollout 을 켜라"는 필요조건이지 충분조건이 아니다. 일단 빠른 생성 엔진을 깔면 병목이 <strong>생성 → (KL forward + reward + backward)</strong> 로 이동한다. 그래서 대규모 RL 프레임워크는 생성만 빠르게 하는 데서 멈추지 않고, ref/logprob forward·reward·backward 를 각각 떼어 비동기로 겹치려 한다(disaggregated rollout).</div>
+
+<h3>6-2. veRL 0.8.0 의 발견 — 빠른 롤아웃 엔진은 사실상 필수</h3>
+<p>veRL 안에서도 vLLM on/off 를 비교하려 <code>rollout.name=hf</code> 로 바꿔봤다. 결과:</p>
+<pre><code># rollout.name=hf →
+AssertionError: Rollout hf with mode async not found
+# rollout.name=hf + rollout.mode=sync →
+ValueError: Rollout mode 'sync' has been removed.
+          Please set actor_rollout_ref.rollout.mode=async or remove the mode setting entirely.</code></pre>
+<p><strong>verl 0.8.0 은 async(agent_loop) 롤아웃만 지원하고, HF 롤아웃은 async 를 못 탄다.</strong> 즉 이 버전에서 <strong>HF 단독 롤아웃은 사실상 막혀 있고, vLLM/SGLang 같은 빠른 엔진이 기본 전제</strong>다. TRL 의 "vLLM off" 같은 비교 자체가 veRL 에선 (의도적으로) 불가능해진 것 — 프레임워크가 "느린 생성은 선택지가 아니다"라고 못박은 셈. <span class="status-fail">의도적 negative result</span>로 기록.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="debug">7. 만난 문제들 — 디버깅 로그 (실패 포함)</h2>
+<div class="card">
+<p>"실패해도 바로 포기 말고 될 때까지" — 실제로 막힌 지점과 우회를 순서대로.</p>
+
+<details><summary>① 컨테이너 ENTRYPOINT 가 <code>vllm</code> 이라 <code>bash -lc</code> 가 vllm 인자로 먹힘</summary>
+<p>이미지가 <code>vllm</code> 을 엔트리포인트로 박아둬 <code>docker run ... bash</code> 가 <code>vllm: error: unrecognized arguments</code>. → <strong>해결</strong>: <code>--entrypoint python</code>/<code>--entrypoint sleep</code> 명시, 스크립트는 노드에 파일로 두고 <code>-v</code> 마운트(따옴표 지옥도 회피, 재현성↑).</p></details>
+
+<details><summary>② Unsloth 설치가 transformers·trl 을 말없이 다운그레이드 → trl 임포트가 <code>vllm_ascend</code> 를 찾다 폭발</summary>
+<pre><code>RuntimeError: Failed to import trl.trainer.grpo_trainer ...
+ModuleNotFoundError: No module named 'vllm_ascend'</code></pre>
+<p><code>pip install unsloth</code> 가 transformers 5.11→5.5.0, trl 1.6→구버전으로 끌어내렸다. 구버전 trl 의 <code>extras/vllm_client.py</code> 는 Ascend(NPU) 전용 모듈을 무조건 import 하다 ROCm 에서 죽는다. → <strong>해결</strong>: <code>pip install --force-reinstall --no-deps trl==1.6.0 transformers==5.11.0</code> 로 복원. 그 뒤 unsloth+trl+vllm 셋이 동시에 임포트됨을 확인하고 진행.</p></details>
+
+<details><summary>③ veRL: rollout 의 <code>log_prob_micro_batch_size</code> 미설정</summary>
+<pre><code>ValueError: [actor_rollout_ref.rollout] Please set at least one of
+  'log_prob_micro_batch_size' or 'log_prob_micro_batch_size_per_gpu'.</code></pre>
+<p>→ <strong>해결</strong>: <code>actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8</code> 추가.</p></details>
+
+<details><summary>④ veRL: HF 롤아웃이 sync/async 어느 쪽도 안 됨 (위 §6-2)</summary>
+<p>async 는 HF 미지원, sync 는 제거됨. → <strong>판정</strong>: 우회 불가(아키텍처적 제거). vLLM 롤아웃으로 본 실험 확정.</p></details>
+
+<p>실제 작동에 든 디버깅은 <strong>4회</strong> — ①②는 2×2, ③④는 veRL. 2×2 네 조건과 veRL vLLM 경로는 전부 성공적으로 수치를 냈다.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="concl">8. 결론 — 레버와 병목</h2>
+<div class="card">
+<ol>
+<li><strong>vLLM rollout 은 RL 루프 가속의 거의 유일한 큰 레버.</strong> 단일 GCD 에서 생성 4.4×, 루프 3.7×. rollout 이 루프의 80~92%를 먹고 있었기 때문.</li>
+<li><strong>Unsloth(커널 패칭, full-param)는 이 루프에서 지렛대가 아니다.</strong> backward 를 ~18% 깎지만 backward 가 루프의 작은 조각이라 총시간 불변. Unsloth 의 진짜 영역(LoRA/4-bit/자체 추론)을 켜야 의미가 생긴다.</li>
+<li><strong>병목은 고정이 아니라 이동한다.</strong> vLLM 을 켜면 생성이 빠져나가고, 다음 후보는 KL/reference forward 와 reward 계산이다(veRL: gen 27% / reward 24% / update 28% / ref+logprob 21%). "KL 한 줄 = forward 두 개"라는 비용을 시간으로 확인.</li>
+<li><strong>veRL 0.8.0 은 빠른 롤아웃 엔진을 사실상 강제</strong>한다(HF 단독 롤아웃 경로 제거). 프레임워크 차원에서 "느린 생성은 선택지가 아님"을 못박은 것.</li>
+<li><strong>colocate 의 weight-sync 는 싸다.</strong> 같은 프로세스 in-process 적재라 네트워크 전송이 없다 — 분산(멀티노드) RL 의 weight-sync 비용과는 별개 문제이며, 그건 다음 실험감.</li>
+</ol>
+<div class="note"><strong>주의 — 비교의 한계.</strong> TRL(1 GCD, KL off)과 veRL(2 GCD, KL on) 의 총시간을 직접 맞대지 말 것. 본 실험은 (a) TRL 안에서의 vLLM/Unsloth 토글 효과, (b) veRL 의 <em>단계 분포</em> 두 가지를 따로 보는 것이다. 0.5B·6스텝 규모라 절대 수치보다 <strong>비율·병목 구조</strong>가 메시지다.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="repro">9. 재현 — 명령 전부</h2>
+<div class="card">
+<h3>9-1. TRL 2×2</h3>
+<pre><code># 컨테이너 (위 §2-1) 안에서, 단일 GCD 고정
+for COND in "hf 0 A_hf_novllm" "hf 1 B_hf_vllm" "unsloth 0 C_unsloth_novllm" "unsloth 1 D_unsloth_vllm"; do
+  set -- $COND
+  HIP_VISIBLE_DEVICES=0 UNSLOTH_SKIP_TORCHVISION_CHECK=1 \
+  python grpo_bench.py --backend $1 --use_vllm $2 \
+    --batch 16 --num_generations 8 --steps 6 --maxlen 256 --tag $3
+done
+# grpo_bench.py: GRPOConfig(use_vllm=bool, vllm_mode="colocate",
+#   vllm_gpu_memory_utilization=0.4, beta=0.0, bf16=True) + rollout 계측 monkeypatch</code></pre>
+
+<h3>9-2. veRL GRPO</h3>
+<pre><code>pip install verl                       # 0.8.0
+git clone --depth 1 -b v0.8.0 https://github.com/volcengine/verl.git verl_src
+python verl_src/examples/data_preprocess/gsm8k.py --local_dir /work/data/gsm8k
+
+HIP_VISIBLE_DEVICES=0,1 python3 -m verl.trainer.main_ppo \
+  algorithm.adv_estimator=grpo \
+  data.train_files=/work/data/gsm8k/train.parquet \
+  data.val_files=/work/data/gsm8k/test.parquet \
+  data.train_batch_size=16 data.max_prompt_length=512 data.max_response_length=256 \
+  actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+  actor_rollout_ref.actor.ppo_mini_batch_size=16 \
+  actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
+  actor_rollout_ref.actor.use_kl_loss=True \
+  actor_rollout_ref.rollout.name=vllm \
+  actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+  actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
+  actor_rollout_ref.rollout.n=8 \
+  actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+  actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
+  trainer.logger=[console] trainer.n_gpus_per_node=2 trainer.nnodes=1 \
+  trainer.val_before_train=False trainer.total_epochs=1 trainer.total_training_steps=4</code></pre>
+
+<h3>9-3. 정리 (bench hygiene)</h3>
+<pre><code>docker rm -f rlbench verlbench    # 실행 직후 컨테이너 제거, GPU 반납
+rocm-smi --showuse                # GPU use 0% 확인</code></pre>
+</div>
+
+<footer>
+작성일 2026-06-14 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · 모든 수치는 본 세션 직접 측정값. ·
+참고: <a href="../post-training/frameworks-survey.html">포스트트레이닝 프레임워크 조사</a>, <a href="../post-training/methodology-survey.html">방법론 조사</a>
+</footer>
+
+</div>
+</body>
+</html>
