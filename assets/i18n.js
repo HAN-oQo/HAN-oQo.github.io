@@ -39,3 +39,17 @@
     mountToggle();
   }
 })();
+
+/* Load the "Ask about this page" AI widget from the same assets dir. */
+(function () {
+  var s = document.currentScript;
+  if (!s) {
+    var ss = document.getElementsByTagName("script");
+    for (var i = 0; i < ss.length; i++) { if (/i18n\.js(\?|$)/.test(ss[i].src)) { s = ss[i]; break; } }
+  }
+  if (!s || !s.src) return;
+  var url = s.src.replace(/i18n\.js(\?.*)?$/, "ask.js");
+  var a = document.createElement("script");
+  a.src = url; a.defer = true;
+  document.head.appendChild(a);
+})();
