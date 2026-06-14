@@ -101,8 +101,9 @@ A 와 같되 `<html lang="ko">`, i18n 링크/스크립트와 en/ko span 없이 �
 
 ### 섹션 구조
 
-top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리포트), `infra/`(인프라),
-`logs/`(작업 로그), `briefings/`(매일의 AI 모닝 브리핑 — 타입 C 자체완결, EN/KO).
+top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리포트), `post-training/`
+(포스트트레이닝 방법론·프레임워크 조사 + 공부 계획), `infra/`(인프라), `logs/`(작업 로그),
+`briefings/`(매일의 AI 모닝 브리핑 — 타입 C 자체완결, EN/KO).
 각 섹션은 자체 `index.html`(카드 목록)을 갖고 루트 `index.html` 에서 링크된다.
 새 섹션을 추가하면 `check_theme.py` 의 섹션 튜플 3곳에도 추가한다.
 
