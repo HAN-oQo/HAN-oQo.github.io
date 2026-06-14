@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ko" data-lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic RL ① — 도구 쓰는 수학 에이전트 (verl multi-turn, MI250)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  h1 { font-size: 1.9rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin-top: 48px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.05rem; margin-top: 28px; }
+  .sub { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  .toc { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+  .toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dashed var(--blue-bd); }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal); }
+  .win { border-left: 4px solid var(--green-bd); background: var(--green-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--green-ink); }
+  figure { margin: 18px 0; } figcaption { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+  .status-ok { color: #2a8a3e; font-weight: 600; } .status-fail { color: #c5302a; font-weight: 600; }
+  .big { font-size: 1.5rem; font-weight: 700; color: var(--blue); }
+  .ser { display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px;
+         background:var(--purple-bg); color:var(--purple-ink); border:1px solid var(--purple-bd); }
+  footer { margin-top: 60px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 관련: <a href="rl-vllm-rollout-unsloth-verl-bench.html">RL 루프 속도 해부</a> · 시리즈: A · <a href="agentic-b-code.html">B</a> · <a href="agentic-c-rag.html">C</a> · <a href="agentic-d-genrm.html">D</a> · <a href="agentic-e-disagg.html">E</a></p>
+
+<p><span class="ser">Agentic RL 시리즈 ① / 5</span></p>
+<h1>도구 쓰는 수학 에이전트 — verl multi-turn tool agent (MI250)</h1>
+<p class="sub">환경: <code>mi250-052</code> (MI250, ROCm 7.2.3) · Docker 전용 · verl 0.8.0 ToolAgentLoop + vLLM(hermes 도구파서) · Qwen2.5-0.5B-Instruct · gsm8k · 2 GCD</p>
+<p class="post-meta"><time datetime="2026-06-14">2026-06-14</time></p>
+
+<div class="card">
+<p><strong>한 줄 요약.</strong> 단일턴 GRPO(앞 실험)를 <strong>멀티턴 도구 에이전트</strong>로 확장했다 — 모델이 추론하다 <code>code_interpreter</code> 도구를 호출하면, 코드실행 샌드박스가 결과를 돌려주고, 모델이 이어서 답을 낸다. MI250 ROCm에서 <strong>verl ToolAgentLoop + vLLM hermes 도구파서가 정상 작동</strong>(4스텝 완주, num_turns 평균 2.1·최대 8). 가장 중요한 발견: <strong>async 롤아웃에선 <code>update_weights</code>(weight-sync)가 스텝의 ~20%를 차지하는 뚜렷한 비용</strong>으로 드러난다 — colocate(앞 실험)에선 숨어 있던 단계다. 단, 미학습 0.5B는 도구를 거의 안 써(<code>tool_calls≈0</code>) 인프라는 되지만 도구 사용 빈도는 SFT 없이는 낮다.</p>
+</div>
+
+<div class="card toc">
+<strong>목차</strong>
+<ul style="list-style: none; padding-left: 0; margin: 8px 0;">
+  <li><a href="#goal">1. 목표 — 단일턴에서 도구 멀티턴으로</a></li>
+  <li><a href="#how">2. 구성 — ToolAgentLoop · 샌드박스 · 도구 config</a></li>
+  <li><a href="#flow">3. 코드 흐름 — 한 에피소드가 도구를 부르는 경로</a></li>
+  <li><a href="#result">4. 결과 — 단계 분해 · 턴 분포 · weight-sync</a></li>
+  <li><a href="#concl">5. 결론 + 다음(B)</a></li>
+  <li><a href="#repro">6. 재현 — 명령 전부</a></li>
+</ul>
+</div>
+
+<h2 id="goal">1. 목표 — 단일턴에서 도구 멀티턴으로</h2>
+<div class="card">
+<p>앞 속도 실험은 "생성 1번 → 채점 → 업데이트"의 단일턴 GRPO였다. 여기서는 <strong>에이전트</strong>로 한 칸 올린다: 모델이 한 턴에 끝내지 않고, <strong>도구(코드 실행기)를 호출 → 결과를 받아 → 이어서 추론</strong>하는 멀티턴 루프. gsm8k 수학 문제를 "직접 계산하지 말고 계산기(파이썬)를 써서" 풀게 하고, 최종 <code>#### 정답</code>이 맞으면 보상 1.</p>
+<p>측정하고 싶은 것: <strong>(a)</strong> 에피소드가 평균 몇 턴 도는가, <strong>(b)</strong> 도구 호출이 루프 시간에서 차지하는 비중, <strong>(c)</strong> 단일턴 대비 단계 분포가 어떻게 바뀌는가 — 특히 async 롤아웃에서 <strong>weight-sync</strong> 비용.</p>
+<div class="note"><strong>용어.</strong> <strong>agent loop</strong> = verl이 제공하는 멀티턴 롤아웃 추상화. <strong>ToolAgentLoop</strong> = 도구 호출을 지원하는 내장 루프. <strong>도구파서(tool parser)</strong> = 모델 출력에서 도구 호출 JSON을 뽑아내는 vLLM 컴포넌트(Qwen 계열은 <code>hermes</code>). <strong>weight-sync</strong> = 업데이트된 정책 가중치를 롤아웃용 vLLM 서버로 다시 적재.</div>
+</div>
+
+<h2 id="how">2. 구성 — ToolAgentLoop · 샌드박스 · 도구 config</h2>
+<div class="card">
+<p>verl 0.8.0의 agent_loop 튜토리얼(<code>examples/tutorial/agent_loop_get_started</code>)을 베이스로, 모델을 Qwen2.5-0.5B, 데이터를 gsm8k로 바꿔 MI250에 맞췄다. 세 조각:</p>
+<table>
+<tr><th>조각</th><th>무엇</th></tr>
+<tr><td><strong>샌드박스</strong></td><td>Ray actor로 FastAPI 코드실행 서버(<code>/run_code</code>) — 모델이 보낸 파이썬을 서브프로세스로 실행(10s 타임아웃)하고 stdout/stderr 반환</td></tr>
+<tr><td><strong>도구</strong></td><td><code>SandboxTool(BaseTool)</code> — <code>code_interpreter(code)</code> 를 OpenAI 도구 스키마로 노출, 샌드박스 URL로 POST. <code>tool_config.json</code> 의 <code>class_name</code> 으로 동적 로드</td></tr>
+<tr><td><strong>롤아웃</strong></td><td>vLLM <code>mode=async</code> + <code>default_agent_loop=tool_agent</code>; <code>enable_auto_tool_choice=True</code>, <code>tool_call_parser=hermes</code></td></tr>
+</table>
+<p>데이터는 <code>gsm8k_tool_agent_loop.py</code> 로 전처리 — 시스템 프롬프트가 "단계별로 풀고 <code>calc</code>/코드 도구를 최소 한 번 쓴 뒤 <code>#### 답</code>"을 지시하고, <code>agent_name: "tool_agent"</code>, <code>reward_model.ground_truth</code>=정답으로 들어간다.</p>
+<pre><code># tool_config.json (드라이버가 샌드박스 주소를 채워 생성)
+{"tools":[{"class_name":"sandbox.SandboxTool",
+           "config":{"type":"native","sandbox_fusion_url":"http://&lt;ip&gt;:&lt;port&gt;/run_code"}}]}</code></pre>
+<div class="tip"><strong>실행 환경.</strong> 공유 GPU 노드라 전부 Docker(<code>vllm-022-rocm</code>) 안. <code>VLLM_ROCM_USE_AITER=0</code>, 2 GCD, Ray 로컬. 드라이버(<code>run_agentA.py</code>)가 ray.init → 샌드박스 actor 기동 → tool_config 작성 → hydra compose → <code>run_ppo(config)</code>.</p></div>
+</div>
+
+<h2 id="flow">3. 코드 흐름 — 한 에피소드가 도구를 부르는 경로</h2>
+<div class="card">
+<figure>
+<svg viewBox="0 0 960 200" width="100%" role="img" aria-label="ToolAgentLoop 한 에피소드 흐름">
+  <defs><marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#7a7468"/></marker></defs>
+  <rect x="10"  y="70" width="150" height="60" rx="9" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="85" y="95" text-anchor="middle" font-size="12" font-weight="700" fill="var(--blue-ink)">생성 (vLLM)</text>
+  <text x="85" y="113" text-anchor="middle" font-size="10" fill="var(--blue-ink)">추론 + 도구 호출?</text>
+  <rect x="200" y="70" width="160" height="60" rx="9" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="280" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--amber)">hermes 파서</text>
+  <text x="280" y="110" text-anchor="middle" font-size="10" fill="var(--amber)">tool_call JSON 추출</text>
+  <rect x="400" y="70" width="170" height="60" rx="9" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+  <text x="485" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--purple-ink)">샌드박스 실행</text>
+  <text x="485" y="110" text-anchor="middle" font-size="10" fill="var(--purple-ink)">/run_code → stdout</text>
+  <rect x="610" y="70" width="160" height="60" rx="9" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  <text x="690" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--gray-ink)">결과를 대화에 추가</text>
+  <text x="690" y="110" text-anchor="middle" font-size="10" fill="var(--gray-ink)">tool role 메시지</text>
+  <rect x="810" y="70" width="140" height="60" rx="9" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="880" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--green-ink)">최종 답 → 보상</text>
+  <text x="880" y="110" text-anchor="middle" font-size="10" fill="var(--green-ink)">#### 정답 일치</text>
+  <line x1="160" y1="100" x2="198" y2="100" stroke="#7a7468" marker-end="url(#ah)"/>
+  <line x1="360" y1="100" x2="398" y2="100" stroke="#7a7468" marker-end="url(#ah)"/>
+  <line x1="570" y1="100" x2="608" y2="100" stroke="#7a7468" marker-end="url(#ah)"/>
+  <line x1="770" y1="100" x2="808" y2="100" stroke="#7a7468" marker-end="url(#ah)"/>
+  <path d="M690,70 L690,40 L85,40 L85,68" fill="none" stroke="#7a7468" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+  <text x="390" y="32" text-anchor="middle" font-size="10.5" fill="var(--muted)">도구 호출이 있으면 결과를 붙여 다시 생성 (최대 max_assistant_turns=4)</text>
+</svg>
+<figcaption>그림 1 — ToolAgentLoop 한 에피소드. 도구 호출이 없으면 1턴에 끝나고, 있으면 결과를 붙여 루프. (verl <code>experimental/agent_loop/tool_agent_loop.py</code> 기준, 직접 작성)</figcaption>
+</figure>
+<p>핵심은 <strong>도구 호출이 롤아웃 안에서 일어난다</strong>는 점이다 — 생성 → 파싱 → 외부 실행 → 토큰 재주입이 한 에피소드 안에서 반복되고, 그렇게 만들어진 멀티턴 시퀀스 전체가 GRPO의 학습 샘플이 된다. 보상은 마지막 답에만 걸린다(결과 기반).</p>
+</div>
+
+<h2 id="result">4. 결과 — 단계 분해 · 턴 분포 · weight-sync</h2>
+<div class="card">
+<p>Qwen2.5-0.5B, gsm8k, 2 GCD, n=8, max 4턴, 4스텝. 정상 스텝(step 4) 기준:</p>
+<table>
+<tr><th>단계</th><th>시간 (s)</th><th>비중</th><th>의미</th></tr>
+<tr><td><code>gen</code></td><td>4.99</td><td>~36%</td><td>멀티턴 생성(vLLM, 도구 왕복 포함)</td></tr>
+<tr><td><code>update_actor</code></td><td>3.58</td><td>~26%</td><td>backward + optimizer</td></tr>
+<tr><td><code>update_weights</code></td><td><strong>2.85</strong></td><td><strong>~20%</strong></td><td><strong>weight-sync → vLLM 서버 재적재 (async 고유)</strong></td></tr>
+<tr><td><code>ref</code></td><td>1.32</td><td>~10%</td><td>reference forward (KL)</td></tr>
+<tr><td><code>old_log_prob</code></td><td>1.10</td><td>~8%</td><td>롤아웃 logprob 재계산</td></tr>
+<tr><td><code>reward / tool_calls / adv</code></td><td>~0</td><td>~0%</td><td>규칙 채점·도구·advantage 모두 저렴</td></tr>
+<tr><td colspan="2"><strong>step 합</strong></td><td colspan="2"><strong>13.9s</strong> · 처리량 3,140 tok/s · actor 13.6 GB</td></tr>
+</table>
+
+<figure>
+<svg viewBox="0 0 640 140" width="100%" role="img" aria-label="agentic GRPO 스텝 분해">
+  <g font-size="10.5" font-weight="700">
+    <rect x="30"  y="40" width="207" height="46" fill="var(--blue)"/><text x="133" y="68" text-anchor="middle" fill="#fff">gen 36%</text>
+    <rect x="237" y="40" width="150" height="46" fill="var(--green-bd)"/><text x="312" y="68" text-anchor="middle" fill="#fff">update_actor 26%</text>
+    <rect x="387" y="40" width="115" height="46" fill="var(--purple)"/><text x="444" y="68" text-anchor="middle" fill="#fff">weight-sync 20%</text>
+    <rect x="502" y="40" width="55"  height="46" fill="var(--gray-ink)"/><text x="529" y="68" text-anchor="middle" fill="#fff">ref</text>
+    <rect x="557" y="40" width="46"  height="46" fill="var(--amber-bd)"/><text x="580" y="64" text-anchor="middle" font-size="8.5" fill="#fff">olp</text><text x="580" y="76" text-anchor="middle" font-size="8.5" fill="#fff">8%</text>
+  </g>
+  <text x="30" y="28" font-size="11" fill="var(--muted)">agentic GRPO 한 스텝 ≈ 13.9s (async 롤아웃, 2 GCD)</text>
+  <text x="30" y="110" font-size="11" fill="var(--ink)">→ 단일턴 colocate(앞 실험)와 달리 <tspan font-weight="700" fill="var(--purple-ink)">weight-sync가 20%로 표면화</tspan>. gen·update_actor·weight-sync 3강.</text>
+</svg>
+<figcaption>그림 2 — agentic(async) GRPO 단계 분해. (verl <code>timing_s/*</code> 로그, 본 실험)</figcaption>
+</figure>
+
+<h3>4-1. 에이전트는 정말 멀티턴으로 도는가 — 그렇다, 다만 도구는 희소</h3>
+<table>
+<tr><th>지표</th><th>값</th><th>해석</th></tr>
+<tr><td>num_turns (평균/최대)</td><td>2.1 / 4~8</td><td>대부분 1 어시스턴트 턴, 일부가 도구 호출로 4~8턴까지</td></tr>
+<tr><td><code>tool_calls</code> 시간</td><td>평균 0.0005s (max 0.022s)</td><td><strong>도구 호출이 매우 희소</strong> — 미학습 0.5B가 도구를 잘 안 부름</td></tr>
+<tr><td>응답 길이</td><td>평균 363 (max 1024)</td><td>멀티턴이라 단일턴(395)과 비슷~짧음</td></tr>
+<tr><td>프롬프트 길이</td><td>평균 318</td><td>시스템 프롬프트 + 도구 스키마가 주입돼 단일턴(99)보다 큼</td></tr>
+<tr><td>보상 평균</td><td>0.039 → 0.078</td><td>4스텝 만에 일부 정답(score max 1.0)</td></tr>
+</table>
+<div class="win"><strong>핵심 ① — weight-sync가 표면화된다.</strong> 앞 단일턴 colocate 실험에선 weight-sync가 in-process라 거의 안 보였다. 여기 <strong>async</strong> 롤아웃(vLLM이 별도 서버 프로세스)에선 매 스텝 업데이트된 가중치를 그 서버로 다시 실어야 해 <code>update_weights</code>가 <strong>2.85s(20%)</strong>로 잡힌다. 이게 분산(멀티노드) RL에서 네트워크 비용으로 커지는 바로 그 항목 — E 실험의 주제다.</div>
+<div class="note"><strong>핵심 ② — 도구 사용은 SFT 없이는 희소하다.</strong> <code>tool_calls≈0</code>은 인프라가 안 된 게 아니라(파서·샌드박스·멀티턴 전부 작동, max 8턴 관찰됨) <strong>미학습 0.5B가 도구를 부르는 법을 모르기 때문</strong>이다. 튜토리얼도 "SFT 단계는 생략"이라 명시한다. 도구를 실제로 쓰게 하려면 (a) 도구사용 SFT 워밍업, (b) 도구 호출 형식 보상, (c) 더 큰 모델이 필요 — 다음 단계 과제.</div>
+</div>
+
+<h2 id="concl">5. 결론 + 다음(B)</h2>
+<div class="card">
+<ol>
+<li><strong>MI250 ROCm에서 verl 멀티턴 도구 에이전트 RL이 작동한다</strong> — ToolAgentLoop + vLLM hermes 파서 + 코드실행 샌드박스, 4스텝 완주.</li>
+<li><strong>agentic(async) 롤아웃은 단계 지형을 바꾼다</strong>: gen 36% / update_actor 26% / <strong>weight-sync 20%</strong> / ref 10% / old_log_prob 8%. 단일턴 colocate에서 숨어 있던 weight-sync가 표면 비용이 된다.</li>
+<li><strong>인프라 ≠ 행동.</strong> 도구 루프는 되지만 미학습 0.5B는 도구를 거의 안 쓴다(tool_calls≈0). agentic RL의 진짜 난점은 "돌리기"가 아니라 "도구를 쓰게 만들기"(SFT 워밍업·형식 보상)다.</li>
+</ol>
+<p><strong>다음(B — 코드 에이전트):</strong> 같은 샌드박스를 재사용하되 과제를 "코드 작성 → 테스트 실행 → 통과"로 바꾼다. 보상이 규칙 일치가 아니라 <strong>유닛테스트 실행 결과</strong>가 되면서 reward 단계가 비싸지는지 본다(앞 실험에서 reward가 24%였던 흐름의 연장).</p>
+</div>
+
+<h2 id="repro">6. 재현 — 명령 전부</h2>
+<div class="card">
+<pre><code># 컨테이너: vllm-022-rocm, verl 0.8.0 (pip install verl)
+# 1) 데이터 — tool-agent 포맷 (agent_name=tool_agent, ground_truth=정답)
+python verl_src/examples/data_preprocess/gsm8k_tool_agent_loop.py --local_save_dir /work/data/gsm8k_tool
+
+# 2) 드라이버 run_agentA.py 핵심:
+#    - @ray.remote Sandbox actor: FastAPI /run_code, subprocess python 실행(10s timeout)
+#    - tool_config.json: {"tools":[{"class_name":"sandbox.SandboxTool","config":{...url...}}]}
+#    - hydra compose(ppo_trainer) + run_ppo(config)
+# 핵심 override:
+#   algorithm.adv_estimator=grpo  data.return_raw_chat=True
+#   actor_rollout_ref.rollout.name=vllm  actor_rollout_ref.rollout.mode=async
+#   actor_rollout_ref.rollout.agent.default_agent_loop=tool_agent
+#   actor_rollout_ref.rollout.multi_turn.tool_config_path=/work/tool_config.json
+#   actor_rollout_ref.rollout.multi_turn.max_assistant_turns=4
+#   +actor_rollout_ref.rollout.engine_kwargs.vllm.enable_auto_tool_choice=True
+#   +actor_rollout_ref.rollout.engine_kwargs.vllm.tool_call_parser=hermes
+#   actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct  trainer.n_gpus_per_node=2
+
+HIP_VISIBLE_DEVICES=0,1 VLLM_ROCM_USE_AITER=0 python run_agentA.py
+
+# 정리: docker rm -f verlbench ; rocm-smi --showuse
+</code></pre>
+<div class="note"><strong>주의(노이즈).</strong> 종료 시 <code>DataLoader worker ... killed by signal</code> Traceback이 찍히지만 exit 0 — Ray/DataLoader 정리 과정의 노이즈이며 학습 실패가 아니다.</div>
+</div>
+
+<footer>
+작성일 2026-06-14 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · 모든 수치는 본 세션 직접 측정값. ·
+시리즈: A(현재) · <a href="agentic-b-code.html">B 코드</a> · <a href="agentic-c-rag.html">C 검색</a> · <a href="agentic-d-genrm.html">D 보상모델</a> · <a href="agentic-e-disagg.html">E 멀티노드</a> · 기반: <a href="rl-vllm-rollout-unsloth-verl-bench.html">RL 루프 속도 해부</a>
+</footer>
+
+</div>
+</body>
+</html>
