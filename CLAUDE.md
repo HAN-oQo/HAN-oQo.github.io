@@ -41,13 +41,14 @@ truth** 다. 크림/웜 톤 라이트 테마이며 다크 테마는 쓰지 않�
 | `t-blue` | Paper / Reference (논문·자료 읽기) |
 | `t-green` | Code / Deep dive / Analysis / Comparison (코드 분석) |
 | `t-coral` | Model report (모델 리포트) |
-| `t-amber` | Hands-on / Series·GitOps / Experiment (실습·실험) |
-| `t-teal` | Runbook / Guide (런북·가이드) |
+| `t-amber` | Hands-on / Series·GitOps / Experiment / Runbook / Guide (실습·운영) |
 | `t-purple` | Infra / Networking (인프라) |
 | `t-gray` | Briefing (모닝 브리핑·일일) |
 
-새 카드를 추가하면 그 분야에 맞는 색 클래스를 쓴다. 새 분야가 생기면 위 표와
-theme.css 의 `.t-*` 주석을 함께 갱신한다.
+팔레트는 **시각적으로 구별되는 6색뿐**이다 (blue·green·amber·coral·purple·gray).
+이 팔레트에선 `teal`=green, `coral`=red 로 동일하게 렌더되므로 태그 색은 위 6개만
+쓴다 (`t-teal`/`t-red` 는 별도 색이 아니다). 새 카드는 그 분야에 맞는 색을 쓰고,
+새 분야가 생기면 위 표와 theme.css 의 `.t-*` 주석을 함께 갱신한다.
 
 ## 페이지 공통 골격 (모든 HTML 필수)
 
