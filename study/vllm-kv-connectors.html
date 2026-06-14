@@ -312,7 +312,10 @@
   </svg>
   <p class="figcap"><span class="en">Intra-node NVLink dwarfs inter-node fabric: keep P&amp;D in one NVLink domain and transfer is ~free; crossing nodes is where the transport matters. Bars approximate, log-scaled. NVLink: NVIDIA specs; IB/RoCE/PCIe: vendor docs &amp; third-party guides (links in table).</span><span class="ko">노드 내 NVLink가 노드 간 패브릭을 압도: P·D를 한 NVLink 도메인에 두면 전송은 ~공짜, 노드를 건널 때 전송 수단이 의미를 가짐. 막대는 근사·로그 스케일. NVLink는 NVIDIA 스펙, IB/RoCE/PCIe는 벤더 문서·제3자 가이드(표에 링크).</span></p>
 
-  <h3><span class="en">Published transport numbers (almost all vendor-claimed)</span><span class="ko">공개된 전송 수단 수치 (거의 전부 vendor 주장)</span></h3>
+  <p class="en"><b>Two different speeds, don't conflate them.</b> "KV-cache transfer" between two engines (§1 connectors, over the network) and "KV offload" to CPU/disk within one engine (§3 connectors) are different operations on different links — so the published numbers split into two tables.</p>
+  <p class="ko"><b>서로 다른 두 속도라 섞으면 안 됩니다.</b> 두 엔진 사이의 "KV-cache 전송"(§1 커넥터, 네트워크 경유)과 한 엔진 안에서 CPU/디스크로 내리는 "KV 오프로드"(§3 커넥터)는 다른 링크에서 일어나는 다른 작업입니다 — 그래서 공개 수치도 두 표로 나눕니다.</p>
+
+  <h4><span class="en">A) Inter-instance KV-cache transfer (prefill ↔ decode, over the fabric)</span><span class="ko">A) 인스턴스 간 KV-cache 전송 (prefill ↔ decode, 패브릭 경유)</span></h4>
   <table>
     <tr><th><span class="en">Transport</span><span class="ko">전송 수단</span></th><th><span class="en">Published number</span><span class="ko">공개 수치</span></th><th><span class="en">Condition / caveat</span><span class="ko">조건 / 단서</span></th><th><span class="en">Source</span><span class="ko">출처</span></th></tr>
     <tr>
@@ -329,23 +332,42 @@
     </tr>
     <tr>
       <td><b>NIXL / UCX</b> (NixlConnector, Dynamo)</td>
-      <td><span class="muted">no isolated P2P GB/s published.</span> Storage-GDS: WEKA <b>252 GB/s/node</b>; VAST ~198 Gbps → <b>TTFT 11s→1.5s (~10×)</b></td>
-      <td>those are GPUDirect-Storage offload numbers, <i>not</i> the P2P transport · <span class="d-store">vendor (storage)</span></td>
-      <td><a href="https://www.weka.io/article/weka-accelerates-ai-inference-with-nvidia-dynamo-and-nvidia-nixl">WEKA</a> · <a href="https://www.vastdata.com/blog/accelerating-inference">VAST</a></td>
+      <td><span class="muted">no isolated P2P GB/s published</span> — latency guidance: IB-NDR sub-1 ms / RoCE 1–3 ms / TCP 5–20 ms for a 4K-token KV</td>
+      <td>3rd-party engineering guide, not a benchmark · <span class="d-pull">3rd-party (est.)</span></td>
+      <td><a href="https://www.spheron.network/blog/nvidia-nixl-disaggregated-inference-guide/">Spheron guide</a></td>
     </tr>
     <tr>
-      <td><b>RDMA vs TCP</b> (any transport)</td>
+      <td><b>RDMA vs TCP</b> (the link, not a connector)</td>
       <td>TTFT <b>~8.5×</b> better (6785→796 ms); throughput <b>~1.8×</b> (307→568 tok/s)</td>
       <td>2000-in/500-out, conc 8, K8s · <span class="d-pull">3rd-party measured</span></td>
       <td><a href="https://medium.com/@owumifestus/why-rdma-kv-cache-transfer-broke-in-kubernetes-dd31fd66fe9a">field report</a></td>
     </tr>
+  </table>
+  <p class="muted"><span class="en">These are the §1 direct connectors. The number that matters is link bandwidth (×interconnect, see ladder above); the connector's job is to saturate it with GPUDirect RDMA (host bypassed, zero-copy).</span><span class="ko">§1 직접 커넥터들. 의미 있는 숫자는 링크 대역폭(인터커넥트별, 위 사다리 참고); 커넥터의 일은 GPUDirect RDMA(호스트 우회·zero-copy)로 그 링크를 꽉 채우는 것.</span></p>
+
+  <h4><span class="en">B) Intra-instance KV offload (GPU ↔ CPU / disk / store, within one engine)</span><span class="ko">B) 인스턴스 내 KV 오프로드 (GPU ↔ CPU / 디스크 / 스토어, 한 엔진 안)</span></h4>
+  <table>
+    <tr><th><span class="en">Connector / path</span><span class="ko">커넥터 / 경로</span></th><th><span class="en">Published number</span><span class="ko">공개 수치</span></th><th><span class="en">Condition / caveat</span><span class="ko">조건 / 단서</span></th><th><span class="en">Source</span><span class="ko">출처</span></th></tr>
     <tr>
-      <td><b>LMCache</b> (CPU/store load)</td>
-      <td>CPU load <b>400 Gbps</b> vs vLLM-native <b>88 Gbps</b> (chunk- vs page-wise); vs NIXL-PD <b>1.53–1.84×</b> lower TTFT</td>
+      <td><b>LMCache</b> (GPU↔CPU load)</td>
+      <td>CPU load <b>400 Gbps</b> vs vLLM-native <b>88 Gbps</b> (chunk- vs page-wise); single-node CPU offload <b>1.9–8.1× lower TTFT</b>, <b>2.3–14× throughput</b></td>
       <td>H100 + NVLink · <span class="d-store">vendor / authors</span></td>
       <td><a href="https://arxiv.org/html/2510.09665v2">LMCache arXiv §8.5–8.6</a></td>
     </tr>
+    <tr>
+      <td><b>vLLM offloading connector</b> (GPU↔CPU)</td>
+      <td>CPU KV load: single-request <b>TTFT 2–22×</b> lower (prompt-size dep.), concurrent <b>throughput up to 9×</b>; DMA path <b>+32%</b> over the custom kernel</td>
+      <td>prefix-reuse workloads · <span class="d-store">vendor</span></td>
+      <td><a href="https://vllm.ai/blog/2026-01-08-kv-offloading-connector">vLLM blog</a></td>
+    </tr>
+    <tr>
+      <td><b>Store-mediated</b> (Mooncake Store / 3FS / FlexKV)</td>
+      <td>3FS: <b>6.6 TiB/s</b> aggregate, <b>40+ GiB/s</b> per client-node; Mooncake Store in vLLM: P50 TTFT <b>46×</b> (via hit-rate 1.7%→92.2%)</td>
+      <td>disk/remote tier — payoff is <b>reuse</b>, not raw bytes/s · <span class="d-store">vendor</span></td>
+      <td><a href="https://github.com/deepseek-ai/3FS">3FS</a> · <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">Mooncake Store</a></td>
+    </tr>
   </table>
+  <p class="muted"><span class="en">These are the §2 (store-mediated) and §3 (offload) connectors. Note the unit differs from table A: offload speed is dominated by the PCIe/host-memory path and by how the data is moved (chunk- vs page-wise gave LMCache its 4.5×), not by an RDMA fabric.</span><span class="ko">§2(스토어 경유)·§3(오프로드) 커넥터들. 표 A와 단위가 다른 점에 주의: 오프로드 속도는 RDMA 패브릭이 아니라 PCIe/호스트 메모리 경로와 데이터 이동 방식(chunk vs page가 LMCache의 4.5×를 만듦)이 좌우합니다.</span></p>
 
   <div class="callout c-blue">
     <span class="tag"><span class="en">push vs pull — a latency difference, NOT a bandwidth one</span><span class="ko">push vs pull — 대역폭이 아니라 지연 차이</span></span>
