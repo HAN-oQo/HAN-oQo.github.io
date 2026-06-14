@@ -164,13 +164,40 @@ A 와 같되 `<html lang="ko">`, i18n 링크/스크립트와 en/ko span 없이 �
   `post-meta` 에 작성일.
 - `python3 tools/check_theme.py` 통과 확인 후 커밋.
 
+## 작성일/갱신일 규약 (created / updated) — 강제됨
+
+카드와 페이지는 **최초 작성일 순서를 유지**한다. 페이지를 나중에 고치면 카드를 맨 위로
+올리지 말고, **그 자리에 둔 채 "갱신(updated)" 표시를 단다.** 이 형식을 사이트 전체가 공유한다.
+
+- **created 만**:
+  ```html
+  <p class="post-meta"><time datetime="2026-06-12">2026-06-12</time></p>
+  ```
+- **created + updated** (페이지를 고친 날):
+  ```html
+  <p class="post-meta">
+    <time datetime="2026-06-12">2026-06-12</time>
+    <span class="sep">·</span>
+    <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
+    <time datetime="2026-06-14">2026-06-14</time>
+  </p>
+  ```
+- 날짜는 **두 곳에 같이** 둔다: 페이지 hero 의 `.post-meta` 와 섹션 `index.html` 의 그 카드.
+  둘이 다르면 검사 실패(`post-meta`).
+- **기존 페이지를 수정하면 반드시 updated 날짜를 새로 단다** — hero 와 카드 양쪽.
+  안 하면 push 가 차단된다(`post-meta-bump`: 원격에 있던 콘텐츠 페이지가 바뀌었는데
+  `.post-meta` 가 그대로면 실패). created ≤ updated 여야 한다.
+
 ## 새 페이지 체크리스트
 
 1. 위 타입 중 하나의 골격으로 작성 (기존 같은 섹션 페이지를 베이스로 복사 권장)
 2. 해당 섹션 `index.html` 에 카드 추가 — 기존 카드(`a.card` + `.tag` + `.post-meta`
    created/updated 날짜) 형식 그대로 (검사기가 index 링크 누락을 잡는다)
-3. `python3 tools/check_theme.py` 통과 확인
-4. 로컬 미리보기: `python3 -m http.server 8000`
+3. 페이지 hero 와 카드에 **작성일** 을 같은 값으로 넣는다 (위 규약).
+4. `python3 tools/check_theme.py` 통과 확인
+5. 로컬 미리보기: `python3 -m http.server 8000`
+
+> 기존 페이지를 **고칠 때**: 내용 수정 + hero/카드의 **updated 날짜 갱신** 을 한 커밋에 같이.
 
 ## 검사 규칙 요약 (tools/check_theme.py)
 
@@ -183,6 +210,8 @@ A 와 같되 `<html lang="ko">`, i18n 링크/스크립트와 en/ko span 없이 �
 | font | body font-family 는 `-apple-system` 시작 스택만 |
 | lockscreen | StatiCrypt 잠금 화면은 `#faf9f5`/`#1f1e1b` 템플릿 색 |
 | index-link | study/logs/infra 콘텐츠 페이지는 섹션 index 에 링크 필수 |
+| post-meta | 카드에 created `<time>` 필수, created ≤ updated, **페이지 hero 날짜 = 카드 날짜** |
+| post-meta-bump | (pre-push) 원격에 있던 콘텐츠 페이지를 고쳤으면 `.post-meta`(갱신일)도 바뀌어야 함 |
 | unencrypted | `*.unencrypted.html` 커밋/push 금지 |
 
 규칙을 바꾸고 싶다면: theme.css(값) 또는 check_theme.py(로직)를 고치고,

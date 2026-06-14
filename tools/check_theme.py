@@ -187,12 +187,108 @@ def check_index_linkage(tree, paths):
                 err(p, "index-link", f"{index} 에 이 페이지 링크(카드)가 없음")
 
 
+# ---------------------------------------------------------------- post-meta (created/updated)
+
+POSTMETA_BLOCK = re.compile(r'<p class="post-meta">(.*?)</p>', re.S)
+CARD_RE = re.compile(r'<a class="card" href="([^"]+)">(.*?)</a>', re.S)
+
+
+def postmeta_dates(inner):
+    """post-meta 블록 안에서 (created, updated|None) 추출. created 없으면 None."""
+    times = re.findall(r'datetime="(\d{4}-\d{2}-\d{2})"', inner)
+    if not times:
+        return None
+    has_updated = "updated-label" in inner
+    created = times[0]
+    updated = times[-1] if (has_updated and len(times) >= 2) else None
+    return (created, updated)
+
+
+def check_postmeta(tree, paths):
+    """created/updated 날짜 규약 강제:
+      - 모든 섹션 index 의 콘텐츠 카드는 created <time datetime> 을 가져야 한다
+      - updated 가 있으면 형식이 맞고 created ≤ updated 여야 한다
+      - 페이지 hero 의 post-meta 날짜가 index 카드의 날짜와 일치해야 한다 (드리프트 차단)
+    규약: 카드는 '최초 작성일' 순서를 유지하고, 페이지를 고치면 updated 를 단다.
+    """
+    for section in ("study", "logs", "infra"):
+        index = f"{section}/index.html"
+        idx = tree.read(index)
+        if idx is None:
+            continue
+        for href, inner in CARD_RE.findall(idx):
+            if not href.endswith(".html") or "/" in href:
+                continue  # 외부/하위경로 링크는 콘텐츠 카드가 아님
+            m = POSTMETA_BLOCK.search(inner)
+            if not m:
+                err(index, "post-meta", f"카드 [{href}] 에 <p class=\"post-meta\"> 가 없음")
+                continue
+            d = postmeta_dates(m.group(1))
+            if d is None:
+                err(index, "post-meta", f"카드 [{href}] post-meta 에 created <time datetime> 가 없음")
+                continue
+            created, updated = d
+            if updated and updated < created:
+                err(index, "post-meta", f"카드 [{href}] updated({updated}) 가 created({created}) 보다 빠름")
+            # 페이지 hero 와 일치하는지 (페이지에 post-meta 가 있을 때만)
+            page = tree.read(f"{section}/{href}")
+            if page is None or is_staticrypt(page):
+                continue
+            pm = POSTMETA_BLOCK.search(page)
+            if not pm:
+                continue  # 페이지 hero 에 post-meta 가 없으면 통과 (카드만 있어도 됨)
+            pd = postmeta_dates(pm.group(1))
+            if pd != d:
+                err(f"{section}/{href}", "post-meta",
+                    f"페이지 hero 날짜 {pd} 가 index 카드 날짜 {d} 와 불일치 "
+                    f"(둘을 같이 갱신하라)")
+
+
+def bump_check(base, head):
+    """수정된 콘텐츠 페이지는 갱신일(post-meta)도 바뀌어야 한다 — pre-push 강제용.
+    base..head 사이에서 내용이 바뀐 study/logs/infra 콘텐츠 페이지의 post-meta 블록이
+    그대로면(=updated 날짜를 안 올렸으면) 실패. 신규 추가/삭제 파일은 면제."""
+    try:
+        changed = sh(["git", "diff", "--name-only", base, head]).splitlines()
+    except subprocess.CalledProcessError:
+        return
+    bt, ht = Tree(base), Tree(head)
+    for p in changed:
+        if not p.endswith(".html") or p.endswith(".unencrypted.html"):
+            continue
+        seg = p.split("/")
+        if len(seg) != 2 or seg[0] not in ("study", "logs", "infra") or seg[1] == "index.html":
+            continue
+        b, h = bt.read(p), ht.read(p)
+        if b is None or h is None or b == h:
+            continue  # 신규/삭제/무변경
+        if is_staticrypt(h):
+            continue
+        mb, mh = POSTMETA_BLOCK.search(b), POSTMETA_BLOCK.search(h)
+        if (mb.group(0) if mb else "") == (mh.group(0) if mh else ""):
+            err(p, "post-meta-bump",
+                "페이지를 수정했는데 post-meta(갱신일)가 그대로다 — "
+                "hero 와 index 카드에 updated 날짜를 갱신하라")
+
+
 # ---------------------------------------------------------------- main
 
 
 def main():
     git_sha = None
     args = sys.argv[1:]
+    if args and args[0] == "--bump-check":
+        if len(args) < 3:
+            print("usage: check_theme.py --bump-check <base_sha> <head_sha>", file=sys.stderr)
+            return 2
+        bump_check(args[1], args[2])
+        if errors:
+            print(f"✗ 갱신일(post-meta) 검사 실패 — {len(errors)}건\n", file=sys.stderr)
+            for e in errors:
+                print("  " + e, file=sys.stderr)
+            print("\n규약: 페이지를 고치면 hero + index 카드의 updated 날짜를 갱신한다 (CLAUDE.md).", file=sys.stderr)
+            return 1
+        return 0
     if args and args[0] == "--git":
         if len(args) < 2:
             print("usage: check_theme.py [--git <sha>]", file=sys.stderr)
@@ -230,6 +326,7 @@ def main():
         check_body_font(p, content)
 
     check_index_linkage(tree, paths)
+    check_postmeta(tree, paths)
 
     n = len([p for p in paths])
     if errors:
