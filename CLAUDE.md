@@ -30,6 +30,25 @@ truth** 다. 크림/웜 톤 라이트 테마이며 다크 테마는 쓰지 않�
   페이지 전용 색이 필요하면 `--accent`, `--kw` 처럼 **새 이름**의 변수를 만든다.
 - 새 색 토큰이 사이트 전반에 필요해지면 theme.css 에 추가한다 — 페이지에 하드코딩하지 않는다.
 
+### 카드 태그 버튼 색 — 분야별 통일 (강제 컨벤션)
+
+카드의 `.tag` 버튼 색은 **분야(field)별로 사이트 전체에서 동일**해야 한다. `.t-*`
+클래스는 **`theme.css` 에만** 정의한다 (single source) — index 페이지에 인라인으로
+`.t-*` 를 재정의하지 말 것. 분야 → 색 매핑:
+
+| 색 | 분야 |
+|---|---|
+| `t-blue` | Paper / Reference (논문·자료 읽기) |
+| `t-green` | Code / Deep dive / Analysis / Comparison (코드 분석) |
+| `t-coral` | Model report (모델 리포트) |
+| `t-amber` | Hands-on / Series·GitOps / Experiment (실습·실험) |
+| `t-teal` | Runbook / Guide (런북·가이드) |
+| `t-purple` | Infra / Networking (인프라) |
+| `t-gray` | Briefing (모닝 브리핑·일일) |
+
+새 카드를 추가하면 그 분야에 맞는 색 클래스를 쓴다. 새 분야가 생기면 위 표와
+theme.css 의 `.t-*` 주석을 함께 갱신한다.
+
 ## 페이지 공통 골격 (모든 HTML 필수)
 
 - `<!DOCTYPE html>` 로 시작
