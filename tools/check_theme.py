@@ -244,10 +244,15 @@ def check_postmeta(tree, paths):
                     f"(둘을 같이 갱신하라)")
 
 
-def bump_check(base, head):
-    """수정된 콘텐츠 페이지는 갱신일(post-meta)도 바뀌어야 한다 — pre-push 강제용.
-    base..head 사이에서 내용이 바뀐 study/logs/infra 콘텐츠 페이지의 post-meta 블록이
-    그대로면(=updated 날짜를 안 올렸으면) 실패. 신규 추가/삭제 파일은 면제."""
+def bump_check(base, head, today=None):
+    """수정된 콘텐츠 페이지는 갱신일이 '오늘'이어야 한다 — pre-push 강제용.
+    base..head 사이에서 내용이 바뀐 study/logs/infra 콘텐츠 페이지는 post-meta 의
+    최신 날짜(updated 있으면 updated, 없으면 created)가 today 와 같아야 한다.
+    같은 날 여러 번 고쳐도(날짜가 이미 오늘) 통과하고, 어제 날짜인 채 고치면 실패.
+    신규 추가/삭제 파일은 면제."""
+    if today is None:
+        import datetime
+        today = datetime.date.today().isoformat()
     try:
         changed = sh(["git", "diff", "--name-only", base, head]).splitlines()
     except subprocess.CalledProcessError:
@@ -264,11 +269,13 @@ def bump_check(base, head):
             continue  # 신규/삭제/무변경
         if is_staticrypt(h):
             continue
-        mb, mh = POSTMETA_BLOCK.search(b), POSTMETA_BLOCK.search(h)
-        if (mb.group(0) if mb else "") == (mh.group(0) if mh else ""):
+        mh = POSTMETA_BLOCK.search(h)
+        d = postmeta_dates(mh.group(1)) if mh else None
+        latest = max(x for x in (d or (None,)) if x) if d else None
+        if latest != today:
             err(p, "post-meta-bump",
-                "페이지를 수정했는데 post-meta(갱신일)가 그대로다 — "
-                "hero 와 index 카드에 updated 날짜를 갱신하라")
+                f"페이지를 수정했는데 갱신일이 오늘({today})이 아님(현재 {latest}) — "
+                "hero 와 index 카드의 updated 날짜를 오늘로 갱신하라")
 
 
 # ---------------------------------------------------------------- main
@@ -279,9 +286,9 @@ def main():
     args = sys.argv[1:]
     if args and args[0] == "--bump-check":
         if len(args) < 3:
-            print("usage: check_theme.py --bump-check <base_sha> <head_sha>", file=sys.stderr)
+            print("usage: check_theme.py --bump-check <base_sha> <head_sha> [today]", file=sys.stderr)
             return 2
-        bump_check(args[1], args[2])
+        bump_check(args[1], args[2], args[3] if len(args) > 3 else None)
         if errors:
             print(f"✗ 갱신일(post-meta) 검사 실패 — {len(errors)}건\n", file=sys.stderr)
             for e in errors:

@@ -372,6 +372,48 @@
   </table>
   <p class="muted"><span class="en">These are the §2 (store-mediated) and §3 (offload) connectors. Note the unit differs from table A: offload speed is dominated by the PCIe/host-memory path and by how the data is moved (chunk- vs page-wise gave LMCache its 4.5×), not by an RDMA fabric.</span><span class="ko">§2(스토어 경유)·§3(오프로드) 커넥터들. 표 A와 단위가 다른 점에 주의: 오프로드 속도는 RDMA 패브릭이 아니라 PCIe/호스트 메모리 경로와 데이터 이동 방식(chunk vs page가 LMCache의 4.5×를 만듦)이 좌우합니다.</span></p>
 
+  <h3><span class="en">Same hardware path, different speed — why?</span><span class="ko">같은 하드웨어 경로인데 왜 속도가 다른가?</span></h3>
+  <p class="en">Two connectors on the <i>same</i> link (say both over the same 400G RoCE NIC with GPUDirect RDMA, or both doing GPU↔CPU over the same PCIe) can still differ several-fold. The interconnect sets the <b>ceiling</b>; the connector's software decides <b>how close to it you get</b>. The levers, each with evidence:</p>
+  <p class="ko">같은 링크를 타는 두 커넥터(예: 둘 다 같은 400G RoCE NIC + GPUDirect RDMA, 또는 둘 다 같은 PCIe로 GPU↔CPU)도 몇 배씩 차이 날 수 있습니다. 인터커넥트는 <b>천장</b>을 정할 뿐, 그 천장에 <b>얼마나 근접하느냐</b>는 커넥터 소프트웨어가 결정합니다. 지렛대들(각각 근거 포함):</p>
+  <table>
+    <tr><th><span class="en">Lever</span><span class="ko">지렛대</span></th><th><span class="en">Why it changes speed on the same path</span><span class="ko">같은 경로에서 속도가 갈리는 이유</span></th><th><span class="en">Evidence</span><span class="ko">근거</span></th></tr>
+    <tr>
+      <td><b><span class="en">Transfer granularity</span><span class="ko">전송 단위</span></b></td>
+      <td><span class="en">Many tiny transfers (page-by-page) never amortize per-op overhead; large contiguous chunks saturate the link. Same CPU memory, 4.5× apart.</span><span class="ko">잘게(page 단위) 많이 보내면 op당 오버헤드를 못 깎고, 크게 연속으로 보내면 링크를 꽉 채운다. 같은 CPU 메모리에서 4.5× 차이.</span></td>
+      <td><span class="en">LMCache 400 vs 88 Gbps</span><span class="ko">LMCache 400 vs 88 Gbps</span> <a href="https://arxiv.org/html/2510.09665v2">[arXiv §8.6]</a></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Zero-copy vs staging</span><span class="ko">zero-copy vs 호스트 경유</span></b></td>
+      <td><span class="en">GPUDirect (GPU→NIC direct) vs bouncing through a host CPU buffer — the extra copy halves effective bandwidth on the very same NIC.</span><span class="ko">GPUDirect(GPU→NIC 직행) vs 호스트 CPU 버퍼 경유 — 같은 NIC라도 추가 복사가 유효 대역폭을 반토막.</span></td>
+      <td><span class="en">NIXL: GDRCopy "necessary for maximum performance"</span><span class="ko">NIXL: GDRCopy "최대 성능에 필요"</span> <a href="https://github.com/ai-dynamo/nixl">[nixl]</a></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Overlap with compute</span><span class="ko">연산과 겹치기</span></b></td>
+      <td><span class="en">Streaming KV layer-by-layer behind ongoing compute hides the transfer; a blocking transfer adds its full time to TTFT. Same bytes, very different observed latency.</span><span class="ko">KV를 레이어 단위로 흘려보내며 연산 뒤에 숨기면 전송이 안 보이고, 블로킹 전송은 그 시간이 통째로 TTFT에 더해진다. 같은 바이트, 체감 지연은 딴판.</span></td>
+      <td><span class="en">push vs pull (below)</span><span class="ko">push vs pull (아래)</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Control-plane / handshake</span><span class="ko">제어 평면 / 핸드셰이크</span></b></td>
+      <td><span class="en">Per-request metadata exchange and proxy round-trips dominate for small KV or high QPS — pure overhead, independent of bandwidth.</span><span class="ko">요청당 메타데이터 교환·프록시 왕복이 작은 KV나 높은 QPS에서 지배적 — 대역폭과 무관한 순수 오버헤드.</span></td>
+      <td><span class="en">push removes a proxy round-trip → 1.2–3.0× TTFT</span><span class="ko">push가 프록시 왕복 제거 → TTFT 1.2–3.0×</span> <a href="https://github.com/vllm-project/vllm/issues/36923">[#36923]</a></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Parallel channels / multi-NIC</span><span class="ko">병렬 채널 / 멀티 NIC</span></b></td>
+      <td><span class="en">Striping one transfer across several NICs (or several RDMA queues) multiplies aggregate bandwidth past a single link's number.</span><span class="ko">하나의 전송을 여러 NIC(또는 여러 RDMA 큐)에 분산하면 단일 링크 수치를 넘어 총 대역폭이 곱해진다.</span></td>
+      <td><span class="en">Mooncake 87→190 GB/s (4×200G→8×400G)</span><span class="ko">Mooncake 87→190 GB/s (4×200G→8×400G)</span> <a href="https://github.com/kvcache-ai/Mooncake">[Mooncake]</a></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Copy engine</span><span class="ko">복사 엔진</span></b></td>
+      <td><span class="en">Which mover copies GPU↔CPU — a hardware DMA engine vs a hand-written CUDA copy kernel — changes throughput on the identical PCIe path.</span><span class="ko">GPU↔CPU를 누가 옮기느냐 — 하드웨어 DMA 엔진 vs 손으로 짠 CUDA 복사 커널 — 가 같은 PCIe 경로에서 처리량을 바꾼다.</span></td>
+      <td><span class="en">vLLM offload: DMA +32% over custom kernel</span><span class="ko">vLLM 오프로드: DMA가 커스텀 커널 대비 +32%</span> <a href="https://vllm.ai/blog/2026-01-08-kv-offloading-connector">[vLLM blog]</a></td>
+    </tr>
+  </table>
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">the one-liner</span><span class="ko">한 줄로</span></span>
+    <span class="en">Hardware (the interconnect) sets the <b>maximum</b>; the connector's <b>granularity, copy path, overlap, handshake, and parallelism</b> decide the <b>fraction of that maximum</b> you actually see. Same path ≠ same speed.</span>
+    <span class="ko">하드웨어(인터커넥트)는 <b>최댓값</b>을 정하고, 커넥터의 <b>전송 단위·복사 경로·겹치기·핸드셰이크·병렬화</b>가 그 최댓값의 <b>몇 %를 실제로 받는지</b>를 정한다. 같은 경로라고 같은 속도가 아니다.</span>
+  </div>
+
   <div class="callout c-blue">
     <span class="tag"><span class="en">push vs pull — a latency difference, NOT a bandwidth one</span><span class="ko">push vs pull — 대역폭이 아니라 지연 차이</span></span>
     <span class="en">Same link, same bytes → same bandwidth. What differs is who initiates and whether the decode-side memory registration overlaps prefill compute. Push removes a proxy round-trip from the critical path. vLLM's own measurement (AWS P5en): <b>"KV push mode showed 1.2× – 3.0× improvements over pull mode"</b> on TTFT (e.g. TP4 512/128 conc8: 2948 ms → 1212 ms; P99 740 ms → 100 ms). <a href="https://github.com/vllm-project/vllm/issues/36923">vLLM RFC #36923</a></span>
