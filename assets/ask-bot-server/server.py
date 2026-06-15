@@ -145,7 +145,7 @@ async def run_job(job_id, question, system, model, web_on, edit_req, page_url):
                 allowed_tools=(["WebSearch"] if web_on else []),
                 disallowed_tools=BASE_DISALLOWED + ([] if web_on else ["WebSearch"]),
                 permission_mode="acceptEdits",
-                max_turns=(6 if web_on else 2),
+                max_turns=(100 if web_on else 100),
             )
         async for msg in query(prompt=question, options=options):
             if isinstance(msg, ResultMessage):
