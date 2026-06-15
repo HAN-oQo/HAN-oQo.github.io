@@ -158,7 +158,8 @@
     url: function () { return lsget("ask-ai-url-bot", ""); },
     headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
     body: function (model, sys, q, web) {
-      return { model: model, system: (typeof sys === "string" ? sys : ""), question: q, web: !!web };
+      return { model: model, system: (typeof sys === "string" ? sys : ""), question: q, web: !!web,
+        page_url: location.pathname }; // lets the bot (edit mode) find the page's source file
     },
     parse: function (d) {
       if (d.error) return { err: (d.error.message || d.error) };

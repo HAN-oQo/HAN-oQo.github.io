@@ -54,6 +54,30 @@ Widget **✦ → ⚙**:
 
 The browser holds only the access token; your subscription auth stays on the node.
 
+## Edit mode — add/fix memos in the HTML by chatting (opt-in, local only)
+
+Because the bot *is* Claude Code, it can **edit the page's HTML source and commit**.
+Turn it on with `ALLOW_EDITS=1`. Then in the chat: *"이 페이지에 '~' 메모 추가해줘"* or
+*"이 문단 이렇게 고쳐줘"* → the bot edits the source file (inserting a
+`<div class="memo">…</div>` callout, styled in `theme.css`), runs
+`python3 tools/check_theme.py`, and `git commit`s. The page updates after you push +
+GitHub Pages redeploys (or instantly in local preview).
+
+```sh
+# run ON the machine that has the repo checked out; preview the site locally too
+cd /path/to/inference-study            # repo root (REPO_DIR defaults to cwd)
+ALLOW_EDITS=1 ACCESS_TOKEN="pick-a-secret" \
+  python assets/ask-bot-server/server.py
+# → binds to 127.0.0.1 by default (edit mode is local-only on purpose)
+# preview:  python3 -m http.server 8000   → open http://localhost:8000/<page>
+# widget Provider = My Claude bot, URL = http://127.0.0.1:8787/ask
+```
+
+> ⚠️ **Edit mode grants the bot file-edit + shell + git on your repo.** It is **off by
+> default**, binds to **localhost**, and is **token-gated**. Only run it on your own
+> machine. It does **not** `git push` unless you set `PUSH=1`. Don't expose an
+> edit-mode bot through a public tunnel.
+
 ## Env vars
 
 | var | default | meaning |
@@ -62,3 +86,7 @@ The browser holds only the access token; your subscription auth stays on the nod
 | `ACCESS_TOKEN` | _(none)_ | if set, callers must send `x-access-token` |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | default model if the widget doesn't send one |
 | `PORT` | `8787` | listen port |
+| `ALLOW_EDITS` | _(off)_ | `1` = let the chat edit HTML + commit (file/shell/git access) |
+| `REPO_DIR` | cwd | repo root the bot edits in (edit mode) |
+| `PUSH` | _(off)_ | `1` = also `git push` after committing (edit mode) |
+| `HOST` | `0.0.0.0` (`127.0.0.1` if `ALLOW_EDITS`) | bind address |

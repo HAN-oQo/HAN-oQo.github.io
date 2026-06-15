@@ -31,6 +31,20 @@ ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "")
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 PORT = int(os.environ.get("PORT", "8787"))
 
+
+def _flag(name):
+    return os.environ.get(name, "") not in ("", "0", "false", "False")
+
+
+# EDIT MODE (opt-in, off by default): lets the chat edit the page's HTML source
+# (add memos / fix text) and commit — because the Agent SDK *is* Claude Code.
+# This grants file-edit + shell to the bot, so it binds to localhost by default
+# and should only ever run on YOUR machine with the repo checked out.
+ALLOW_EDITS = _flag("ALLOW_EDITS")
+PUSH = _flag("PUSH")
+REPO_DIR = os.environ.get("REPO_DIR", os.getcwd())
+HOST = os.environ.get("HOST", "127.0.0.1" if ALLOW_EDITS else "0.0.0.0")
+
 BASE_DISALLOWED = ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch"]
 
 
@@ -57,17 +71,37 @@ async def handle_ask(request):
     system = data.get("system") or ""
     model = data.get("model") or DEFAULT_MODEL
     web_on = bool(data.get("web"))
+    page_url = (data.get("page_url") or "").strip()
     if not question:
         return cors(web.json_response({"error": "empty question"}, status=400))
 
-    options = ClaudeAgentOptions(
-        model=model,
-        system_prompt=system,
-        allowed_tools=(["WebSearch"] if web_on else []),
-        disallowed_tools=BASE_DISALLOWED + ([] if web_on else ["WebSearch"]),
-        permission_mode="acceptEdits",
-        max_turns=(6 if web_on else 2),
-    )
+    if ALLOW_EDITS:
+        edit_note = (
+            "\n\n=== EDIT MODE ===\n"
+            f"You are Claude Code in the git repo at: {REPO_DIR}\n"
+            f"The page being viewed: {page_url or '(unknown)'} → its source is that path under the repo "
+            "(e.g. '/logs/x.html' → 'logs/x.html').\n"
+            "If the user asks to ADD A MEMO or EDIT the page, edit that HTML SOURCE file. For a memo insert a "
+            "callout inside the .wrap container:\n"
+            "  <div class=\"memo\">memo text<span class=\"memo-date\">YYYY-MM-DD</span></div>\n"
+            "After editing, run `python3 tools/check_theme.py`; keep the change only if it passes, fix it otherwise. "
+            "Then `git add -A && git commit -m '…'`. " + ("Then `git push`." if PUSH else "Do NOT push.")
+            + " If the user only asks a question, just answer — do not edit."
+        )
+        allowed = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"] + (["WebSearch"] if web_on else [])
+        options = ClaudeAgentOptions(
+            model=model, system_prompt=system + edit_note, cwd=REPO_DIR,
+            allowed_tools=allowed, permission_mode="acceptEdits", max_turns=24,
+        )
+    else:
+        options = ClaudeAgentOptions(
+            model=model,
+            system_prompt=system,
+            allowed_tools=(["WebSearch"] if web_on else []),
+            disallowed_tools=BASE_DISALLOWED + ([] if web_on else ["WebSearch"]),
+            permission_mode="acceptEdits",
+            max_turns=(6 if web_on else 2),
+        )
 
     answer, parts, sources = None, [], []
     try:
@@ -97,8 +131,9 @@ def main():
     app = web.Application(client_max_size=2 * 1024 * 1024)
     app.router.add_route("OPTIONS", "/ask", handle_options)
     app.router.add_post("/ask", handle_ask)
-    print(f"ask-bot-server on :{PORT}  (origin={ALLOW_ORIGIN}, gated={'yes' if ACCESS_TOKEN else 'no'})")
-    web.run_app(app, host="0.0.0.0", port=PORT)
+    mode = f"EDIT MODE (repo={REPO_DIR}, push={'yes' if PUSH else 'no'})" if ALLOW_EDITS else "read-only"
+    print(f"ask-bot-server on {HOST}:{PORT}  ({mode}, origin={ALLOW_ORIGIN}, gated={'yes' if ACCESS_TOKEN else 'no'})")
+    web.run_app(app, host=HOST, port=PORT)
 
 
 if __name__ == "__main__":
