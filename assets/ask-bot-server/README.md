@@ -3,8 +3,19 @@
 A long-running bot you host on your own (CPU) node. It uses the **Claude Agent
 SDK** authenticated by your **local `claude` login** (`claude setup-token`), so it
 runs on your **Claude subscription — no `ANTHROPIC_API_KEY`, no API billing**. The
-web widget shoots `/ask` calls at it; it answers (optionally with **WebSearch**)
-and returns `{answer, sources}`.
+web widget shoots `/ask` calls at it; it answers (optionally with **WebSearch**).
+
+**Two-step protocol** (a public edge often caps responses at a few seconds, so no
+single request blocks): `POST /ask` → `{id}`, then poll `GET /result?id=…` →
+`{status: pending|done|error, answer, sources}`. `GET /models` proxies the gateway's
+model list for the widget's dropdown. (The widget's bot provider also accepts a
+synchronous `{answer}` from `POST /ask`, so a localhost dev run can stay one-shot.)
+
+**Models / local LLM:** the Agent SDK obeys this login's `~/.claude` settings, so if
+`ANTHROPIC_BASE_URL` points at a gateway (e.g. a local-LLM gateway with
+`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`), the bot can serve **both** Claude
+cloud models *and* local models. Pass `model=` per request; set `GATEWAY_URL` so
+`/models` can list them.
 
 This is the same pattern as a Claude-Code/Agent-SDK Slack bot
 (e.g. `hanq-moreh/ce_slack_bot`) — just an HTTP front door instead of Slack.
@@ -78,6 +89,46 @@ tmux attach -t askbot-pub                # watch live (detach: Ctrl-b then d)
 The tokens are **not** stored in this repo — only in `~/.askbot/*.txt` (your home dir)
 and in the live process env. The trycloudflare URL is **ephemeral** (new on each
 tunnel restart); the saved file always reflects the latest run.
+
+## Production deploy (systemd on a node) — the always-on bot
+
+The live blog uses a bot kept on a node as a **systemd service** (read-only, no edit
+mode), reachable over HTTPS at a stable host. This is separate from the local edit
+launcher above.
+
+```ini
+# /etc/systemd/system/ce-askbot.service  (User=<you>, WorkingDirectory=/srv/askbot)
+Environment=ALLOW_ORIGINS=https://han-oqo.github.io,https://ce-blog.ce.moreh.dev
+Environment=ANTHROPIC_MODEL=claude-moreh-Qwen3.6-27B   # default model (local LLM)
+Environment=GATEWAY_URL=http://<gateway-host>:<port>   # enables /models discovery
+Environment=PORT=8787
+Environment=RATE_LIMIT=600
+EnvironmentFile=/srv/askbot/askbot.env                 # ACCESS_TOKEN=… (chmod 600, NOT in git)
+ExecStart=/srv/askbot/venv/bin/python /srv/askbot/server.py
+```
+
+Common ops (`sudo` on the node):
+
+```sh
+sudo systemctl cat ce-askbot                                  # see env
+sudo cat /srv/askbot/askbot.env                               # token
+# add an allowed site (comma list) → restart:
+sudo sed -i 's|^Environment=ALLOW_ORIGINS=.*|Environment=ALLOW_ORIGINS=…,https://new-site|' /etc/systemd/system/ce-askbot.service
+sudo systemctl daemon-reload && sudo systemctl restart ce-askbot
+curl -s "$GATEWAY_URL/v1/models" | python3 -m json.tool       # what the gateway serves
+sudo journalctl -u ce-askbot -n 50 --no-pager                 # logs
+```
+
+| Env var | Meaning |
+|---|---|
+| `ALLOW_ORIGINS` | Comma list of allowed browser origins (CORS echoes the match). Falls back to `ALLOW_ORIGIN`, then `*`. |
+| `ACCESS_TOKEN` | Shared token required on `/ask`,`/result`,`/models` (omit ⇒ token-free, gated by Origin+rate-limit). |
+| `ANTHROPIC_MODEL` | Default model when a request omits `model`. |
+| `GATEWAY_URL` | Gateway base URL; `/models` proxies `GATEWAY_URL/v1/models`. |
+| `RATE_LIMIT`/`RATE_WINDOW` | Max `/ask` per window per IP (default 60/60s). |
+| `ALLOW_EDITS`/`PUSH` | Edit mode (localhost-only) + allow `git push`. Off in production. |
+
+> Keep `server.py` here in sync with the deployed copy: `scp server.py node:/srv/askbot/ && sudo systemctl restart ce-askbot`.
 
 ## Setup (manual)
 

@@ -61,6 +61,7 @@
   <li><a href="#manual">5. 수동 — 직접 띄우는 법</a></li>
   <li><a href="#security">6. 보안 모델 (왜 나만 가능한가)</a></li>
   <li><a href="#files">7. 파일 맵 · 흔한 문제</a></li>
+  <li><a href="#ops">8. 운영 치트시트 — 프로덕션 봇 바꾸기 (ce-master)</a></li>
 </ul>
 </div>
 
@@ -98,8 +99,16 @@
   <text x="170" y="238" text-anchor="middle" font-size="9.5" fill="var(--muted)">소스 미수정, 배포본 모든 HTML에 위젯 주입</text>
   <line x1="170" y1="180" x2="140" y2="112" stroke="#7a7468" stroke-dasharray="4 3" marker-end="url(#ah)"/>
 </svg>
-<figcaption>그림 1 — 위젯은 CI가 모든 페이지에 주입; 위젯은 https API(키 직접) 또는 내 로컬 Claude 봇(구독)으로 답한다.</figcaption>
+<figcaption>그림 1 — 위젯은 CI가 모든 페이지에 주입; 위젯은 https API(키 직접) 또는 Claude 봇(구독)으로 답한다.</figcaption>
 </figure>
+</div>
+
+<div class="card">
+<p><strong>봇은 두 경로로 돈다 — 둘 다 쓴다.</strong></p>
+<ul>
+<li><strong>로컬 편집 봇</strong> (4·5장) — 내 맥 tmux, <code>localhost</code> 바인드, <strong>편집 모드</strong>(채팅으로 HTML 메모 추가·수정·push). <strong>나만</strong> 가능. 라이브엔 cloudflared 터널로 읽기전용 노출 가능.</li>
+<li><strong>프로덕션 봇</strong> (8장) — <code>ce-master</code> systemd <code>ce-askbot</code>(포트 8787), 공개 <code>askbot.ce.moreh.dev</code>, <strong>읽기전용</strong>. herom <code>~/.claude</code> 게이트웨이를 물려받아 <strong>로컬 LLM(여러 모델) + Claude 클라우드</strong>를 모두 서빙. 라이브 블로그(han-oqo·ce-blog)가 평소 쓰는 봇이 이것.</li>
+</ul>
 </div>
 
 <!-- ============================================================ -->
@@ -242,8 +251,10 @@ cloudflared tunnel --url http://localhost:8788       # → https://xxxx.trycloud
 <tr><td><code>assets/i18n.js</code></td><td>언어 토글 + ask.js 자동 로드</td></tr>
 <tr><td><code>tools/inject_ask_widget.py</code></td><td>배포 시 모든 페이지에 위젯 주입(CI)</td></tr>
 <tr><td><code>.github/workflows/pages.yml</code></td><td>검사 → 주입 → 배포</td></tr>
-<tr><td><code>assets/ask-bot-server/server.py</code></td><td>Agent SDK 봇(/ask, WebSearch, 편집모드)</td></tr>
-<tr><td><code>assets/ask-bot-server/launch.sh</code></td><td>tmux 원클릭 런처(+정보파일 저장)</td></tr>
+<tr><td><code>assets/ask-bot-server/server.py</code></td><td>Agent SDK 봇 — 2단계(/ask·/result)·/models 디스커버리·다중 Origin·편집모드</td></tr>
+<tr><td><code>assets/ask-bot-server/launch.sh</code></td><td>tmux 원클릭 런처(로컬 편집용, +정보파일 저장)</td></tr>
+<tr><td><code>ce-master:/srv/askbot/</code></td><td>(프로덕션) <code>server.py</code> + <code>askbot.env</code>(토큰, 깃 밖) — 8장</td></tr>
+<tr><td><code>ce-master:/etc/systemd/system/ce-askbot.service</code></td><td>(프로덕션) systemd 유닛 — env로 모델·Origin·게이트웨이 지정</td></tr>
 <tr><td><code>assets/ask-proxy-worker.example.js</code></td><td>키 숨기는 Cloudflare Worker 예제(프록시 모드)</td></tr>
 <tr><td><code>~/.askbot/&lt;세션&gt;.txt</code></td><td>(레포 밖) 실행 중 URL·토큰</td></tr>
 </table>
@@ -253,11 +264,71 @@ cloudflared tunnel --url http://localhost:8788       # → https://xxxx.trycloud
 <li><strong>라이브에서 봇 연결 안 됨</strong> → mixed-content. 로컬 프리뷰에서 쓰거나 터널(https) 사용.</li>
 <li><strong>편집 모드가 라이브에서 안 됨</strong> → 의도된 동작(터널=읽기전용).</li>
 <li><strong>Gemini <code>limit: 0</code></strong> → 그 계정/지역 무료티어 미지원. Groq 무료 또는 결제.</li>
+<li><strong>"Failed to fetch"</strong> → 서버가 아니라 브라우저 쪽(죽은 URL·mixed-content·CORS). 콘솔에서 <code>localStorage.removeItem("ask-ai-url-bot"); location.reload()</code> 로 옛 URL 비우면 기본값(<code>askbot.ce.moreh.dev/ask</code>) 사용. 새 도메인이면 8장에서 Origin 추가.</li>
+<li><strong>특정 모델 "(no answer)"</strong> → ThinkingBlock으로 끝나 <code>result</code>가 빈 경우였음(수정됨, 서버 폴백). 안 되면 <code>journalctl -u ce-askbot</code> 확인.</li>
+<li><strong>"who are you"에 모델명 안 나옴</strong> → 정상. Agent SDK가 Claude 정체성을 씌움 → 위젯 헤더의 <code>모델:</code> 배지가 실제 모델.</li>
 </ul>
 </div>
 
+<!-- ============================================================ -->
+<h2 id="ops">8. 운영 치트시트 — 프로덕션 봇 바꾸기 (ce-master)</h2>
+<div class="card">
+<p>라이브 위젯이 평소 쓰는 봇(<code>askbot.ce.moreh.dev</code>)은 <code>ce-master</code>에 <strong>systemd 서비스</strong>로 상주한다(읽기전용). 모델·허용 도메인(Origin)·토큰을 바꾸는 법. (편집·push는 4·5장의 로컬 봇에서만 — 나만 가능.)</p>
+
+<h3>8-1. 어디에 뭐가 있나</h3>
+<table>
+<tr><th>항목</th><th>위치</th></tr>
+<tr><td>서버 코드</td><td><code>/srv/askbot/server.py</code> (= 레포 <code>assets/ask-bot-server/server.py</code>)</td></tr>
+<tr><td>토큰/비밀 (깃 밖)</td><td><code>/srv/askbot/askbot.env</code> — <code>ACCESS_TOKEN=…</code>, chmod 600</td></tr>
+<tr><td>systemd 유닛</td><td><code>/etc/systemd/system/ce-askbot.service</code> — env: <code>ALLOW_ORIGINS·ANTHROPIC_MODEL·GATEWAY_URL·RATE_LIMIT</code></td></tr>
+<tr><td>공개 라우트</td><td>istio HTTPRoute <code>askbot</code>(ns <code>ce-blog</code>) → 노드:8787, host <code>askbot.ce.moreh.dev</code> (와일드카드 <code>*.ce.moreh.dev</code>→게이트웨이)</td></tr>
+<tr><td>로컬 LLM 게이트웨이</td><td><code>http://192.168.2.15:30088</code> (herom <code>~/.claude/settings.json</code> <code>ANTHROPIC_BASE_URL</code>)</td></tr>
+</table>
+
+<h3>8-2. 프로토콜 (2단계 — 공개 엣지 ~4초 컷 우회)</h3>
+<pre><code>POST /ask    {question,model,web,page_url}  → {"id":"…"}        # 백그라운드 시작
+GET  /result?id=…                            → {"status":"pending|done|error", answer, sources}
+GET  /models                                 → 게이트웨이 모델 목록(위젯 드롭다운이 사용)
+# 위젯(ask.js)의 bot 프로바이더 send()가 POST→폴링을 처리. 동기 {answer} 서버도 그대로 지원.</code></pre>
+
+<h3>8-3. 자주 하는 변경 (전부 <code>ssh ce-master</code>, sudo 필요)</h3>
+<pre><code># 0) 현재 설정 / 토큰 보기
+sudo systemctl cat ce-askbot              # Environment= 줄 확인
+sudo cat /srv/askbot/askbot.env           # 토큰
+
+# 1) 블로그 도메인(Origin) 추가 — 새 사이트에서 위젯을 쓰려면 (쉼표 목록)
+sudo sed -i 's|^Environment=ALLOW_ORIGINS=.*|Environment=ALLOW_ORIGINS=https://han-oqo.github.io,https://ce-blog.ce.moreh.dev,http://localhost:8000,https://새도메인|' /etc/systemd/system/ce-askbot.service
+sudo systemctl daemon-reload &amp;&amp; sudo systemctl restart ce-askbot
+
+# 2) 기본 모델 바꾸기 (위젯이 model을 안 보낼 때 쓰임)
+sudo sed -i 's|^Environment=ANTHROPIC_MODEL=.*|Environment=ANTHROPIC_MODEL=claude-moreh-Qwen3.6-27B|' /etc/systemd/system/ce-askbot.service
+sudo systemctl daemon-reload &amp;&amp; sudo systemctl restart ce-askbot
+
+# 3) 서빙 중인 모델 목록 보기
+curl -s http://192.168.2.15:30088/v1/models | python3 -m json.tool          # 게이트웨이 직접
+TOK=$(sudo cat /srv/askbot/askbot.env | cut -d= -f2)
+curl -s https://askbot.ce.moreh.dev/models -H "x-access-token: $TOK"        # 위젯이 보는 목록
+
+# 4) 토큰 교체(노출 시) — 교체 후 두 블로그 위젯 ⚙에 새 토큰 재입력 필요
+NEW=$(openssl rand -hex 24); echo "ACCESS_TOKEN=$NEW" | sudo tee /srv/askbot/askbot.env >/dev/null
+sudo chmod 600 /srv/askbot/askbot.env; sudo systemctl restart ce-askbot; echo "새 토큰: $NEW"
+
+# 5) 서버 코드 업데이트 (레포에서 server.py 고친 뒤 — 정본 동기화)
+scp assets/ask-bot-server/server.py ce-master:/tmp/s.py
+ssh ce-master 'sudo cp /tmp/s.py /srv/askbot/server.py &amp;&amp; sudo systemctl restart ce-askbot'
+
+# 6) 로그 / 상태 / 재시작
+sudo journalctl -u ce-askbot -n 50 --no-pager
+systemctl is-active ce-askbot
+sudo systemctl restart ce-askbot</code></pre>
+
+<h3>8-4. 위젯 모델 드롭다운</h3>
+<p>두 그룹으로 뜬다 — <strong>Claude — 클라우드(구독)</strong>: opus/sonnet/haiku(게이트웨이→Anthropic, 구독 소모). <strong>로컬 — 게이트웨이(무료)</strong>: Qwen·gemma·DeepSeek 등 vLLM(<code>claude-moreh-*</code>, 구독 안 태움). 목록은 <code>/models</code>로 자동 채움, 기본값은 무료 로컬. 그룹·기본값은 <code>ask.js</code> <code>PROVIDERS.bot</code>의 <code>cloudModels</code>/<code>defModel</code>에서 바꾼다.</p>
+<p>⚠️ 토큰은 <strong>절대 깃에 올리지 않는다</strong> — <code>*.env</code>는 <code>.gitignore</code>. URL은 비밀이 아니라 <code>ask.js</code>의 <code>DEFAULT_BOT_URL</code>에 박아도 된다.</p>
+</div>
+
 <footer>
-작성일 2026-06-15 · han-oqo.github.io 운영 런북 · 봇은 내 맥 tmux(askbot/askbot-pub)에서 구동 · 관련: <a href="rl-vllm-rollout-unsloth-verl-bench.html">RL 속도 실험</a>
+작성일 2026-06-15 · han-oqo.github.io 운영 런북 · 프로덕션 봇: ce-master systemd(ce-askbot) · 로컬 편집 봇: 내 맥 tmux · 관련: <a href="rl-vllm-rollout-unsloth-verl-bench.html">RL 속도 실험</a>
 </footer>
 
 </div>
