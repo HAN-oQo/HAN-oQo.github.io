@@ -59,8 +59,17 @@ HOST = os.environ.get("HOST", "127.0.0.1" if ALLOW_EDITS else "0.0.0.0")
 BASE_DISALLOWED = ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch"]
 
 
-def cors(resp):
-    resp.headers["Access-Control-Allow-Origin"] = "*" if "*" in ALLOW_ORIGINS else (ALLOW_ORIGINS[0] if ALLOW_ORIGINS else "*")
+def _cors(resp, origin=""):
+    # Echo the *request's* origin when it's in the allowlist — required for a
+    # multi-origin allowlist to work in browsers (a single fixed value only lets
+    # one site through). "*" stays "*"; unknown origins get the first entry.
+    if "*" in ALLOW_ORIGINS:
+        allow = "*"
+    elif origin and origin in ALLOW_ORIGINS:
+        allow = origin
+    else:
+        allow = ALLOW_ORIGINS[0] if ALLOW_ORIGINS else "*"
+    resp.headers["Access-Control-Allow-Origin"] = allow
     resp.headers["Vary"] = "Origin"
     resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "content-type, x-access-token"
@@ -83,12 +92,13 @@ def _rate_ok(ip):
 
 
 async def handle_options(request):
-    return cors(web.Response(status=204))
+    return _cors(web.Response(status=204), request.headers.get("Origin", ""))
 
 
 async def handle_ask(request):
     # 1) Origin allowlist — blocks other sites' browsers (lets you skip a token).
     origin = request.headers.get("Origin", "")
+    cors = lambda resp: _cors(resp, origin)   # bind this request's origin for every reply below
     if not _origin_ok(origin):
         return cors(web.json_response({"error": "forbidden origin"}, status=403))
     # 2) Rate limit per client IP (cloudflared sets X-Forwarded-For).
