@@ -34,6 +34,7 @@ import time
 import uuid
 import asyncio
 import collections
+import aiohttp
 from aiohttp import web
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
@@ -42,6 +43,11 @@ ALLOW_ORIGIN = os.environ.get("ALLOW_ORIGIN", "*")
 ALLOW_ORIGINS = [o.strip() for o in os.environ.get("ALLOW_ORIGINS", ALLOW_ORIGIN).split(",") if o.strip()]
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "")
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+# The Claude-Code gateway this login points at (~/.claude settings ANTHROPIC_BASE_URL).
+# Set GATEWAY_URL so /models can proxy its model list to the widget's dropdown — lets
+# the blog pick local-LLM models (no Anthropic-subscription burn) instead of cloud.
+GATEWAY_URL = os.environ.get("GATEWAY_URL", "").rstrip("/")
+_models_cache = {"t": 0.0, "data": None}
 PORT = int(os.environ.get("PORT", "8787"))
 RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "60"))     # max POST /ask per window per IP
 RATE_WINDOW = int(os.environ.get("RATE_WINDOW", "60"))   # window seconds
@@ -199,12 +205,39 @@ async def handle_result(request):
     return cors(web.json_response({k: v for k, v in job.items() if k != "t"}))
 
 
+async def handle_models(request):
+    # Discovery: proxy the gateway's /v1/models so the widget can list the
+    # local-LLM models. Returns {"models":[{"id","name"}...]} (cached 60s).
+    origin = request.headers.get("Origin", "")
+    cors = lambda resp: _cors(resp, origin)
+    if not _authed(request):
+        return cors(web.json_response({"error": "unauthorized"}, status=401))
+    if not GATEWAY_URL:
+        return cors(web.json_response({"models": [{"id": DEFAULT_MODEL, "name": DEFAULT_MODEL}]}))
+    now = time.time()
+    if _models_cache["data"] and now - _models_cache["t"] < 60:
+        return cors(web.json_response(_models_cache["data"]))
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(GATEWAY_URL + "/v1/models", timeout=aiohttp.ClientTimeout(total=8)) as r:
+                j = await r.json()
+        models = [{"id": m.get("id"), "name": m.get("display_name") or m.get("id")}
+                  for m in (j.get("data") or []) if m.get("id") and m.get("healthy", True)]
+        out = {"models": models or [{"id": DEFAULT_MODEL, "name": DEFAULT_MODEL}]}
+        _models_cache.update(t=now, data=out)
+        return cors(web.json_response(out))
+    except Exception as e:
+        return cors(web.json_response({"models": [{"id": DEFAULT_MODEL, "name": DEFAULT_MODEL}], "warn": str(e)}))
+
+
 def main():
     app = web.Application(client_max_size=2 * 1024 * 1024)
     app.router.add_route("OPTIONS", "/ask", handle_options)
     app.router.add_post("/ask", handle_ask)
     app.router.add_route("OPTIONS", "/result", handle_options)
     app.router.add_get("/result", handle_result)
+    app.router.add_route("OPTIONS", "/models", handle_options)
+    app.router.add_get("/models", handle_models)
     # SAFETY: edit mode must stay on the owner's machine. A localhost-bound bot is
     # unreachable from anyone else's browser, so only YOU can trigger edits/pushes.
     if ALLOW_EDITS and HOST not in ("127.0.0.1", "localhost", "::1") and not _flag("FORCE_REMOTE_EDIT"):

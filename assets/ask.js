@@ -167,7 +167,12 @@
      Slack bot). The bot server (assets/ask-bot-server/server.py) exposes /ask
      and returns {answer, sources}. Browser holds only an optional access token. */
   PROVIDERS.bot = {
-    label: "My Claude bot (Agent SDK)", models: PROVIDERS.claude.models, defModel: PROVIDERS.claude.defModel, needsUrl: true,
+    label: "My Claude bot (Agent SDK)", needsUrl: true,
+    // Fallback list (gateway-served, claude-moreh-* = local vLLM, no Anthropic burn);
+    // the live list is fetched from <bot>/models and replaces these in the dropdown.
+    models: ["claude-moreh-Qwen3.6-27B", "claude-moreh-gemma-4-31B-it", "claude-moreh-DeepSeek-V4-Flash",
+      "claude-moreh-deepseek/deepseek-v4-pro", "claude-moreh-xiaomi/mimo-v2.5-pro", "claude-moreh-z-ai/glm-5.1"],
+    defModel: "claude-moreh-Qwen3.6-27B",
     url: function () {
       var u = (lsget("ask-ai-url-bot", "") || DEFAULT_BOT_URL).trim().replace(/\/+$/, "");
       return /\/ask$/.test(u) ? u : u + "/ask";   // default baked in; /ask appended if missing
@@ -320,20 +325,33 @@
   var urlLabel = el("label", null, [tsp("Proxy URL", "프록시 URL")]);
   var urlInput = el("input", { type: "text", placeholder: "https://your-worker.workers.dev" });
   var modelSelect = el("select");
+  function mlabel(id) { return String(id).replace(/^claude-moreh-/, ""); }   // prettier dropdown text
+  function fillModels(list, saved) {                                          // list: [id] or [{id,name}]
+    modelSelect.innerHTML = "";
+    list.forEach(function (m) {
+      var id = (typeof m === "string") ? m : m.id, nm = (typeof m === "string") ? mlabel(m) : (m.name || mlabel(m.id));
+      var o = el("option", { value: id }, [nm]);
+      if (id === saved) o.setAttribute("selected", "selected");
+      modelSelect.appendChild(o);
+    });
+  }
+  function fetchBotModels() {                                                 // live discovery from <bot>/models
+    var base = (lsget("ask-ai-url-bot", "") || DEFAULT_BOT_URL).trim().replace(/\/+$/, "").replace(/\/ask$/, "");
+    var tok = lsget(keyLS("bot"), "").trim(), h = {}; if (tok) h["x-access-token"] = tok;
+    fetch(base + "/models", { headers: h }).then(function (r) { return r.json(); }).then(function (d) {
+      if (provSel.value !== "bot" || !d || !d.models || !d.models.length) return;
+      fillModels(d.models, lsget(modelLS("bot"), "") || (d.models[0].id || d.models[0]));
+    }).catch(function () {});
+  }
   function loadProvFields() {
     var p = provSel.value, needsUrl = !!PROVIDERS[p].needsUrl;
     keyInput.value = lsget(keyLS(p), "");
-    modelSelect.innerHTML = "";
-    var saved = lsget(modelLS(p), "") || PROVIDERS[p].defModel;
-    PROVIDERS[p].models.forEach(function (m) {
-      var o = el("option", { value: m }, [m]);
-      if (m === saved) o.setAttribute("selected", "selected");
-      modelSelect.appendChild(o);
-    });
+    fillModels(PROVIDERS[p].models, lsget(modelLS(p), "") || PROVIDERS[p].defModel);
     keyLabel.textContent = needsUrl ? t("Access token (optional)", "접근 토큰 (선택)") : t("API key", "API 키");
     urlInput.value = lsget("ask-ai-url-" + p, "") || (p === "bot" ? DEFAULT_BOT_URL : "");
     urlLabel.style.display = urlInput.style.display = needsUrl ? "" : "none";
     editLabel.style.display = (p === "bot") ? "" : "none"; // edit mode only via the local Claude bot
+    if (p === "bot") fetchBotModels();                     // refresh dropdown with the gateway's live models
   }
   provSel.addEventListener("change", function () { lsset(LS_PROV, provSel.value); loadProvFields(); });
   loadProvFields();
