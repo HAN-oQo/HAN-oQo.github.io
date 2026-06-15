@@ -247,6 +247,15 @@
     ".askai-u{align-self:flex-end;background:var(--blue-bg,#e6f1fb);color:var(--blue-ink,#0c447c)}" +
     ".askai-b{align-self:flex-start;background:var(--gray-bg,#f1efe8);color:var(--ink,#1f1e1b)}" +
     ".askai-empty{color:var(--muted,#86807a);font-size:12.5px;text-align:center;padding:18px 6px}" +
+    ".askai-md{white-space:normal}" +
+    ".askai-md p{margin:0 0 8px}.askai-md p:last-child{margin-bottom:0}" +
+    ".askai-md pre{background:var(--code-bg,#2b2a27);color:var(--code-ink,#f3f1ea);padding:9px 11px;border-radius:8px;overflow-x:auto;margin:6px 0;font:12.5px/1.45 ui-monospace,Menlo,Consolas,monospace}" +
+    ".askai-md pre code{background:none;padding:0;font-size:inherit;color:inherit}" +
+    ".askai-md code{background:var(--gray-bg,#ece9e0);padding:1px 5px;border-radius:4px;font:.9em ui-monospace,Menlo,Consolas,monospace}" +
+    ".askai-md ul,.askai-md ol{margin:4px 0 8px;padding-left:20px}.askai-md li{margin:2px 0}" +
+    ".askai-md h4,.askai-md h5,.askai-md h6{margin:8px 0 4px;font-size:13.5px;font-weight:600}" +
+    ".askai-md blockquote{margin:6px 0;padding:2px 10px;border-left:3px solid var(--line,#e7e2d6);color:var(--muted,#86807a)}" +
+    ".askai-md a{color:var(--blue-ink,#2456b8);text-decoration:underline}.askai-md strong{font-weight:600}" +
     ".askai-ans{white-space:pre-wrap;font-size:13.5px;margin:4px 0 0}" +
     ".askai-ans code{background:var(--blue-bg,#eef);padding:1px 5px;border-radius:4px;font-size:.9em}" +
     ".askai-src{margin-top:10px;font-size:12px;color:var(--muted,#86807a)}" +
@@ -276,6 +285,41 @@
     return txt.length > 16000 ? txt.slice(0, 16000) + "\n…(truncated)" : txt;
   }
 
+  /* ---- tiny, dependency-free, XSS-safe Markdown → HTML (for bot answers) ---- */
+  function mdEsc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function mdInline(s) {                                   // s is already HTML-escaped
+    return s
+      .replace(/`([^`]+)`/g, function (_, c) { return "<code>" + c + "</code>"; })
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  }
+  function mdToHtml(src) {
+    var lines = mdEsc(String(src || "").trim()).replace(/\r\n?/g, "\n").split("\n");
+    var out = [], code = null, list = null, listBuf = [], para = [];
+    function flushList() { if (list) { out.push("<" + list + ">" + listBuf.join("") + "</" + list + ">"); list = null; listBuf = []; } }
+    function flushPara() { if (para.length) { out.push("<p>" + para.map(mdInline).join("<br>") + "</p>"); para = []; } }
+    function flushAll() { flushPara(); flushList(); }
+    lines.forEach(function (ln) {
+      var f = ln.match(/^```(.*)$/);
+      if (f) { if (code !== null) { out.push("<pre><code>" + code.join("\n") + "</code></pre>"); code = null; } else { flushAll(); code = []; } return; }
+      if (code !== null) { code.push(ln); return; }
+      var h = ln.match(/^(#{1,6})\s+(.*)$/);
+      if (h) { flushAll(); var lv = Math.min(h[1].length + 2, 6); out.push("<h" + lv + ">" + mdInline(h[2]) + "</h" + lv + ">"); return; }
+      var ol = ln.match(/^\s*\d+[.)]\s+(.*)$/), ul = ln.match(/^\s*[-*+]\s+(.*)$/);
+      if (ol) { flushPara(); if (list !== "ol") { flushList(); list = "ol"; } listBuf.push("<li>" + mdInline(ol[1]) + "</li>"); return; }
+      if (ul) { flushPara(); if (list !== "ul") { flushList(); list = "ul"; } listBuf.push("<li>" + mdInline(ul[1]) + "</li>"); return; }
+      var bq = ln.match(/^&gt;\s?(.*)$/);    // '>' was HTML-escaped to '&gt;' above
+      if (bq) { flushAll(); out.push("<blockquote>" + mdInline(bq[1]) + "</blockquote>"); return; }
+      if (ln.trim() === "") { flushAll(); return; }
+      flushList(); para.push(ln);
+    });
+    if (code !== null) out.push("<pre><code>" + code.join("\n") + "</code></pre>");
+    flushAll();
+    return out.join("");
+  }
+
   /* ---------------- UI ---------------- */
   var fab = el("button", { class: "askai-fab", type: "button", "aria-label": "Ask AI" }, ["✦ ", tsp("Ask AI", "AI에게 질문")]);
   var thread = el("div", { class: "askai-thread" });
@@ -289,7 +333,14 @@
     if (!convo.length && !pending)
       thread.appendChild(el("div", { class: "askai-empty" }, [t("Ask anything about this page — follow-ups keep context (saved while you're on this page).", "이 페이지에 대해 무엇이든 물어보세요 — 후속 질문은 맥락이 이어집니다(이 페이지에 있는 동안 저장).")]));
     convo.forEach(function (m) {
-      var b = el("div", { class: "askai-msg " + (m.role === "user" ? "askai-u" : "askai-b") }, [m.content]);
+      var b = el("div", { class: "askai-msg " + (m.role === "user" ? "askai-u" : "askai-b") });
+      if (m.role === "user") {
+        b.appendChild(document.createTextNode(m.content));
+      } else {
+        var md = el("div", { class: "askai-md" });
+        md.innerHTML = mdToHtml(m.content);     // bot answers render as Markdown
+        b.appendChild(md);
+      }
       if (m.role === "assistant" && m.cites && m.cites.length) {
         var s = el("div", { class: "askai-src" }), seen = {};
         m.cites.filter(function (c) { if (seen[c.url]) return false; seen[c.url] = 1; return true; })
@@ -464,8 +515,14 @@
       convo.push({ role: "assistant", content: out.text || t("(no answer)", "(응답 없음)"), cites: out.cites || [] });
       saveConvo(); renderThread(false);
     }).catch(function (e) {
-      errBox.textContent = t("Request failed: ", "요청 실패: ") + (e && e.message ? e.message : e) +
-        t("  (check URL / key / model / network)", "  (URL·키·모델·네트워크 확인)");
+      var msg = (e && e.message ? e.message : String(e));
+      if (/unauthorized|401/i.test(msg)) {        // bot/proxy needs an access token
+        setBox.classList.add("open");
+        errBox.textContent = t("Enter your access token in settings (⚙).", "설정(⚙)에서 접근 토큰을 입력하세요.");
+      } else {
+        errBox.textContent = t("Request failed: ", "요청 실패: ") + msg +
+          t("  (check URL / key / model / network)", "  (URL·키·모델·네트워크 확인)");
+      }
       renderThread(false);
     }).then(function () { go.disabled = false; goSpan.textContent = t("Ask", "물어보기"); });
   }
