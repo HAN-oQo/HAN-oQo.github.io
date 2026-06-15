@@ -172,6 +172,8 @@
     // the live list is fetched from <bot>/models and replaces these in the dropdown.
     models: ["claude-moreh-Qwen3.6-27B", "claude-moreh-gemma-4-31B-it", "claude-moreh-DeepSeek-V4-Flash",
       "claude-moreh-deepseek/deepseek-v4-pro", "claude-moreh-xiaomi/mimo-v2.5-pro", "claude-moreh-z-ai/glm-5.1"],
+    // Claude cloud models stay available too (routed via the gateway → Anthropic = subscription).
+    cloudModels: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
     defModel: "claude-moreh-Qwen3.6-27B",
     url: function () {
       var u = (lsget("ask-ai-url-bot", "") || DEFAULT_BOT_URL).trim().replace(/\/+$/, "");
@@ -326,32 +328,44 @@
   var urlInput = el("input", { type: "text", placeholder: "https://your-worker.workers.dev" });
   var modelSelect = el("select");
   function mlabel(id) { return String(id).replace(/^claude-moreh-/, ""); }   // prettier dropdown text
-  function fillModels(list, saved) {                                          // list: [id] or [{id,name}]
+  function optFor(m, saved) {                                                 // m: id string or {id,name}
+    var id = (typeof m === "string") ? m : m.id, nm = (typeof m === "string") ? mlabel(m) : (m.name || mlabel(m.id));
+    var o = el("option", { value: id }, [nm]);
+    if (id === saved) o.setAttribute("selected", "selected");
+    return o;
+  }
+  function fillModels(list, saved) {
     modelSelect.innerHTML = "";
-    list.forEach(function (m) {
-      var id = (typeof m === "string") ? m : m.id, nm = (typeof m === "string") ? mlabel(m) : (m.name || mlabel(m.id));
-      var o = el("option", { value: id }, [nm]);
-      if (id === saved) o.setAttribute("selected", "selected");
-      modelSelect.appendChild(o);
-    });
+    list.forEach(function (m) { modelSelect.appendChild(optFor(m, saved)); });
+  }
+  // Bot dropdown keeps BOTH: Claude cloud (subscription) and local gateway models (free).
+  function fillBotModels(localList, saved) {
+    modelSelect.innerHTML = "";
+    var gc = el("optgroup", { label: t("Claude — cloud (subscription)", "Claude — 클라우드 (구독)") });
+    (PROVIDERS.bot.cloudModels || []).forEach(function (m) { gc.appendChild(optFor(m, saved)); });
+    var gl = el("optgroup", { label: t("Local — gateway (free)", "로컬 — 게이트웨이 (무료)") });
+    (localList || []).forEach(function (m) { gl.appendChild(optFor(m, saved)); });
+    if (gc.children.length) modelSelect.appendChild(gc);
+    if (gl.children.length) modelSelect.appendChild(gl);
   }
   function fetchBotModels() {                                                 // live discovery from <bot>/models
     var base = (lsget("ask-ai-url-bot", "") || DEFAULT_BOT_URL).trim().replace(/\/+$/, "").replace(/\/ask$/, "");
     var tok = lsget(keyLS("bot"), "").trim(), h = {}; if (tok) h["x-access-token"] = tok;
     fetch(base + "/models", { headers: h }).then(function (r) { return r.json(); }).then(function (d) {
       if (provSel.value !== "bot" || !d || !d.models || !d.models.length) return;
-      fillModels(d.models, lsget(modelLS("bot"), "") || (d.models[0].id || d.models[0]));
+      fillBotModels(d.models, lsget(modelLS("bot"), "") || PROVIDERS.bot.defModel);
     }).catch(function () {});
   }
   function loadProvFields() {
     var p = provSel.value, needsUrl = !!PROVIDERS[p].needsUrl;
     keyInput.value = lsget(keyLS(p), "");
-    fillModels(PROVIDERS[p].models, lsget(modelLS(p), "") || PROVIDERS[p].defModel);
+    var saved = lsget(modelLS(p), "") || PROVIDERS[p].defModel;
+    if (p === "bot") fillBotModels(PROVIDERS.bot.models, saved); else fillModels(PROVIDERS[p].models, saved);
     keyLabel.textContent = needsUrl ? t("Access token (optional)", "접근 토큰 (선택)") : t("API key", "API 키");
     urlInput.value = lsget("ask-ai-url-" + p, "") || (p === "bot" ? DEFAULT_BOT_URL : "");
     urlLabel.style.display = urlInput.style.display = needsUrl ? "" : "none";
     editLabel.style.display = (p === "bot") ? "" : "none"; // edit mode only via the local Claude bot
-    if (p === "bot") fetchBotModels();                     // refresh dropdown with the gateway's live models
+    if (p === "bot") fetchBotModels();                     // refresh local group with the gateway's live models
   }
   provSel.addEventListener("change", function () { lsset(LS_PROV, provSel.value); loadProvFields(); });
   loadProvFields();
