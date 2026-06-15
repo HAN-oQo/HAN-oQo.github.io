@@ -40,9 +40,9 @@
       defModel: "llama-3.3-70b-versatile",
       url: function () { return "https://api.groq.com/openai/v1/chat/completions"; },
       headers: function (key) { return { "content-type": "application/json", "authorization": "Bearer " + key }; },
-      body: function (model, sys, q) {
+      body: function (model, sys, msgs) {
         return { model: model, max_tokens: 1500,
-          messages: [{ role: "system", content: (typeof sys === "string" ? sys : "") }, { role: "user", content: q }] };
+          messages: [{ role: "system", content: (typeof sys === "string" ? sys : "") }].concat(msgs) };
       },
       parse: function (d) {
         if (d.error) return { err: d.error.message || JSON.stringify(d.error) };
@@ -65,8 +65,9 @@
         else { h["x-api-key"] = key; }
         return h;
       },
-      body: function (model, sys, q, web) {
-        var b = { model: model, max_tokens: 1500, system: sys, messages: [{ role: "user", content: q }] };
+      body: function (model, sys, msgs, web) {
+        var b = { model: model, max_tokens: 1500, system: sys,
+          messages: msgs.map(function (m) { return { role: m.role, content: m.content }; }) };
         if (web) b.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }];
         return b;
       },
@@ -88,8 +89,9 @@
       defModel: "gpt-4o-mini",
       url: function () { return "https://api.openai.com/v1/responses"; },
       headers: function (key) { return { "content-type": "application/json", "authorization": "Bearer " + key }; },
-      body: function (model, sys, q, web) {
-        var b = { model: model, instructions: sys, input: q };
+      body: function (model, sys, msgs, web) {
+        var b = { model: model, instructions: sys,
+          input: msgs.map(function (m) { return { role: m.role, content: m.content }; }) };
         if (web) b.tools = [{ type: "web_search_preview" }];
         return b;
       },
@@ -119,9 +121,9 @@
           ":generateContent?key=" + encodeURIComponent(key);
       },
       headers: function () { return { "content-type": "application/json" }; },
-      body: function (model, sys, q, web) {
+      body: function (model, sys, msgs, web) {
         var b = { systemInstruction: { parts: [{ text: sys }] },
-          contents: [{ role: "user", parts: [{ text: q }] }] };
+          contents: msgs.map(function (m) { return { role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }; }) };
         if (web) b.tools = [{ google_search: {} }];
         return b;
       },
@@ -161,8 +163,10 @@
       return /\/ask$/.test(u) ? u : u + "/ask";   // tolerate URLs given without the /ask path
     },
     headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
-    body: function (model, sys, q, web) {
-      return { model: model, system: (typeof sys === "string" ? sys : ""), question: q, web: !!web,
+    body: function (model, sys, msgs, web) {
+      var q = msgs.length === 1 ? msgs[0].content
+        : msgs.map(function (m) { return (m.role === "user" ? "User: " : "Assistant: ") + m.content; }).join("\n\n");
+      return { model: model, system: (typeof sys === "string" ? sys : ""), question: q, messages: msgs, web: !!web,
         edit: lsget("ask-ai-edit", "") === "1",   // edit-mode checkbox (honored only by a local ALLOW_EDITS bot)
         page_url: location.pathname };             // lets the bot find the page's source file
     },
@@ -189,6 +193,11 @@
     ".askai-hd b{font-size:13.5px;margin-right:auto}" +
     ".askai-hd button{cursor:pointer;color:var(--muted,#86807a);background:none;border:none;font-size:16px;line-height:1}" +
     ".askai-body{padding:12px 14px;overflow-y:auto;flex:1}" +
+    ".askai-thread{display:flex;flex-direction:column;gap:10px}" +
+    ".askai-msg{max-width:88%;padding:8px 11px;border-radius:11px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}" +
+    ".askai-u{align-self:flex-end;background:var(--blue-bg,#e6f1fb);color:var(--blue-ink,#0c447c)}" +
+    ".askai-b{align-self:flex-start;background:var(--gray-bg,#f1efe8);color:var(--ink,#1f1e1b)}" +
+    ".askai-empty{color:var(--muted,#86807a);font-size:12.5px;text-align:center;padding:18px 6px}" +
     ".askai-ans{white-space:pre-wrap;font-size:13.5px;margin:4px 0 0}" +
     ".askai-ans code{background:var(--blue-bg,#eef);padding:1px 5px;border-radius:4px;font-size:.9em}" +
     ".askai-src{margin-top:10px;font-size:12px;color:var(--muted,#86807a)}" +
@@ -220,9 +229,32 @@
 
   /* ---------------- UI ---------------- */
   var fab = el("button", { class: "askai-fab", type: "button", "aria-label": "Ask AI" }, ["✦ ", t("Ask AI", "AI에게 질문")]);
-  var ans = el("div", { class: "askai-ans" });
-  var src = el("div", { class: "askai-src" });
+  var thread = el("div", { class: "askai-thread" });
   var errBox = el("div", { class: "askai-err" });
+  var CKEY = "askai:convo:" + location.pathname;   // chat history per page (this tab)
+  function loadConvo() { try { return JSON.parse(sessionStorage.getItem(CKEY) || "[]"); } catch (e) { return []; } }
+  function saveConvo() { try { sessionStorage.setItem(CKEY, JSON.stringify(convo)); } catch (e) {} }
+  var convo = loadConvo();
+  function renderThread(pending) {
+    thread.textContent = "";
+    if (!convo.length && !pending)
+      thread.appendChild(el("div", { class: "askai-empty" }, [t("Ask anything about this page — follow-ups keep context (saved while you're on this page).", "이 페이지에 대해 무엇이든 물어보세요 — 후속 질문은 맥락이 이어집니다(이 페이지에 있는 동안 저장).")]));
+    convo.forEach(function (m) {
+      var b = el("div", { class: "askai-msg " + (m.role === "user" ? "askai-u" : "askai-b") }, [m.content]);
+      if (m.role === "assistant" && m.cites && m.cites.length) {
+        var s = el("div", { class: "askai-src" }), seen = {};
+        m.cites.filter(function (c) { if (seen[c.url]) return false; seen[c.url] = 1; return true; })
+          .forEach(function (c, i) {
+            if (i === 0) s.appendChild(el("div", null, [t("Sources:", "출처:")]));
+            s.appendChild(el("a", { href: c.url, target: "_blank", rel: "noopener" }, ["• " + c.title]));
+          });
+        b.appendChild(s);
+      }
+      thread.appendChild(b);
+    });
+    if (pending) thread.appendChild(el("div", { class: "askai-msg askai-b" }, [t("…thinking", "…생각 중")]));
+    thread.scrollTop = thread.scrollHeight;
+  }
   var ta = el("textarea", { class: "askai-ta", placeholder: t("Ask about this page…", "이 페이지 내용을 물어보세요…") });
   var webChk = el("input", { type: "checkbox" });
   webChk.checked = lsget(LS_WEB, "1") !== "0";
@@ -286,13 +318,15 @@
 
   var gear = el("button", { type: "button", title: t("Settings", "설정") }, ["⚙"]);
   gear.addEventListener("click", function () { setBox.classList.toggle("open"); });
-  var closeBtn = el("button", { type: "button", "aria-label": "Close" }, ["×"]);
+  var clearBtn = el("button", { type: "button", title: t("New chat (clear history)", "새 대화 (기록 지우기)") }, ["🗑"]);
+  clearBtn.addEventListener("click", function () { convo = []; saveConvo(); errBox.textContent = ""; renderThread(false); });
+  var closeBtn = el("button", { type: "button", title: t("Minimize (keeps the chat)", "최소화 (대화 유지)"), "aria-label": "Minimize" }, ["—"]);
   closeBtn.addEventListener("click", function () { panel.classList.remove("open"); });
 
   var panel = el("div", { class: "askai-panel" }, [
-    el("div", { class: "askai-hd" }, [el("b", null, [t("Ask about this page", "이 페이지에 대해 질문")]), gear, closeBtn]),
+    el("div", { class: "askai-hd" }, [el("b", null, [t("Ask about this page", "이 페이지에 대해 질문")]), clearBtn, gear, closeBtn]),
     setBox,
-    el("div", { class: "askai-body" }, [ans, src, errBox]),
+    el("div", { class: "askai-body" }, [thread, errBox]),
     el("div", { class: "askai-foot" }, [ta,
       el("div", { class: "askai-row" }, [go, el("div", { class: "askai-chks" }, [webLabel, editLabel])])])
   ]);
@@ -300,20 +334,12 @@
   fab.addEventListener("click", function () {
     panel.classList.toggle("open");
     if (panel.classList.contains("open")) {
-      if (!lsget(keyLS(curProv()), "")) setBox.classList.add("open");
+      var p = curProv();
+      if (PROVIDERS[p].needsUrl ? !PROVIDERS[p].url() : !lsget(keyLS(p), "")) setBox.classList.add("open");
+      renderThread(false);
       ta.focus();
     }
   });
-
-  function renderCites(cites) {
-    src.textContent = "";
-    var seen = {};
-    cites.filter(function (c) { if (seen[c.url]) return false; seen[c.url] = 1; return true; })
-      .forEach(function (c, i) {
-        if (i === 0) src.appendChild(el("div", null, [t("Sources:", "출처:")]));
-        src.appendChild(el("a", { href: c.url, target: "_blank", rel: "noopener" }, ["• " + c.title]));
-      });
-  }
 
   function ask() {
     var p = curProv(), prov = PROVIDERS[p];
@@ -321,26 +347,34 @@
     var model = lsget(modelLS(p), "").trim() || prov.defModel;
     var q = ta.value.trim();
     errBox.textContent = "";
-    if (!key) { setBox.classList.add("open"); errBox.textContent = t("Enter your API key first.", "먼저 API 키를 입력하세요."); return; }
+    if (prov.needsUrl) {
+      if (!prov.url()) { setBox.classList.add("open"); errBox.textContent = t("Set the server URL first.", "먼저 서버 URL을 입력하세요."); return; }
+    } else if (!key) {
+      setBox.classList.add("open"); errBox.textContent = t("Enter your API key first.", "먼저 API 키를 입력하세요."); return;
+    }
     if (!q) return;
-    go.disabled = true; go.textContent = t("Thinking…", "생각 중…"); ans.textContent = ""; src.textContent = "";
+
+    convo.push({ role: "user", content: q }); saveConvo(); ta.value = "";
+    renderThread(true);
+    go.disabled = true; go.textContent = t("Thinking…", "생각 중…");
 
     var sys = "You are a study assistant embedded in a technical blog page. The reader is viewing the page whose text is given below. " +
-      "Answer their question. Prefer and ground your answer in the PAGE CONTENT. If the page does not cover it, or the question needs " +
-      "current/external/broader information, use web search and cite sources. Be concise and clear. " +
-      "Answer in " + (ko() ? "Korean." : "English.") +
+      "This is a multi-turn conversation — use the prior turns as context. Prefer and ground your answer in the PAGE CONTENT. " +
+      "If the page does not cover it, or the question needs current/external/broader information, use web search and cite sources. " +
+      "Be concise and clear. Answer in " + (ko() ? "Korean." : "English.") +
       "\n\n=== PAGE CONTENT ===\n" + pageText();
 
     fetch(prov.url(model, key), {
-      method: "POST", headers: prov.headers(key), body: JSON.stringify(prov.body(model, sys, q, webChk.checked))
+      method: "POST", headers: prov.headers(key), body: JSON.stringify(prov.body(model, sys, convo, webChk.checked))
     }).then(function (r) { return r.json(); }).then(function (d) {
       var out = prov.parse(d);
-      if (out.err) { errBox.textContent = out.err; return; }
-      ans.textContent = out.text || t("(no answer)", "(응답 없음)");
-      renderCites(out.cites || []);
+      if (out.err) { errBox.textContent = out.err; renderThread(false); return; }
+      convo.push({ role: "assistant", content: out.text || t("(no answer)", "(응답 없음)"), cites: out.cites || [] });
+      saveConvo(); renderThread(false);
     }).catch(function (e) {
       errBox.textContent = t("Request failed: ", "요청 실패: ") + (e && e.message ? e.message : e) +
-        t("  (check key / model / network)", "  (키·모델·네트워크 확인)");
+        t("  (check URL / key / model / network)", "  (URL·키·모델·네트워크 확인)");
+      renderThread(false);
     }).then(function () { go.disabled = false; go.textContent = t("Ask", "물어보기"); });
   }
   go.addEventListener("click", ask);
