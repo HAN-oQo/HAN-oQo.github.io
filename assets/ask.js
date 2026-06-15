@@ -155,7 +155,11 @@
      and returns {answer, sources}. Browser holds only an optional access token. */
   PROVIDERS.bot = {
     label: "My Claude bot (Agent SDK)", models: PROVIDERS.claude.models, defModel: PROVIDERS.claude.defModel, needsUrl: true,
-    url: function () { return lsget("ask-ai-url-bot", ""); },
+    url: function () {
+      var u = (lsget("ask-ai-url-bot", "") || "").trim().replace(/\/+$/, "");
+      if (!u) return "";
+      return /\/ask$/.test(u) ? u : u + "/ask";   // tolerate URLs given without the /ask path
+    },
     headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
     body: function (model, sys, q, web) {
       return { model: model, system: (typeof sys === "string" ? sys : ""), question: q, web: !!web,
