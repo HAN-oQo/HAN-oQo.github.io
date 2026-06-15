@@ -144,10 +144,26 @@
      Your server (e.g. a Cloudflare Worker) holds the real Anthropic key and
      forwards the Claude-shaped body to api.anthropic.com. */
   PROVIDERS.proxy = {
-    label: "Proxy (your server)", models: PROVIDERS.claude.models, defModel: PROVIDERS.claude.defModel, needsUrl: true,
-    url: function () { return lsget("ask-ai-proxy-url", ""); },
+    label: "Proxy (your API key)", models: PROVIDERS.claude.models, defModel: PROVIDERS.claude.defModel, needsUrl: true,
+    url: function () { return lsget("ask-ai-url-proxy", ""); },
     headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
     body: PROVIDERS.claude.body, parse: PROVIDERS.claude.parse
+  };
+  /* Your own Claude Agent SDK bot (uses a Claude subscription via the local
+     `claude` login / setup-token — the same pattern as a Claude-Code/Agent-SDK
+     Slack bot). The bot server (assets/ask-bot-server/server.py) exposes /ask
+     and returns {answer, sources}. Browser holds only an optional access token. */
+  PROVIDERS.bot = {
+    label: "My Claude bot (Agent SDK)", models: PROVIDERS.claude.models, defModel: PROVIDERS.claude.defModel, needsUrl: true,
+    url: function () { return lsget("ask-ai-url-bot", ""); },
+    headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
+    body: function (model, sys, q, web) {
+      return { model: model, system: (typeof sys === "string" ? sys : ""), question: q, web: !!web };
+    },
+    parse: function (d) {
+      if (d.error) return { err: (d.error.message || d.error) };
+      return { text: d.answer || "", cites: (d.sources || []) };
+    }
   };
   function curProv() { var p = lsget(LS_PROV, "groq"); return PROVIDERS[p] ? p : "groq"; }
 
@@ -219,7 +235,7 @@
   var urlInput = el("input", { type: "text", placeholder: "https://your-worker.workers.dev" });
   var modelSelect = el("select");
   function loadProvFields() {
-    var p = provSel.value, isProxy = (p === "proxy");
+    var p = provSel.value, needsUrl = !!PROVIDERS[p].needsUrl;
     keyInput.value = lsget(keyLS(p), "");
     modelSelect.innerHTML = "";
     var saved = lsget(modelLS(p), "") || PROVIDERS[p].defModel;
@@ -228,9 +244,9 @@
       if (m === saved) o.setAttribute("selected", "selected");
       modelSelect.appendChild(o);
     });
-    keyLabel.textContent = isProxy ? t("Access token (optional)", "접근 토큰 (선택)") : t("API key", "API 키");
-    urlInput.value = lsget("ask-ai-proxy-url", "");
-    urlLabel.style.display = urlInput.style.display = isProxy ? "" : "none";
+    keyLabel.textContent = needsUrl ? t("Access token (optional)", "접근 토큰 (선택)") : t("API key", "API 키");
+    urlInput.value = lsget("ask-ai-url-" + p, "");
+    urlLabel.style.display = urlInput.style.display = needsUrl ? "" : "none";
   }
   provSel.addEventListener("change", function () { lsset(LS_PROV, provSel.value); loadProvFields(); });
   loadProvFields();
@@ -240,7 +256,7 @@
     lsset(LS_PROV, p);
     lsset(keyLS(p), keyInput.value.trim());
     lsset(modelLS(p), modelSelect.value);
-    if (p === "proxy") lsset("ask-ai-proxy-url", urlInput.value.trim());
+    if (PROVIDERS[p].needsUrl) lsset("ask-ai-url-" + p, urlInput.value.trim());
     setBox.classList.remove("open"); errBox.textContent = "";
   });
   var setBox = el("div", { class: "askai-set" }, [

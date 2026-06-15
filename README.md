@@ -58,15 +58,28 @@ Then in the widget ⚙: **Provider = Proxy (your server)**, **Proxy URL =**
 The browser now holds only the revocable access token; the real key stays in the
 Worker secret. Web search still works (it's a server-side tool the request enables).
 
-### Note on `claude setup-token` / OAuth tokens
+### Use your Claude **subscription** (no API billing) — Agent SDK bot
 
-`claude setup-token` issues an **OAuth token** (`sk-ant-oat…`) for **Claude Code (the CLI)**,
-not an API key. The widget will send it as `Authorization: Bearer` (auto-detected),
-but Anthropic **gates these tokens to Claude Code** — using one to power a web app
-requires impersonating the Claude Code client, which is outside the subscription's
-terms and is intentionally **not** done here. If a Bearer call returns a permission
-error, that's the gate: use a **Console API key** (`sk-ant-api…`) or **Gemini's free
-tier** instead. Both work cleanly with the widget and the proxy above.
+If you already pay for Claude and don't want API charges, run your own bot with the
+**Claude Agent SDK**, authenticated by your local `claude` login (`claude setup-token`).
+The SDK runs Claude Code on your subscription — **no `ANTHROPIC_API_KEY`**. It's the
+same pattern as a Claude-Code/Agent-SDK Slack bot. A ready server is in
+[`assets/ask-bot-server/`](assets/ask-bot-server/) (`/ask` endpoint, WebSearch, CORS,
+optional access-token gate). Host it on a (CPU) node, expose it over HTTPS
+(`cloudflared tunnel --url http://localhost:8787`), then set widget
+**Provider = "My Claude bot (Agent SDK)"**, URL = `https://…/ask`. See its
+[README](assets/ask-bot-server/README.md). Keep it personal/team-scoped (gate with a
+token) — a subscription isn't meant to power a high-traffic public service.
+
+### Note on `claude setup-token` used **directly** in the browser
+
+The widget can also take an OAuth token (`sk-ant-oat…`) and send it as
+`Authorization: Bearer`, but Anthropic **gates these tokens to Claude Code** — calling
+the raw API with one requires impersonating the Claude Code client, which is
+circumvention and is intentionally **not** done here. The legitimate way to use that
+subscription token is the **Agent SDK bot above** (Anthropic's official path), not a
+raw-API call from the page. For pay-per-use, a **Console API key** (`sk-ant-api…`) or
+**Gemini's free tier** also work cleanly.
 
 ## Local preview
 
