@@ -50,6 +50,35 @@ check **편집 모드**, and chat: *"이 페이지에 ~ 메모 추가해줘"*.
 - The **편집 모드** checkbox in the widget toggles editing per message; the server only
   honors it when *you* launched with `ALLOW_EDITS=1` (the launcher's local mode).
 
+## Where it runs & how to read the URL / token yourself
+
+Everything runs **on your machine** as plain processes inside tmux — nothing hidden.
+Check it yourself (no need to ask anyone):
+
+```sh
+# 1) which bots are up (sessions)
+tmux ls                                  # e.g. askbot (local edit) / askbot-pub (public)
+
+# 2) the saved connection info (written by launch.sh on every run)
+cat ~/.askbot/askbot.txt                 # local edit bot
+cat ~/.askbot/askbot-pub.txt             # public tunnel bot
+
+# 3) ports / processes on this machine
+lsof -nP -iTCP -sTCP:LISTEN | grep -E ':8787|:8788|:8000'
+pgrep -fl 'server.py|http.server|cloudflared'
+
+# 4) token straight from the running process env
+ps eww $(pgrep -f 'ask-bot-server/server.py') | tr ' ' '\n' | grep ACCESS_TOKEN=
+
+# 5) public tunnel URL from cloudflared's log (or its tmux pane)
+grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/askbot-tunnel.log | tail -1
+tmux attach -t askbot-pub                # watch live (detach: Ctrl-b then d)
+```
+
+The tokens are **not** stored in this repo — only in `~/.askbot/*.txt` (your home dir)
+and in the live process env. The trycloudflare URL is **ephemeral** (new on each
+tunnel restart); the saved file always reflects the latest run.
+
 ## Setup (manual)
 
 ```sh

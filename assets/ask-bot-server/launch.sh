@@ -71,6 +71,17 @@ else
   PREVIEW="http://localhost:$PREVIEW_PORT/"
 fi
 
+# persist the connection info so you can read it any time (cat), not just now
+INFO_DIR="${INFO_DIR:-$HOME/.askbot}"; mkdir -p "$INFO_DIR"; INFO="$INFO_DIR/$SESS.txt"
+{
+  echo "Provider     : My Claude bot (Agent SDK)"
+  echo "URL          : $ASK_URL"
+  echo "Access token : $ACCESS_TOKEN"
+  echo "Mode         : $MODE"
+  [ -n "$PREVIEW" ] && echo "Preview      : $PREVIEW"
+  echo "Session/Port : $SESS / $PORT"
+} > "$INFO"
+
 cat <<EOF
 
 ================  위젯 ⚙ 에 입력  ================
@@ -81,6 +92,7 @@ cat <<EOF
 EOF
 [ -n "$PREVIEW" ] && echo " 사이트 프리뷰 : $PREVIEW  ← 여기서 보면서 '편집 모드' 체크하고 메모 추가/수정"
 cat <<EOF
+ 저장됨       : $INFO   ← 나중에 'cat $INFO' 로 다시 확인
  tmux         : tmux attach -t $SESS   (빠져나오기: Ctrl-b 그다음 d)
 =================================================
 EOF
