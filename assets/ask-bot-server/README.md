@@ -31,6 +31,13 @@ TUNNEL=1 bash assets/ask-bot-server/launch.sh
 Then open the printed **사이트 프리뷰** URL, click **✦ → ⚙**, paste the URL + token,
 check **편집 모드**, and chat: *"이 페이지에 ~ 메모 추가해줘"*.
 
+> Already logged into `claude` on this machine? Add **`SKIP_TOKEN=1`** to skip the
+> browser step and reuse that login (the Agent SDK uses your existing `~/.claude`
+> session). Use **`PYTHON=…`** to point at a venv that has the deps installed, e.g.
+> `SKIP_TOKEN=1 PYTHON=~/ask-bot-venv/bin/python bash assets/ask-bot-server/launch.sh`.
+> The bot runs in a **detached tmux session** (`askbot`) — independent of any Claude
+> Code session, and it keeps running after you close this terminal.
+
 ### Who can edit / push? — only you, automatically
 
 - **Edit mode binds to `127.0.0.1`.** Another visitor's browser hitting `127.0.0.1:8787`
