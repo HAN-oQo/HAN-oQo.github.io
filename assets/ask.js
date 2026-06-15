@@ -204,7 +204,7 @@
           if (d.answer != null) return { text: d.answer, cites: d.sources || [] };   // synchronous server
           if (!d.id) throw new Error("no job id from bot");
           return new Promise(function (resolve, reject) {                              // poll /result
-            var tries = 0, MAX = 100;                                                  // ~100 x 1.5s ≈ 2.5 min
+            var tries = 0, MAX = 360, IVL = 1000;                                      // ~360 x 1s ≈ 6 min
             (function poll() {
               tries++;
               fetch(resBase + "?id=" + encodeURIComponent(d.id), { headers: headers })
@@ -213,9 +213,9 @@
                   if (j.status === "done") resolve({ text: j.answer || "", cites: j.sources || [] });
                   else if (j.status === "error") reject(new Error(j.error || "bot error"));
                   else if (tries >= MAX) reject(new Error("timeout waiting for the bot"));
-                  else setTimeout(poll, 1500);
+                  else { if ((j.partial || j.thinking) && ctx.onProgress) ctx.onProgress(j.partial || "", j.thinking || ""); setTimeout(poll, IVL); }  // stream partial answer + thinking
                 })
-                .catch(function (e) { if (tries >= MAX) reject(e); else setTimeout(poll, 1500); });
+                .catch(function (e) { if (tries >= MAX) reject(e); else setTimeout(poll, IVL); });
             })();
           });
         });
@@ -247,6 +247,12 @@
     ".askai-u{align-self:flex-end;background:var(--blue-bg,#e6f1fb);color:var(--blue-ink,#0c447c)}" +
     ".askai-b{align-self:flex-start;background:var(--gray-bg,#f1efe8);color:var(--ink,#1f1e1b)}" +
     ".askai-empty{color:var(--muted,#86807a);font-size:12.5px;text-align:center;padding:18px 6px}" +
+    ".askai-think{color:var(--muted,#86807a);font-size:12px;font-weight:600;display:block;margin-bottom:4px}" +
+    ".askai-reason{color:var(--muted,#86807a);font-size:12px;line-height:1.5;font-style:italic;white-space:pre-wrap;max-height:120px;overflow:hidden}" +
+    ".askai-dots{animation:askblink 1.2s ease-in-out infinite;letter-spacing:1px}" +
+    ".askai-cursor{display:inline-block;color:var(--muted,#86807a);animation:askblink 1s steps(1) infinite;margin-left:1px}" +
+    "@keyframes askblink{50%{opacity:.25}}" +
+    "@media(prefers-reduced-motion:reduce){.askai-dots,.askai-cursor{animation:none}}" +
     ".askai-md{white-space:normal}" +
     ".askai-md p{margin:0 0 8px}.askai-md p:last-child{margin-bottom:0}" +
     ".askai-md pre{background:var(--code-bg,#2b2a27);color:var(--code-ink,#f3f1ea);padding:9px 11px;border-radius:8px;overflow-x:auto;margin:6px 0;font:12.5px/1.45 ui-monospace,Menlo,Consolas,monospace}" +
@@ -328,7 +334,8 @@
   function loadConvo() { try { return JSON.parse(sessionStorage.getItem(CKEY) || "[]"); } catch (e) { return []; } }
   function saveConvo() { try { sessionStorage.setItem(CKEY, JSON.stringify(convo)); } catch (e) {} }
   var convo = loadConvo();
-  function renderThread(pending) {
+  var askStart = 0;   // ms timestamp of the in-flight request (0 = idle), for the elapsed counter
+  function renderThread(pending, partial, thinking) {
     thread.textContent = "";
     if (!convo.length && !pending)
       thread.appendChild(el("div", { class: "askai-empty" }, [t("Ask anything about this page — follow-ups keep context (saved while you're on this page).", "이 페이지에 대해 무엇이든 물어보세요 — 후속 질문은 맥락이 이어집니다(이 페이지에 있는 동안 저장).")]));
@@ -352,7 +359,26 @@
       }
       thread.appendChild(b);
     });
-    if (pending) thread.appendChild(el("div", { class: "askai-msg askai-b" }, [t("…thinking", "…생각 중")]));
+    if (pending) {
+      var sec = askStart ? Math.round((Date.now() - askStart) / 1000) : 0;
+      var pb = el("div", { class: "askai-msg askai-b" });
+      if (partial && partial.trim()) {                       // streaming the answer-so-far
+        var pm = el("div", { class: "askai-md" });
+        pm.innerHTML = mdToHtml(partial) + '<span class="askai-cursor">▍</span>';
+        pb.appendChild(pm);
+      } else if (thinking && thinking.trim()) {              // reasoning streaming before the answer
+        var head = el("div", { class: "askai-think" }, ["💭 " + t("reasoning", "생각하는 중") + (sec ? " · " + sec + "s" : "")]);
+        var body = el("div", { class: "askai-reason" });
+        var tail = thinking.length > 600 ? "…" + thinking.slice(-600) : thinking;  // show the latest reasoning
+        body.textContent = tail;
+        body.appendChild(el("span", { class: "askai-cursor" }, ["▍"]));
+        pb.appendChild(head); pb.appendChild(body);
+      } else {                                               // not started yet: live "thinking (Ns)"
+        pb.appendChild(el("span", { class: "askai-think" },
+          [t("Thinking", "생각 중") + (sec ? " · " + sec + "s" : "") + " ", el("span", { class: "askai-dots" }, ["•••"])]));
+      }
+      thread.appendChild(pb);
+    }
     thread.scrollTop = thread.scrollHeight;
   }
   var ta = tat(el("textarea", { class: "askai-ta" }), "placeholder", "Ask about this page…", "이 페이지 내용을 물어보세요…");
@@ -492,7 +518,10 @@
     if (!q) return;
 
     convo.push({ role: "user", content: q }); saveConvo(); ta.value = "";
-    renderThread(true);
+    askStart = Date.now();
+    var partial = "", thinking = "";
+    var tick = setInterval(function () { renderThread(true, partial, thinking); }, 1000);   // live elapsed counter
+    renderThread(true, partial, thinking);
     go.disabled = true; goSpan.textContent = t("Thinking…", "생각 중…");
 
     var sys = "You are a study assistant embedded in a technical blog page. The reader is viewing the page whose text is given below. " +
@@ -503,7 +532,8 @@
       "\n\n=== PAGE CONTENT ===\n" + pageText();
 
     var run = prov.send
-      ? prov.send({ model: model, key: key, sys: sys, convo: convo, web: webChk.checked })
+      ? prov.send({ model: model, key: key, sys: sys, convo: convo, web: webChk.checked,
+          onProgress: function (p, th) { partial = p; thinking = th || ""; renderThread(true, partial, thinking); } })   // stream answer + thinking
       : fetch(prov.url(model, key), {
           method: "POST", headers: prov.headers(key), body: JSON.stringify(prov.body(model, sys, convo, webChk.checked))
         }).then(function (r) { return r.json(); }).then(function (d) {
@@ -524,7 +554,7 @@
           t("  (check URL / key / model / network)", "  (URL·키·모델·네트워크 확인)");
       }
       renderThread(false);
-    }).then(function () { go.disabled = false; goSpan.textContent = t("Ask", "물어보기"); });
+    }).then(function () { clearInterval(tick); askStart = 0; go.disabled = false; goSpan.textContent = t("Ask", "물어보기"); });
   }
   go.addEventListener("click", ask);
   ta.addEventListener("keydown", function (e) {

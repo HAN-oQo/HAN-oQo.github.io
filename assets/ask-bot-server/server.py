@@ -130,38 +130,49 @@ def _edit_note(page_url):
 
 
 async def run_job(job_id, question, system, model, web_on, edit_req, page_url):
-    answer, parts, sources = None, [], []
+    answer, parts, think, sources = None, [], [], []
+    def _put(status):
+        JOBS[job_id] = {"status": status, "partial": "".join(parts),
+                        "thinking": "".join(think), "sources": sources, "t": time.time()}
     try:
+        common = dict(permission_mode="acceptEdits", include_partial_messages=True)  # stream token deltas
         if edit_req:
             allowed = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"] + (["WebSearch"] if web_on else [])
             options = ClaudeAgentOptions(
                 model=model, system_prompt=system + _edit_note(page_url), cwd=REPO_DIR,
-                allowed_tools=allowed, permission_mode="acceptEdits", max_turns=24,
+                allowed_tools=allowed, max_turns=24, **common,
             )
         else:
             options = ClaudeAgentOptions(
-                model=model,
-                system_prompt=system,
+                model=model, system_prompt=system,
                 allowed_tools=(["WebSearch"] if web_on else []),
                 disallowed_tools=BASE_DISALLOWED + ([] if web_on else ["WebSearch"]),
-                permission_mode="acceptEdits",
-                max_turns=(100 if web_on else 100),
+                max_turns=100, **common,
             )
         async for msg in query(prompt=question, options=options):
+            # Streamed token deltas (include_partial_messages): answer + thinking.
+            ev = getattr(msg, "event", None)
+            if isinstance(ev, dict) and ev.get("type") == "content_block_delta":
+                d = ev.get("delta") or {}
+                if d.get("type") == "text_delta" and d.get("text"):
+                    parts.append(d["text"]); _put("running")
+                elif d.get("type") == "thinking_delta" and d.get("thinking"):
+                    think.append(d["thinking"]); _put("running")
+                continue
             if isinstance(msg, ResultMessage):
                 if msg.subtype == "success":
                     answer = msg.result
                 continue
+            # Final AssistantMessage: collect sources; use its text only if nothing streamed.
             for block in (getattr(msg, "content", None) or []):
                 tx = getattr(block, "text", None)
-                if tx:
-                    parts.append(tx)
+                if tx and not parts:
+                    parts.append(tx); _put("running")
                 for attr in ("url", "uri"):
                     u = getattr(block, attr, None)
                     if u:
                         sources.append({"url": u, "title": getattr(block, "title", u)})
-        # Some gateway models end on a ThinkingBlock, leaving ResultMessage.result
-        # as "" — fall back to the accumulated TextBlocks instead of "(no answer)".
+        # Some gateway models leave ResultMessage.result == "" — fall back to streamed text.
         text = (answer or "").strip() or "".join(parts).strip()
         JOBS[job_id] = {"status": "done", "answer": text or "(no answer)",
                         "sources": sources, "t": time.time()}
