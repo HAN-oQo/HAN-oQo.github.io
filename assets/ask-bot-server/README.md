@@ -16,7 +16,34 @@ This is the same pattern as a Claude-Code/Agent-SDK Slack bot
 > Keep the bot for personal/team use (gate it with `ACCESS_TOKEN`); a subscription
 > is not meant to power a high-traffic public service.
 
-## Setup
+## One command (tmux launcher)
+
+```sh
+# LOCAL edit mode — only you can edit/push (binds to localhost):
+bash assets/ask-bot-server/launch.sh
+#   → gets a subscription token (browser once), starts the bot + a site preview at :8000,
+#     prints Provider / URL / Access token to paste into the widget ⚙.
+
+# Public read-only (use the live site for Q&A; editing stays off):
+TUNNEL=1 bash assets/ask-bot-server/launch.sh
+```
+
+Then open the printed **사이트 프리뷰** URL, click **✦ → ⚙**, paste the URL + token,
+check **편집 모드**, and chat: *"이 페이지에 ~ 메모 추가해줘"*.
+
+### Who can edit / push? — only you, automatically
+
+- **Edit mode binds to `127.0.0.1`.** Another visitor's browser hitting `127.0.0.1:8787`
+  reaches *their own* machine, not yours — they can't touch your bot. The server even
+  **refuses to start** in edit mode on a non-localhost host (unless `FORCE_REMOTE_EDIT=1`).
+- The bot **URL + access token live only in your browser** (localStorage). Other readers
+  default to Groq and never see them.
+- `git push` uses **your machine's git credentials**. No one else's session can push.
+- `TUNNEL=1` is **forced read-only** — a public tunnel never exposes editing.
+- The **편집 모드** checkbox in the widget toggles editing per message; the server only
+  honors it when *you* launched with `ALLOW_EDITS=1` (the launcher's local mode).
+
+## Setup (manual)
 
 ```sh
 # 1) one-time: install + log in the Claude CLI on this box (uses your subscription)

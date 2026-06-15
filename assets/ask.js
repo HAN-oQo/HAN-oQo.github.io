@@ -159,7 +159,8 @@
     headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
     body: function (model, sys, q, web) {
       return { model: model, system: (typeof sys === "string" ? sys : ""), question: q, web: !!web,
-        page_url: location.pathname }; // lets the bot (edit mode) find the page's source file
+        edit: lsget("ask-ai-edit", "") === "1",   // edit-mode checkbox (honored only by a local ALLOW_EDITS bot)
+        page_url: location.pathname };             // lets the bot find the page's source file
     },
     parse: function (d) {
       if (d.error) return { err: (d.error.message || d.error) };
@@ -195,7 +196,8 @@
     ".askai-go{flex:0 0 auto;padding:8px 14px;border-radius:8px;border:none;cursor:pointer;" +
       "background:var(--ink,#1f1e1b);color:var(--bg,#faf9f5);font:600 13px inherit}" +
     ".askai-go[disabled]{opacity:.5;cursor:default}" +
-    ".askai-chk{font-size:12px;color:var(--muted,#86807a);display:flex;align-items:center;gap:5px;cursor:pointer;margin-left:auto}" +
+    ".askai-chk{font-size:12px;color:var(--muted,#86807a);display:flex;align-items:center;gap:5px;cursor:pointer}" +
+    ".askai-chks{margin-left:auto;display:flex;gap:12px;align-items:center}" +
     ".askai-set{display:none;padding:10px 14px;border-top:1px solid var(--line,#e7e2d6)}" +
     ".askai-set.open{display:block}" +
     ".askai-set label{font-size:11.5px;color:var(--muted,#86807a);display:block;margin-top:8px}" +
@@ -221,6 +223,13 @@
   var webChk = el("input", { type: "checkbox" });
   webChk.checked = lsget(LS_WEB, "1") !== "0";
   webChk.addEventListener("change", function () { lsset(LS_WEB, webChk.checked ? "1" : "0"); });
+  var webLabel = el("label", { class: "askai-chk" }, [webChk, t("web search", "웹 검색")]);
+  var editChk = el("input", { type: "checkbox" });
+  editChk.checked = lsget("ask-ai-edit", "") === "1";
+  editChk.addEventListener("change", function () { lsset("ask-ai-edit", editChk.checked ? "1" : "0"); });
+  var editLabel = el("label", { class: "askai-chk", title: t("Edit this page's HTML (local bot only)", "이 페이지 HTML 편집 (로컬 봇 전용)") },
+    [editChk, t("edit mode", "편집 모드")]);
+  editLabel.style.display = "none"; // shown only for the bot provider
   var go = el("button", { class: "askai-go", type: "button" }, [t("Ask", "물어보기")]);
 
   /* settings */
@@ -248,6 +257,7 @@
     keyLabel.textContent = needsUrl ? t("Access token (optional)", "접근 토큰 (선택)") : t("API key", "API 키");
     urlInput.value = lsget("ask-ai-url-" + p, "");
     urlLabel.style.display = urlInput.style.display = needsUrl ? "" : "none";
+    editLabel.style.display = (p === "bot") ? "" : "none"; // edit mode only via the local Claude bot
   }
   provSel.addEventListener("change", function () { lsset(LS_PROV, provSel.value); loadProvFields(); });
   loadProvFields();
@@ -280,7 +290,7 @@
     setBox,
     el("div", { class: "askai-body" }, [ans, src, errBox]),
     el("div", { class: "askai-foot" }, [ta,
-      el("div", { class: "askai-row" }, [go, el("label", { class: "askai-chk" }, [webChk, t("web search", "웹 검색")])])])
+      el("div", { class: "askai-row" }, [go, el("div", { class: "askai-chks" }, [webLabel, editLabel])])])
   ]);
 
   fab.addEventListener("click", function () {

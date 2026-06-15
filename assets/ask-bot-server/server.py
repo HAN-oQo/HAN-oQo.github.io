@@ -75,15 +75,20 @@ async def handle_ask(request):
     if not question:
         return cors(web.json_response({"error": "empty question"}, status=400))
 
-    if ALLOW_EDITS:
+    # Effective edit = server permits it (ALLOW_EDITS, set only on the owner's
+    # localhost box) AND this request asked for it (widget checkbox). A stranger
+    # can't reach a localhost-bound bot anyway, so this is just per-message control.
+    edit_req = ALLOW_EDITS and bool(data.get("edit"))
+    if edit_req:
         edit_note = (
             "\n\n=== EDIT MODE ===\n"
             f"You are Claude Code in the git repo at: {REPO_DIR}\n"
             f"The page being viewed: {page_url or '(unknown)'} → its source is that path under the repo "
             "(e.g. '/logs/x.html' → 'logs/x.html').\n"
-            "If the user asks to ADD A MEMO or EDIT the page, edit that HTML SOURCE file. For a memo insert a "
-            "callout inside the .wrap container:\n"
-            "  <div class=\"memo\">memo text<span class=\"memo-date\">YYYY-MM-DD</span></div>\n"
+            "If the user asks to ADD A MEMO or EDIT the page, edit that HTML SOURCE file. A memo must be "
+            "COLLAPSED by default — insert this inside the .wrap container:\n"
+            "  <details class=\"memo\"><summary>short title</summary>"
+            "<div class=\"memo-body\">memo text<span class=\"memo-date\">YYYY-MM-DD</span></div></details>\n"
             "After editing, run `python3 tools/check_theme.py`; keep the change only if it passes, fix it otherwise. "
             "Then `git add -A && git commit -m '…'`. " + ("Then `git push`." if PUSH else "Do NOT push.")
             + " If the user only asks a question, just answer — do not edit."
@@ -131,6 +136,14 @@ def main():
     app = web.Application(client_max_size=2 * 1024 * 1024)
     app.router.add_route("OPTIONS", "/ask", handle_options)
     app.router.add_post("/ask", handle_ask)
+    # SAFETY: edit mode must stay on the owner's machine. A localhost-bound bot is
+    # unreachable from anyone else's browser, so only YOU can trigger edits/pushes.
+    if ALLOW_EDITS and HOST not in ("127.0.0.1", "localhost", "::1") and not _flag("FORCE_REMOTE_EDIT"):
+        raise SystemExit(
+            f"refusing to start: ALLOW_EDITS=1 with HOST={HOST}. Edit mode must bind to "
+            "localhost so nobody else can edit/push. Use HOST=127.0.0.1 (default), or set "
+            "FORCE_REMOTE_EDIT=1 only if you really know what you're doing."
+        )
     mode = f"EDIT MODE (repo={REPO_DIR}, push={'yes' if PUSH else 'no'})" if ALLOW_EDITS else "read-only"
     print(f"ask-bot-server on {HOST}:{PORT}  ({mode}, origin={ALLOW_ORIGIN}, gated={'yes' if ACCESS_TOKEN else 'no'})")
     web.run_app(app, host=HOST, port=PORT)
