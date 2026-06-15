@@ -160,7 +160,9 @@ async def run_job(job_id, question, system, model, web_on, edit_req, page_url):
                     u = getattr(block, attr, None)
                     if u:
                         sources.append({"url": u, "title": getattr(block, "title", u)})
-        text = answer if answer is not None else "".join(parts)
+        # Some gateway models end on a ThinkingBlock, leaving ResultMessage.result
+        # as "" — fall back to the accumulated TextBlocks instead of "(no answer)".
+        text = (answer or "").strip() or "".join(parts).strip()
         JOBS[job_id] = {"status": "done", "answer": text or "(no answer)",
                         "sources": sources, "t": time.time()}
     except Exception as e:
