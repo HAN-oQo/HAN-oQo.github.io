@@ -34,6 +34,23 @@
 
   /* ---------------- providers ---------------- */
   var PROVIDERS = {
+    groq: {
+      label: "Groq (free)",
+      models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
+      defModel: "llama-3.3-70b-versatile",
+      url: function () { return "https://api.groq.com/openai/v1/chat/completions"; },
+      headers: function (key) { return { "content-type": "application/json", "authorization": "Bearer " + key }; },
+      body: function (model, sys, q) {
+        return { model: model, max_tokens: 1500,
+          messages: [{ role: "system", content: (typeof sys === "string" ? sys : "") }, { role: "user", content: q }] };
+      },
+      parse: function (d) {
+        if (d.error) return { err: d.error.message || JSON.stringify(d.error) };
+        var text = "";
+        (d.choices || []).forEach(function (c) { if (c.message && c.message.content) text += c.message.content; });
+        return { text: text, cites: [] };
+      }
+    },
     claude: {
       label: "Claude",
       models: ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-8"],
@@ -132,7 +149,7 @@
     headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
     body: PROVIDERS.claude.body, parse: PROVIDERS.claude.parse
   };
-  function curProv() { var p = lsget(LS_PROV, "claude"); return PROVIDERS[p] ? p : "claude"; }
+  function curProv() { var p = lsget(LS_PROV, "groq"); return PROVIDERS[p] ? p : "groq"; }
 
   /* ---------------- styles ---------------- */
   var css = "" +

@@ -29,12 +29,14 @@ Nothing is committed to this repo and there is no shared server by default.
 
 | Provider | Where to get a key | Web search | Note |
 |---|---|---|---|
-| **Gemini** | [aistudio.google.com](https://aistudio.google.com/apikey) | Google Search grounding | **Free tier** — cheapest way to try, no card needed |
-| **Claude** | [console.anthropic.com](https://console.anthropic.com/) (key `sk-ant-api…`) | built-in `web_search` | pay-per-use |
+| **Groq** (default) | [console.groq.com/keys](https://console.groq.com/keys) | — page-grounded only | **Free, no card** — Llama models; works without any billing |
+| **Gemini** | [aistudio.google.com](https://aistudio.google.com/apikey) | Google Search grounding | Free tier *where available* (region/project dependent — may show `limit: 0`) |
+| **Claude** | [console.anthropic.com](https://console.anthropic.com/) (`sk-ant-api…`) | built-in `web_search` | pay-per-use — the **API is separate from a Claude.ai/Claude Code subscription** |
 | **OpenAI** | [platform.openai.com](https://platform.openai.com/api-keys) | Responses `web_search` | pay-per-use |
 
-> Web search is billed per search on your own key. Models are a dropdown per
-> provider; edit `PROVIDERS[*].models` in `assets/ask.js` to add/remove.
+> Default provider is **Groq** because it's free and needs no billing. Web search
+> (Claude/OpenAI/Gemini) is billed per search on your own key. Models are a dropdown
+> per provider; edit `PROVIDERS[*].models` in `assets/ask.js` to add/remove.
 
 ### Proxy mode (hide the key / let visitors ask)
 
