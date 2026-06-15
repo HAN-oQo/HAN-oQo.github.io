@@ -236,7 +236,10 @@
       "box-shadow:0 12px 40px rgba(0,0,0,.22);font:14px/1.55 -apple-system,'Apple SD Gothic Neo',sans-serif}" +
     ".askai-panel.open{display:flex}" +
     ".askai-hd{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line,#e7e2d6)}" +
-    ".askai-hd b{font-size:13.5px;margin-right:auto}" +
+    ".askai-hdl{display:flex;flex-direction:column;gap:1px;margin-right:auto;min-width:0}" +
+    ".askai-hd b{font-size:13.5px}" +
+    ".askai-model{font-size:11px;font-weight:400;color:var(--muted,#86807a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
+    ".askai-model b{font-weight:600;color:var(--ink,#1f1e1b);font-size:11px}" +
     ".askai-hd button{cursor:pointer;color:var(--muted,#86807a);background:none;border:none;font-size:16px;line-height:1}" +
     ".askai-body{padding:12px 14px;overflow-y:auto;flex:1}" +
     ".askai-thread{display:flex;flex-direction:column;gap:10px}" +
@@ -327,6 +330,14 @@
   var urlLabel = el("label", null, [tsp("Proxy URL", "프록시 URL")]);
   var urlInput = el("input", { type: "text", placeholder: "https://your-worker.workers.dev" });
   var modelSelect = el("select");
+  var modelTag = el("span", { class: "askai-model" });   // shows the active model in the header
+  function showModel() {
+    var p = curProv(), m = lsget(modelLS(p), "") || PROVIDERS[p].defModel;
+    modelTag.innerHTML = "";
+    modelTag.appendChild(document.createTextNode(t("model: ", "모델: ")));
+    modelTag.appendChild(el("b", null, [mlabel(m)]));
+    modelTag.title = PROVIDERS[p].label + " · " + m;
+  }
   function mlabel(id) { return String(id).replace(/^claude-moreh-/, ""); }   // prettier dropdown text
   function optFor(m, saved) {                                                 // m: id string or {id,name}
     var id = (typeof m === "string") ? m : m.id, nm = (typeof m === "string") ? mlabel(m) : (m.name || mlabel(m.id));
@@ -367,7 +378,7 @@
     editLabel.style.display = (p === "bot") ? "" : "none"; // edit mode only via the local Claude bot
     if (p === "bot") fetchBotModels();                     // refresh local group with the gateway's live models
   }
-  provSel.addEventListener("change", function () { lsset(LS_PROV, provSel.value); loadProvFields(); });
+  provSel.addEventListener("change", function () { lsset(LS_PROV, provSel.value); loadProvFields(); showModel(); });
   loadProvFields();
   var saveBtn = el("button", { class: "askai-go", type: "button" }, [tsp("Save", "저장")]);
   saveBtn.addEventListener("click", function () {
@@ -376,7 +387,7 @@
     lsset(keyLS(p), keyInput.value.trim());
     lsset(modelLS(p), modelSelect.value);
     if (PROVIDERS[p].needsUrl) lsset("ask-ai-url-" + p, urlInput.value.trim());
-    setBox.classList.remove("open"); errBox.textContent = "";
+    setBox.classList.remove("open"); errBox.textContent = ""; showModel();
   });
   var setBox = el("div", { class: "askai-set" }, [
     el("label", null, [tsp("Provider", "프로바이더")]), provSel,
@@ -396,7 +407,9 @@
   closeBtn.addEventListener("click", function () { panel.classList.remove("open"); });
 
   var panel = el("div", { class: "askai-panel" }, [
-    el("div", { class: "askai-hd" }, [el("b", null, [tsp("Ask about this page", "이 페이지에 대해 질문")]), clearBtn, gear, closeBtn]),
+    el("div", { class: "askai-hd" }, [
+      el("div", { class: "askai-hdl" }, [el("b", null, [tsp("Ask about this page", "이 페이지에 대해 질문")]), modelTag]),
+      clearBtn, gear, closeBtn]),
     setBox,
     el("div", { class: "askai-body" }, [thread, errBox]),
     el("div", { class: "askai-foot" }, [ta,
@@ -408,6 +421,7 @@
     if (panel.classList.contains("open")) {
       var p = curProv();
       if (PROVIDERS[p].needsUrl ? !PROVIDERS[p].url() : !lsget(keyLS(p), "")) setBox.classList.add("open");
+      showModel();
       renderThread(false);
       ta.focus();
     }
@@ -434,6 +448,7 @@
       "This is a multi-turn conversation — use the prior turns as context. Prefer and ground your answer in the PAGE CONTENT. " +
       "If the page does not cover it, or the question needs current/external/broader information, use web search and cite sources. " +
       "Be concise and clear. Answer in " + (ko() ? "Korean." : "English.") +
+      " If asked which model or LLM you are, answer honestly that you are being served as '" + model + "'." +
       "\n\n=== PAGE CONTENT ===\n" + pageText();
 
     var run = prov.send
@@ -468,6 +483,7 @@
   new MutationObserver(function () {
     relang();
     loadProvFields();              // keyLabel + any per-provider text in current lang
+    showModel();                   // "model:" label in current lang
     if (!go.disabled) goSpan.textContent = t("Ask", "물어보기");
     renderThread(false);
   }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-lang", "lang"] });
