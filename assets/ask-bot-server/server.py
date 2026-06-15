@@ -23,10 +23,21 @@ Run:
     #   cloudflared tunnel --url http://localhost:8787   → https://<random>.trycloudflare.com
 """
 import os
+import time
+import collections
 from aiohttp import web
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
 ALLOW_ORIGIN = os.environ.get("ALLOW_ORIGIN", "*")
+# Comma-separated allowlist (falls back to ALLOW_ORIGIN). "*" = any origin.
+# With a real allowlist you can run WITHOUT a token: the browser sends Origin,
+# requests from other sites are refused, and rate-limiting bounds abuse. (Origin
+# is forgeable by non-browser clients, so this is "good enough" for a read-only
+# bot, not a hard secret — pair with a token or Cloudflare Turnstile if needed.)
+ALLOW_ORIGINS = [o.strip() for o in os.environ.get("ALLOW_ORIGINS", ALLOW_ORIGIN).split(",") if o.strip()]
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "30"))     # max requests per window per IP
+RATE_WINDOW = int(os.environ.get("RATE_WINDOW", "60"))   # window seconds
+_hits = collections.defaultdict(list)
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "")
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 PORT = int(os.environ.get("PORT", "8787"))
@@ -49,10 +60,26 @@ BASE_DISALLOWED = ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch"]
 
 
 def cors(resp):
-    resp.headers["Access-Control-Allow-Origin"] = ALLOW_ORIGIN
+    resp.headers["Access-Control-Allow-Origin"] = "*" if "*" in ALLOW_ORIGINS else (ALLOW_ORIGINS[0] if ALLOW_ORIGINS else "*")
+    resp.headers["Vary"] = "Origin"
     resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "content-type, x-access-token"
     return resp
+
+
+def _origin_ok(origin):
+    return ("*" in ALLOW_ORIGINS) or (origin in ALLOW_ORIGINS) or not origin
+
+
+def _rate_ok(ip):
+    now = time.time()
+    q = _hits[ip]
+    while q and q[0] < now - RATE_WINDOW:
+        q.pop(0)
+    if len(q) >= RATE_LIMIT:
+        return False
+    q.append(now)
+    return True
 
 
 async def handle_options(request):
@@ -60,6 +87,15 @@ async def handle_options(request):
 
 
 async def handle_ask(request):
+    # 1) Origin allowlist — blocks other sites' browsers (lets you skip a token).
+    origin = request.headers.get("Origin", "")
+    if not _origin_ok(origin):
+        return cors(web.json_response({"error": "forbidden origin"}, status=403))
+    # 2) Rate limit per client IP (cloudflared sets X-Forwarded-For).
+    ip = (request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.remote or "?"))
+    if not _rate_ok(ip):
+        return cors(web.json_response({"error": "rate limited — slow down"}, status=429))
+    # 3) Optional shared token (only enforced if ACCESS_TOKEN is set).
     if ACCESS_TOKEN and request.headers.get("x-access-token") != ACCESS_TOKEN:
         return cors(web.json_response({"error": "unauthorized"}, status=401))
     try:
@@ -145,7 +181,8 @@ def main():
             "FORCE_REMOTE_EDIT=1 only if you really know what you're doing."
         )
     mode = f"EDIT MODE (repo={REPO_DIR}, push={'yes' if PUSH else 'no'})" if ALLOW_EDITS else "read-only"
-    print(f"ask-bot-server on {HOST}:{PORT}  ({mode}, origin={ALLOW_ORIGIN}, gated={'yes' if ACCESS_TOKEN else 'no'})")
+    gate = ("token" if ACCESS_TOKEN else "no-token") + " · origins=" + ",".join(ALLOW_ORIGINS) + f" · rate={RATE_LIMIT}/{RATE_WINDOW}s"
+    print(f"ask-bot-server on {HOST}:{PORT}  ({mode} · {gate})")
     web.run_app(app, host=HOST, port=PORT)
 
 
