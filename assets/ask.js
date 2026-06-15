@@ -183,6 +183,35 @@
     parse: function (d) {
       if (d.error) return { err: (d.error.message || d.error) };
       return { text: d.answer || "", cites: (d.sources || []) };
+    },
+    // The deployed bot is TWO-STEP (the public edge caps responses at ~4s):
+    //   POST /ask -> {id}      then  GET /result?id=.. -> {status: pending|done|error}
+    // send() handles both that and a synchronous {answer} server, returning {text,cites}.
+    send: function (ctx) {
+      var prov = this, headers = prov.headers(ctx.key), askUrl = prov.url();
+      var resBase = askUrl.replace(/\/ask$/, "/result");
+      return fetch(askUrl, { method: "POST", headers: headers, body: JSON.stringify(prov.body(ctx.model, ctx.sys, ctx.convo, ctx.web)) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.error) throw new Error(d.error.message || d.error);
+          if (d.answer != null) return { text: d.answer, cites: d.sources || [] };   // synchronous server
+          if (!d.id) throw new Error("no job id from bot");
+          return new Promise(function (resolve, reject) {                              // poll /result
+            var tries = 0, MAX = 100;                                                  // ~100 x 1.5s ≈ 2.5 min
+            (function poll() {
+              tries++;
+              fetch(resBase + "?id=" + encodeURIComponent(d.id), { headers: headers })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                  if (j.status === "done") resolve({ text: j.answer || "", cites: j.sources || [] });
+                  else if (j.status === "error") reject(new Error(j.error || "bot error"));
+                  else if (tries >= MAX) reject(new Error("timeout waiting for the bot"));
+                  else setTimeout(poll, 1500);
+                })
+                .catch(function (e) { if (tries >= MAX) reject(e); else setTimeout(poll, 1500); });
+            })();
+          });
+        });
     }
   };
   function curProv() { var p = lsget(LS_PROV, "bot"); return PROVIDERS[p] ? p : "bot"; }
@@ -375,11 +404,16 @@
       "Be concise and clear. Answer in " + (ko() ? "Korean." : "English.") +
       "\n\n=== PAGE CONTENT ===\n" + pageText();
 
-    fetch(prov.url(model, key), {
-      method: "POST", headers: prov.headers(key), body: JSON.stringify(prov.body(model, sys, convo, webChk.checked))
-    }).then(function (r) { return r.json(); }).then(function (d) {
-      var out = prov.parse(d);
-      if (out.err) { errBox.textContent = out.err; renderThread(false); return; }
+    var run = prov.send
+      ? prov.send({ model: model, key: key, sys: sys, convo: convo, web: webChk.checked })
+      : fetch(prov.url(model, key), {
+          method: "POST", headers: prov.headers(key), body: JSON.stringify(prov.body(model, sys, convo, webChk.checked))
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          var out = prov.parse(d);
+          if (out.err) throw new Error(out.err);
+          return out;
+        });
+    run.then(function (out) {
       convo.push({ role: "assistant", content: out.text || t("(no answer)", "(응답 없음)"), cites: out.cites || [] });
       saveConvo(); renderThread(false);
     }).catch(function (e) {
