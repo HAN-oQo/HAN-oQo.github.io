@@ -16,6 +16,10 @@
   var LS_WEB = "ask-ai-web";
   var keyLS = function (p) { return "ask-ai-key-" + p; };
   var modelLS = function (p) { return "ask-ai-model-" + p; };
+  // Default "My Claude bot" endpoint — a URL is NOT a secret, so it's fine to bake.
+  // No token is baked: the bot server gates by Origin allowlist + rate limit instead
+  // (a client-side token can't be hidden, so it wouldn't add real security anyway).
+  var DEFAULT_BOT_URL = "https://askbot.ce.moreh.dev/ask";
 
   function ko() { return document.documentElement.getAttribute("data-lang") === "ko"; }
   function t(en, k) { return ko() ? k : en; }
@@ -158,9 +162,8 @@
   PROVIDERS.bot = {
     label: "My Claude bot (Agent SDK)", models: PROVIDERS.claude.models, defModel: PROVIDERS.claude.defModel, needsUrl: true,
     url: function () {
-      var u = (lsget("ask-ai-url-bot", "") || "").trim().replace(/\/+$/, "");
-      if (!u) return "";
-      return /\/ask$/.test(u) ? u : u + "/ask";   // tolerate URLs given without the /ask path
+      var u = (lsget("ask-ai-url-bot", "") || DEFAULT_BOT_URL).trim().replace(/\/+$/, "");
+      return /\/ask$/.test(u) ? u : u + "/ask";   // default baked in; /ask appended if missing
     },
     headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
     body: function (model, sys, msgs, web) {
@@ -175,7 +178,7 @@
       return { text: d.answer || "", cites: (d.sources || []) };
     }
   };
-  function curProv() { var p = lsget(LS_PROV, "groq"); return PROVIDERS[p] ? p : "groq"; }
+  function curProv() { var p = lsget(LS_PROV, "bot"); return PROVIDERS[p] ? p : "bot"; }
 
   /* ---------------- styles ---------------- */
   var css = "" +
@@ -291,7 +294,7 @@
       modelSelect.appendChild(o);
     });
     keyLabel.textContent = needsUrl ? t("Access token (optional)", "접근 토큰 (선택)") : t("API key", "API 키");
-    urlInput.value = lsget("ask-ai-url-" + p, "");
+    urlInput.value = lsget("ask-ai-url-" + p, "") || (p === "bot" ? DEFAULT_BOT_URL : "");
     urlLabel.style.display = urlInput.style.display = needsUrl ? "" : "none";
     editLabel.style.display = (p === "bot") ? "" : "none"; // edit mode only via the local Claude bot
   }
