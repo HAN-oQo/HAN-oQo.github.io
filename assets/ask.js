@@ -35,7 +35,9 @@
   /* ---------------- providers ---------------- */
   var PROVIDERS = {
     claude: {
-      label: "Claude", defModel: "claude-haiku-4-5-20251001",
+      label: "Claude",
+      models: ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-8"],
+      defModel: "claude-haiku-4-5-20251001",
       url: function () { return "https://api.anthropic.com/v1/messages"; },
       headers: function (key) {
         return { "content-type": "application/json", "x-api-key": key,
@@ -59,7 +61,9 @@
       }
     },
     openai: {
-      label: "OpenAI", defModel: "gpt-4o-mini",
+      label: "OpenAI",
+      models: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
+      defModel: "gpt-4o-mini",
       url: function () { return "https://api.openai.com/v1/responses"; },
       headers: function (key) { return { "content-type": "application/json", "authorization": "Bearer " + key }; },
       body: function (model, sys, q, web) {
@@ -85,7 +89,9 @@
       }
     },
     gemini: {
-      label: "Gemini", defModel: "gemini-2.0-flash",
+      label: "Gemini",
+      models: ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"],
+      defModel: "gemini-2.0-flash",
       url: function (model, key) {
         return "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) +
           ":generateContent?key=" + encodeURIComponent(key);
@@ -116,7 +122,7 @@
      Your server (e.g. a Cloudflare Worker) holds the real Anthropic key and
      forwards the Claude-shaped body to api.anthropic.com. */
   PROVIDERS.proxy = {
-    label: "Proxy (your server)", defModel: PROVIDERS.claude.defModel, needsUrl: true,
+    label: "Proxy (your server)", models: PROVIDERS.claude.models, defModel: PROVIDERS.claude.defModel, needsUrl: true,
     url: function () { return lsget("ask-ai-proxy-url", ""); },
     headers: function (key) { var h = { "content-type": "application/json" }; if (key) h["x-access-token"] = key; return h; },
     body: PROVIDERS.claude.body, parse: PROVIDERS.claude.parse
@@ -189,12 +195,17 @@
   var keyInput = el("input", { type: "password", placeholder: "API key" });
   var urlLabel = el("label", null, [t("Proxy URL", "프록시 URL")]);
   var urlInput = el("input", { type: "text", placeholder: "https://your-worker.workers.dev" });
-  var modelInput = el("input", { type: "text" });
+  var modelSelect = el("select");
   function loadProvFields() {
     var p = provSel.value, isProxy = (p === "proxy");
     keyInput.value = lsget(keyLS(p), "");
-    modelInput.value = lsget(modelLS(p), "");
-    modelInput.placeholder = PROVIDERS[p].defModel;
+    modelSelect.innerHTML = "";
+    var saved = lsget(modelLS(p), "") || PROVIDERS[p].defModel;
+    PROVIDERS[p].models.forEach(function (m) {
+      var o = el("option", { value: m }, [m]);
+      if (m === saved) o.setAttribute("selected", "selected");
+      modelSelect.appendChild(o);
+    });
     keyLabel.textContent = isProxy ? t("Access token (optional)", "접근 토큰 (선택)") : t("API key", "API 키");
     urlInput.value = lsget("ask-ai-proxy-url", "");
     urlLabel.style.display = urlInput.style.display = isProxy ? "" : "none";
@@ -206,7 +217,7 @@
     var p = provSel.value;
     lsset(LS_PROV, p);
     lsset(keyLS(p), keyInput.value.trim());
-    lsset(modelLS(p), modelInput.value.trim());
+    lsset(modelLS(p), modelSelect.value);
     if (p === "proxy") lsset("ask-ai-proxy-url", urlInput.value.trim());
     setBox.classList.remove("open"); errBox.textContent = "";
   });
@@ -214,7 +225,7 @@
     el("label", null, [t("Provider", "프로바이더")]), provSel,
     urlLabel, urlInput,
     keyLabel, keyInput,
-    el("label", null, [t("Model (optional)", "모델 (선택)")]), modelInput,
+    el("label", null, [t("Model", "모델")]), modelSelect,
     el("div", { class: "askai-row" }, [saveBtn]),
     el("div", { class: "askai-note" }, [t("Key/token stored only in this browser (localStorage), sent only to the provider or your proxy. Web search is billed per use.",
       "키/토큰은 이 브라우저(localStorage)에만 저장되고 프로바이더(또는 내 프록시)로만 전송됩니다. 웹 검색은 사용량만큼 과금됩니다.")])
