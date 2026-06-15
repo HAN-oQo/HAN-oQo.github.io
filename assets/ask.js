@@ -21,8 +21,15 @@
   // (a client-side token can't be hidden, so it wouldn't add real security anyway).
   var DEFAULT_BOT_URL = "https://askbot.ce.moreh.dev/ask";
 
-  function ko() { return document.documentElement.getAttribute("data-lang") === "ko"; }
+  function ko() { var d = document.documentElement; return (d.getAttribute("data-lang") || d.getAttribute("lang") || "").slice(0, 2) === "ko"; }
   function t(en, k) { return ko() ? k : en; }
+  /* i18n registry — labels re-apply when the site EN/KO toggle flips data-lang,
+     so the widget chrome follows the toggle instead of freezing at mount time. */
+  var i18nApply = [];
+  function reg(fn) { fn(); i18nApply.push(fn); return fn; }
+  function tsp(en, k) { var s = document.createElement("span"); reg(function () { s.textContent = t(en, k); }); return s; }
+  function tat(node, attr, en, k) { reg(function () { node.setAttribute(attr, t(en, k)); }); return node; }
+  function relang() { i18nApply.forEach(function (fn) { fn(); }); }
   function lsget(k, d) { try { return localStorage.getItem(k) || d || ""; } catch (e) { return d || ""; } }
   function lsset(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
   function el(tag, attrs, kids) {
@@ -231,7 +238,7 @@
   }
 
   /* ---------------- UI ---------------- */
-  var fab = el("button", { class: "askai-fab", type: "button", "aria-label": "Ask AI" }, ["✦ ", t("Ask AI", "AI에게 질문")]);
+  var fab = el("button", { class: "askai-fab", type: "button", "aria-label": "Ask AI" }, ["✦ ", tsp("Ask AI", "AI에게 질문")]);
   var thread = el("div", { class: "askai-thread" });
   var errBox = el("div", { class: "askai-err" });
   var CKEY = "askai:convo:" + location.pathname;   // chat history per page (this tab)
@@ -258,18 +265,19 @@
     if (pending) thread.appendChild(el("div", { class: "askai-msg askai-b" }, [t("…thinking", "…생각 중")]));
     thread.scrollTop = thread.scrollHeight;
   }
-  var ta = el("textarea", { class: "askai-ta", placeholder: t("Ask about this page…", "이 페이지 내용을 물어보세요…") });
+  var ta = tat(el("textarea", { class: "askai-ta" }), "placeholder", "Ask about this page…", "이 페이지 내용을 물어보세요…");
   var webChk = el("input", { type: "checkbox" });
   webChk.checked = lsget(LS_WEB, "1") !== "0";
   webChk.addEventListener("change", function () { lsset(LS_WEB, webChk.checked ? "1" : "0"); });
-  var webLabel = el("label", { class: "askai-chk" }, [webChk, t("web search", "웹 검색")]);
+  var webLabel = el("label", { class: "askai-chk" }, [webChk, tsp("web search", "웹 검색")]);
   var editChk = el("input", { type: "checkbox" });
   editChk.checked = lsget("ask-ai-edit", "") === "1";
   editChk.addEventListener("change", function () { lsset("ask-ai-edit", editChk.checked ? "1" : "0"); });
-  var editLabel = el("label", { class: "askai-chk", title: t("Edit this page's HTML (local bot only)", "이 페이지 HTML 편집 (로컬 봇 전용)") },
-    [editChk, t("edit mode", "편집 모드")]);
+  var editLabel = el("label", { class: "askai-chk" }, [editChk, tsp("edit mode", "편집 모드")]);
+  tat(editLabel, "title", "Edit this page's HTML (local bot only)", "이 페이지 HTML 편집 (로컬 봇 전용)");
   editLabel.style.display = "none"; // shown only for the bot provider
-  var go = el("button", { class: "askai-go", type: "button" }, [t("Ask", "물어보기")]);
+  var goSpan = tsp("Ask", "물어보기");
+  var go = el("button", { class: "askai-go", type: "button" }, [goSpan]);
 
   /* settings */
   var provSel = el("select");
@@ -280,7 +288,7 @@
   });
   var keyLabel = el("label", null, [t("API key", "API 키")]);
   var keyInput = el("input", { type: "password", placeholder: "API key" });
-  var urlLabel = el("label", null, [t("Proxy URL", "프록시 URL")]);
+  var urlLabel = el("label", null, [tsp("Proxy URL", "프록시 URL")]);
   var urlInput = el("input", { type: "text", placeholder: "https://your-worker.workers.dev" });
   var modelSelect = el("select");
   function loadProvFields() {
@@ -300,7 +308,7 @@
   }
   provSel.addEventListener("change", function () { lsset(LS_PROV, provSel.value); loadProvFields(); });
   loadProvFields();
-  var saveBtn = el("button", { class: "askai-go", type: "button" }, [t("Save", "저장")]);
+  var saveBtn = el("button", { class: "askai-go", type: "button" }, [tsp("Save", "저장")]);
   saveBtn.addEventListener("click", function () {
     var p = provSel.value;
     lsset(LS_PROV, p);
@@ -310,24 +318,24 @@
     setBox.classList.remove("open"); errBox.textContent = "";
   });
   var setBox = el("div", { class: "askai-set" }, [
-    el("label", null, [t("Provider", "프로바이더")]), provSel,
+    el("label", null, [tsp("Provider", "프로바이더")]), provSel,
     urlLabel, urlInput,
     keyLabel, keyInput,
-    el("label", null, [t("Model", "모델")]), modelSelect,
+    el("label", null, [tsp("Model", "모델")]), modelSelect,
     el("div", { class: "askai-row" }, [saveBtn]),
-    el("div", { class: "askai-note" }, [t("Key/token stored only in this browser (localStorage), sent only to the provider or your proxy. Web search is billed per use.",
+    el("div", { class: "askai-note" }, [tsp("Key/token stored only in this browser (localStorage), sent only to the provider or your proxy. Web search is billed per use.",
       "키/토큰은 이 브라우저(localStorage)에만 저장되고 프로바이더(또는 내 프록시)로만 전송됩니다. 웹 검색은 사용량만큼 과금됩니다.")])
   ]);
 
-  var gear = el("button", { type: "button", title: t("Settings", "설정") }, ["⚙"]);
+  var gear = tat(el("button", { type: "button" }, ["⚙"]), "title", "Settings", "설정");
   gear.addEventListener("click", function () { setBox.classList.toggle("open"); });
-  var clearBtn = el("button", { type: "button", title: t("New chat (clear history)", "새 대화 (기록 지우기)") }, ["🗑"]);
+  var clearBtn = tat(el("button", { type: "button" }, ["🗑"]), "title", "New chat (clear history)", "새 대화 (기록 지우기)");
   clearBtn.addEventListener("click", function () { convo = []; saveConvo(); errBox.textContent = ""; renderThread(false); });
-  var closeBtn = el("button", { type: "button", title: t("Minimize (keeps the chat)", "최소화 (대화 유지)"), "aria-label": "Minimize" }, ["—"]);
+  var closeBtn = tat(el("button", { type: "button", "aria-label": "Minimize" }, ["—"]), "title", "Minimize (keeps the chat)", "최소화 (대화 유지)");
   closeBtn.addEventListener("click", function () { panel.classList.remove("open"); });
 
   var panel = el("div", { class: "askai-panel" }, [
-    el("div", { class: "askai-hd" }, [el("b", null, [t("Ask about this page", "이 페이지에 대해 질문")]), clearBtn, gear, closeBtn]),
+    el("div", { class: "askai-hd" }, [el("b", null, [tsp("Ask about this page", "이 페이지에 대해 질문")]), clearBtn, gear, closeBtn]),
     setBox,
     el("div", { class: "askai-body" }, [thread, errBox]),
     el("div", { class: "askai-foot" }, [ta,
@@ -359,7 +367,7 @@
 
     convo.push({ role: "user", content: q }); saveConvo(); ta.value = "";
     renderThread(true);
-    go.disabled = true; go.textContent = t("Thinking…", "생각 중…");
+    go.disabled = true; goSpan.textContent = t("Thinking…", "생각 중…");
 
     var sys = "You are a study assistant embedded in a technical blog page. The reader is viewing the page whose text is given below. " +
       "This is a multi-turn conversation — use the prior turns as context. Prefer and ground your answer in the PAGE CONTENT. " +
@@ -378,7 +386,7 @@
       errBox.textContent = t("Request failed: ", "요청 실패: ") + (e && e.message ? e.message : e) +
         t("  (check URL / key / model / network)", "  (URL·키·모델·네트워크 확인)");
       renderThread(false);
-    }).then(function () { go.disabled = false; go.textContent = t("Ask", "물어보기"); });
+    }).then(function () { go.disabled = false; goSpan.textContent = t("Ask", "물어보기"); });
   }
   go.addEventListener("click", ask);
   ta.addEventListener("keydown", function (e) {
@@ -388,4 +396,13 @@
   function mount() { document.body.appendChild(fab); document.body.appendChild(panel); }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount);
   else mount();
+
+  // Follow the site EN/KO toggle: when i18n.js flips data-lang, re-apply every
+  // registered label, refresh the provider fields, and re-render the thread.
+  new MutationObserver(function () {
+    relang();
+    loadProvFields();              // keyLabel + any per-provider text in current lang
+    if (!go.disabled) goSpan.textContent = t("Ask", "물어보기");
+    renderThread(false);
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-lang", "lang"] });
 })();
