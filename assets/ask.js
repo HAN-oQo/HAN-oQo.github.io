@@ -40,8 +40,13 @@
       defModel: "claude-haiku-4-5-20251001",
       url: function () { return "https://api.anthropic.com/v1/messages"; },
       headers: function (key) {
-        return { "content-type": "application/json", "x-api-key": key,
-          "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+        var h = { "content-type": "application/json", "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true" };
+        // `claude setup-token` issues an OAuth token (sk-ant-oat…) → Bearer auth,
+        // not x-api-key. A normal Console key (sk-ant-api…) uses x-api-key.
+        if (/^sk-ant-oat/.test(key)) { h["authorization"] = "Bearer " + key; h["anthropic-beta"] = "oauth-2025-04-20"; }
+        else { h["x-api-key"] = key; }
+        return h;
       },
       body: function (model, sys, q, web) {
         var b = { model: model, max_tokens: 1500, system: sys, messages: [{ role: "user", content: q }] };
@@ -291,7 +296,9 @@
     }).then(function () { go.disabled = false; go.textContent = t("Ask", "물어보기"); });
   }
   go.addEventListener("click", ask);
-  ta.addEventListener("keydown", function (e) { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") ask(); });
+  ta.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask(); } // Enter=send, Shift+Enter=newline
+  });
 
   function mount() { document.body.appendChild(fab); document.body.appendChild(panel); }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount);
