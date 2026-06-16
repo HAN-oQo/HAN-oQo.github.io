@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neither Parallel Nor Sequential — how DiffusionGemma actually commits tokens (paper note)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:880px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:26px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .eq{background:#fafbfd;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:10px 0;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;overflow-x:auto}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">Neither Parallel Nor Sequential — how DiffusionGemma actually commits tokens (paper note)</span>
+    <span class="ko">병렬도 순차도 아니다 — DiffusionGemma는 실제로 토큰을 어떤 순서로 확정하는가 (논문 정리)</span>
+  </h1>
+  <p class="lede">
+    <span class="en">Diffusion LLMs are sold as "parallel" decoders — but nobody measures the order a <i>shipped</i> checkpoint actually commits tokens. This inference-only interpretability study hooks DiffusionGemma's own sampler and watches. Finding: it's <b>neither clean parallel nor clean left-to-right</b> — a partial, granularity-dependent left-to-right bias, with big parallel commit batches and one regime (JSON) that's order-independent. A companion to the <a href="vllm-diffusion-llm.html">diffusion-LLM note</a>.</span>
+    <span class="ko">Diffusion LLM은 "병렬" 디코더로 홍보되지만, <i>출시된</i> 체크포인트가 실제로 토큰을 어떤 순서로 확정하는지는 아무도 안 잰다. 이 추론-전용 해석 연구는 DiffusionGemma 자체 샘플러에 훅을 걸어 관찰한다. 결론: <b>깨끗한 병렬도, 깨끗한 좌→우도 아님</b> — 부분적이고 해상도(granularity) 의존적인 좌→우 편향, 큰 병렬 커밋 배치, 그리고 순서 무관한 한 영역(JSON). <a href="vllm-diffusion-llm.html">diffusion-LLM 노트</a>의 짝.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://arxiv.org/abs/2606.14620">arXiv:2606.14620</a></span>
+    <span class="badge"><a href="https://arxiv.org/html/2606.14620v1">HTML full text</a></span>
+    <span class="badge">cs.LG · 2026-06-12</span>
+    <span class="badge">Asaria, Salomone, Gandhi · Transformer Lab</span>
+  </div>
+  <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. Problem — nobody measured a shipped dLLM's commit order</span><span class="ko">1. 문제 정의 — 출시된 dLLM의 커밋 순서를 잰 적이 없다</span></a></li>
+    <li><a href="#s2"><span class="en">2. Method — hook the sampler, measure the order</span><span class="ko">2. 해결 방법 — 샘플러에 훅, 순서를 측정</span></a></li>
+    <li><a href="#s3"><span class="en">3. Implementation</span><span class="ko">3. 구현 방법</span></a></li>
+    <li><a href="#s4"><span class="en">4. Results</span><span class="ko">4. 결과</span></a></li>
+    <li><a href="#s5"><span class="en">5. Discussion</span><span class="ko">5. Discussion</span></a></li>
+    <li><a href="#s6"><span class="en">6. Sources</span><span class="ko">6. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">Hook <code class="inl">EntropyBoundSampler.accept_canvas</code> on <code class="inl">google/diffusiongemma-26B-A4B-it</code> and record, per accept-call, which canvas positions commit and at what entropy — no weights touched. Across 6 task regimes (686 prompts, 600 traces): the commit order is a <b>partial, granularity-dependent left-to-right bias</b> — token-level Kendall <b>τ_b ≈ 0.43–0.60</b> (well below a 0.94–0.96 block-sequential control → genuine sub-block disorder), rising <b>smoothly</b> 0.59→0.91 as you coarsen the analysis bin 4→64 (<b>no jump at 16</b>, so the "16-token block" is an artifact of the ruler, not the model). Commits are big (≈13–26 tokens per call) and aggressive (finishes in ≪48 steps, entropy far below the 0.1 bound). JSON is ≈order-independent. Confidence predicts correctness on math (AUROC 0.749) but not factual recall (0.471). Accuracy ≈ the AR sibling. No public code.</span>
+  <span class="ko"><code class="inl">google/diffusiongemma-26B-A4B-it</code>의 <code class="inl">EntropyBoundSampler.accept_canvas</code>에 훅을 걸어, accept-call마다 어느 canvas 위치가 어떤 엔트로피로 확정되는지 기록 — 가중치 무수정. 6개 영역(686 프롬프트, 600 trace): 커밋 순서는 <b>부분적·해상도 의존 좌→우 편향</b> — 토큰 수준 Kendall <b>τ_b ≈ 0.43–0.60</b>(block-sequential 통제값 0.94–0.96보다 훨씬 낮음 → 진짜 sub-block 무질서), 분석 bin을 4→64로 키우면 0.59→0.91로 <b>매끄럽게</b> 상승(<b>16에서 점프 없음</b> → "16토큰 블록"은 모델이 아니라 측정 자의 산물). 커밋은 크고(call당 ≈13–26토큰) 공격적(48스텝보다 훨씬 적게 끝, 엔트로피가 0.1 한계보다 훨씬 아래). JSON은 ≈순서 무관. 확신도는 수학에서 정답 예측(AUROC 0.749), 사실 회상에선 아님(0.471). 정확도는 AR 형제와 동등. 공개 코드 없음.</span>
+</div>
+
+<div class="grid3">
+  <div class="mini"><h4>DiffusionGemma</h4><p><span class="en">Google's masked discrete-diffusion MoE on Gemma 4 (25.2B total / 3.8B active). The first dLLM natively served by vLLM — see the <a href="vllm-diffusion-llm.html">diffusion-LLM note</a>.</span><span class="ko">Gemma 4 기반 Google의 마스크 이산-diffusion MoE(25.2B/3.8B active). vLLM이 네이티브 지원하는 최초 dLLM — <a href="vllm-diffusion-llm.html">diffusion-LLM 노트</a> 참고.</span></p></div>
+  <div class="mini"><h4>canvas / accept-call</h4><p><span class="en">canvas = the 256-token block being denoised. accept-call = one invocation of the sampler that may commit several positions at once.</span><span class="ko">canvas = denoise 중인 256토큰 블록. accept-call = 한 번에 여러 위치를 확정할 수 있는 샘플러 1회 호출.</span></p></div>
+  <div class="mini"><h4><span class="en">commit order</span><span class="ko">커밋 순서</span></h4><p><span class="en">For each position, the first accept-call that finalizes it. The thing being measured.</span><span class="ko">각 위치를 확정한 첫 accept-call. 측정 대상.</span></p></div>
+  <div class="mini"><h4>Kendall τ_b</h4><p><span class="en">A tie-aware rank correlation. Here: between commit time and left-to-right position. +1 = strict L→R, 0 = order-independent.</span><span class="ko">동점 보정 순위 상관. 여기선 커밋 시점 vs 좌→우 위치. +1 = 엄격한 좌→우, 0 = 순서 무관.</span></p></div>
+  <div class="mini"><h4><span class="en">entropy-at-commit</span><span class="ko">커밋시 엔트로피</span></h4><p><span class="en">Shannon entropy (nats) of the committing call's logits — a confidence reading, comparable to the sampler's 0.1 bound.</span><span class="ko">확정 call logits의 Shannon 엔트로피(nats) — 확신도 측정, 샘플러의 0.1 한계와 비교 가능.</span></p></div>
+  <div class="mini"><h4>AUROC</h4><p><span class="en">P(a correct generation looks more confident than an incorrect one). 0.5 = chance; &gt;0.5 = confidence separates right from wrong.</span><span class="ko">P(정답 생성이 오답보다 더 확신 있어 보임). 0.5 = 우연; &gt;0.5 = 확신도가 정/오답 구분.</span></p></div>
+</div>
+
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">Problem — nobody measured a shipped dLLM's commit order</span><span class="ko">문제 정의 — 출시된 dLLM의 커밋 순서를 잰 적이 없다</span></h2>
+<p><span class="en">Diffusion LLMs denoise a masked canvas, "in principle committing many positions in parallel rather than strictly left to right" — that parallelism is the selling point (lower latency than AR). But the order a <i>deployed checkpoint</i> actually finalizes tokens in is an <b>empirical property of the trained model + sampler</b>, not a guarantee of the architecture — and it had gone unmeasured. The literature even disagrees: some say learned order trends left-to-right, others document structured "anchor-first" out-of-order generation.</span>
+<span class="ko">Diffusion LLM은 마스킹된 canvas를 denoise하며 "원칙적으로 엄격한 좌→우가 아니라 여러 위치를 병렬 확정"한다 — 그 병렬성이 셀링포인트(AR보다 낮은 지연). 그러나 <i>배포된 체크포인트</i>가 실제로 토큰을 확정하는 순서는 아키텍처의 보장이 아니라 <b>학습된 모델 + 샘플러의 경험적 성질</b>이고 — 측정된 적이 없었다. 문헌도 엇갈린다: 학습된 순서가 좌→우로 기운다는 쪽, 구조적 "anchor-first" 비순차 생성을 보고하는 쪽.</span></p>
+<blockquote class="q">
+  <p>"the order in which a deployed checkpoint actually finalizes tokens, and whether that order is sequential, parallel, or something in between, is an empirical property of the trained model and its sampler, not a given of the architecture."</p>
+  <cite>— §1, ¶1 · <a href="https://arxiv.org/html/2606.14620v1#S1">arXiv:2606.14620 §1</a></cite>
+</blockquote>
+<p><span class="en">So the question is concrete: take one public checkpoint (<code class="inl">google/diffusiongemma-26B-A4B-it</code>), instrument it, and ask — sequential, parallel, or in between? Plus two follow-ups: does the model's commit <b>confidence</b> predict correctness, and is its accuracy competitive with a matched <b>autoregressive sibling</b>?</span>
+<span class="ko">그래서 질문은 구체적이다: 공개 체크포인트 하나(<code class="inl">google/diffusiongemma-26B-A4B-it</code>)를 계측해 묻는다 — 순차인가 병렬인가 그 사이인가? 그리고 둘 더: 모델의 커밋 <b>확신도</b>가 정답을 예측하는가, 그 정확도가 짝이 되는 <b>자기회귀 형제</b>와 견줄 만한가?</span></p>
+</section>
+
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">Method — hook the sampler, measure the order honestly</span><span class="ko">해결 방법 — 샘플러에 훅, 순서를 정직하게 측정</span></h2>
+<p><span class="en">Purely <b>observational</b>: a forward hook on <code class="inl">EntropyBoundSampler.accept_canvas(...)</code> records, for every position <code class="inl">p</code>, the first accept-call that commits it (<code class="inl">commit(p)</code>) and the per-position entropy of the committing logits. No weights or sampling decisions are changed.</span>
+<span class="ko">순수 <b>관찰</b>: <code class="inl">EntropyBoundSampler.accept_canvas(...)</code>에 forward 훅을 걸어, 각 위치 <code class="inl">p</code>마다 그것을 확정한 첫 accept-call(<code class="inl">commit(p)</code>)과 확정 logits의 위치별 엔트로피를 기록. 가중치·샘플링 결정 무수정.</span></p>
+<blockquote class="q">
+  <p>"We wrap it with a forward hook that records, for every position p, the first accept-call index that commits p … together with the per-position entropy of the committing logits … No model weights or sampling decisions are modified; the hook is purely observational."</p>
+  <cite>— §3 (Instrumentation) · <a href="https://arxiv.org/html/2606.14620v1#S3">arXiv:2606.14620 §3</a></cite>
+</blockquote>
+
+<h3><span class="en">The order metric, and the honesty controls</span><span class="ko">순서 지표와 정직성 통제</span></h3>
+<div class="eq">order score = τ_b( commit(p) , p )      (tie-aware Kendall, content positions only)</div>
+<p class="muted"><span class="en"><b>Plain-language of the math:</b></span>
+<span class="ko"><b>수식 쉬운 설명:</b></span></p>
+<ul>
+<li><span class="en"><b>Kendall τ_b</b> — over all pairs of positions, the fraction that <i>agree</i> on ordering between "when committed" and "left-to-right position," minus those that disagree, with a correction for ties. +1 = strict left-to-right, 0 = order-independent, negative = right-to-left. The <b>tie correction matters</b> because many tokens commit in the <i>same</i> accept-call — they're simultaneous, not "out of order," and a naive metric would wrongly punish that.</span>
+<span class="ko"><b>Kendall τ_b</b> — 모든 위치 쌍에 대해, "언제 확정"과 "좌→우 위치"의 순서가 <i>일치</i>하는 비율에서 불일치를 빼고 동점을 보정. +1 = 엄격한 좌→우, 0 = 순서 무관, 음수 = 우→좌. 많은 토큰이 <i>같은</i> accept-call에 확정되므로 <b>동점 보정이 중요</b> — 동시이지 "순서가 틀린" 게 아닌데, 순진한 지표는 이를 잘못 벌한다.</span></li>
+<li><span class="en"><b>Block-τ_b sweep</b> — group positions into B-token bins (B ∈ {4,8,16,32,64}), give each bin its earliest commit, recompute τ_b. Coarsening the ruler mechanically <i>hides</i> within-bin disorder, so τ_b rises with B. The point isn't the value — it's the <b>shape</b>: smooth and monotone with <b>no jump at 16</b>, which kills the idea of a privileged "16-token architectural block."</span>
+<span class="ko"><b>Block-τ_b 스윕</b> — 위치를 B토큰 bin(B ∈ {4,8,16,32,64})으로 묶고 bin마다 가장 이른 커밋을 주어 τ_b 재계산. 자를 거칠게 하면 bin 내부 무질서가 <i>가려져</i> τ_b가 B에 따라 오른다. 핵심은 값이 아니라 <b>모양</b>: 매끄럽고 단조이며 <b>16에서 점프 없음</b> → "특권적 16토큰 아키텍처 블록"이라는 생각을 깬다.</span></li>
+<li><span class="en"><b>Block-sequential control</b> — a synthetic process where commit time = <code class="inl">position // 16</code> (a clean 16-block left-to-right, tied within blocks). Its τ_b (≈0.94–0.96) is what <i>clean</i> block-autoregression would score. The <b>gap</b> down to the real τ_b (0.43–0.60) measures genuine sub-block disorder — the paper's load-bearing comparison.</span>
+<span class="ko"><b>Block-sequential 통제</b> — 커밋 시점 = <code class="inl">position // 16</code>인 합성 과정(깨끗한 16블록 좌→우, 블록 내 동점). 그 τ_b(≈0.94–0.96)가 <i>깨끗한</i> block-AR이 낼 값. 실제 τ_b(0.43–0.60)까지의 <b>격차</b>가 진짜 sub-block 무질서를 잰다 — 논문의 핵심 비교.</span></li>
+<li><span class="en"><b>Entropy-at-commit</b> = Shannon entropy <code class="inl">H = −Σ p log p</code> (nats) over the 262K vocab at the committing call — a confidence reading directly comparable to the sampler's <code class="inl">entropy_bound = 0.1</code>. <b>AUROC of −entropy → correct</b> tests whether higher confidence ⇒ correct (computed <i>within</i> each regime; pooling across regimes is a trap — see Simpson's paradox below).</span>
+<span class="ko"><b>커밋시 엔트로피</b> = 확정 call에서 262K vocab에 대한 Shannon 엔트로피 <code class="inl">H = −Σ p log p</code>(nats) — 샘플러의 <code class="inl">entropy_bound = 0.1</code>과 직접 비교 가능한 확신도. <b>−entropy → 정답의 AUROC</b>는 높은 확신 ⇒ 정답인지 검정(영역 <i>내</i>에서 계산; 영역 간 풀링은 함정 — 아래 Simpson's paradox).</span></li>
+</ul>
+<p><span class="en">A large part of the paper's contribution is the <b>measurement methodology</b> itself — handling trailing-EOS padding, commit ties, commit non-monotonicity, block-size sensitivity, and Simpson's-paradox pooling — offered as "how decoding order should be measured."</span>
+<span class="ko">논문 기여의 큰 부분은 <b>측정 방법론</b> 자체 — trailing-EOS 패딩, 커밋 동점, 커밋 비단조성, block-size 민감도, Simpson's-paradox 풀링 처리 — "디코딩 순서를 어떻게 측정해야 하는가"로 제시.</span></p>
+</section>
+
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">Implementation</span><span class="ko">구현 방법</span></h2>
+<div class="grid2">
+  <div class="mini"><h4><span class="en">Subject &amp; config</span><span class="ko">대상 &amp; 설정</span></h4><p><code class="inl">google/diffusiongemma-26B-A4B-it</code>, <code class="inl">DiffusionGemmaForBlockDiffusion</code>. Masked discrete-diffusion MoE on Gemma 4, 25.2B/3.8B active (8 of 128 experts). Canvas 256, ≤48 denoising steps, <code class="inl">EntropyBoundSampler</code> bound 0.1, vocab 262,144.</p></div>
+  <div class="mini"><h4><span class="en">Stack &amp; compute</span><span class="ko">스택 &amp; 연산</span></h4><p>transformers 5.11.0, torch 2.9.0+cu128, <b>1× H100 80GB</b>. The whole study: <b>≈0.9 H100-hours</b> (it's inference-only instrumentation).</p></div>
+</div>
+<p><span class="en"><b>Probe suite:</b> 686 prompts across 6 regimes. Headline "strengthening run": 5 seeds × 20 prompts/regime = 100 traces/regime, 600 generations; 95% CIs via <b>prompt-clustered bootstrap</b> (resample prompts, preserving cross-seed correlation — so the interval doesn't fake precision from correlated repeats).</span>
+<span class="ko"><b>프로브 스위트:</b> 6개 영역에 걸쳐 686 프롬프트. 대표 "strengthening run": 5 seed × 영역당 20 프롬프트 = 영역당 100 trace, 600 생성; 95% CI는 <b>prompt-clustered bootstrap</b>(프롬프트를 재표집해 seed 간 상관 보존 — 상관 반복으로 정밀도를 위조하지 않음).</span></p>
+<table>
+<tr><th>Regime</th><th>R1</th><th>R2</th><th>R3</th><th>R4</th><th>R5</th><th>R6</th></tr>
+<tr><td><span class="en">Task</span><span class="ko">과제</span></td><td>math (GSM8K)</td><td>code compl. (HumanEval)</td><td>code synth (MBPP)</td><td><span class="en">factual</span><span class="ko">사실</span></td><td><span class="en">open-ended</span><span class="ko">개방형</span></td><td>JSON</td></tr>
+<tr><td>N</td><td>200</td><td>164</td><td>200</td><td>52</td><td>40</td><td>30</td></tr>
+</table>
+<div class="callout c-amber">
+  <span class="tag"><span class="en">no public code / artifacts</span><span class="ko">공개 코드/산출물 없음</span></span>
+  <span class="en">§7 (Availability) states verbatim: <i>"No code, data, or checkpoints associated with this study are publicly released. We do not maintain a public repository …"</i> (artifacts available from the authors on request). So no code-flow/permalink section. The only concrete code object named is the hook target — <code class="inl">EntropyBoundSampler.accept_canvas</code> inside HuggingFace <code class="inl">transformers</code>' <code class="inl">diffusion_gemma</code> model — which belongs to the library, not the authors.</span>
+  <span class="ko">§7(Availability) 원문: <i>"이 연구와 관련된 어떤 코드·데이터·체크포인트도 공개하지 않는다. 공개 저장소를 유지하지 않는다…"</i>(요청 시 저자 제공). 따라서 코드 흐름/permalink 섹션 없음. 구체적으로 언급된 유일한 코드 객체는 훅 대상 — HuggingFace <code class="inl">transformers</code>의 <code class="inl">diffusion_gemma</code> 모델 내 <code class="inl">EntropyBoundSampler.accept_canvas</code> — 이며 저자가 아니라 라이브러리 소유.</span>
+</div>
+</section>
+
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">Results</span><span class="ko">결과</span></h2>
+<svg class="fig" viewBox="0 0 760 150" role="img" aria-label="commit-order spectrum">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.b{font:600 10.5px -apple-system,sans-serif}</style>
+  <text x="20" y="20" class="t">Where DiffusionGemma's token commit order sits (Kendall τ_b)</text>
+  <line x1="60" y1="80" x2="700" y2="80" stroke="var(--line)" stroke-width="2"/>
+  <text x="60" y="110" class="k" text-anchor="middle">0.0</text><text x="60" y="124" class="k" text-anchor="middle">order-independent</text>
+  <text x="700" y="110" class="k" text-anchor="middle">1.0</text><text x="700" y="124" class="k" text-anchor="middle">strict L→R</text>
+  <!-- ticks -->
+  <g stroke="var(--line)"><line x1="60" y1="75" x2="60" y2="85"/><line x1="700" y1="75" x2="700" y2="85"/></g>
+  <!-- JSON ~ -0.044 (clamp at left) -->
+  <circle cx="58" cy="80" r="6" fill="var(--gray-bd)"/><text x="58" y="62" class="b" fill="var(--gray-ink)" text-anchor="middle">JSON</text><text x="58" y="48" class="k" text-anchor="middle">−0.04</text>
+  <!-- token tau 0.43-0.60 band -->
+  <rect x="335" y="72" width="109" height="16" rx="3" fill="var(--amber-bd)" opacity="0.6"/>
+  <text x="389" y="62" class="b" fill="var(--amber-ink)" text-anchor="middle">real token order 0.43–0.60</text>
+  <!-- block-seq control 0.94-0.96 -->
+  <circle cx="662" cy="80" r="6" fill="var(--blue-bd)"/><text x="662" y="62" class="b" fill="var(--blue-ink)" text-anchor="middle">block-seq control</text><text x="662" y="48" class="k" text-anchor="middle">0.94–0.96</text>
+  <text x="389" y="108" class="k" text-anchor="middle">↑ neither parallel (0) nor sequential (≈0.95): a partial L→R bias, with real sub-block disorder</text>
+</svg>
+<p class="figcap"><span class="en">Fig 1 — Token-level commit order lands in the middle and well below a clean block-sequential control; JSON is ≈order-independent. Source: Table 1 (arXiv:2606.14620 §5.1).</span><span class="ko">그림 1 — 토큰 수준 커밋 순서는 중간이며 깨끗한 block-sequential 통제보다 훨씬 낮음; JSON은 ≈순서 무관. 출처: Table 1 (§5.1).</span></p>
+
+<table>
+<tr><th>Regime</th><th>Token τ_b [95% CI]</th><th><span class="en">block-seq control</span><span class="ko">block-seq 통제</span></th><th>tok/call</th></tr>
+<tr><td>R1 math (GSM8K)</td><td>0.512 [0.456, 0.569]</td><td>0.96</td><td>25.5</td></tr>
+<tr><td>R2 code (HumanEval)</td><td>0.430 [0.318, 0.527]</td><td>0.94</td><td>23.0</td></tr>
+<tr><td>R3 code (MBPP)</td><td>0.604 [0.561, 0.647]</td><td>0.96</td><td>19.8</td></tr>
+<tr><td>R4 factual</td><td>0.460 [0.422, 0.496]</td><td>0.41</td><td>5.8</td></tr>
+<tr><td>R5 open-ended</td><td>0.502 [0.463, 0.542]</td><td>0.96</td><td>12.6</td></tr>
+<tr><td>R6 JSON</td><td><b>−0.044</b> [−0.086, −0.00]</td><td>0.75</td><td>8.5</td></tr>
+</table>
+<p class="muted"><span class="en">Block-τ_b sweep (R1): <b>0.59 → 0.64 → 0.70 → 0.79 → 0.91</b> as bin = 4 → 8 → 16 → 32 → 64 — smooth, no jump at 16. Big parallel commit batches (≈13–26 content tokens/call) mean within-batch order is largely unresolved.</span>
+<span class="ko">Block-τ_b 스윕(R1): bin = 4→8→16→32→64에 따라 <b>0.59→0.64→0.70→0.79→0.91</b> — 매끄럽고 16에서 점프 없음. 큰 병렬 커밋 배치(call당 ≈13–26 콘텐츠 토큰)라 배치 내부 순서는 대체로 미해결.</span></p>
+
+<blockquote class="q">
+  <p>"A pure block-sequential control (commit := position//16, within-block tied) yields token-τ_b ≈ 0.94–0.96 … The real token-τ_b is only 0.43–0.60, well below the control, so the model is not cleanly block-autoregressive: there is genuine sub-block disorder."</p>
+  <cite>— §5.1 · <a href="https://arxiv.org/html/2606.14620v1#S5.SS1">arXiv:2606.14620 §5.1</a></cite>
+</blockquote>
+
+<h3><span class="en">Confidence, early stopping, and accuracy</span><span class="ko">확신도·조기 종료·정확도</span></h3>
+<p><span class="en">Commit confidence predicts correctness on <b>math</b> (AUROC 0.749, CI excludes 0.5) but is a <b>null on factual recall</b> (0.471) — a regime-specific, not universal, signal. Pooling all regimes gives AUROC 0.437, which looks like "more confident ⇒ more often wrong" but is a <b>Simpson's-paradox artifact</b>, not a finding. The sampler is <b>aggressive</b>: generations finish in 3.3–17.1 accept-calls (vs the 48-step budget) at entropy 0.002–0.012 nats — one to two orders of magnitude below the 0.1 bound. And accuracy is <b>comparable to the matched AR sibling</b> <code class="inl">gemma-4-26B-A4B-it</code> (e.g. GSM8K 0.66–0.73 vs 0.70).</span>
+<span class="ko">커밋 확신도는 <b>수학</b>에서 정답 예측(AUROC 0.749, CI가 0.5 제외)이나 <b>사실 회상에선 null</b>(0.471) — 보편이 아닌 영역별 신호. 모든 영역 풀링은 AUROC 0.437로 "확신할수록 더 자주 틀림"처럼 보이나 <b>Simpson's-paradox 산물</b>이지 발견이 아님. 샘플러는 <b>공격적</b>: 생성이 3.3–17.1 accept-call(48스텝 예산 대비)에 엔트로피 0.002–0.012 nats — 0.1 한계보다 1–2자릿수 아래 — 로 끝. 정확도는 짝 AR 형제 <code class="inl">gemma-4-26B-A4B-it</code>와 <b>동등</b>(예: GSM8K 0.66–0.73 vs 0.70).</span></p>
+<blockquote class="q">
+  <p>"Pooling commitments across regimes into a single AUROC gives 0.437, numerically below 0.5, which might be misread as 'more confident → more often wrong.' This is a Simpson's-paradox artifact."</p>
+  <cite>— §5.2 · <a href="https://arxiv.org/html/2606.14620v1#S5.SS2">arXiv:2606.14620 §5.2</a></cite>
+</blockquote>
+</section>
+
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Discussion</span><span class="ko">Discussion</span></h2>
+<p><span class="en">The title is the conclusion: <b>neither parallel nor sequential</b> — a partial, granularity-dependent left-to-right bias, regime-dependent (JSON ≈ order-independent), with an aggressive early-committing sampler and a confidence signal that's real only in some regimes, at AR-comparable accuracy. The paper is unusually honest about its own process:</span>
+<span class="ko">제목이 곧 결론: <b>병렬도 순차도 아니다</b> — 부분적·해상도 의존 좌→우 편향, 영역 의존(JSON ≈ 순서 무관), 공격적 조기 커밋 샘플러, 일부 영역에서만 진짜인 확신 신호, AR과 동등한 정확도. 논문은 자기 과정에 유난히 정직하다:</span></p>
+<blockquote class="q">
+  <p>"A strengthening run (5 seeds, prompt-clustered bootstrap, a block-size sweep, a block-sequential control, and a commit-non-monotonicity check) walked back our initial 'block-autoregressive' headline to this more careful claim."</p>
+  <cite>— §8 (Conclusion) · <a href="https://arxiv.org/html/2606.14620v1#S8">arXiv:2606.14620 §8</a></cite>
+</blockquote>
+<p class="muted"><span class="en">13 threats to validity are listed (§6.1): τ_b is correlation, not mechanism (no causal claim); within-batch order is unresolved at accept-call resolution; commits aren't strictly frozen (4,524 un-accept events; robust on the monotone subset); block size is an analyst choice; small prompt counts / single checkpoint / single GPU; calibration is regime-specific; the AR comparison is accuracy-only and underpowered; R1–R3 may have pretraining contamination. Two measurement landmines are flagged: trailing-EOS padding (naive metric gives τ_b ≈ −0.9) and Simpson's-paradox pooling.</span>
+<span class="ko">타당성 위협 13개(§6.1): τ_b는 상관이지 메커니즘 아님(인과 주장 없음); accept-call 해상도라 배치 내부 순서 미해결; 커밋이 엄격히 고정 아님(un-accept 4,524회; 단조 부분집합에선 견고); block size는 분석자 선택; 적은 프롬프트 수/단일 체크포인트/단일 GPU; 보정은 영역별; AR 비교는 정확도뿐이고 검정력 부족; R1–R3은 사전학습 오염 가능. 측정 지뢰 둘 표시: trailing-EOS 패딩(순진 지표는 τ_b ≈ −0.9), Simpson's-paradox 풀링.</span></p>
+<div class="callout c-purple">
+  <span class="tag"><span class="en">editor's note — our angle (not the paper's claim)</span><span class="ko">편집자 주 — 우리 관점 (논문 주장 아님)</span></span>
+  <span class="en">This is the perfect empirical companion to our <a href="vllm-diffusion-llm.html">diffusion-LLM note</a>: that note explains <i>why</i> block diffusion makes a prefix KV cache work again; this paper <i>measures</i> the actual commit behavior of the exact checkpoint vLLM serves and finds it's mostly-but-not-cleanly left-to-right — which is consistent with (and a sanity check on) the block-autoregressive framing, while showing the "16-token block" is partly an analysis artifact. Two takeaways we'd carry: (1) the <b>aggressive early stop</b> (finishing in ≪48 steps at near-zero entropy) is the real speed lever in practice — the step budget is rarely spent; (2) the <b>methodology</b> (EOS padding, ties, Simpson's paradox, block-size sweeps) is a reusable checklist for any "is this model parallel?" measurement, including our own benchmarking. Caveat: single checkpoint, v1, no code, small constrained regimes.</span>
+  <span class="ko">이건 우리 <a href="vllm-diffusion-llm.html">diffusion-LLM 노트</a>의 완벽한 경험적 짝이다: 그 노트는 block diffusion이 <i>왜</i> prefix KV cache를 다시 작동하게 하는지 설명하고, 이 논문은 vLLM이 서빙하는 바로 그 체크포인트의 실제 커밋 행동을 <i>측정</i>해 대체로-그러나-깨끗하지-않은 좌→우임을 보인다 — block-autoregressive 프레이밍과 일관되며(그 점검), "16토큰 블록"이 부분적으로 분석 산물임을 보여준다. 가져갈 둘: (1) <b>공격적 조기 종료</b>(48스텝보다 훨씬 적게, 거의 0 엔트로피로 끝)가 실전 속도 레버 — 스텝 예산은 거의 안 씀; (2) <b>방법론</b>(EOS 패딩·동점·Simpson's paradox·block-size 스윕)은 "이 모델이 병렬인가?" 측정의 재사용 체크리스트 — 우리 벤치마킹에도. 단서: 단일 체크포인트·v1·코드 없음·작은 제약 영역.</span>
+</div>
+</section>
+
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<ul class="srcs">
+<li><span class="en">Paper:</span><span class="ko">논문:</span> "Neither Parallel Nor Sequential: How DiffusionGemma Actually Commits Tokens," Asaria, Salomone, Gandhi (Transformer Lab), cs.LG, 2026-06-12 — <a href="https://arxiv.org/abs/2606.14620">arXiv:2606.14620</a> · <a href="https://arxiv.org/html/2606.14620v1">HTML</a></li>
+<li><span class="en">Anchors used:</span><span class="ko">사용 앵커:</span> §1 <a href="https://arxiv.org/html/2606.14620v1#S1">#S1</a> · §3 <a href="https://arxiv.org/html/2606.14620v1#S3">#S3</a> · §5.1 <a href="https://arxiv.org/html/2606.14620v1#S5.SS1">#S5.SS1</a> · §5.2 <a href="https://arxiv.org/html/2606.14620v1#S5.SS2">#S5.SS2</a> · §6.1 <a href="https://arxiv.org/html/2606.14620v1#S6.SS1">#S6.SS1</a> · §7 <a href="https://arxiv.org/html/2606.14620v1#S7">#S7</a> · §8 <a href="https://arxiv.org/html/2606.14620v1#S8">#S8</a></li>
+<li><span class="en">Subject model (external):</span><span class="ko">대상 모델(외부):</span> <a href="https://huggingface.co/google/diffusiongemma-26B-A4B-it">google/diffusiongemma-26B-A4B-it</a> · AR sibling <a href="https://huggingface.co/google/gemma-4-26B-A4B-it">gemma-4-26B-A4B-it</a> · vLLM DiffusionGemma <a href="https://vllm-project.github.io/2026/06/10/diffusion-gemma.html">blog</a> (see our <a href="vllm-diffusion-llm.html">diffusion-LLM note</a>)</li>
+<li><span class="en">No official code repository (per §7).</span><span class="ko">공식 코드 저장소 없음(§7).</span></li>
+</ul>
+<p class="muted"><span class="en">Caveat: arXiv preprint (cs.LG), v1, not peer-reviewed — numbers are author-reported. The published claim is the "partial, granularity-dependent L→R bias"; an earlier "block-autoregressive" framing on the abstract page was walked back in the strengthening run. Equations are inline (no display math); restated here in plain language.</span>
+<span class="ko">주의: arXiv 프리프린트(cs.LG), v1, 비심사 — 수치는 저자 보고. 공개 주장은 "부분적·해상도 의존 좌→우 편향"; 초록 페이지의 이전 "block-autoregressive" 프레이밍은 strengthening run에서 철회됨. 수식은 인라인(디스플레이 수식 없음); 여기선 쉬운 말로 재기술.</span></p>
+</section>
+
+<footer>
+  <span class="en">Paper note · 2026-06-16 · arXiv:2606.14620 · companion to the diffusion-LLM note · quotes verbatim with section anchors; no code released.</span>
+  <span class="ko">논문 정리 · 2026-06-16 · arXiv:2606.14620 · diffusion-LLM 노트의 짝 · 인용은 섹션 앵커와 함께 원문 그대로; 코드 미공개.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
