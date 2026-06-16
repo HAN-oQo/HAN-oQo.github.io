@@ -115,6 +115,7 @@
     <li><a href="#s5"><span class="en">5. Code flow (with permalinks)</span><span class="ko">5. 코드 흐름 (permalink)</span></a></li>
     <li><a href="#s6"><span class="en">6. Implementation status</span><span class="ko">6. 구현 상태</span></a></li>
     <li><a href="#s7"><span class="en">7. Sources</span><span class="ko">7. 출처</span></a></li>
+    <li><a href="#s8"><span class="en">8. Appendix — parallelism × communication cheat-sheet (TP/EP/all-reduce/all-to-all/KV transfer)</span><span class="ko">8. 부록 — 병렬화 × 통신 한눈에 (TP/EP/all-reduce/all-to-all/KV transfer)</span></a></li>
   </ol>
 </nav>
 
@@ -433,6 +434,94 @@
 </ul>
 <p class="muted"><span class="en">Caveats: vLLM DBO targets DP+EP MoE all-to-all (not TP all-reduce). The ~1.5k→2.2k tok/s figure is a combined gain, not DBO-isolated. No public source isolates vLLM DBO's standalone speedup; the one direct isolated micro-measurement (PR #23693) is a single-node regression. Line numbers are valid at commit f4359a7 and may drift on other revisions.</span>
 <span class="ko">주의: vLLM DBO는 DP+EP MoE all-to-all 대상(TP all-reduce 아님). ~1.5k→2.2k tok/s는 합산 이득이지 DBO 단독 아님. vLLM DBO 단독 속도향상을 분리한 공개 출처는 없고, 직접 분리 측정 하나(PR #23693)는 단일노드 회귀. 줄 번호는 커밋 f4359a7 기준이며 다른 리비전에선 달라질 수 있음.</span></p>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span><span class="en">Appendix — parallelism × communication cheat-sheet</span><span class="ko">부록 — 병렬화 × 통신 한눈에</span></h2>
+<p><span class="en">DBO touches one specific collective (the MoE all-to-all). To keep the surrounding terms straight, here's which parallelism needs which communication, including the KV transfer used in P/D disaggregation (which is <i>not</i> a collective).</span>
+<span class="ko">DBO가 건드리는 건 딱 하나의 집합통신(MoE all-to-all)이다. 주변 용어를 정리하기 위해, 어떤 병렬화가 어떤 통신을 쓰는지 — P/D 분리에 쓰는 KV transfer(집합통신이 <i>아님</i>)까지 — 한 표로 정리한다.</span></p>
+
+<table>
+<tr><th><span class="en">Parallelism</span><span class="ko">병렬화</span></th><th><span class="en">What's split</span><span class="ko">무엇을 쪼개나</span></th><th><span class="en">Communication</span><span class="ko">통신</span></th><th><span class="en">When / where</span><span class="ko">언제 / 어디</span></th><th><span class="en">Note</span><span class="ko">노트</span></th></tr>
+<tr><td><b>Data Parallel (DP)</b></td><td><span class="en">requests / the batch (full model replicated on each rank)</span><span class="ko">요청 / 배치 (각 rank에 모델 전체 복제)</span></td><td><span class="en">~none for plain inference (DP-attention adds only small metadata sync)</span><span class="ko">순수 추론엔 거의 없음 (DP-attention은 작은 메타 동기화 정도)</span></td><td>—</td><td><span class="en">replicas independent; llm-d's DP is this</span><span class="ko">replica 독립; llm-d의 DP가 이것</span></td></tr>
+<tr><td><b>Tensor Parallel (TP)</b></td><td><span class="en">each weight matrix (heads / hidden dim sharded)</span><span class="ko">각 weight 행렬 (head / hidden 분할)</span></td><td><b>all-reduce</b> <span class="en">×2 per layer</span><span class="ko">×2/레이어</span></td><td><span class="en">after attention, after the MLP</span><span class="ko">attention 후, MLP 후</span></td><td><span class="en">sums partial outputs; usually intra-node (NVLink)</span><span class="ko">부분 출력 합산; 보통 노드 내(NVLink)</span></td></tr>
+<tr><td><b>Expert Parallel (EP)</b></td><td><span class="en">MoE experts (each GPU holds some experts)</span><span class="ko">MoE expert (GPU마다 일부 expert)</span></td><td><b>all-to-all</b> <span class="en">×2 per layer = <b>dispatch</b> + <b>combine</b></span><span class="ko">×2/레이어 = <b>dispatch</b> + <b>combine</b></span></td><td><span class="en">each MoE layer</span><span class="ko">매 MoE 레이어</span></td><td><span class="en">tokens → expert GPUs and back; expensive cross-node — <b>this is what DBO hides</b></span><span class="ko">토큰 ↔ expert GPU; 노드 넘으면 비쌈 — <b>DBO가 숨기는 대상</b></span></td></tr>
+<tr><td><b>Pipeline Parallel (PP)</b></td><td><span class="en">layers (into stages)</span><span class="ko">레이어 (stage 분할)</span></td><td><span class="en">point-to-point send/recv</span><span class="ko">point-to-point send/recv</span></td><td><span class="en">at stage boundaries</span><span class="ko">stage 경계</span></td><td><span class="en">passes activations between stages</span><span class="ko">stage 간 activation 전달</span></td></tr>
+<tr><td><b>P/D disaggregation</b></td><td><span class="en">prefill vs decode instances</span><span class="ko">prefill vs decode 인스턴스</span></td><td><b>KV transfer</b> <span class="en">(point-to-point, <i>not</i> a collective)</span><span class="ko">(point-to-point, 집합통신 <i>아님</i>)</span></td><td><span class="en">once per request (prefill → decode)</span><span class="ko">요청당 1회 (prefill → decode)</span></td><td><span class="en">moves the prompt's KV cache over NIXL/RDMA; same idea as KV offload/tiering to CPU</span><span class="ko">프롬프트 KV cache를 NIXL/RDMA로 이동; CPU로의 KV offload/tiering과 같은 발상</span></td></tr>
+</table>
+
+<h3><span class="en">The collectives, in one breath</span><span class="ko">집합통신, 한 호흡에</span></h3>
+<div class="grid2">
+  <div class="mini"><h4>all-reduce <span class="muted">(TP)</span></h4><p><span class="en">Every rank contributes a partial result; everyone ends with the <b>sum</b>. TP uses it to add up the partial outputs of a sharded matmul. Blocking — the next op needs the summed result.</span><span class="ko">모든 rank가 부분 결과를 기여하고, 모두가 <b>합</b>을 받음. TP가 sharded matmul의 부분 출력을 합산하는 데 사용. 블로킹 — 다음 연산이 합산 결과를 필요로 함.</span></p></div>
+  <div class="mini"><h4>all-to-all <span class="muted">(EP) = dispatch + combine</span></h4><p><span class="en">Every rank sends a <b>different</b> chunk to every other rank (a transpose). MoE does it twice: <b>dispatch</b> scatters each token to its expert's GPU; <b>combine</b> gathers the expert outputs back to the token's home GPU.</span><span class="ko">각 rank가 모든 rank에 <b>서로 다른</b> 조각을 보냄(transpose). MoE는 두 번: <b>dispatch</b>는 각 토큰을 expert의 GPU로 흩뿌리고, <b>combine</b>은 expert 출력을 원래 토큰의 GPU로 모음.</span></p></div>
+  <div class="mini"><h4>point-to-point <span class="muted">(PP)</span></h4><p><span class="en">One rank sends directly to one other (send/recv). PP passes a stage's activations to the next stage.</span><span class="ko">한 rank가 다른 한 rank로 직접(send/recv). PP가 한 stage의 activation을 다음 stage로 전달.</span></p></div>
+  <div class="mini"><h4>KV transfer <span class="muted">(P/D · offload)</span></h4><p><span class="en"><b>Not a collective</b> — a one-shot move of an already-computed KV cache: prefill→decode (P/D), or GPU→CPU/remote (offload/tiering). Carried by NIXL/RDMA, LMCache, etc.</span><span class="ko"><b>집합통신 아님</b> — 이미 계산된 KV cache를 1회 이동: prefill→decode(P/D), 또는 GPU→CPU/원격(offload/tiering). NIXL/RDMA, LMCache 등이 운반.</span></p></div>
+</div>
+
+<svg class="fig" viewBox="0 0 760 210" role="img" aria-label="all-reduce vs all-to-all vs KV transfer">
+  <style>.tt{font:600 11.5px -apple-system,sans-serif;fill:var(--ink)}.kk{font:10.5px -apple-system,sans-serif;fill:var(--muted)}
+    .g{fill:var(--card);stroke:var(--line);stroke-width:1.3}.ar{stroke:var(--blue-bd);stroke-width:1.4;fill:none}.aa{stroke:var(--amber-bd);stroke-width:1.2;fill:none}.kv{stroke:var(--purple-bd);stroke-width:2;fill:none}</style>
+  <defs>
+    <marker id="mb" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--blue-bd)"/></marker>
+    <marker id="ma" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--amber-bd)"/></marker>
+    <marker id="mp" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--purple-bd)"/></marker>
+  </defs>
+  <!-- panel 1: all-reduce -->
+  <text x="20" y="18" class="tt">all-reduce (TP)</text>
+  <rect class="g" x="20" y="30" width="50" height="26" rx="5"/><text x="45" y="47" class="kk" text-anchor="middle">G0</text>
+  <rect class="g" x="20" y="64" width="50" height="26" rx="5"/><text x="45" y="81" class="kk" text-anchor="middle">G1</text>
+  <rect class="g" x="20" y="98" width="50" height="26" rx="5"/><text x="45" y="115" class="kk" text-anchor="middle">G2</text>
+  <circle cx="150" cy="77" r="16" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="150" y="81" class="kk" text-anchor="middle" fill="var(--blue-ink)">Σ</text>
+  <path class="ar" d="M72,43 C110,50 120,70 134,74" marker-end="url(#mb)"/><path class="ar" d="M72,77 L132,77" marker-end="url(#mb)"/><path class="ar" d="M72,111 C110,104 120,84 134,80" marker-end="url(#mb)"/>
+  <path class="ar" d="M166,72 C180,40 95,30 72,40" marker-end="url(#mb)"/>
+  <text x="20" y="150" class="kk">partials → sum → all get it</text>
+
+  <!-- panel 2: all-to-all -->
+  <text x="280" y="18" class="tt">all-to-all (EP): dispatch + combine</text>
+  <rect class="g" x="280" y="30" width="44" height="22" rx="5"/><text x="302" y="45" class="kk" text-anchor="middle">G0</text>
+  <rect class="g" x="280" y="104" width="44" height="22" rx="5"/><text x="302" y="119" class="kk" text-anchor="middle">G2</text>
+  <rect class="g" x="470" y="30" width="44" height="22" rx="5"/><text x="492" y="45" class="kk" text-anchor="middle">G1</text>
+  <rect class="g" x="470" y="104" width="44" height="22" rx="5"/><text x="492" y="119" class="kk" text-anchor="middle">G3</text>
+  <path class="aa" d="M324,41 L468,41" marker-end="url(#ma)"/>
+  <path class="aa" d="M324,46 L468,110" marker-end="url(#ma)"/>
+  <path class="aa" d="M324,110 L468,46" marker-end="url(#ma)"/>
+  <path class="aa" d="M324,115 L468,115" marker-end="url(#ma)"/>
+  <path class="aa" d="M302,52 L302,102" marker-end="url(#ma)"/><path class="aa" d="M492,52 L492,102" marker-end="url(#ma)"/>
+  <text x="280" y="150" class="kk">each GPU → a different piece to every GPU (token↔expert)</text>
+
+  <!-- panel 3: KV transfer -->
+  <text x="560" y="18" class="tt">KV transfer (P/D)</text>
+  <rect class="g" x="560" y="40" width="80" height="30" rx="6"/><text x="600" y="59" class="kk" text-anchor="middle">prefill</text>
+  <rect class="g" x="560" y="98" width="80" height="30" rx="6"/><text x="600" y="117" class="kk" text-anchor="middle">decode</text>
+  <path class="kv" d="M600,70 L600,96" marker-end="url(#mp)"/>
+  <text x="650" y="86" class="kk">KV once</text>
+  <text x="560" y="150" class="kk">point-to-point, not a collective</text>
+</svg>
+<p class="figcap"><span class="en">Fig 4 — Three communication shapes around an LLM: all-reduce (TP, sum-and-broadcast), all-to-all (EP, the token↔expert transpose = dispatch+combine), and KV transfer (P/D, a one-shot point-to-point move). DBO overlaps the middle one. Schematic.</span><span class="ko">그림 4 — LLM 주변의 세 가지 통신 형태: all-reduce(TP, 합산-브로드캐스트), all-to-all(EP, 토큰↔expert transpose = dispatch+combine), KV transfer(P/D, 1회성 point-to-point 이동). DBO는 가운데 것을 겹친다. 개략도.</span></p>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">where DBO fits</span><span class="ko">DBO의 위치</span></span>
+  <span class="en">DBO overlaps the <b>EP all-to-all (dispatch/combine)</b> with compute. It does <b>not</b> overlap TP all-reduce (separate, unmerged PR #44677), and KV transfer is a P/D concern, not DBO's. So: DBO ⊂ Expert Parallel, and its enabling backend is whatever runs the all-to-all (DeepEP — and now NIXL EP, below).</span>
+  <span class="ko">DBO는 <b>EP의 all-to-all(dispatch/combine)</b>을 연산과 겹친다. TP all-reduce는 겹치지 <b>않고</b>(별개·미병합 PR #44677), KV transfer는 P/D의 일이지 DBO가 아니다. 즉 DBO ⊂ Expert Parallel이고, 그 enabling backend는 all-to-all을 돌리는 것(DeepEP — 그리고 이제 아래 NIXL EP).</span>
+</div>
+
+<h3><span class="en">Forecast — DBO × NIXL EP (PR #45275, just merged)</span><span class="ko">전망 — DBO × NIXL EP (PR #45275, 방금 머지)</span></h3>
+<p><span class="en">PR <a class="src" href="https://github.com/vllm-project/vllm/pull/45275">#45275 "[EP] Enable DBO with NIXL EP"</a> merged 2026-06-15. It is small and surgical — per the PR description: <i>"DBO works with NIXL EP because it supports async prepare/finalize, but the backend validation only allowed DeepEP backends,"</i> plus it adds <code class="inl">nixl_ep</code> to the CUDA-graph guidance for decode-optimized all2all backends. It touches only <code class="inl">config/compilation.py</code> and <code class="inl">config/vllm.py</code> — i.e., it <b>unlocks an existing capability</b>, it doesn't add new overlap kernels.</span>
+<span class="ko">PR <a class="src" href="https://github.com/vllm-project/vllm/pull/45275">#45275 "[EP] Enable DBO with NIXL EP"</a>가 2026-06-15 머지됨. 작고 외과적이다 — PR 설명대로 <i>"DBO는 NIXL EP의 async prepare/finalize를 지원하므로 동작하는데, backend 검증이 DeepEP backend만 허용했었다"</i>, 그리고 <code class="inl">nixl_ep</code>를 decode 최적화 all2all backend의 CUDA-graph 가이던스에 추가. 건드린 파일은 <code class="inl">config/compilation.py</code>·<code class="inl">config/vllm.py</code>뿐 — 즉 <b>기존 역량의 잠금을 푼 것</b>이지 새 overlap 커널을 더한 게 아니다.</span></p>
+
+<div class="callout c-purple">
+  <span class="tag"><span class="en">editor's note — prediction (not a vLLM claim)</span><span class="ko">편집자 주 — 예측 (vLLM 주장 아님)</span></span>
+  <span class="en">What this should buy, in order of confidence:
+  <b>(1) Wider reach.</b> Until now DBO required a DeepEP all-to-all backend; now it also runs on <b>NIXL EP</b>. NIXL (NVIDIA Inference Xfer Library) is the same backend-pluggable transfer layer vLLM already uses for <b>P/D KV transfer</b> — so a fleet that picked NIXL EP for its all-to-all (or wants one transfer stack for both KV transfer <i>and</i> EP) can now get DBO's comm-hiding without switching to DeepEP.
+  <b>(2) One fabric, composable.</b> Because NIXL abstracts UCX/RDMA/GPUDirect and is the shared transport for P/D + wide-EP, DBO-over-NIXL-EP should compose cleanly with disaggregated / wide-EP MoE serving on a single coherent fabric — exactly the multi-node regime where DBO actually pays off.
+  <b>(3) Full CUDA graphs on decode.</b> The PR adds <code class="inl">nixl_ep</code> to the decode-optimized cudagraph guidance, so DBO+NIXL EP can keep full CUDA graphs — which DBO needs to minimize the CPU ping-pong overhead.
+  <b>Caveat:</b> this is enablement, not a speedup kernel. The realized gain depends on whether NIXL EP's all-to-all is as fast as DeepEP's low-latency kernels; if NIXL EP is slower, DBO over it hides comm but the comm it hides is larger. Net: it broadens <i>where</i> DBO can run more than it speeds up a fixed DeepEP setup. For us, the interesting part is the convergence — NIXL becoming the single transfer layer under P/D KV transfer, wide-EP all-to-all, <i>and</i> DBO overlap.</span>
+  <span class="ko">이게 가져다줄 것, 확신 순서대로:
+  <b>(1) 적용 범위 확대.</b> 지금까진 DBO가 DeepEP all-to-all backend를 요구했는데, 이제 <b>NIXL EP</b>에서도 돈다. NIXL(NVIDIA Inference Xfer Library)은 vLLM이 <b>P/D KV transfer</b>에 이미 쓰는 backend-pluggable 전송 계층이라 — all-to-all로 NIXL EP를 고른(또는 KV transfer와 EP를 한 전송 스택으로 묶고 싶은) fleet이 DeepEP로 갈아타지 않고도 DBO의 통신 숨김을 얻는다.
+  <b>(2) 한 fabric, 조합 가능.</b> NIXL이 UCX/RDMA/GPUDirect를 추상화하고 P/D + wide-EP의 공용 전송이므로, DBO-over-NIXL-EP는 분리/wide-EP MoE 서빙과 한 fabric 위에서 깔끔히 조합될 것 — DBO가 실제로 값을 하는 멀티노드 영역이 바로 그것.
+  <b>(3) decode에서 full CUDA graph.</b> PR이 <code class="inl">nixl_ep</code>를 decode 최적화 cudagraph 가이던스에 추가 → DBO+NIXL EP가 full CUDA graph 유지 가능(DBO가 CPU 핑퐁 오버헤드 최소화에 필요).
+  <b>단서:</b> 이건 enablement이지 속도 커널이 아니다. 실제 이득은 NIXL EP의 all-to-all이 DeepEP low-latency 커널만큼 빠른지에 달렸다; NIXL EP가 더 느리면 DBO가 통신을 숨기되 숨기는 통신 자체가 더 크다. 요약: 고정된 DeepEP 셋업을 빠르게 한다기보다 DBO가 <i>돌 수 있는 곳</i>을 넓힌다. 우리에겐 흥미로운 지점이 수렴 — NIXL이 P/D KV transfer·wide-EP all-to-all·DBO overlap 아래 단일 전송 계층이 되는 것.</span>
+</div>
 </section>
 
 <footer>

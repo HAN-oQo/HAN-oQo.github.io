@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diffusion LLMs in vLLM — how they differ, forward count, KV cache, code flow</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  .flow{list-style:none;padding:0;margin:14px 0;counter-reset:fl}
+  .flow>li{position:relative;padding:10px 0 12px 40px;border-bottom:1px solid var(--line)}
+  .flow>li::before{counter-increment:fl;content:counter(fl);position:absolute;left:0;top:9px;
+    width:26px;height:26px;border-radius:50%;background:var(--blue-ink);color:#fff;font-size:12px;
+    font-weight:700;display:flex;align-items:center;justify-content:center}
+  .flow code{font-size:12px}
+  .flow a.pl{font-size:11.5px;color:var(--muted);border-bottom:1px dotted var(--muted);text-decoration:none}
+  .flow a.pl:hover{color:var(--blue-ink)}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">Diffusion LLMs in vLLM — how they differ, forward count, KV cache, code flow</span>
+    <span class="ko">vLLM의 Diffusion LLM — 트랜스포머와 뭐가 다른가, forward 횟수, KV cache, 코드 흐름</span>
+  </h1>
+  <p class="lede">
+    <span class="en">A diffusion LLM generates text by starting from a fully-masked answer and <b>un-masking many tokens in parallel over a few denoising steps</b>, instead of one token at a time left-to-right. The architecture is <b>the same Transformer backbone</b> — the differences are <b>bidirectional attention</b> + a <b>masked-denoising objective</b>. That bidirectionality is exactly what breaks the normal KV cache. This note: how it differs, how many forwards make N tokens, what vLLM ships today (DiffusionGemma), how it manages the KV cache, and the code flow with permalinks.</span>
+    <span class="ko">Diffusion LLM은 완전히 마스킹된 답에서 시작해 <b>몇 번의 denoising 스텝 동안 여러 토큰을 병렬로 un-mask</b>해서 문장을 만든다 — 좌→우 한 토큰씩이 아니라. 아키텍처는 <b>동일한 트랜스포머 백본</b>이고, 차이는 <b>양방향(bidirectional) 어텐션</b> + <b>마스크 denoising 목적함수</b>다. 바로 그 양방향성이 일반 KV cache를 깨뜨린다. 이 노트: 무엇이 다른가, N개 토큰에 forward 몇 번인가, vLLM이 현재 무엇을 지원하는가(DiffusionGemma), KV cache를 어떻게 관리하는가, 코드 흐름(permalink).</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://docs.vllm.ai/projects/recipes/en/latest/">vLLM recipes</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/pull/45163">DiffusionGemma PR #45163</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/models/diffusion_gemma.py">code @ f4359a7</a></span>
+    <span class="badge"><span class="en">Feature deep-dive · code-walk</span><span class="ko">기능 딥다이브 · 코드 분석</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. What a diffusion LLM is — and is the architecture the same? (yes, mostly)</span><span class="ko">1. Diffusion LLM이란 — 아키텍처는 동일한가? (대체로 예)</span></a></li>
+    <li><a href="#s2"><span class="en">2. How many forward passes to make N tokens?</span><span class="ko">2. N개 토큰에 forward 몇 번?</span></a></li>
+    <li><a href="#s3"><span class="en">3. KV cache — why it's hard, and how it's done</span><span class="ko">3. KV cache — 왜 어렵고 어떻게 하나</span></a></li>
+    <li><a href="#s4"><span class="en">4. What vLLM ships — DiffusionGemma, and how it's optimized</span><span class="ko">4. vLLM이 지원하는 것 — DiffusionGemma와 최적화</span></a></li>
+    <li><a href="#s5"><span class="en">5. Code flow (with permalinks)</span><span class="ko">5. 코드 흐름 (permalink)</span></a></li>
+    <li><a href="#s6"><span class="en">6. Status &amp; how to run it</span><span class="ko">6. 구현 상태 &amp; 실행법</span></a></li>
+    <li><a href="#s7"><span class="en">7. Sources</span><span class="ko">7. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">Same Transformer, two changes: <b>bidirectional attention</b> + <b>masked-denoising</b> objective (Dream is even initialized from AR Qwen). Generation = <b>T denoising steps over the whole sequence</b> (T can be ≪N for speed, up to N for AR-like quality), not N sequential steps. The bidirectional attention <b>breaks the standard KV cache</b>, so systems move to <b>block diffusion</b>: finalize a block, cache its KV like a causal prefix, denoise the next block. vLLM's one native dLLM is <b>DiffusionGemma</b> — it cleverly reuses the <b>speculative-decoding path</b> (the "canvas" = draft tokens) and runs the backbone in two modes: a causal <b>encoder that writes KV</b> and a bidirectional <b>decoder that reads KV but doesn't write</b>.</span>
+  <span class="ko">같은 트랜스포머, 두 가지 변경: <b>양방향 어텐션</b> + <b>마스크 denoising</b> 목적함수(Dream은 AR Qwen에서 초기화까지 함). 생성 = <b>전체 시퀀스에 대한 T번의 denoising 스텝</b>(속도용 T≪N, AR급 품질엔 T=N까지), N번 순차가 아님. 양방향 어텐션이 <b>표준 KV cache를 깨뜨려서</b> 시스템들은 <b>block diffusion</b>으로 간다: 한 블록을 확정하고 그 KV를 causal prefix처럼 캐시한 뒤 다음 블록을 denoise. vLLM의 유일한 네이티브 dLLM은 <b>DiffusionGemma</b> — <b>speculative-decoding 경로</b>를 영리하게 재사용("canvas"=draft 토큰)하고, 백본을 두 모드로 돌린다: <b>KV를 쓰는 causal encoder</b>와 <b>KV를 읽되 안 쓰는 bidirectional decoder</b>.</span>
+</div>
+
+<div class="grid3">
+  <div class="mini"><h4><span class="en">AR (autoregressive)</span><span class="ko">AR (자기회귀)</span></h4><p><span class="en">Normal LLM: predict the next token left-to-right, one per forward. KV cache makes each forward cheap.</span><span class="ko">일반 LLM: 좌→우로 다음 토큰을 예측, forward당 1개. KV cache가 각 forward를 싸게 만듦.</span></p></div>
+  <div class="mini"><h4><span class="en">masked diffusion (dLLM)</span><span class="ko">마스크 diffusion (dLLM)</span></h4><p><span class="en">Start fully masked, un-mask many positions per step over T steps. Each step is a full forward over the sequence.</span><span class="ko">완전 마스킹에서 시작, T 스텝에 걸쳐 스텝당 여러 위치를 un-mask. 각 스텝은 시퀀스 전체 forward.</span></p></div>
+  <div class="mini"><h4><span class="en">denoising step</span><span class="ko">denoising 스텝</span></h4><p><span class="en">One iteration that predicts all currently-masked tokens and commits the confident ones (re-masks the rest).</span><span class="ko">현재 마스킹된 모든 토큰을 예측하고 확신하는 것만 확정(나머지는 다시 마스킹)하는 1회 반복.</span></p></div>
+  <div class="mini"><h4><span class="en">block / semi-AR diffusion</span><span class="ko">block / semi-AR diffusion</span></h4><p><span class="en">Generate a block of L tokens by diffusion, finalize it, then the next block. Interpolates AR↔diffusion; enables a KV cache.</span><span class="ko">L개 블록을 diffusion으로 생성·확정 후 다음 블록. AR↔diffusion 보간; KV cache 가능케 함.</span></p></div>
+  <div class="mini"><h4>canvas</h4><p><span class="en">vLLM/DiffusionGemma's name for the in-flight block being denoised (length <code>canvas_length</code>, 256).</span><span class="ko">vLLM/DiffusionGemma에서 denoise 중인 블록을 부르는 이름(길이 <code>canvas_length</code>, 256).</span></p></div>
+  <div class="mini"><h4><span class="en">confidence remasking</span><span class="ko">confidence remasking</span></h4><p><span class="en">The unmasking rule: keep high-confidence predictions, re-mask low-confidence ones for the next step.</span><span class="ko">un-mask 규칙: 확신 높은 예측은 유지, 낮은 건 다음 스텝에 다시 마스킹.</span></p></div>
+</div>
+
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">What a diffusion LLM is — and is the architecture the same?</span><span class="ko">Diffusion LLM이란 — 아키텍처는 동일한가?</span></h2>
+
+<p><span class="en">An AR Transformer factorizes text left-to-right: each token conditions on all previous tokens, decoded one at a time. A <b>masked diffusion LLM</b> defines a forward process that progressively masks tokens, and learns the reverse: start from a <b>fully-masked</b> response and <b>iteratively un-mask</b>, predicting <b>all masked positions simultaneously</b> at each step <a class="src" href="https://arxiv.org/abs/2502.09992">[LLaDA]</a> <a class="src" href="https://arxiv.org/abs/2508.15487">[Dream]</a>.</span>
+<span class="ko">AR 트랜스포머는 문장을 좌→우로 분해한다 — 각 토큰이 이전 토큰들에 조건부, 한 번에 하나씩 디코딩. <b>마스크 diffusion LLM</b>은 토큰을 점진적으로 마스킹하는 forward 과정을 정의하고 그 역과정을 학습한다: <b>완전 마스킹된</b> 답에서 시작해 <b>반복적으로 un-mask</b>하며, 각 스텝에서 <b>마스킹된 모든 위치를 동시에</b> 예측한다 <a class="src" href="https://arxiv.org/abs/2502.09992">[LLaDA]</a> <a class="src" href="https://arxiv.org/abs/2508.15487">[Dream]</a>.</span></p>
+
+<h3><span class="en">The architecture is the same Transformer — with two changes</span><span class="ko">아키텍처는 같은 트랜스포머 — 두 가지만 다름</span></h3>
+<p><span class="en">This is the crux. dLLMs are <b>not</b> a new architecture; they're a Transformer with (a) the causal mask removed and (b) a different training objective:</span>
+<span class="ko">이게 핵심이다. dLLM은 <b>새 아키텍처가 아니라</b>, (a) causal mask를 없애고 (b) 학습 목적함수를 바꾼 트랜스포머다:</span></p>
+
+<blockquote class="q">
+  <p>"LLaDA does not use a causal mask, as its formulation allows it to see the entire input for predictions."</p>
+  <cite>— LLaDA §2.2 · <a href="https://arxiv.org/html/2502.09992v3">arXiv:2502.09992</a></cite>
+</blockquote>
+
+<table>
+<tr><th></th><th><span class="en">AR Transformer</span><span class="ko">AR 트랜스포머</span></th><th><span class="en">Diffusion LLM</span><span class="ko">Diffusion LLM</span></th></tr>
+<tr><td><span class="en">Backbone</span><span class="ko">백본</span></td><td colspan="2" style="text-align:center"><span class="en"><b>Same</b> Transformer blocks (attn + MLP). Dream uses "the same model configuration as Qwen2.5-7B."</span><span class="ko"><b>동일</b>한 트랜스포머 블록(attn + MLP). Dream은 "Qwen2.5-7B와 같은 모델 구성" 사용.</span></td></tr>
+<tr><td><span class="en">Attention</span><span class="ko">어텐션</span></td><td><span class="en">causal (masked)</span><span class="ko">causal (마스킹)</span></td><td><span class="en"><b>bidirectional / full</b> (no causal mask)</span><span class="ko"><b>양방향 / full</b> (causal mask 없음)</span></td></tr>
+<tr><td><span class="en">Objective</span><span class="ko">목적함수</span></td><td><span class="en">next-token prediction</span><span class="ko">다음 토큰 예측</span></td><td><span class="en">masked-token denoising (likelihood bound)</span><span class="ko">마스크 토큰 denoising (가능도 하한)</span></td></tr>
+<tr><td><span class="en">Decoding</span><span class="ko">디코딩</span></td><td><span class="en">1 token / step, left-to-right</span><span class="ko">스텝당 1토큰, 좌→우</span></td><td><span class="en">many tokens / step, any order</span><span class="ko">스텝당 여러 토큰, 임의 순서</span></td></tr>
+</table>
+
+<p><span class="en">The strongest evidence the backbone is shared: <b>Dream 7B is initialized from Qwen2.5 AR weights</b> — the team found AR-initialization "more effective than training the diffusion language model from scratch" <a class="src" href="https://hkunlp.github.io/blog/2025/dream/">[Dream blog]</a>. You can literally take an autoregressive model and adapt it into a diffusion one (also shown by DiffuLLaMA, ICLR 2025 <a class="src" href="https://github.com/HKUNLP/DiffuLLaMA">[repo]</a>). The upside of bidirectionality: dLLMs can "consider multiple conditioning directions," which breaks the AR "reversal curse" <a class="src" href="https://arxiv.org/html/2502.09992v3">[LLaDA §3.1]</a>. The downside: removing the causal mask is exactly what breaks KV caching (§3).</span>
+<span class="ko">백본이 공유된다는 가장 강한 증거: <b>Dream 7B는 Qwen2.5 AR 가중치에서 초기화</b>된다 — 팀은 AR 초기화가 "diffusion LM을 처음부터 학습하는 것보다 효과적"임을 발견 <a class="src" href="https://hkunlp.github.io/blog/2025/dream/">[Dream blog]</a>. 말 그대로 자기회귀 모델을 가져와 diffusion으로 적응시킬 수 있다(DiffuLLaMA, ICLR 2025도 입증 <a class="src" href="https://github.com/HKUNLP/DiffuLLaMA">[repo]</a>). 양방향성의 장점: dLLM은 "여러 조건 방향을 고려"할 수 있어 AR의 "reversal curse"를 깬다 <a class="src" href="https://arxiv.org/html/2502.09992v3">[LLaDA §3.1]</a>. 단점: causal mask 제거가 바로 KV caching을 깨뜨린다(§3).</span></p>
+
+<svg class="fig" viewBox="0 0 760 270" role="img" aria-label="AR vs diffusion generation">
+  <style>
+    .t{font:600 12.5px -apple-system,sans-serif;fill:var(--ink)} .k{font:11px -apple-system,sans-serif;fill:var(--muted)}
+    .tok{font:600 12px "SF Mono",monospace} .cell{stroke:var(--line);stroke-width:1}
+    .m{fill:var(--gray-bg)} .c{fill:var(--blue-bd)} .n{fill:var(--green-bd)}
+  </style>
+  <text x="20" y="22" class="t">AR — one token per forward, left-to-right (N forwards for N tokens)</text>
+  <g transform="translate(20,34)">
+    <rect class="cell c" x="0" y="0" width="48" height="26"/><text x="24" y="18" class="tok" fill="#fff" text-anchor="middle">The</text>
+    <rect class="cell c" x="50" y="0" width="48" height="26"/><text x="74" y="18" class="tok" fill="#fff" text-anchor="middle">cat</text>
+    <rect class="cell c" x="100" y="0" width="48" height="26"/><text x="124" y="18" class="tok" fill="#fff" text-anchor="middle">sat</text>
+    <rect class="cell n" x="150" y="0" width="48" height="26"/><text x="174" y="18" class="tok" fill="#fff" text-anchor="middle">on</text>
+    <rect class="cell m" x="200" y="0" width="48" height="26"/><text x="224" y="18" class="tok" fill="var(--muted)" text-anchor="middle">?</text>
+    <text x="270" y="18" class="k">step t: commit 1 new token (green), attend only left ◀</text>
+  </g>
+
+  <text x="20" y="120" class="t">Diffusion — full masked canvas, un-mask many per step over T steps (T forwards, any order)</text>
+  <g transform="translate(20,134)" class="k">
+    <text x="0" y="-2" class="k">step 0 (all masked)</text>
+    <g transform="translate(0,4)"><rect class="cell m" x="0" y="0" width="40" height="24"/><rect class="cell m" x="42" y="0" width="40" height="24"/><rect class="cell m" x="84" y="0" width="40" height="24"/><rect class="cell m" x="126" y="0" width="40" height="24"/><rect class="cell m" x="168" y="0" width="40" height="24"/><rect class="cell m" x="210" y="0" width="40" height="24"/>
+    <text x="20" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text><text x="62" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text><text x="104" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text><text x="146" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text><text x="188" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text><text x="230" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text></g>
+  </g>
+  <text x="278" y="160" class="k">→</text>
+  <g transform="translate(300,134)" class="k">
+    <text x="0" y="-2" class="k">step 1 (confident ones un-masked, parallel)</text>
+    <g transform="translate(0,4)"><rect class="cell n" x="0" y="0" width="40" height="24"/><rect class="cell m" x="42" y="0" width="40" height="24"/><rect class="cell n" x="84" y="0" width="40" height="24"/><rect class="cell m" x="126" y="0" width="40" height="24"/><rect class="cell n" x="168" y="0" width="40" height="24"/><rect class="cell m" x="210" y="0" width="40" height="24"/>
+    <text x="20" y="16" class="tok" fill="#fff" text-anchor="middle">The</text><text x="62" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text><text x="104" y="16" class="tok" fill="#fff" text-anchor="middle">sat</text><text x="146" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text><text x="188" y="16" class="tok" fill="#fff" text-anchor="middle">the</text><text x="230" y="16" class="tok" fill="var(--muted)" text-anchor="middle">▢</text></g>
+  </g>
+  <g transform="translate(20,210)" class="k">
+    <text x="0" y="-2" class="k">… → step T (all filled)</text>
+    <g transform="translate(0,4)"><rect class="cell c" x="0" y="0" width="40" height="24"/><rect class="cell c" x="42" y="0" width="40" height="24"/><rect class="cell c" x="84" y="0" width="40" height="24"/><rect class="cell c" x="126" y="0" width="40" height="24"/><rect class="cell c" x="168" y="0" width="40" height="24"/><rect class="cell c" x="210" y="0" width="40" height="24"/>
+    <text x="20" y="16" class="tok" fill="#fff" text-anchor="middle">The</text><text x="62" y="16" class="tok" fill="#fff" text-anchor="middle">cat</text><text x="104" y="16" class="tok" fill="#fff" text-anchor="middle">sat</text><text x="146" y="16" class="tok" fill="#fff" text-anchor="middle">on</text><text x="188" y="16" class="tok" fill="#fff" text-anchor="middle">the</text><text x="230" y="16" class="tok" fill="#fff" text-anchor="middle">mat</text></g>
+    <text x="270" y="16" class="k">each step attends both directions ◀▶ · gray ▢ = [MASK]</text>
+  </g>
+</svg>
+<p class="figcap"><span class="en">Fig 1 — AR commits one token per forward (left-to-right); diffusion refines a whole masked canvas, un-masking several tokens per step in any order, attending bidirectionally. Sources: LLaDA §2.4 (arXiv:2502.09992), Dream (arXiv:2508.15487).</span><span class="ko">그림 1 — AR은 forward당 1토큰을 확정(좌→우); diffusion은 마스킹된 canvas 전체를 다듬으며 스텝당 여러 토큰을 임의 순서로 un-mask, 양방향 어텐션. 출처: LLaDA §2.4, Dream.</span></p>
+</section>
+
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">How many forward passes to make N tokens?</span><span class="ko">N개 토큰에 forward 몇 번?</span></h2>
+
+<table>
+<tr><th></th><th><span class="en">Forwards for N tokens</span><span class="ko">N토큰당 forward</span></th><th><span class="en">Cost per forward</span><span class="ko">forward당 비용</span></th></tr>
+<tr><td><span class="en">AR</span><span class="ko">AR</span></td><td><b>≈ N</b> <span class="en">(1 committed token / forward)</span><span class="ko">(forward당 1토큰 확정)</span></td><td><span class="en">cheap — KV cache means you process only the new token</span><span class="ko">쌈 — KV cache로 새 토큰만 처리</span></td></tr>
+<tr><td><span class="en">Diffusion</span><span class="ko">Diffusion</span></td><td><b>= T denoising steps</b> <span class="en">(T can be ≪ N up to T = N)</span><span class="ko">(T는 ≪N부터 T=N까지)</span></td><td><span class="en">expensive — each step is a <b>full forward over the whole sequence</b></span><span class="ko">비쌈 — 각 스텝이 <b>시퀀스 전체 forward</b></span></td></tr>
+</table>
+
+<p><span class="en">So diffusion <b>decouples token count from step count</b>. Fewer steps → more tokens committed per step → faster but lower quality, because parallel un-masking assumes the tokens are conditionally independent (they aren't). LLaDA states the tradeoff bluntly:</span>
+<span class="ko">즉 diffusion은 <b>토큰 수와 스텝 수를 분리</b>한다. 스텝이 적을수록 → 스텝당 더 많은 토큰 확정 → 빠르지만 품질↓ — 병렬 un-mask가 토큰 간 조건부 독립을 가정하기 때문(실제론 아님). LLaDA는 이 트레이드오프를 단도직입적으로 말한다:</span></p>
+
+<blockquote class="q">
+  <p>"LLaDA achieves optimal performance when the number of sampling steps equals the response length … reducing the number of sampling steps leads to a decrease in performance."</p>
+  <cite>— LLaDA repo FAQ · <a href="https://github.com/ML-GSAI/LLaDA">github.com/ML-GSAI/LLaDA</a></cite>
+</blockquote>
+
+<p><span class="en">The fix for the quality cliff is <b>confidence-aware parallel decoding</b>: only commit tokens above a confidence threshold each step, so the step count adapts to difficulty. Fast-dLLM reports "up to 27.6× throughput improvement with minimal accuracy loss" this way <a class="src" href="https://arxiv.org/abs/2505.22618">[Fast-dLLM]</a>. The other axis is <b>block / semi-AR diffusion</b>: generate a block of L tokens with K steps, finalize it, move on — interpolating between AR (block=1) and full diffusion (block=full length) <a class="src" href="https://arxiv.org/abs/2503.09573">[Block Diffusion / BD3-LM]</a>. So a practical forward count is <b>(N / L blocks) × (K steps per block)</b>.</span>
+<span class="ko">품질 절벽의 해법은 <b>confidence-aware 병렬 디코딩</b>: 스텝마다 확신 임계값을 넘는 토큰만 확정 → 스텝 수가 난이도에 적응. Fast-dLLM은 이 방식으로 "최대 27.6× 처리량, 정확도 손실 최소"를 보고 <a class="src" href="https://arxiv.org/abs/2505.22618">[Fast-dLLM]</a>. 다른 축은 <b>block / semi-AR diffusion</b>: L개 블록을 K 스텝으로 생성·확정 후 다음 — AR(블록=1)과 full diffusion(블록=전체) 사이를 보간 <a class="src" href="https://arxiv.org/abs/2503.09573">[Block Diffusion / BD3-LM]</a>. 따라서 실전 forward 수는 <b>(N / L 블록) × (블록당 K 스텝)</b>.</span></p>
+</section>
+
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">KV cache — why it's hard, and how it's done</span><span class="ko">KV cache — 왜 어렵고 어떻게 하나</span></h2>
+
+<p><span class="en">AR KV caching is <i>exact</i> because the causal mask guarantees a token's K/V never change once computed. dLLMs break that on <b>two</b> counts:</span>
+<span class="ko">AR의 KV caching은 <i>정확</i>하다 — causal mask가 한 토큰의 K/V는 한 번 계산되면 변하지 않음을 보장하기 때문. dLLM은 이를 <b>두 가지</b>로 깬다:</span></p>
+<ol>
+<li><span class="en"><b>Bidirectional attention → no causal prefix to cache.</b> "Traditional ARM acceleration techniques, such as Key-Value caching, are incompatible with dLLMs due to their bidirectional attention mechanism" <a class="src" href="https://arxiv.org/abs/2506.06295">[dLLM-Cache]</a>.</span><span class="ko"><b>양방향 어텐션 → 캐시할 causal prefix가 없음.</b> "KV caching 같은 전통적 ARM 가속 기법은 양방향 어텐션 때문에 dLLM과 호환되지 않는다" <a class="src" href="https://arxiv.org/abs/2506.06295">[dLLM-Cache]</a>.</span></li>
+<li><span class="en"><b>Tokens at every position change across steps → cached K/V go stale.</b> Caching has to become <i>approximate</i> or <i>delayed</i> <a class="src" href="https://arxiv.org/abs/2505.15781">[dKV-Cache]</a>.</span><span class="ko"><b>매 스텝 모든 위치의 토큰이 바뀜 → 캐시된 K/V가 오래됨.</b> 캐싱이 <i>근사</i> 또는 <i>지연</i> 방식이 되어야 함 <a class="src" href="https://arxiv.org/abs/2505.15781">[dKV-Cache]</a>.</span></li>
+</ol>
+
+<p><span class="en">Two families of fix, and it's worth keeping them distinct:</span>
+<span class="ko">두 갈래의 해법이 있고, 구분해 두는 게 좋다:</span></p>
+<table>
+<tr><th><span class="en">Approach</span><span class="ko">방식</span></th><th><span class="en">Exact?</span><span class="ko">정확?</span></th><th><span class="en">Idea</span><span class="ko">아이디어</span></th></tr>
+<tr><td><b>Block diffusion (BD3-LM)</b></td><td class="muted"><span class="en"><b>exact</b> (between blocks)</span><span class="ko"><b>정확</b> (블록 간)</span></td><td><span class="en">finalized blocks form a causal prefix → cache their KV exactly, like AR. <a class="src" href="https://arxiv.org/abs/2503.09573">[BD3-LM]</a></span><span class="ko">확정된 블록이 causal prefix를 이룸 → 그 KV를 AR처럼 정확히 캐시. <a class="src" href="https://arxiv.org/abs/2503.09573">[BD3-LM]</a></span></td></tr>
+<tr><td><b>Fast-dLLM / dLLM-Cache / dKV-Cache</b></td><td class="muted"><span class="en">approximate</span><span class="ko">근사</span></td><td><span class="en">K/V drift slowly between adjacent steps → reuse them anyway ("adjacent steps … highly similar" <a class="src" href="https://arxiv.org/abs/2505.22618">[Fast-dLLM]</a>).</span><span class="ko">인접 스텝 간 K/V가 느리게 변함 → 그냥 재사용("인접 스텝 … 매우 유사" <a class="src" href="https://arxiv.org/abs/2505.22618">[Fast-dLLM]</a>).</span></td></tr>
+</table>
+
+<p><span class="en">This is why production systems converge on <b>block diffusion</b>: it's the version where a normal prefix KV cache (and vLLM's automatic prefix caching) works again. vLLM's DiffusionGemma takes exactly this route — see §4.</span>
+<span class="ko">그래서 프로덕션 시스템들이 <b>block diffusion</b>으로 수렴한다 — 일반 prefix KV cache(그리고 vLLM의 automatic prefix caching)가 다시 작동하는 버전이기 때문. vLLM의 DiffusionGemma가 정확히 이 길을 택한다 — §4 참고.</span></p>
+</section>
+
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">What vLLM ships — DiffusionGemma, and how it's optimized</span><span class="ko">vLLM이 지원하는 것 — DiffusionGemma와 최적화</span></h2>
+
+<p><span class="en">Mainline vLLM natively supports <b>exactly one</b> diffusion model today: <b>DiffusionGemma</b> (Google's dLLM on the Gemma backbone), landed in PR #45163 (merged 2026-06-12) and announced as "the first dLLM natively supported in vLLM" <a class="src" href="https://github.com/vllm-project/vllm/pull/45163">[PR #45163]</a>. LLaDA / Dream are <b>not</b> in mainline (there's a separate, still-mock <code class="inl">dllm-plugin</code> + RFC #36155). The design is deliberately minimal — it reuses existing machinery rather than adding diffusion-specific core types:</span>
+<span class="ko">메인라인 vLLM은 현재 <b>정확히 하나</b>의 diffusion 모델을 네이티브 지원한다: <b>DiffusionGemma</b>(Gemma 백본의 Google dLLM), PR #45163(2026-06-12 병합)로 안착, "vLLM 최초의 네이티브 dLLM"으로 발표 <a class="src" href="https://github.com/vllm-project/vllm/pull/45163">[PR #45163]</a>. LLaDA/Dream은 메인라인에 <b>없음</b>(별도의, 아직 mock인 <code class="inl">dllm-plugin</code> + RFC #36155). 설계는 의도적으로 미니멀 — diffusion 전용 코어 타입을 추가하지 않고 기존 장치를 재사용한다:</span></p>
+
+<div class="grid2">
+  <div class="mini"><h4><span class="en">① Reuse the spec-decode path</span><span class="ko">① spec-decode 경로 재사용</span></h4><p><span class="en">The denoising "canvas" is delivered through vLLM's <b>speculative-decoding</b> draft-token path — draft tokens = the canvas. No new request type; metrics are reinterpreted as denoising-step metrics.</span><span class="ko">denoising "canvas"를 vLLM의 <b>speculative-decoding</b> draft-token 경로로 전달 — draft 토큰 = canvas. 새 요청 타입 없음; 지표는 denoising-step 지표로 재해석.</span></p></div>
+  <div class="mini"><h4><span class="en">② Block-based → prefix caching works</span><span class="ko">② 블록 기반 → prefix caching 작동</span></h4><p><span class="en">It's block diffusion (canvas = a block), so "vLLM's automatic prefix caching works out of the box" <a class="src" href="https://vllm-project.github.io/2026/06/10/diffusion-gemma.html">[blog]</a>.</span><span class="ko">block diffusion이라(canvas=블록) "vLLM의 automatic prefix caching이 그대로 작동" <a class="src" href="https://vllm-project.github.io/2026/06/10/diffusion-gemma.html">[블로그]</a>.</span></p></div>
+  <div class="mini"><h4><span class="en">③ Dual-mode backbone (one set of weights)</span><span class="ko">③ 이중 모드 백본(가중치 한 벌)</span></h4><p><span class="en">Same Gemma layers run as a <b>causal encoder that writes KV</b> (prefill/commit) or a <b>bidirectional decoder that reads KV</b> (denoise) — a per-request causal flag (<code class="inl">dynamic_causal</code>) lets one batch mix both.</span><span class="ko">같은 Gemma 레이어가 <b>KV를 쓰는 causal encoder</b>(prefill/commit) 또는 <b>KV를 읽는 bidirectional decoder</b>(denoise)로 — 요청별 causal 플래그(<code class="inl">dynamic_causal</code>)로 한 배치에 둘 혼합.</span></p></div>
+  <div class="mini"><h4><span class="en">④ Entropy-bound sampler</span><span class="ko">④ entropy-bound 샘플러</span></h4><p><span class="en">A custom sampler accepts confident positions and re-noises the rest each step; a block "commits" when it converges or hits <code class="inl">max_denoising_steps</code> (48).</span><span class="ko">커스텀 샘플러가 스텝마다 확신 위치를 수락하고 나머지를 re-noise; 수렴하거나 <code class="inl">max_denoising_steps</code>(48)에 도달하면 블록 "commit".</span></p></div>
+</div>
+
+<p class="muted"><span class="en">Attention backend constraints follow from the per-request causal flag: FlashAttention is auto-upgraded to <b>FA4</b> (or use <b>TRITON_ATTN</b>); <b>FlashInfer is rejected</b>; structured outputs are rejected (a parallel canvas isn't a left-to-right FSM); and <code class="inl">max_num_seqs</code> is capped to 8 (the fp32 <code class="inl">[seqs, canvas, vocab]</code> logits are memory-bound).</span>
+<span class="ko">어텐션 백엔드 제약은 요청별 causal 플래그에서 따라온다: FlashAttention은 <b>FA4</b>로 자동 업그레이드(또는 <b>TRITON_ATTN</b>); <b>FlashInfer 거부</b>; structured output 거부(병렬 canvas는 좌→우 FSM이 아님); <code class="inl">max_num_seqs</code>는 8로 제한(fp32 <code class="inl">[seqs, canvas, vocab]</code> logits가 메모리 바운드).</span></p>
+
+<svg class="fig" viewBox="0 0 760 220" role="img" aria-label="DiffusionGemma KV cache dual mode">
+  <style>.t3{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k3{font:11px -apple-system,sans-serif;fill:var(--muted)}.bk3{font:600 11px -apple-system,sans-serif}</style>
+  <text x="20" y="20" class="t3">DiffusionGemma — KV cache is asymmetric (encoder writes, decoder only reads)</text>
+  <!-- committed prefix -->
+  <rect x="30" y="44" width="300" height="46" rx="8" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="40" y="62" class="bk3" fill="var(--blue-ink)">committed prefix (prompt + finalized blocks)</text>
+  <text x="40" y="80" class="k3">causal ENCODER pass → writes K/V to cache ✍</text>
+  <!-- canvas -->
+  <rect x="360" y="44" width="370" height="46" rx="8" fill="var(--gray-bg)" stroke="var(--gray-bd)" stroke-dasharray="4 3"/>
+  <text x="372" y="62" class="bk3" fill="var(--amber-ink)">in-flight canvas (256 masked tokens, denoising)</text>
+  <text x="372" y="80" class="k3">bidirectional DECODER pass → reads prefix K/V, does NOT write ✗</text>
+  <!-- read arrow -->
+  <path d="M360,67 L334,67" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ah3)"/>
+  <defs><marker id="ah3" markerWidth="7" markerHeight="7" refX="2" refY="3" orient="auto"><path d="M6,0 L0,3 L6,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="120" y="115" class="k3">attend ▶ (causal, cached)</text>
+  <text x="430" y="115" class="k3">attend ◀▶ (full, recomputed every step)</text>
+  <!-- commit -->
+  <path d="M545,128 L545,150" stroke="var(--green-bd)" stroke-width="1.6" marker-end="url(#ah4)"/>
+  <defs><marker id="ah4" markerWidth="8" markerHeight="8" refX="3" refY="6" orient="auto"><path d="M0,0 L6,0 L3,6 Z" fill="var(--green-bd)"/></marker></defs>
+  <rect x="360" y="152" width="370" height="40" rx="8" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="372" y="170" class="bk3" fill="var(--green-ink)">on convergence → COMMIT (causal encoder pass)</text>
+  <text x="372" y="186" class="k3">finalized block's K/V appended to the prefix cache; canvas advances</text>
+  <text x="40" y="170" class="k3">⟳ up to 48 denoise</text>
+  <text x="40" y="186" class="k3">forwards per block,</text>
+  <text x="40" y="200" class="k3">early-stop on convergence</text>
+</svg>
+<p class="figcap"><span class="en">Fig 2 — vLLM DiffusionGemma KV cache: the prefix (prompt + finalized blocks) is cached via causal encoder passes that write KV; the in-flight canvas is denoised by bidirectional decoder passes that read that prefix but never write (its K/V are recomputed each of up to 48 steps). On convergence a commit pass appends the block's KV. Source: diffusion_gemma.py header + dual-mode docstring @ f4359a7.</span><span class="ko">그림 2 — vLLM DiffusionGemma KV cache: prefix(프롬프트+확정 블록)는 KV를 쓰는 causal encoder pass로 캐시; 진행 중 canvas는 그 prefix를 읽되 절대 쓰지 않는 bidirectional decoder pass로 denoise(최대 48스텝마다 K/V 재계산). 수렴 시 commit pass가 블록 KV를 prefix에 append. 출처: diffusion_gemma.py 헤더 + 이중모드 docstring @ f4359a7.</span></p>
+</section>
+
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Code flow (with permalinks)</span><span class="ko">코드 흐름 (permalink)</span></h2>
+<p class="muted"><span class="en">Permalinks pinned to commit <code class="inl">f4359a7</code>. DiffusionGemma path:</span><span class="ko">permalink은 커밋 <code class="inl">f4359a7</code>에 핀. DiffusionGemma 경로:</span></p>
+<ol class="flow">
+<li><span class="en"><b>Detect "diffusion."</b> A model is a dLLM iff its HF config has <code class="inl">canvas_length</code>.</span><span class="ko"><b>"diffusion" 감지.</b> HF config에 <code class="inl">canvas_length</code>가 있으면 dLLM.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/config/model.py#L1527-L1529">vllm/config/model.py#L1527-L1529 (<code>is_diffusion</code>)</a></li>
+<li><span class="en"><b>Config setup.</b> Auto-build <code class="inl">DiffusionConfig</code>, force non-causal backend (reject FlashInfer), cap <code class="inl">max_num_seqs</code> to 8.</span><span class="ko"><b>설정.</b> <code class="inl">DiffusionConfig</code> 자동 생성, non-causal 백엔드 강제(FlashInfer 거부), <code class="inl">max_num_seqs</code> 8 제한.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/models/config.py#L108-L159">models/config.py#L108-L159</a></li>
+<li><span class="en"><b>Canvas via spec-decode path.</b> Scheduler sets <code class="inl">num_sampled_tokens_per_step = 0</code> for diffusion (a denoising step may commit zero tokens); the canvas is delivered as "draft tokens."</span><span class="ko"><b>spec-decode 경로로 canvas 전달.</b> 스케줄러가 diffusion엔 <code class="inl">num_sampled_tokens_per_step = 0</code>(denoising 스텝이 0토큰 확정 가능); canvas는 "draft 토큰"으로 전달.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/core/sched/scheduler.py#L118-L121">v1/core/sched/scheduler.py#L118-L121</a></li>
+<li><span class="en"><b>Dual-mode backbone.</b> One Gemma backbone, two modes by <code class="inl">num_draft_tokens</code>: encoder (causal, writes KV) vs decoder (bidirectional, reads KV).</span><span class="ko"><b>이중 모드 백본.</b> Gemma 백본 하나, <code class="inl">num_draft_tokens</code>로 두 모드: encoder(causal, KV write) vs decoder(bidirectional, KV read).</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/models/diffusion_gemma.py#L744-L750">diffusion_gemma.py#L744-L750</a></li>
+<li><span class="en"><b>One forward per call</b>, mode chosen by draft-token count (<code class="inl">==0</code> → prefill/commit; <code class="inl">&gt;0</code> → one denoising pass over the whole canvas).</span><span class="ko"><b>호출당 forward 1회</b>, draft-token 수로 모드 결정(<code class="inl">==0</code> → prefill/commit; <code class="inl">&gt;0</code> → canvas 전체 denoising 1패스).</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/models/diffusion_gemma.py#L1217-L1218">diffusion_gemma.py#L1217-L1218</a></li>
+<li><span class="en"><b>Per-request causal flag</b> → mixed causal/bidirectional batches; this <code class="inl">dynamic_causal</code> is why FA3 is upgraded to FA4.</span><span class="ko"><b>요청별 causal 플래그</b> → causal/bidirectional 혼합 배치; 이 <code class="inl">dynamic_causal</code> 때문에 FA3→FA4 업그레이드.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/models/diffusion_gemma.py#L997-L1024">diffusion_gemma.py#L997-L1024</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/attention/backends/fa_utils.py#L134-L139">fa_utils.py#L134-L139</a></li>
+<li><span class="en"><b>Entropy-bound sampler.</b> Each step Gumbel-samples the canvas, builds an entropy/confidence acceptance mask, then renoises unaccepted positions or commits.</span><span class="ko"><b>entropy-bound 샘플러.</b> 스텝마다 canvas를 Gumbel 샘플, entropy/confidence 수락 마스크 생성 후 미수락 위치 renoise 또는 commit.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/models/diffusion_gemma.py#L555-L564">diffusion_gemma.py#L555-L564</a></li>
+<li><span class="en"><b>Convergence → commit.</b> A canvas converges when stable+confident, or at <code class="inl">max_denoising_steps</code>; next step flips to encoder mode to commit the block (causal, writes KV).</span><span class="ko"><b>수렴 → commit.</b> 안정+확신 시, 또는 <code class="inl">max_denoising_steps</code>에서 canvas 수렴; 다음 스텝에 encoder 모드로 전환해 블록 commit(causal, KV write).</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/models/diffusion_gemma.py#L614-L622">diffusion_gemma.py#L614-L622</a></li>
+</ol>
+<p class="muted"><span class="en"><b>Forwards for N tokens, precisely:</b> block-wise. Per block of <code class="inl">canvas_length</code> (256): ~1 causal prefill share + up to <code class="inl">max_denoising_steps</code> (48) bidirectional denoise forwards (early-stop on convergence) + 1 commit forward. So N tokens ≈ <code class="inl">ceil(N / 256)</code> blocks; each denoise forward refines the entire 256-token canvas in parallel.</span>
+<span class="ko"><b>N토큰당 forward, 정확히:</b> 블록 단위. <code class="inl">canvas_length</code>(256) 블록당: causal prefill ~1 + 최대 <code class="inl">max_denoising_steps</code>(48) bidirectional denoise forward(수렴 시 조기 종료) + commit 1. 따라서 N토큰 ≈ <code class="inl">ceil(N / 256)</code> 블록; 각 denoise forward가 256토큰 canvas 전체를 병렬로 다듬음.</span></p>
+</section>
+
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Status &amp; how to run it</span><span class="ko">구현 상태 &amp; 실행법</span></h2>
+<p><span class="en"><b>Mainline:</b> DiffusionGemma only, merged &amp; not behind a feature flag (PR #45163, 2026-06-12; follow-ups #45468, #45643). Diffusion mode is implicit — triggered by the model's <code class="inl">canvas_length</code> config, there is <b>no</b> <code class="inl">--diffusion</code> flag. <b>Plugin/RFC:</b> general dLLMs (LLaDA 2.0) live in the out-of-tree <code class="inl">dllm-plugin</code> (RFC #36155), which currently ships a <b>mock</b> model and needs a vLLM fork — <b>not production-ready</b>. LLaDA/Dream are not in mainline.</span>
+<span class="ko"><b>메인라인:</b> DiffusionGemma만, 병합됨·플래그 뒤 아님(PR #45163, 2026-06-12; 후속 #45468, #45643). diffusion 모드는 암묵적 — 모델의 <code class="inl">canvas_length</code> config로 트리거, <code class="inl">--diffusion</code> 플래그 <b>없음</b>. <b>플러그인/RFC:</b> 일반 dLLM(LLaDA 2.0)은 out-of-tree <code class="inl">dllm-plugin</code>(RFC #36155)에 있고, 현재 <b>mock</b> 모델 + vLLM fork 필요 — <b>프로덕션 미준비</b>. LLaDA/Dream은 메인라인에 없음.</span></p>
+<pre><code># DiffusionGemma (mainline) — no --diffusion flag; canvas_length in the model config triggers it
+vllm serve google/diffusiongemma-26B-A4B-it \
+    --max-num-seqs 4 --attention-backend TRITON_ATTN \
+    --diffusion-config '{"canvas_length": 256}' \
+    --hf-overrides '{"diffusion_sampler":"entropy_bound","diffusion_entropy_bound":0.1}'
+# constraints: max_num_seqs ≤ 8 · FA4 or TRITON_ATTN (FlashInfer rejected) ·
+#              structured outputs rejected · entropy-bound sampler config required</code></pre>
+<p class="muted"><span class="en">Other systems for context: SGLang added day-0 LLaDA 2.0 (block-diffusion) support, citing "the inefficient utilization of the KV Cache" of full bidirectional diffusion as the reason the field is moving to block diffusion <a class="src" href="https://www.lmsys.org/blog/2025-12-19-diffusion-llm/">[LMSYS/SGLang blog]</a>. Commercial dLLMs: Mercury (Inception, claims &gt;1000 tok/s) and Gemini Diffusion (DiffusionGemma's closed sibling).</span>
+<span class="ko">참고로 다른 시스템: SGLang은 LLaDA 2.0(block-diffusion) day-0 지원을 추가하며, full bidirectional diffusion의 "KV Cache 비효율"을 업계가 block diffusion으로 이동하는 이유로 지목 <a class="src" href="https://www.lmsys.org/blog/2025-12-19-diffusion-llm/">[LMSYS/SGLang 블로그]</a>. 상용 dLLM: Mercury(Inception, &gt;1000 tok/s 주장), Gemini Diffusion(DiffusionGemma의 비공개 형제).</span></p>
+</section>
+
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<h4><span class="en">Models &amp; theory (papers / repos)</span><span class="ko">모델 &amp; 이론 (논문 / 레포)</span></h4>
+<ul class="srcs">
+<li>LLaDA "Large Language Diffusion Models" (no causal mask, masked denoising, reversal curse) — <a href="https://arxiv.org/abs/2502.09992">arXiv:2502.09992</a> · <a href="https://github.com/ML-GSAI/LLaDA">repo</a></li>
+<li>Dream 7B (AR-initialized from Qwen2.5, causal→full attention) — <a href="https://arxiv.org/abs/2508.15487">arXiv:2508.15487</a> · <a href="https://hkunlp.github.io/blog/2025/dream/">blog</a></li>
+<li>Block Diffusion / BD3-LM (AR↔diffusion interpolation, exact between-block KV cache) — <a href="https://arxiv.org/abs/2503.09573">arXiv:2503.09573</a></li>
+<li>DiffuLLaMA (adapting AR LLaMA into a diffusion LM) — <a href="https://github.com/HKUNLP/DiffuLLaMA">github.com/HKUNLP/DiffuLLaMA</a></li>
+<li>Background: D3PM <a href="https://arxiv.org/abs/2107.03006">arXiv:2107.03006</a> · SEDD <a href="https://arxiv.org/abs/2310.16834">arXiv:2310.16834</a> · MDLM <a href="https://arxiv.org/abs/2406.07524">arXiv:2406.07524</a> · Diffusion-LM <a href="https://arxiv.org/abs/2205.14217">arXiv:2205.14217</a></li>
+</ul>
+<h4><span class="en">KV cache / parallel decoding</span><span class="ko">KV cache / 병렬 디코딩</span></h4>
+<ul class="srcs">
+<li>Fast-dLLM (approx block KV cache + confidence-aware parallel decoding, up to 27.6×) — <a href="https://arxiv.org/abs/2505.22618">arXiv:2505.22618</a> · <a href="https://github.com/NVlabs/Fast-dLLM">NVlabs/Fast-dLLM</a></li>
+<li>dLLM-Cache — <a href="https://arxiv.org/abs/2506.06295">arXiv:2506.06295</a> · dKV-Cache (NeurIPS 2025) — <a href="https://arxiv.org/abs/2505.15781">arXiv:2505.15781</a> · d²Cache — <a href="https://arxiv.org/abs/2509.23094">arXiv:2509.23094</a></li>
+<li>ParallelBench (skeptical analysis of parallel-decoding quality) — <a href="https://arxiv.org/abs/2510.04767">arXiv:2510.04767</a></li>
+</ul>
+<h4><span class="en">vLLM &amp; serving systems</span><span class="ko">vLLM &amp; 서빙 시스템</span></h4>
+<ul class="srcs">
+<li>vLLM DiffusionGemma — PR <a href="https://github.com/vllm-project/vllm/pull/45163">#45163</a> · blog <a href="https://vllm-project.github.io/2026/06/10/diffusion-gemma.html">vllm-project.github.io/2026/06/10/diffusion-gemma</a> · code @ <a href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/models/diffusion_gemma.py">f4359a7 diffusion_gemma.py</a></li>
+<li>vLLM dllm-plugin (experimental/mock) + RFC #36155 — <a href="https://github.com/vllm-project/dllm-plugin">github.com/vllm-project/dllm-plugin</a></li>
+<li>SGLang/LMSYS LLaDA 2.0 (block diffusion, KV-cache rationale) — <a href="https://www.lmsys.org/blog/2025-12-19-diffusion-llm/">lmsys.org/blog/2025-12-19-diffusion-llm</a></li>
+<li>Surveys — <a href="https://arxiv.org/abs/2508.10875">arXiv:2508.10875</a> · <a href="https://arxiv.org/abs/2506.13759">arXiv:2506.13759</a></li>
+</ul>
+<p class="muted"><span class="en">Caveats: vLLM's only mainline dLLM is DiffusionGemma; the dllm-plugin is a mock scaffold, not production. Throughput claims for Mercury / Gemini Diffusion / DiffusionGemma are vendor/announcement numbers. Code line numbers are valid at commit f4359a7 and may drift on other revisions; the DiffusionGemma weights/config defaults are read from the code, not a downloaded checkpoint.</span>
+<span class="ko">주의: vLLM 메인라인 dLLM은 DiffusionGemma뿐; dllm-plugin은 mock 골격, 프로덕션 아님. Mercury / Gemini Diffusion / DiffusionGemma의 처리량 주장은 벤더/발표 수치. 코드 줄 번호는 커밋 f4359a7 기준이며 다른 리비전에선 달라질 수 있음; DiffusionGemma 가중치/config 기본값은 다운로드 체크포인트가 아니라 코드에서 읽음.</span></p>
+</section>
+
+<footer>
+  <span class="en">Inference study note · 2026-06-16 · DiffusionGemma code @ vllm-project/vllm f4359a7 · theory from LLaDA / Dream / BD3-LM / Fast-dLLM. Code line numbers commit-pinned; everything else cited inline.</span>
+  <span class="ko">추론 스터디 노트 · 2026-06-16 · DiffusionGemma 코드 @ vllm-project/vllm f4359a7 · 이론 출처 LLaDA / Dream / BD3-LM / Fast-dLLM. 코드 줄 번호는 커밋 핀, 나머지는 본문 인용.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
