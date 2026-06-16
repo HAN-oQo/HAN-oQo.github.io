@@ -136,17 +136,25 @@ def check_palette_drift(path, content, tokens):
 
 
 def check_i18n(path, content):
-    """en/ko 이중언어 span 을 쓰는 페이지는 i18n 토글 장치가 있어야 한다."""
-    if not re.search(r'class="(en|ko)"', content):
-        return
+    """en/ko 이중언어 span 을 쓰는 페이지는 i18n 토글 장치가 있어야 하고,
+    반대로 i18n.js 를 로드하는 페이지는 실제 이중언어 콘텐츠가 있어야 한다(죽은 토글 금지)."""
+    has_spans = bool(re.search(r'class="(en|ko)"', content))
     linked = "assets/i18n.js" in content and "assets/i18n.css" in content
     inline = "html[data-lang=" in content and "lang-toggle" in content
-    if not (linked or inline):
+    if has_spans and not (linked or inline):
         err(
             path,
             "i18n",
             "en/ko span 사용 중인데 i18n 장치가 없음 — assets/i18n.css+js 링크 "
             "또는 자체 내장 토글(html[data-lang=…] + .lang-toggle) 필요",
+        )
+    # 반대 방향: 토글은 뜨는데(=i18n.js 로드) 번역 콘텐츠가 없으면 '죽은 토글'.
+    if (not has_spans) and ("assets/i18n.js" in content) and not is_staticrypt(content):
+        err(
+            path,
+            "i18n-dead-toggle",
+            "assets/i18n.js 를 로드하지만 en/ko span 이 없음 — 토글 버튼이 떠도 "
+            "눌러도 그대로(죽은 토글). 이중언어화하거나 i18n.js 링크를 제거하라",
         )
 
 

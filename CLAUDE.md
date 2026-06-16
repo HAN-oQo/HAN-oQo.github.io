@@ -235,6 +235,7 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 | theme / theme-path | theme.css 를 올바른 상대경로로 링크하거나(A/B), 정본 팔레트 인라인(C) |
 | palette-drift | 정본 토큰(`--bg` 등)을 다른 값으로 재정의 금지 |
 | i18n | en/ko span 을 쓰면 i18n 장치(링크 또는 인라인) 필수 |
+| i18n-dead-toggle | (비-staticrypt) `assets/i18n.js` 를 로드하면 en/ko span 이 있어야 함 — 토글만 뜨고 콘텐츠가 한국어 전용인 '죽은 토글' 금지 |
 | font | body font-family 는 `-apple-system` 시작 스택만 |
 | lockscreen | StatiCrypt 잠금 화면은 `#faf9f5`/`#1f1e1b` 템플릿 색 |
 | index-link | study/logs/infra/briefings 콘텐츠 페이지는 섹션 index 에 링크 필수 |
