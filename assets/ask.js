@@ -206,6 +206,7 @@
           return new Promise(function (resolve, reject) {                              // poll /result
             var tries = 0, MAX = 360, IVL = 1000;                                      // ~360 x 1s ≈ 6 min
             (function poll() {
+              if (ctx.alive && !ctx.alive()) { resolve({ cancelled: true }); return; } // stopped/superseded — quit polling
               tries++;
               fetch(resBase + "?id=" + encodeURIComponent(d.id), { headers: headers })
                 .then(function (r) { return r.json(); })
@@ -273,6 +274,8 @@
     ".askai-go{flex:0 0 auto;padding:8px 14px;border-radius:8px;border:none;cursor:pointer;" +
       "background:var(--ink,#1f1e1b);color:var(--bg,#faf9f5);font:600 13px inherit}" +
     ".askai-go[disabled]{opacity:.5;cursor:default}" +
+    ".askai-go.askai-stop{background:var(--red-ink,#b3402e)}" +
+    ".askai-divider{align-self:center;font-size:11px;color:var(--muted,#86807a);margin:6px 0;padding:2px 10px;border:1px solid var(--line,#e7e2d6);border-radius:999px;background:var(--gray-bg,#f1efe8)}" +
     ".askai-chk{font-size:12px;color:var(--muted,#86807a);display:flex;align-items:center;gap:5px;cursor:pointer}" +
     ".askai-chks{margin-left:auto;display:flex;gap:12px;align-items:center}" +
     ".askai-set{display:none;padding:10px 14px;border-top:1px solid var(--line,#e7e2d6)}" +
@@ -334,12 +337,18 @@
   function loadConvo() { try { return JSON.parse(sessionStorage.getItem(CKEY) || "[]"); } catch (e) { return []; } }
   function saveConvo() { try { sessionStorage.setItem(CKEY, JSON.stringify(convo)); } catch (e) {} }
   var convo = loadConvo();
-  var askStart = 0;   // ms timestamp of the in-flight request (0 = idle), for the elapsed counter
+  var askStart = 0;     // ms timestamp of the in-flight request (0 = idle), for the elapsed counter
+  var reqSeq = 0;       // bumped on each ask()/stop() — stale callbacks check this and no-op
+  var curTick = 0, curPartial = "", curThinking = "", busy = false;   // in-flight state (for Stop)
   function renderThread(pending, partial, thinking) {
     thread.textContent = "";
     if (!convo.length && !pending)
       thread.appendChild(el("div", { class: "askai-empty" }, [t("Ask anything about this page — follow-ups keep context (saved while you're on this page).", "이 페이지에 대해 무엇이든 물어보세요 — 후속 질문은 맥락이 이어집니다(이 페이지에 있는 동안 저장).")]));
     convo.forEach(function (m) {
+      if (m.role === "divider") {     // model switch marker (UI-only, not sent to the model)
+        thread.appendChild(el("div", { class: "askai-divider" }, ["⇄ " + mlabel(m.from) + " → " + mlabel(m.to)]));
+        return;
+      }
       var b = el("div", { class: "askai-msg " + (m.role === "user" ? "askai-u" : "askai-b") });
       if (m.role === "user") {
         b.appendChild(document.createTextNode(m.content));
@@ -479,7 +488,10 @@
   var gear = tat(el("button", { type: "button" }, ["⚙"]), "title", "Settings", "설정");
   gear.addEventListener("click", function () { setBox.classList.toggle("open"); });
   var clearBtn = tat(el("button", { type: "button" }, ["🗑"]), "title", "New chat (clear history)", "새 대화 (기록 지우기)");
-  clearBtn.addEventListener("click", function () { convo = []; saveConvo(); errBox.textContent = ""; renderThread(false); });
+  clearBtn.addEventListener("click", function () {
+    if (busy) { reqSeq++; clearInterval(curTick); askStart = 0; setIdle(); }   // cancel any in-flight request
+    convo = []; curPartial = ""; curThinking = ""; saveConvo(); errBox.textContent = ""; renderThread(false);
+  });
   var closeBtn = tat(el("button", { type: "button", "aria-label": "Minimize" }, ["—"]), "title", "Minimize (keeps the chat)", "최소화 (대화 유지)");
   closeBtn.addEventListener("click", function () { panel.classList.remove("open"); });
 
@@ -504,7 +516,18 @@
     }
   });
 
+  function setBusy() { busy = true; go.classList.add("askai-stop"); goSpan.textContent = t("Stop", "중단"); }
+  function setIdle() { busy = false; go.classList.remove("askai-stop"); goSpan.textContent = t("Ask", "물어보기"); }
+  function stop() {                                   // abandon the in-flight generation
+    if (!busy) return;
+    reqSeq++;                                         // invalidate its callbacks + stop polling
+    clearInterval(curTick); askStart = 0;
+    if (curPartial && curPartial.trim())             // keep what was generated so far
+      { convo.push({ role: "assistant", content: curPartial.trim() + "\n\n— " + t("(stopped)", "(중단됨)"), cites: [] }); saveConvo(); }
+    curPartial = ""; curThinking = ""; setIdle(); renderThread(false);
+  }
   function ask() {
+    if (busy) return;                                 // locked while generating — use Stop first
     var p = curProv(), prov = PROVIDERS[p];
     var key = lsget(keyLS(p), "").trim();
     var model = lsget(modelLS(p), "").trim() || prov.defModel;
@@ -517,12 +540,17 @@
     }
     if (!q) return;
 
-    convo.push({ role: "user", content: q }); saveConvo(); ta.value = "";
-    askStart = Date.now();
-    var partial = "", thinking = "";
-    var tick = setInterval(function () { renderThread(true, partial, thinking); }, 1000);   // live elapsed counter
-    renderThread(true, partial, thinking);
-    go.disabled = true; goSpan.textContent = t("Thinking…", "생각 중…");
+    // model-switch divider: if the model changed since the last question, mark it in the thread
+    var prevModel = null;
+    for (var i = convo.length - 1; i >= 0; i--) { if (convo[i].role === "user" && convo[i].model) { prevModel = convo[i].model; break; } }
+    if (prevModel && prevModel !== model) convo.push({ role: "divider", from: prevModel, to: model });
+
+    convo.push({ role: "user", content: q, model: model }); saveConvo(); ta.value = "";
+    var myReq = ++reqSeq;                              // this generation's token
+    askStart = Date.now(); curPartial = ""; curThinking = "";
+    curTick = setInterval(function () { if (myReq === reqSeq) renderThread(true, curPartial, curThinking); }, 1000);
+    renderThread(true, curPartial, curThinking);
+    setBusy(); goSpan.textContent = t("Stop", "중단");
 
     var sys = "You are a study assistant embedded in a technical blog page. The reader is viewing the page whose text is given below. " +
       "This is a multi-turn conversation — use the prior turns as context. Prefer and ground your answer in the PAGE CONTENT. " +
@@ -531,22 +559,27 @@
       " If asked which model or LLM you are, answer honestly that you are being served as '" + model + "'." +
       "\n\n=== PAGE CONTENT ===\n" + pageText();
 
+    var sendConvo = convo.filter(function (m) { return m.role === "user" || m.role === "assistant"; });  // drop dividers
     var run = prov.send
-      ? prov.send({ model: model, key: key, sys: sys, convo: convo, web: webChk.checked,
-          onProgress: function (p, th) { partial = p; thinking = th || ""; renderThread(true, partial, thinking); } })   // stream answer + thinking
+      ? prov.send({ model: model, key: key, sys: sys, convo: sendConvo, web: webChk.checked,
+          alive: function () { return myReq === reqSeq; },                                  // poll stops when superseded/stopped
+          onProgress: function (pp, th) { if (myReq !== reqSeq) return; curPartial = pp; curThinking = th || ""; renderThread(true, curPartial, curThinking); } })
       : fetch(prov.url(model, key), {
-          method: "POST", headers: prov.headers(key), body: JSON.stringify(prov.body(model, sys, convo, webChk.checked))
+          method: "POST", headers: prov.headers(key), body: JSON.stringify(prov.body(model, sys, sendConvo, webChk.checked))
         }).then(function (r) { return r.json(); }).then(function (d) {
           var out = prov.parse(d);
           if (out.err) throw new Error(out.err);
           return out;
         });
     run.then(function (out) {
+      if (myReq !== reqSeq) return;                   // stale (stopped / superseded) — ignore
+      if (out && out.cancelled) return;
       convo.push({ role: "assistant", content: out.text || t("(no answer)", "(응답 없음)"), cites: out.cites || [] });
       saveConvo(); renderThread(false);
     }).catch(function (e) {
+      if (myReq !== reqSeq) return;
       var msg = (e && e.message ? e.message : String(e));
-      if (/unauthorized|401/i.test(msg)) {        // bot/proxy needs an access token
+      if (/unauthorized|401/i.test(msg)) {
         setBox.classList.add("open");
         errBox.textContent = t("Enter your access token in settings (⚙).", "설정(⚙)에서 접근 토큰을 입력하세요.");
       } else {
@@ -554,11 +587,11 @@
           t("  (check URL / key / model / network)", "  (URL·키·모델·네트워크 확인)");
       }
       renderThread(false);
-    }).then(function () { clearInterval(tick); askStart = 0; go.disabled = false; goSpan.textContent = t("Ask", "물어보기"); });
+    }).then(function () { if (myReq !== reqSeq) return; clearInterval(curTick); askStart = 0; setIdle(); });
   }
-  go.addEventListener("click", ask);
+  go.addEventListener("click", function () { busy ? stop() : ask(); });
   ta.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask(); } // Enter=send, Shift+Enter=newline
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) ask(); }  // locked while generating
   });
 
   function mount() { document.body.appendChild(fab); document.body.appendChild(panel); }
