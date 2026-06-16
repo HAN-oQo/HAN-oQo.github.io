@@ -401,7 +401,7 @@
   var editLabel = el("label", { class: "askai-chk" }, [editChk, tsp("edit mode", "편집 모드")]);
   tat(editLabel, "title", "Edit this page's HTML (local bot only)", "이 페이지 HTML 편집 (로컬 봇 전용)");
   editLabel.style.display = "none"; // shown only for the bot provider
-  var goSpan = tsp("Ask", "물어보기");
+  var goSpan = el("span", null, [t("Ask", "물어보기")]);   // label managed by applyGoLabel() (state-aware, not auto-tsp)
   var go = el("button", { class: "askai-go", type: "button" }, [goSpan]);
 
   /* settings */
@@ -516,8 +516,9 @@
     }
   });
 
-  function setBusy() { busy = true; go.classList.add("askai-stop"); goSpan.textContent = t("Stop", "중단"); }
-  function setIdle() { busy = false; go.classList.remove("askai-stop"); goSpan.textContent = t("Ask", "물어보기"); }
+  function applyGoLabel() { goSpan.textContent = busy ? t("Stop", "중단") : t("Ask", "물어보기"); }   // state + lang aware
+  function setBusy() { busy = true; go.classList.add("askai-stop"); applyGoLabel(); }
+  function setIdle() { busy = false; go.classList.remove("askai-stop"); applyGoLabel(); }
   function stop() {                                   // abandon the in-flight generation
     if (!busy) return;
     reqSeq++;                                         // invalidate its callbacks + stop polling
@@ -550,7 +551,7 @@
     askStart = Date.now(); curPartial = ""; curThinking = "";
     curTick = setInterval(function () { if (myReq === reqSeq) renderThread(true, curPartial, curThinking); }, 1000);
     renderThread(true, curPartial, curThinking);
-    setBusy(); goSpan.textContent = t("Stop", "중단");
+    setBusy();
 
     var sys = "You are a study assistant embedded in a technical blog page. The reader is viewing the page whose text is given below. " +
       "This is a multi-turn conversation — use the prior turns as context. Prefer and ground your answer in the PAGE CONTENT. " +
@@ -604,7 +605,7 @@
     relang();
     loadProvFields();              // keyLabel + any per-provider text in current lang
     showModel();                   // "model:" label in current lang
-    if (!go.disabled) goSpan.textContent = t("Ask", "물어보기");
+    applyGoLabel();   // keep Stop/Ask label correct (and in the new language) during generation
     renderThread(false);
   }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-lang", "lang"] });
 })();
