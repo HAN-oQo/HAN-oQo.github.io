@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ko" data-lang="ko">
+<html lang="en" data-lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agentic RL ⑤ — disaggregation & weight-sync 스케일링 (MI250)</title>
+<title>Agentic RL ⑤ — disaggregation & weight-sync scaling (MI250)</title>
 <link rel="stylesheet" href="../assets/theme.css">
 <link rel="stylesheet" href="../assets/i18n.css">
 <script defer src="../assets/i18n.js"></script>
@@ -41,52 +41,55 @@
 <body>
 <div class="wrap">
 
-<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 시리즈: <a href="agentic-a-tool-math.html">A</a> · <a href="agentic-b-code.html">B</a> · <a href="agentic-c-rag.html">C</a> · <a href="agentic-d-genrm.html">D</a> · E</p>
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <span class="en">series:</span><span class="ko">시리즈:</span> <a href="agentic-a-tool-math.html">A</a> · <a href="agentic-b-code.html">B</a> · <a href="agentic-c-rag.html">C</a> · <a href="agentic-d-genrm.html">D</a> · E</p>
 
-<p><span class="ser">Agentic RL 시리즈 ⑤ / 5</span></p>
-<h1>Disaggregation & weight-sync 스케일링 — 멀티노드의 실제 비용 (MI250)</h1>
-<p class="sub">환경: <code>mi250-052</code> / <code>mi250-053</code> (MI250, ROCm 7.2.3) · Docker 전용 · verl 0.8.0 GRPO(async) · Qwen2.5-0.5B · gsm8k</p>
-<p class="post-meta"><time datetime="2026-06-15">2026-06-15</time></p>
+<p><span class="ser"><span class="en">Agentic RL series ⑤ / 5</span><span class="ko">Agentic RL 시리즈 ⑤ / 5</span></span></p>
+<h1><span class="en">Disaggregation & weight-sync scaling — the real cost of multi-node (MI250)</span><span class="ko">Disaggregation & weight-sync 스케일링 — 멀티노드의 실제 비용 (MI250)</span></h1>
+<p class="sub"><span class="en">Environment: <code>mi250-052</code> / <code>mi250-053</code> (MI250, ROCm 7.2.3) · Docker only · verl 0.8.0 GRPO(async) · Qwen2.5-0.5B · gsm8k</span><span class="ko">환경: <code>mi250-052</code> / <code>mi250-053</code> (MI250, ROCm 7.2.3) · Docker 전용 · verl 0.8.0 GRPO(async) · Qwen2.5-0.5B · gsm8k</span></p>
+<p class="post-meta"><time datetime="2026-06-15">2026-06-15</time>
+  <span class="sep">·</span>
+  <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
+  <time datetime="2026-06-16">2026-06-16</time></p>
 
 <div class="card">
-<p><strong>한 줄 요약.</strong> 목표는 롤아웃 GPU와 학습 GPU를 <strong>노드 단위로 분리</strong>해, weight-sync(A에서 본 <code>update_weights</code>)가 <strong>네트워크 비용</strong>으로 바뀌는지 보는 것이었다. 진짜 크로스노드(052+053)는 <span class="status-fail">인프라 블로커</span>로 막혔다(053에 vLLM-ROCm 이미지 없음 · 노드 간 ssh/registry 쓰기 불가 · 30GB 로컬 릴레이 비현실 · D에서 본 ROCm NCCL 취약성). 대신 <strong>052 단독에서 weight-sync 스케일링(2→4→8 GCD)</strong>을 실측했고, 분명한 패턴을 얻었다: <strong>weight-sync는 ~일정(≈1.5s)인데 학습(update_actor)은 GPU 수에 반비례로 줄어 → weight-sync의 상대 비중이 10%→20%로 커진다.</strong> 즉 학습을 병렬화할수록 동기 weight-sync가 병목이 되는 <strong>Amdahl 법칙</strong>이 RL 루프에 그대로 적용된다 — 이것이 disaggregation·async 가중치 전송이 푸는 문제다.</p>
+<p><span class="en"><strong>One-line summary.</strong> The goal was to <strong>split the rollout GPU and the training GPU across nodes</strong> and see whether weight-sync (the <code>update_weights</code> seen in A) turns into a <strong>network cost</strong>. True cross-node (052+053) was blocked by an <span class="status-fail">infra blocker</span> (no vLLM-ROCm image on 053 · no node-to-node ssh/registry write · 30GB local relay impractical · the ROCm NCCL fragility seen in D). Instead I measured <strong>weight-sync scaling on 052 alone (2→4→8 GCD)</strong> and got a clear pattern: <strong>weight-sync stays ~constant (≈1.5s) while training (update_actor) shrinks inversely with GPU count → weight-sync's relative share grows from 10% to 20%.</strong> In other words, <strong>Amdahl's law</strong> — where synchronous weight-sync becomes the bottleneck the more you parallelize training — applies directly to the RL loop. This is exactly the problem disaggregation and async weight transfer solve.</span><span class="ko"><strong>한 줄 요약.</strong> 목표는 롤아웃 GPU와 학습 GPU를 <strong>노드 단위로 분리</strong>해, weight-sync(A에서 본 <code>update_weights</code>)가 <strong>네트워크 비용</strong>으로 바뀌는지 보는 것이었다. 진짜 크로스노드(052+053)는 <span class="status-fail">인프라 블로커</span>로 막혔다(053에 vLLM-ROCm 이미지 없음 · 노드 간 ssh/registry 쓰기 불가 · 30GB 로컬 릴레이 비현실 · D에서 본 ROCm NCCL 취약성). 대신 <strong>052 단독에서 weight-sync 스케일링(2→4→8 GCD)</strong>을 실측했고, 분명한 패턴을 얻었다: <strong>weight-sync는 ~일정(≈1.5s)인데 학습(update_actor)은 GPU 수에 반비례로 줄어 → weight-sync의 상대 비중이 10%→20%로 커진다.</strong> 즉 학습을 병렬화할수록 동기 weight-sync가 병목이 되는 <strong>Amdahl 법칙</strong>이 RL 루프에 그대로 적용된다 — 이것이 disaggregation·async 가중치 전송이 푸는 문제다.</span></p>
 </div>
 
 <div class="card toc">
-<strong>목차</strong>
+<strong><span class="en">Contents</span><span class="ko">목차</span></strong>
 <ul style="list-style: none; padding-left: 0; margin: 8px 0;">
-  <li><a href="#goal">1. 목표 — 롤아웃을 떼어내면 weight-sync가 네트워크로</a></li>
-  <li><a href="#blocker">2. 진짜 멀티노드 시도 — 인프라 블로커</a></li>
-  <li><a href="#scaling">3. 단일노드 프록시 — weight-sync 스케일링 (2/4/8 GCD)</a></li>
-  <li><a href="#project">4. 크로스노드 투영 — xGMI → 네트워크</a></li>
-  <li><a href="#concl">5. 결론 + 시리즈 마무리</a></li>
+  <li><a href="#goal"><span class="en">1. Goal — split off the rollout and weight-sync goes to the network</span><span class="ko">1. 목표 — 롤아웃을 떼어내면 weight-sync가 네트워크로</span></a></li>
+  <li><a href="#blocker"><span class="en">2. The real multi-node attempt — an infra blocker</span><span class="ko">2. 진짜 멀티노드 시도 — 인프라 블로커</span></a></li>
+  <li><a href="#scaling"><span class="en">3. Single-node proxy — weight-sync scaling (2/4/8 GCD)</span><span class="ko">3. 단일노드 프록시 — weight-sync 스케일링 (2/4/8 GCD)</span></a></li>
+  <li><a href="#project"><span class="en">4. Cross-node projection — xGMI → network</span><span class="ko">4. 크로스노드 투영 — xGMI → 네트워크</span></a></li>
+  <li><a href="#concl"><span class="en">5. Conclusion + series wrap-up</span><span class="ko">5. 결론 + 시리즈 마무리</span></a></li>
 </ul>
 </div>
 
-<h2 id="goal">1. 목표 — 롤아웃을 떼어내면 weight-sync가 네트워크로</h2>
+<h2 id="goal"><span class="en">1. Goal — split off the rollout and weight-sync goes to the network</span><span class="ko">1. 목표 — 롤아웃을 떼어내면 weight-sync가 네트워크로</span></h2>
 <div class="card">
-<p>A에서 봤듯, async 롤아웃에선 매 스텝 업데이트된 정책 가중치를 vLLM 롤아웃 엔진으로 다시 실어야 한다(<code>update_weights</code>, A에서 ~20%). colocate(같은 노드·같은 GPU군)에선 이게 빠른 노드 내 인터커넥트(MI250의 <strong>xGMI/Infinity Fabric</strong>)를 탄다. 하지만 <strong>롤아웃을 별도 노드로 분리</strong>(진짜 disaggregation)하면 그 전송이 <strong>노드 간 네트워크</strong>(이더넷/IB)를 타게 된다 — 대역폭이 xGMI보다 훨씬 낮다. D가 "보상을 떼어내라"였다면 E는 "<strong>롤아웃을 떼어내라</strong>"이고, 그 대가가 weight-sync다.</p>
+<p><span class="en">As seen in A, async rollout has to ship the freshly updated policy weights back to the vLLM rollout engine every step (<code>update_weights</code>, ~20% in A). When colocated (same node, same GPU group) this rides the fast intra-node interconnect (MI250's <strong>xGMI/Infinity Fabric</strong>). But if you <strong>split the rollout onto a separate node</strong> (true disaggregation), that transfer rides the <strong>inter-node network</strong> (Ethernet/IB) — much lower bandwidth than xGMI. If D was "split off the reward," E is "<strong>split off the rollout</strong>," and the price is weight-sync.</span><span class="ko">A에서 봤듯, async 롤아웃에선 매 스텝 업데이트된 정책 가중치를 vLLM 롤아웃 엔진으로 다시 실어야 한다(<code>update_weights</code>, A에서 ~20%). colocate(같은 노드·같은 GPU군)에선 이게 빠른 노드 내 인터커넥트(MI250의 <strong>xGMI/Infinity Fabric</strong>)를 탄다. 하지만 <strong>롤아웃을 별도 노드로 분리</strong>(진짜 disaggregation)하면 그 전송이 <strong>노드 간 네트워크</strong>(이더넷/IB)를 타게 된다 — 대역폭이 xGMI보다 훨씬 낮다. D가 "보상을 떼어내라"였다면 E는 "<strong>롤아웃을 떼어내라</strong>"이고, 그 대가가 weight-sync다.</span></p>
 </div>
 
-<h2 id="blocker">2. 진짜 멀티노드 시도 — 인프라 블로커</h2>
+<h2 id="blocker"><span class="en">2. The real multi-node attempt — an infra blocker</span><span class="ko">2. 진짜 멀티노드 시도 — 인프라 블로커</span></h2>
 <div class="card">
-<p>052+053 양 노드로 verl <code>nnodes=2</code>를 띄우려 했으나 다음에서 막혔다:</p>
+<p><span class="en">I tried to bring up verl <code>nnodes=2</code> across both nodes (052+053), but got blocked at:</span><span class="ko">052+053 양 노드로 verl <code>nnodes=2</code>를 띄우려 했으나 다음에서 막혔다:</span></p>
 <table>
-<tr><th>단계</th><th>상태</th></tr>
-<tr><td>두 노드 도달성 (052=192.168.3.52, 053=192.168.3.53)</td><td><span class="status-ok">OK</span></td></tr>
-<tr><td>053에 vLLM-ROCm 이미지(<code>vllm-022-rocm</code>)</td><td><span class="status-fail">없음</span> — 053은 다른 이미지(moreh-vllm, rocm6.3.1)만 보유</td></tr>
-<tr><td>052→053 passwordless ssh (이미지 직접 전송용)</td><td><span class="status-fail">불가</span> — <code>Permission denied (publickey)</code></td></tr>
-<tr><td>클러스터 registry로 push (053이 pull)</td><td><span class="status-fail">쓰기 권한 없음</span></td></tr>
-<tr><td>로컬 경유 30GB 릴레이(<code>docker save | ssh load</code>)</td><td><span class="status-fail">비현실적</span> — 로컬 링크 병목으로 장시간 미완 → 중단</td></tr>
+<tr><th><span class="en">Step</span><span class="ko">단계</span></th><th><span class="en">Status</span><span class="ko">상태</span></th></tr>
+<tr><td><span class="en">Both nodes reachable (052=192.168.3.52, 053=192.168.3.53)</span><span class="ko">두 노드 도달성 (052=192.168.3.52, 053=192.168.3.53)</span></td><td><span class="status-ok">OK</span></td></tr>
+<tr><td><span class="en">vLLM-ROCm image (<code>vllm-022-rocm</code>) on 053</span><span class="ko">053에 vLLM-ROCm 이미지(<code>vllm-022-rocm</code>)</span></td><td><span class="status-fail"><span class="en">missing</span><span class="ko">없음</span></span> <span class="en">— 053 only has other images (moreh-vllm, rocm6.3.1)</span><span class="ko">— 053은 다른 이미지(moreh-vllm, rocm6.3.1)만 보유</span></td></tr>
+<tr><td><span class="en">052→053 passwordless ssh (to send the image directly)</span><span class="ko">052→053 passwordless ssh (이미지 직접 전송용)</span></td><td><span class="status-fail"><span class="en">no</span><span class="ko">불가</span></span> — <code>Permission denied (publickey)</code></td></tr>
+<tr><td><span class="en">push to cluster registry (053 pulls)</span><span class="ko">클러스터 registry로 push (053이 pull)</span></td><td><span class="status-fail"><span class="en">no write access</span><span class="ko">쓰기 권한 없음</span></span></td></tr>
+<tr><td><span class="en">30GB relay via local (<code>docker save | ssh load</code>)</span><span class="ko">로컬 경유 30GB 릴레이(<code>docker save | ssh load</code>)</span></td><td><span class="status-fail"><span class="en">impractical</span><span class="ko">비현실적</span></span> <span class="en">— local-link bottleneck, didn't finish for a long time → aborted</span><span class="ko">— 로컬 링크 병목으로 장시간 미완 → 중단</span></td></tr>
 </table>
-<div class="fail"><strong>판정.</strong> 진짜 크로스노드는 <strong>이미지 배포 인프라</strong>(노드 간 ssh / registry 쓰기 / 빠른 전송 경로)가 없어 막혔다. 설령 이미지를 옮겨도, D에서 본 <strong>ROCm NCCL/RCCL 취약성</strong> 위에 크로스노드 RCCL(NCCL_SOCKET_IFNAME 튜닝 등)이 더해져 추가 디버깅이 필요하다. 정직하게 <span class="status-fail">블로커로 기록</span>하고, 핵심 측정(weight-sync)은 단일노드 프록시로 대체했다.</div>
+<div class="fail"><span class="en"><strong>Verdict.</strong> True cross-node was blocked by the lack of <strong>image distribution infra</strong> (node-to-node ssh / registry write / a fast transfer path). Even if the image were moved, on top of the <strong>ROCm NCCL/RCCL fragility</strong> seen in D, cross-node RCCL (NCCL_SOCKET_IFNAME tuning, etc.) adds more debugging. I honestly <span class="status-fail">log it as a blocker</span> and substituted the core measurement (weight-sync) with a single-node proxy.</span><span class="ko"><strong>판정.</strong> 진짜 크로스노드는 <strong>이미지 배포 인프라</strong>(노드 간 ssh / registry 쓰기 / 빠른 전송 경로)가 없어 막혔다. 설령 이미지를 옮겨도, D에서 본 <strong>ROCm NCCL/RCCL 취약성</strong> 위에 크로스노드 RCCL(NCCL_SOCKET_IFNAME 튜닝 등)이 더해져 추가 디버깅이 필요하다. 정직하게 <span class="status-fail">블로커로 기록</span>하고, 핵심 측정(weight-sync)은 단일노드 프록시로 대체했다.</span></div>
 </div>
 
-<h2 id="scaling">3. 단일노드 프록시 — weight-sync 스케일링 (2/4/8 GCD)</h2>
+<h2 id="scaling"><span class="en">3. Single-node proxy — weight-sync scaling (2/4/8 GCD)</span><span class="ko">3. 단일노드 프록시 — weight-sync 스케일링 (2/4/8 GCD)</span></h2>
 <div class="card">
-<p>같은 verl async GRPO(gsm8k, batch 32, n=8)를 <strong>GCD 수만 2→4→8로</strong> 바꿔 돌렸다. 학습 풀(FSDP)과 롤아웃(vLLM)이 GCD 수에 따라 어떻게 갈리는지 본다. 정상 스텝:</p>
+<p><span class="en">I ran the same verl async GRPO (gsm8k, batch 32, n=8), changing only the <strong>GCD count, 2→4→8</strong>. The point is to see how the training pool (FSDP) and the rollout (vLLM) diverge with GCD count. Steady-state step:</span><span class="ko">같은 verl async GRPO(gsm8k, batch 32, n=8)를 <strong>GCD 수만 2→4→8로</strong> 바꿔 돌렸다. 학습 풀(FSDP)과 롤아웃(vLLM)이 GCD 수에 따라 어떻게 갈리는지 본다. 정상 스텝:</span></p>
 <table>
-<tr><th>GCD</th><th>step (s)</th><th>gen</th><th>update_actor (학습)</th><th>update_weights (weight-sync)</th><th>weight-sync 비중</th></tr>
+<tr><th>GCD</th><th>step (s)</th><th>gen</th><th>update_actor <span class="en">(training)</span><span class="ko">(학습)</span></th><th>update_weights (weight-sync)</th><th><span class="en">weight-sync share</span><span class="ko">weight-sync 비중</span></th></tr>
 <tr><td>2</td><td>15.38</td><td>3.93</td><td>5.39</td><td>1.56</td><td>10%</td></tr>
 <tr><td>4</td><td>9.95</td><td>3.38</td><td>2.88</td><td>1.52</td><td>15%</td></tr>
 <tr><td>8</td><td>7.12</td><td>3.05</td><td>1.49</td><td><strong>1.43</strong></td><td><strong>20%</strong></td></tr>
@@ -100,7 +103,7 @@
     <line x1="60" y1="188" x2="600" y2="188" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="191" text-anchor="end">2s</text>
     <line x1="60" y1="146" x2="600" y2="146" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="149" text-anchor="end">4s</text>
     <line x1="60" y1="104" x2="600" y2="104" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="107" text-anchor="end">6s</text>
-    <text x="20" y="130" text-anchor="middle" transform="rotate(-90 20 130)">초 / 스텝</text>
+    <text class="en" x="20" y="130" text-anchor="middle" transform="rotate(-90 20 130)">s / step</text><text class="ko" x="20" y="130" text-anchor="middle" transform="rotate(-90 20 130)">초 / 스텝</text>
   </g>
   <!-- x positions: NG2=150, NG4=330, NG8=510 ; y=230 - v*21 (1s=21px) -->
   <g font-size="10.5" fill="var(--muted)"><text x="150" y="248" text-anchor="middle">2 GCD</text><text x="330" y="248" text-anchor="middle">4 GCD</text><text x="510" y="248" text-anchor="middle">8 GCD</text></g>
@@ -109,52 +112,59 @@
   <circle cx="150" cy="116.8" r="4" fill="var(--green-bd)"/><circle cx="330" cy="169.5" r="4" fill="var(--green-bd)"/><circle cx="510" cy="198.7" r="4" fill="var(--green-bd)"/>
   <text x="150" y="110" text-anchor="middle" font-size="10" fill="var(--green-ink)">5.39</text>
   <text x="510" y="192" text-anchor="middle" font-size="10" fill="var(--green-ink)">1.49</text>
-  <text x="360" y="150" font-size="11" font-weight="700" fill="var(--green-ink)">update_actor (학습) — GPU 늘면 반감</text>
+  <text class="en" x="360" y="150" font-size="11" font-weight="700" fill="var(--green-ink)">update_actor (training) — halves as GPUs grow</text><text class="ko" x="360" y="150" font-size="11" font-weight="700" fill="var(--green-ink)">update_actor (학습) — GPU 늘면 반감</text>
   <!-- weight-sync line (1.56,1.52,1.43) ~ flat -->
   <polyline points="150,197.3 330,198.1 510,200.0" fill="none" stroke="var(--purple)" stroke-width="2.5"/>
   <circle cx="150" cy="197.3" r="4" fill="var(--purple)"/><circle cx="330" cy="198.1" r="4" fill="var(--purple)"/><circle cx="510" cy="200.0" r="4" fill="var(--purple)"/>
   <text x="150" y="214" text-anchor="middle" font-size="10" fill="var(--purple-ink)">1.56</text>
   <text x="510" y="216" text-anchor="middle" font-size="10" fill="var(--purple-ink)">1.43</text>
-  <text x="240" y="186" font-size="11" font-weight="700" fill="var(--purple-ink)">weight-sync — ~일정 (안 줄어듦)</text>
-  <text x="60" y="278" font-size="11.5" fill="var(--ink)">→ 학습은 병렬화로 줄지만 weight-sync는 그대로 → weight-sync 비중 10%→20%.</text>
-  <text x="60" y="294" font-size="10.5" fill="var(--muted)">RL 루프의 Amdahl 법칙: 직렬 단계(weight-sync)가 병렬화의 한계를 정한다.</text>
+  <text class="en" x="240" y="186" font-size="11" font-weight="700" fill="var(--purple-ink)">weight-sync — ~constant (doesn't shrink)</text><text class="ko" x="240" y="186" font-size="11" font-weight="700" fill="var(--purple-ink)">weight-sync — ~일정 (안 줄어듦)</text>
+  <text class="en" x="60" y="278" font-size="11.5" fill="var(--ink)">→ training shrinks with parallelism but weight-sync stays → weight-sync share 10%→20%.</text><text class="ko" x="60" y="278" font-size="11.5" fill="var(--ink)">→ 학습은 병렬화로 줄지만 weight-sync는 그대로 → weight-sync 비중 10%→20%.</text>
+  <text class="en" x="60" y="294" font-size="10.5" fill="var(--muted)">Amdahl's law in the RL loop: the serial stage (weight-sync) sets the limit of parallelism.</text><text class="ko" x="60" y="294" font-size="10.5" fill="var(--muted)">RL 루프의 Amdahl 법칙: 직렬 단계(weight-sync)가 병렬화의 한계를 정한다.</text>
 </svg>
-<figcaption>그림 1 — GCD 수에 따른 update_actor(학습) vs weight-sync. 학습은 5.39→1.49s로 반비례 감소, weight-sync는 1.56→1.43s로 사실상 평탄. (본 실험 verl <code>timing_s/*</code>, batch 32)</figcaption>
+<figcaption><span class="en">Figure 1 — update_actor (training) vs weight-sync by GCD count. Training drops inversely, 5.39→1.49s; weight-sync stays essentially flat, 1.56→1.43s. (this experiment's verl <code>timing_s/*</code>, batch 32)</span><span class="ko">그림 1 — GCD 수에 따른 update_actor(학습) vs weight-sync. 학습은 5.39→1.49s로 반비례 감소, weight-sync는 1.56→1.43s로 사실상 평탄. (본 실험 verl <code>timing_s/*</code>, batch 32)</span></figcaption>
 </figure>
 
-<div class="win"><strong>핵심 — weight-sync는 RL의 Amdahl 직렬 항.</strong> GCD를 2→8로 4배 늘리면 학습(update_actor)은 5.39→1.49s로 ~3.6배 빨라지지만, <strong>weight-sync는 1.56→1.43s로 거의 안 줄어든다</strong>. 0.5B 가중치를 colocate vLLM 엔진에 브로드캐스트하는 비용은 GPU 수에 비례해 줄지 않기 때문(작은 모델 + 빠른 xGMI라 절대값도 작음). 결과적으로 <strong>weight-sync의 상대 비중이 10%→20%로 커진다</strong> — 학습을 병렬화할수록 직렬 weight-sync가 전체를 지배하기 시작한다. 이게 disaggregated RL이 <strong>가중치 전송을 학습/생성과 비동기로 겹치려는</strong> 이유다.</div>
+<div class="win"><span class="en"><strong>Key — weight-sync is RL's Amdahl serial term.</strong> Quadrupling the GCD count 2→8 makes training (update_actor) ~3.6× faster (5.39→1.49s), but <strong>weight-sync barely shrinks, 1.56→1.43s</strong>. That's because broadcasting the 0.5B weights to the colocated vLLM engine doesn't scale down with GPU count (small model + fast xGMI keeps the absolute value small too). As a result, <strong>weight-sync's relative share grows from 10% to 20%</strong> — the more you parallelize training, the more the serial weight-sync starts to dominate the whole. This is why disaggregated RL wants to <strong>overlap weight transfer asynchronously with training/generation</strong>.</span><span class="ko"><strong>핵심 — weight-sync는 RL의 Amdahl 직렬 항.</strong> GCD를 2→8로 4배 늘리면 학습(update_actor)은 5.39→1.49s로 ~3.6배 빨라지지만, <strong>weight-sync는 1.56→1.43s로 거의 안 줄어든다</strong>. 0.5B 가중치를 colocate vLLM 엔진에 브로드캐스트하는 비용은 GPU 수에 비례해 줄지 않기 때문(작은 모델 + 빠른 xGMI라 절대값도 작음). 결과적으로 <strong>weight-sync의 상대 비중이 10%→20%로 커진다</strong> — 학습을 병렬화할수록 직렬 weight-sync가 전체를 지배하기 시작한다. 이게 disaggregated RL이 <strong>가중치 전송을 학습/생성과 비동기로 겹치려는</strong> 이유다.</span></div>
 </div>
 
-<h2 id="project">4. 크로스노드 투영 — xGMI → 네트워크</h2>
+<h2 id="project"><span class="en">4. Cross-node projection — xGMI → network</span><span class="ko">4. 크로스노드 투영 — xGMI → 네트워크</span></h2>
 <div class="card">
-<p>측정값은 모두 <strong>노드 내 xGMI</strong>(MI250 Infinity Fabric, 수백 GB/s)를 탄 weight-sync다. 진짜 멀티노드 disaggregation에선 같은 전송이 <strong>노드 간 네트워크</strong>(이더넷/IB)를 타며, 두 가지로 악화된다:</p>
+<p><span class="en">All the measured values are weight-sync over <strong>intra-node xGMI</strong> (MI250 Infinity Fabric, hundreds of GB/s). In true multi-node disaggregation the same transfer rides the <strong>inter-node network</strong> (Ethernet/IB), and worsens in two ways:</span><span class="ko">측정값은 모두 <strong>노드 내 xGMI</strong>(MI250 Infinity Fabric, 수백 GB/s)를 탄 weight-sync다. 진짜 멀티노드 disaggregation에선 같은 전송이 <strong>노드 간 네트워크</strong>(이더넷/IB)를 타며, 두 가지로 악화된다:</span></p>
 <ul>
-<li><strong>대역폭</strong>: 노드 간 링크는 xGMI보다 보통 한 자릿수 이상 느리다 → 같은 0.5B라도 weight-sync가 수 배로.</li>
-<li><strong>모델 크기</strong>: weight-sync는 가중치 바이트 수에 비례. 0.5B(≈1GB bf16)는 싸지만 7B(≈14GB)·70B면 매 스텝 수~수십 GB를 노드 간 전송 → weight-sync가 <strong>지배적 병목</strong>이 된다.</li>
+<li><span class="en"><strong>Bandwidth</strong>: an inter-node link is usually an order of magnitude or more slower than xGMI → even the same 0.5B makes weight-sync several times larger.</span><span class="ko"><strong>대역폭</strong>: 노드 간 링크는 xGMI보다 보통 한 자릿수 이상 느리다 → 같은 0.5B라도 weight-sync가 수 배로.</span></li>
+<li><span class="en"><strong>Model size</strong>: weight-sync scales with the number of weight bytes. 0.5B (≈1GB bf16) is cheap, but at 7B (≈14GB) or 70B you transfer several to tens of GB between nodes every step → weight-sync becomes the <strong>dominant bottleneck</strong>.</span><span class="ko"><strong>모델 크기</strong>: weight-sync는 가중치 바이트 수에 비례. 0.5B(≈1GB bf16)는 싸지만 7B(≈14GB)·70B면 매 스텝 수~수십 GB를 노드 간 전송 → weight-sync가 <strong>지배적 병목</strong>이 된다.</span></li>
 </ul>
-<p>그래서 대규모 disaggregated RL 프레임워크(이번 시리즈의 verl 포함)는 weight-sync를 단순 동기 브로드캐스트로 두지 않고 — <strong>전송을 학습/생성과 겹치고(async), RDMA/NCCL 기반 가중치 브로드캐스트나 파라미터 캐시</strong>로 최적화한다. 본 실험의 단일노드 곡선(직렬 weight-sync가 병렬화의 한계)은 그 동기를 작은 규모에서 그대로 보여준다.</p>
-<div class="note"><strong>측정의 한계.</strong> 크로스노드 절대 수치는 인프라 블로커로 못 쟀다(§2). 위 투영은 측정된 xGMI weight-sync(≈1.5s/0.5B)와 인터커넥트 특성에 근거한 <strong>방향성 추론</strong>이지 측정값이 아니다 — 정직하게 구분해 둔다.</p></div>
+<p><span class="en">That's why large-scale disaggregated RL frameworks (including this series' verl) don't leave weight-sync as a plain synchronous broadcast — they <strong>overlap the transfer with training/generation (async) and optimize it with RDMA/NCCL-based weight broadcast or a parameter cache</strong>. This experiment's single-node curve (serial weight-sync setting the limit of parallelism) shows that motivation directly, at a small scale.</span><span class="ko">그래서 대규모 disaggregated RL 프레임워크(이번 시리즈의 verl 포함)는 weight-sync를 단순 동기 브로드캐스트로 두지 않고 — <strong>전송을 학습/생성과 겹치고(async), RDMA/NCCL 기반 가중치 브로드캐스트나 파라미터 캐시</strong>로 최적화한다. 본 실험의 단일노드 곡선(직렬 weight-sync가 병렬화의 한계)은 그 동기를 작은 규모에서 그대로 보여준다.</span></p>
+<div class="note"><span class="en"><strong>Limits of the measurement.</strong> Cross-node absolute numbers couldn't be measured due to the infra blocker (§2). The projection above is a <strong>directional inference</strong> based on the measured xGMI weight-sync (≈1.5s/0.5B) and interconnect characteristics, not a measured value — I keep that distinction honest.</span><span class="ko"><strong>측정의 한계.</strong> 크로스노드 절대 수치는 인프라 블로커로 못 쟀다(§2). 위 투영은 측정된 xGMI weight-sync(≈1.5s/0.5B)와 인터커넥트 특성에 근거한 <strong>방향성 추론</strong>이지 측정값이 아니다 — 정직하게 구분해 둔다.</span></p></div>
 </div>
 
-<h2 id="concl">5. 결론 + 시리즈 마무리</h2>
+<h2 id="concl"><span class="en">5. Conclusion + series wrap-up</span><span class="ko">5. 결론 + 시리즈 마무리</span></h2>
 <div class="card">
 <ol>
-<li><strong>weight-sync는 RL 루프의 직렬(Amdahl) 항.</strong> 학습은 GPU로 병렬화되지만 weight-sync는 안 줄어 — 비중이 10%→20%로 증가(2→8 GCD). 스케일이 커질수록 weight-sync가 한계를 정한다.</li>
-<li><strong>크로스노드면 더 나쁘다</strong>: xGMI → 네트워크 + 큰 모델 = weight-sync 폭증. disaggregation의 핵심 과제이며, async 가중치 전송이 답.</li>
-<li><strong>진짜 멀티노드는 인프라 블로커</strong>(이미지 배포 + ROCm NCCL)로 미완 — 정직하게 기록. 단일노드 스케일링이 동일한 통찰을 준다.</li>
+<li><span class="en"><strong>weight-sync is the RL loop's serial (Amdahl) term.</strong> Training parallelizes across GPUs but weight-sync doesn't shrink — its share rises from 10% to 20% (2→8 GCD). The larger the scale, the more weight-sync sets the limit.</span><span class="ko"><strong>weight-sync는 RL 루프의 직렬(Amdahl) 항.</strong> 학습은 GPU로 병렬화되지만 weight-sync는 안 줄어 — 비중이 10%→20%로 증가(2→8 GCD). 스케일이 커질수록 weight-sync가 한계를 정한다.</span></li>
+<li><span class="en"><strong>Cross-node is worse</strong>: xGMI → network + large model = weight-sync explosion. It's the core challenge of disaggregation, and async weight transfer is the answer.</span><span class="ko"><strong>크로스노드면 더 나쁘다</strong>: xGMI → 네트워크 + 큰 모델 = weight-sync 폭증. disaggregation의 핵심 과제이며, async 가중치 전송이 답.</span></li>
+<li><span class="en"><strong>True multi-node was left unfinished by an infra blocker</strong> (image distribution + ROCm NCCL) — logged honestly. Single-node scaling gives the same insight.</span><span class="ko"><strong>진짜 멀티노드는 인프라 블로커</strong>(이미지 배포 + ROCm NCCL)로 미완 — 정직하게 기록. 단일노드 스케일링이 동일한 통찰을 준다.</span></li>
 </ol>
-<div class="tip"><strong>시리즈 5부작 종합.</strong> 단일턴 GRPO에서 출발해 agentic으로 확장하며 "<strong>비-정책 연산이 어디서 비용이 되는가</strong>"를 따라왔다:
+<div class="tip"><span class="en"><strong>The 5-part series, synthesized.</strong> Starting from single-turn GRPO and extending to agentic, I traced "<strong>where do non-policy computations become a cost</strong>":
+<br>· <strong>A tool-math</strong>: multi-turn works, async weight-sync ~20% surfaces, tool use is sparse without SFT
+<br>· <strong>B code</strong>: reward = running tests → reward 14–24% (the verifier is the cost)
+<br>· <strong>C search</strong>: tool = BM25, cheap at ~7ms (tool cost depends on the tool), 0.5B can't solve multi-hop
+<br>· <strong>D GenRM</strong>: reward = a model → can't be colocated inline (GPU NCCL clash / CPU paralysis), needs dedicated serving
+<br>· <strong>E disagg</strong>: weight-sync = the Amdahl serial term, a bottleneck at scale and cross-node
+<br>Overarching conclusion: <strong>"running" agentic RL and "scaling" it are different things.</strong> On small models / a single node almost everything runs, but non-policy computations like verifiers, reward models, and weight-sync become bottlenecks one by one at scale, each demanding dedicated infra (sandbox pools, RM servers, async weight transfer).</span><span class="ko"><strong>시리즈 5부작 종합.</strong> 단일턴 GRPO에서 출발해 agentic으로 확장하며 "<strong>비-정책 연산이 어디서 비용이 되는가</strong>"를 따라왔다:
 <br>· <strong>A 도구수학</strong>: 멀티턴 됨, async weight-sync ~20% 표면화, 도구사용은 SFT 없이 희소
 <br>· <strong>B 코드</strong>: 보상=테스트 실행 → reward 14~24% (검증기가 비용)
 <br>· <strong>C 검색</strong>: 도구=BM25, ~7ms로 저렴(도구 비용은 도구 나름), 0.5B는 멀티홉 못 풂
 <br>· <strong>D GenRM</strong>: 보상=모델 → colocate 인라인 불가(GPU NCCL 충돌 / CPU 마비), 전용 서빙 필요
 <br>· <strong>E disagg</strong>: weight-sync = Amdahl 직렬 항, 스케일·크로스노드에서 병목
-<br>관통 결론: <strong>agentic RL을 "돌리는" 것과 "스케일시키는" 것은 다르다.</strong> 작은 모델·단일노드에선 거의 다 돌지만, 검증기·보상모델·weight-sync 같은 비-정책 연산이 규모에서 차례로 병목이 되고, 각각 전용 인프라(샌드박스 풀·RM 서버·async 가중치 전송)를 요구한다.</div>
+<br>관통 결론: <strong>agentic RL을 "돌리는" 것과 "스케일시키는" 것은 다르다.</strong> 작은 모델·단일노드에선 거의 다 돌지만, 검증기·보상모델·weight-sync 같은 비-정책 연산이 규모에서 차례로 병목이 되고, 각각 전용 인프라(샌드박스 풀·RM 서버·async 가중치 전송)를 요구한다.</span></div>
 </div>
 
 <footer>
-작성일 2026-06-15 · mi250-052/053 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · 단일노드 수치는 직접 측정, 크로스노드는 블로커로 미측정(투영은 추론). ·
-시리즈: <a href="agentic-a-tool-math.html">A 도구수학</a> · <a href="agentic-b-code.html">B 코드</a> · <a href="agentic-c-rag.html">C 검색</a> · <a href="agentic-d-genrm.html">D 보상모델</a> · E(현재) · 기반: <a href="rl-vllm-rollout-unsloth-verl-bench.html">RL 루프 속도 해부</a>
+<span class="en">Written 2026-06-15 · mi250-052/053 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · single-node numbers measured directly, cross-node unmeasured due to blocker (projection is inference). ·
+series: <a href="agentic-a-tool-math.html">A tool-math</a> · <a href="agentic-b-code.html">B code</a> · <a href="agentic-c-rag.html">C search</a> · <a href="agentic-d-genrm.html">D reward model</a> · E (current) · basis: <a href="rl-vllm-rollout-unsloth-verl-bench.html">anatomy of RL-loop speed</a></span><span class="ko">작성일 2026-06-15 · mi250-052/053 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · 단일노드 수치는 직접 측정, 크로스노드는 블로커로 미측정(투영은 추론). ·
+시리즈: <a href="agentic-a-tool-math.html">A 도구수학</a> · <a href="agentic-b-code.html">B 코드</a> · <a href="agentic-c-rag.html">C 검색</a> · <a href="agentic-d-genrm.html">D 보상모델</a> · E(현재) · 기반: <a href="rl-vllm-rollout-unsloth-verl-bench.html">RL 루프 속도 해부</a></span>
 </footer>
 
 </div>

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ko" data-lang="ko">
+<html lang="en" data-lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RL 루프 속도 해부 — vLLM rollout · Unsloth · veRL (MI250)</title>
+<title>Anatomy of the RL loop speed — vLLM rollout · Unsloth · veRL (MI250)</title>
 <link rel="stylesheet" href="../assets/theme.css">
 <link rel="stylesheet" href="../assets/i18n.css">
 <script defer src="../assets/i18n.js"></script>
@@ -47,55 +47,58 @@
 <body>
 <div class="wrap">
 
-<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 관련: <a href="../post-training/frameworks-survey.html">포스트트레이닝 프레임워크 조사</a> · <a href="mi250-pd-disaggregation-experiment.html">MI250 P/D 실험</a></p>
+<p class="crumb"><a href="../">← <span class="en">Home</span><span class="ko">홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <span class="en">related:</span><span class="ko">관련:</span> <a href="../post-training/frameworks-survey.html"><span class="en">Post-training frameworks survey</span><span class="ko">포스트트레이닝 프레임워크 조사</span></a> · <a href="mi250-pd-disaggregation-experiment.html"><span class="en">MI250 P/D experiment</span><span class="ko">MI250 P/D 실험</span></a></p>
 
-<h1>RL 루프 속도 해부 — vLLM rollout · Unsloth · veRL (MI250)</h1>
-<p class="sub">환경: <code>mi250-052</code> (AMD INSTINCT MI250 OAM, ROCm 7.2.3) · Docker 전용 · 작은 모델(Qwen2.5-0.5B)로 GRPO 한 스텝을 분해 측정</p>
-<p class="post-meta"><time datetime="2026-06-14">2026-06-14</time></p>
+<h1><span class="en">Anatomy of the RL loop speed — vLLM rollout · Unsloth · veRL (MI250)</span><span class="ko">RL 루프 속도 해부 — vLLM rollout · Unsloth · veRL (MI250)</span></h1>
+<p class="sub"><span class="en">Environment: <code>mi250-052</code> (AMD INSTINCT MI250 OAM, ROCm 7.2.3) · Docker-only · decomposed measurement of one GRPO step on a small model (Qwen2.5-0.5B)</span><span class="ko">환경: <code>mi250-052</code> (AMD INSTINCT MI250 OAM, ROCm 7.2.3) · Docker 전용 · 작은 모델(Qwen2.5-0.5B)로 GRPO 한 스텝을 분해 측정</span></p>
+<p class="post-meta"><time datetime="2026-06-14">2026-06-14</time>
+  <span class="sep">·</span>
+  <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
+  <time datetime="2026-06-16">2026-06-16</time></p>
 
 <div class="card">
-<p><strong>한 줄 요약.</strong> RL(GRPO) 루프에서 <strong>vLLM rollout 을 켜는 것이 거의 유일한 큰 레버</strong>다 — 생성 처리량이 단일 GCD에서 <span class="big">4.4×</span> (517 → 2,280 tok/s), 루프 전체는 3.7× 빨라졌다. 반면 <strong>Unsloth 는 full-parameter 토글에선 사실상 무효과</strong>(생성 병목을 건드리지 못함). veRL 로 옮기면 빠른 롤아웃 엔진이 <em>기본값</em>이라 생성은 더 이상 지배적 단계가 아니고, KL/reference forward·reward 계산이 비등하게 비용을 차지한다. 모든 명령·config·실패·코드 흐름을 그대로 기록한다.</p>
+<p><span class="en"><strong>One-line summary.</strong> In the RL (GRPO) loop, <strong>turning on vLLM rollout is almost the only big lever</strong> — generation throughput jumped <span class="big">4.4×</span> on a single GCD (517 → 2,280 tok/s), and the whole loop got 3.7× faster. By contrast <strong>Unsloth has essentially no effect under the full-parameter toggle</strong> (it can't touch the generation bottleneck). Moving to veRL, a fast rollout engine is the <em>default</em>, so generation is no longer the dominant stage, and the KL/reference forward and reward computation take comparable shares of the cost. Every command, config, failure, and code flow is recorded as-is.</span><span class="ko"><strong>한 줄 요약.</strong> RL(GRPO) 루프에서 <strong>vLLM rollout 을 켜는 것이 거의 유일한 큰 레버</strong>다 — 생성 처리량이 단일 GCD에서 <span class="big">4.4×</span> (517 → 2,280 tok/s), 루프 전체는 3.7× 빨라졌다. 반면 <strong>Unsloth 는 full-parameter 토글에선 사실상 무효과</strong>(생성 병목을 건드리지 못함). veRL 로 옮기면 빠른 롤아웃 엔진이 <em>기본값</em>이라 생성은 더 이상 지배적 단계가 아니고, KL/reference forward·reward 계산이 비등하게 비용을 차지한다. 모든 명령·config·실패·코드 흐름을 그대로 기록한다.</span></p>
 </div>
 
 <div class="card toc">
-<strong>목차</strong>
+<strong><span class="en">Table of contents</span><span class="ko">목차</span></strong>
 <ul style="list-style: none; padding-left: 0; margin: 8px 0;">
-  <li><a href="#goal">1. 궁금했던 것 — 무엇을 측정하나</a></li>
-  <li><a href="#env">2. 환경 — 노드·도커·버전 핀 고정</a></li>
-  <li><a href="#design">3. 실험 설계 — 2×2, 그리고 무엇을 어떻게 잰다</a></li>
-  <li><a href="#flow">4. 코드 흐름 — RL 한 스텝의 해부</a></li>
-  <li><a href="#trl">5. 결과 ① — TRL GRPO 2×2 (vLLM × Unsloth full-param)</a></li>
-  <li><a href="#lora">6. 결과 ② — LoRA·4bit·Unsloth 진짜 경로 + 입력/출력 길이</a></li>
-  <li><a href="#verl">7. 결과 ③ — veRL 로 확장: 단계별 분해</a></li>
-  <li><a href="#debug">8. 만난 문제들 — 디버깅 로그 (실패 포함)</a></li>
-  <li><a href="#concl">9. 결론 — 레버와 병목</a></li>
-  <li><a href="#repro">10. 재현 — 명령 전부</a></li>
-  <li><a href="#next">11. 다음 — agentic RL 프로젝트 아이디어</a></li>
+  <li><a href="#goal"><span class="en">1. What I was curious about — what we measure</span><span class="ko">1. 궁금했던 것 — 무엇을 측정하나</span></a></li>
+  <li><a href="#env"><span class="en">2. Environment — node · Docker · pinned versions</span><span class="ko">2. 환경 — 노드·도커·버전 핀 고정</span></a></li>
+  <li><a href="#design"><span class="en">3. Experiment design — 2×2, and what we measure how</span><span class="ko">3. 실험 설계 — 2×2, 그리고 무엇을 어떻게 잰다</span></a></li>
+  <li><a href="#flow"><span class="en">4. Code flow — anatomy of one RL step</span><span class="ko">4. 코드 흐름 — RL 한 스텝의 해부</span></a></li>
+  <li><a href="#trl"><span class="en">5. Result ① — TRL GRPO 2×2 (vLLM × Unsloth full-param)</span><span class="ko">5. 결과 ① — TRL GRPO 2×2 (vLLM × Unsloth full-param)</span></a></li>
+  <li><a href="#lora"><span class="en">6. Result ② — LoRA · 4bit · Unsloth's real path + input/output length</span><span class="ko">6. 결과 ② — LoRA·4bit·Unsloth 진짜 경로 + 입력/출력 길이</span></a></li>
+  <li><a href="#verl"><span class="en">7. Result ③ — scaling to veRL: per-stage breakdown</span><span class="ko">7. 결과 ③ — veRL 로 확장: 단계별 분해</span></a></li>
+  <li><a href="#debug"><span class="en">8. Problems hit — debugging log (failures included)</span><span class="ko">8. 만난 문제들 — 디버깅 로그 (실패 포함)</span></a></li>
+  <li><a href="#concl"><span class="en">9. Conclusion — levers and bottlenecks</span><span class="ko">9. 결론 — 레버와 병목</span></a></li>
+  <li><a href="#repro"><span class="en">10. Reproduction — all commands</span><span class="ko">10. 재현 — 명령 전부</span></a></li>
+  <li><a href="#next"><span class="en">11. Next — agentic RL project ideas</span><span class="ko">11. 다음 — agentic RL 프로젝트 아이디어</span></a></li>
 </ul>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="goal">1. 궁금했던 것 — 무엇을 측정하나</h2>
+<h2 id="goal"><span class="en">1. What I was curious about — what we measure</span><span class="ko">1. 궁금했던 것 — 무엇을 측정하나</span></h2>
 <div class="card">
-<p>출발 질문은 하나였다: <strong>"RL(GRPO) 학습에서 vLLM rollout 이 실제로 루프를 빠르게 하는가? 얼마나? 병목은 어디인가?"</strong> 여기에 한 가지를 더 얹었다 — <strong>Unsloth on/off</strong>. 그래서 옵션 2개를 교차한 2×2를 본다:</p>
+<p><span class="en">The starting question was a single one: <strong>"In RL (GRPO) training, does vLLM rollout actually speed up the loop? By how much? Where is the bottleneck?"</strong> I added one more thing on top — <strong>Unsloth on/off</strong>. So we look at a 2×2 crossing two options:</span><span class="ko">출발 질문은 하나였다: <strong>"RL(GRPO) 학습에서 vLLM rollout 이 실제로 루프를 빠르게 하는가? 얼마나? 병목은 어디인가?"</strong> 여기에 한 가지를 더 얹었다 — <strong>Unsloth on/off</strong>. 그래서 옵션 2개를 교차한 2×2를 본다:</span></p>
 <ol>
-<li><strong>vLLM rollout on/off</strong> — 생성(rollout) 을 vLLM(paged-attention, continuous batching)로 할지, 평범한 HuggingFace <code>model.generate()</code> 로 할지.</li>
-<li><strong>Unsloth on/off</strong> — Unsloth 의 커널 패칭(어텐션·옵티마이저 등 in-place 패치)을 입힐지 말지.</li>
+<li><span class="en"><strong>vLLM rollout on/off</strong> — whether to do generation (rollout) with vLLM (paged-attention, continuous batching) or with plain HuggingFace <code>model.generate()</code>.</span><span class="ko"><strong>vLLM rollout on/off</strong> — 생성(rollout) 을 vLLM(paged-attention, continuous batching)로 할지, 평범한 HuggingFace <code>model.generate()</code> 로 할지.</span></li>
+<li><span class="en"><strong>Unsloth on/off</strong> — whether to apply Unsloth's kernel patching (in-place patches to attention, optimizer, etc.) or not.</span><span class="ko"><strong>Unsloth on/off</strong> — Unsloth 의 커널 패칭(어텐션·옵티마이저 등 in-place 패치)을 입힐지 말지.</span></li>
 </ol>
-<p>그다음 후속으로 두 가지를 더 봤다: (a) <strong>Unsloth 의 진짜 경로(LoRA + 4bit)</strong> 와 <strong>vanilla LoRA·4bit QLoRA</strong> 를 같은 축에 올려 "그럼 학습부를 줄이면 병목이 줄어드나"를 직접 확인하고, (b) 모든 조건에서 <strong>입력(프롬프트)·출력(생성) 토큰 길이</strong>를 기록했다(§6). 마지막으로 <strong>veRL</strong>(대규모 RL 프레임워크)로 옮겨, TRL 의 단일 프로세스 colocate 방식과 veRL 의 Ray 기반 단계 분리(disaggregated) 방식에서 시간 분포가 어떻게 달라지는지 본다(§7).</p>
+<p><span class="en">Then as follow-ups I looked at two more things: (a) putting <strong>Unsloth's real path (LoRA + 4bit)</strong> and <strong>vanilla LoRA · 4bit QLoRA</strong> on the same axis to directly check "so does shrinking the training portion shrink the bottleneck?", and (b) recording the <strong>input (prompt) and output (generation) token lengths</strong> in every condition (§6). Finally, moving to <strong>veRL</strong> (a large-scale RL framework), I look at how the time distribution changes between TRL's single-process colocate approach and veRL's Ray-based disaggregated approach (§7).</span><span class="ko">그다음 후속으로 두 가지를 더 봤다: (a) <strong>Unsloth 의 진짜 경로(LoRA + 4bit)</strong> 와 <strong>vanilla LoRA·4bit QLoRA</strong> 를 같은 축에 올려 "그럼 학습부를 줄이면 병목이 줄어드나"를 직접 확인하고, (b) 모든 조건에서 <strong>입력(프롬프트)·출력(생성) 토큰 길이</strong>를 기록했다(§6). 마지막으로 <strong>veRL</strong>(대규모 RL 프레임워크)로 옮겨, TRL 의 단일 프로세스 colocate 방식과 veRL 의 Ray 기반 단계 분리(disaggregated) 방식에서 시간 분포가 어떻게 달라지는지 본다(§7).</span></p>
 
-<div class="note"><strong>용어 빨리 풀기.</strong> <strong>GRPO</strong> = 한 프롬프트에 응답을 G개 뽑아(rollout), 규칙 기반 보상으로 채점하고, 그룹 내 상대 우위(advantage)로 정책을 업데이트하는 RL. <strong>rollout</strong> = 모델이 응답을 생성하는 단계(추론). <strong>colocate</strong> = 학습 모델과 생성 엔진이 같은 GPU·같은 프로세스에 공존. <strong>weight-sync</strong> = 한 스텝 업데이트한 정책 가중치를 생성 엔진(vLLM)에 다시 밀어넣는 것.</div>
+<div class="note"><span class="en"><strong>Quick terms.</strong> <strong>GRPO</strong> = RL that draws G responses per prompt (rollout), scores them with a rule-based reward, and updates the policy with the within-group relative advantage. <strong>rollout</strong> = the stage where the model generates responses (inference). <strong>colocate</strong> = the training model and generation engine coexist on the same GPU and same process. <strong>weight-sync</strong> = pushing the one-step-updated policy weights back into the generation engine (vLLM).</span><span class="ko"><strong>용어 빨리 풀기.</strong> <strong>GRPO</strong> = 한 프롬프트에 응답을 G개 뽑아(rollout), 규칙 기반 보상으로 채점하고, 그룹 내 상대 우위(advantage)로 정책을 업데이트하는 RL. <strong>rollout</strong> = 모델이 응답을 생성하는 단계(추론). <strong>colocate</strong> = 학습 모델과 생성 엔진이 같은 GPU·같은 프로세스에 공존. <strong>weight-sync</strong> = 한 스텝 업데이트한 정책 가중치를 생성 엔진(vLLM)에 다시 밀어넣는 것.</span></div>
 
-<div class="tip"><strong>기록 원칙.</strong> 모든 명령·config·실패·우회·코드 흐름을 그대로. 공유 GPU 노드라 <strong>호스트에 pip 금지 → 전부 Docker 안에서</strong>. 실행 후 컨테이너 즉시 정리, GPU 반납.</div>
+<div class="tip"><span class="en"><strong>Recording principle.</strong> Every command, config, failure, workaround, and code flow as-is. Since it's a shared GPU node, <strong>no pip on the host → everything inside Docker</strong>. Tear down the container immediately after running, return the GPU.</span><span class="ko"><strong>기록 원칙.</strong> 모든 명령·config·실패·우회·코드 흐름을 그대로. 공유 GPU 노드라 <strong>호스트에 pip 금지 → 전부 Docker 안에서</strong>. 실행 후 컨테이너 즉시 정리, GPU 반납.</span></div>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="env">2. 환경 — 노드·도커·버전 핀 고정</h2>
+<h2 id="env"><span class="en">2. Environment — node · Docker · pinned versions</span><span class="ko">2. 환경 — 노드·도커·버전 핀 고정</span></h2>
 <div class="card">
-<p>mi250-052 에 이미 빌드돼 있던 <strong>최신 vLLM-ROCm 이미지</strong>(<code>vllm-022-rocm:latest</code>, vLLM 0.22.1+rocm723)를 베이스로 썼다. 두 노드(mi250-052/053) 모두 8 GCD 유휴 상태를 사전 확인했고, 실험은 052 한 노드에서 끝났다(0.5B 모델이라 단일·소수 GCD로 충분).</p>
+<p><span class="en">As the base I used the <strong>latest vLLM-ROCm image</strong> already built on mi250-052 (<code>vllm-022-rocm:latest</code>, vLLM 0.22.1+rocm723). I confirmed beforehand that both nodes (mi250-052/053) had all 8 GCDs idle, and the experiment finished on node 052 alone (a 0.5B model needs only a single or a few GCDs).</span><span class="ko">mi250-052 에 이미 빌드돼 있던 <strong>최신 vLLM-ROCm 이미지</strong>(<code>vllm-022-rocm:latest</code>, vLLM 0.22.1+rocm723)를 베이스로 썼다. 두 노드(mi250-052/053) 모두 8 GCD 유휴 상태를 사전 확인했고, 실험은 052 한 노드에서 끝났다(0.5B 모델이라 단일·소수 GCD로 충분).</span></p>
 
 <table>
-<tr><th>구성요소</th><th>버전 (핀 고정)</th></tr>
+<tr><th><span class="en">Component</span><span class="ko">구성요소</span></th><th><span class="en">Version (pinned)</span><span class="ko">버전 (핀 고정)</span></th></tr>
 <tr><td>GPU</td><td>AMD INSTINCT MI250 (MCM) OAM — 8 GCD (gfx90a)</td></tr>
 <tr><td>ROCm</td><td><strong>7.2.3</strong></td></tr>
 <tr><td>PyTorch</td><td>2.10.0 (ROCm)</td></tr>
@@ -104,10 +107,10 @@
 <tr><td>TRL</td><td>1.6.0</td></tr>
 <tr><td>Unsloth</td><td>2026.6.7 (unsloth_zoo 2026.6.5)</td></tr>
 <tr><td>veRL</td><td>0.8.0 · Ray 2.55.1 · tensordict 0.10.0</td></tr>
-<tr><td>모델 / 데이터</td><td>Qwen/Qwen2.5-0.5B-Instruct · openai/gsm8k (main)</td></tr>
+<tr><td><span class="en">Model / data</span><span class="ko">모델 / 데이터</span></td><td>Qwen/Qwen2.5-0.5B-Instruct · openai/gsm8k (main)</td></tr>
 </table>
 
-<h3>2-1. 컨테이너 기동 (ROCm passthrough)</h3>
+<h3><span class="en">2-1. Container startup (ROCm passthrough)</span><span class="ko">2-1. 컨테이너 기동 (ROCm passthrough)</span></h3>
 <pre><code># 영속 컨테이너 1개 띄워 그 안에서 반복 실행 (재현성↑, 매번 새로 안 띄움)
 docker run -d --name rlbench --network host \
   --device=/dev/kfd --device=/dev/dri --group-add video \
@@ -118,31 +121,31 @@ docker run -d --name rlbench --network host \
   --entrypoint sleep vllm-022-rocm:latest infinity
 
 docker exec rlbench pip install -q trl   # → trl 1.6.0</code></pre>
-<div class="note"><strong>왜 <code>VLLM_ROCM_USE_AITER=0</code>?</strong> aiter 는 MI300+ 용 커널 라이브러리다. MI250(gfx90a)에서 켜져 있으면 vLLM 초기화가 깨진다 — 이전 P/D 실험에서 확인한 동일한 함정.</div>
+<div class="note"><span class="en"><strong>Why <code>VLLM_ROCM_USE_AITER=0</code>?</strong> aiter is a kernel library for MI300+. If it's on for MI250 (gfx90a), vLLM initialization breaks — the same trap confirmed in the earlier P/D experiment.</span><span class="ko"><strong>왜 <code>VLLM_ROCM_USE_AITER=0</code>?</strong> aiter 는 MI300+ 용 커널 라이브러리다. MI250(gfx90a)에서 켜져 있으면 vLLM 초기화가 깨진다 — 이전 P/D 실험에서 확인한 동일한 함정.</span></div>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="design">3. 실험 설계 — 2×2, 그리고 무엇을 어떻게 잰다</h2>
+<h2 id="design"><span class="en">3. Experiment design — 2×2, and what we measure how</span><span class="ko">3. 실험 설계 — 2×2, 그리고 무엇을 어떻게 잰다</span></h2>
 <div class="card">
-<h3>3-1. 고정 조건 (apple-to-apple)</h3>
+<h3><span class="en">3-1. Fixed conditions (apple-to-apple)</span><span class="ko">3-1. 고정 조건 (apple-to-apple)</span></h3>
 <table>
-<tr><th>항목</th><th>값</th><th>의미</th></tr>
-<tr><td>model</td><td>Qwen2.5-0.5B-Instruct</td><td>작고 빠른 — mechanism 측정용</td></tr>
-<tr><td>dataset</td><td>gsm8k (초등 수학)</td><td>규칙 채점 가능(정답 정수 일치)</td></tr>
-<tr><td>num_generations (G)</td><td>8</td><td>프롬프트당 응답 8개</td></tr>
-<tr><td>per_device batch</td><td>16</td><td>= 프롬프트 2 × G 8 = 한 스텝 16개 시퀀스</td></tr>
-<tr><td>max_completion_length</td><td>256</td><td>생성 길이 상한</td></tr>
-<tr><td>steps</td><td>6</td><td>첫 스텝(warmup) 제외하고 평균</td></tr>
-<tr><td>GPU</td><td><code>HIP_VISIBLE_DEVICES=0</code> (1 GCD)</td><td>네 조건 모두 동일 단일 GCD</td></tr>
-<tr><td>KL(beta)</td><td>0.0</td><td>TRL 측은 reference forward 생략 → 학습부를 backward로 단순화</td></tr>
+<tr><th><span class="en">Item</span><span class="ko">항목</span></th><th><span class="en">Value</span><span class="ko">값</span></th><th><span class="en">Meaning</span><span class="ko">의미</span></th></tr>
+<tr><td>model</td><td>Qwen2.5-0.5B-Instruct</td><td><span class="en">small and fast — for measuring the mechanism</span><span class="ko">작고 빠른 — mechanism 측정용</span></td></tr>
+<tr><td>dataset</td><td><span class="en">gsm8k (grade-school math)</span><span class="ko">gsm8k (초등 수학)</span></td><td><span class="en">rule-scorable (exact integer match of the answer)</span><span class="ko">규칙 채점 가능(정답 정수 일치)</span></td></tr>
+<tr><td>num_generations (G)</td><td>8</td><td><span class="en">8 responses per prompt</span><span class="ko">프롬프트당 응답 8개</span></td></tr>
+<tr><td>per_device batch</td><td>16</td><td><span class="en">= prompts 2 × G 8 = 16 sequences per step</span><span class="ko">= 프롬프트 2 × G 8 = 한 스텝 16개 시퀀스</span></td></tr>
+<tr><td>max_completion_length</td><td>256</td><td><span class="en">upper bound on generation length</span><span class="ko">생성 길이 상한</span></td></tr>
+<tr><td>steps</td><td>6</td><td><span class="en">averaged excluding the first step (warmup)</span><span class="ko">첫 스텝(warmup) 제외하고 평균</span></td></tr>
+<tr><td>GPU</td><td><code>HIP_VISIBLE_DEVICES=0</code> (1 GCD)</td><td><span class="en">same single GCD across all four conditions</span><span class="ko">네 조건 모두 동일 단일 GCD</span></td></tr>
+<tr><td>KL(beta)</td><td>0.0</td><td><span class="en">TRL side skips the reference forward → simplifies the training portion to backward</span><span class="ko">TRL 측은 reference forward 생략 → 학습부를 backward로 단순화</span></td></tr>
 </table>
-<p>네 조건 모두 생성 토큰 수가 정확히 같았다(24,576 = 16×256×6 — 모든 응답이 256 상한까지 감, gsm8k CoT가 길어 EOS 전 절단). 그래서 <strong>tok/s 가 깨끗한 비교 지표</strong>가 된다.</p>
+<p><span class="en">All four conditions had exactly the same generation token count (24,576 = 16×256×6 — every response ran to the 256 cap, since gsm8k CoT is long and got truncated before EOS). So <strong>tok/s becomes a clean comparison metric</strong>.</span><span class="ko">네 조건 모두 생성 토큰 수가 정확히 같았다(24,576 = 16×256×6 — 모든 응답이 256 상한까지 감, gsm8k CoT가 길어 EOS 전 절단). 그래서 <strong>tok/s 가 깨끗한 비교 지표</strong>가 된다.</span></p>
 
-<h3>3-2. 어떻게 단계별로 시간을 쪼개나</h3>
-<p>TRL <code>GRPOTrainer</code> 는 루프를 추상화해 버려서, 직접 두 군데를 계측했다:</p>
+<h3><span class="en">3-2. How we split time per stage</span><span class="ko">3-2. 어떻게 단계별로 시간을 쪼개나</span></h3>
+<p><span class="en">TRL's <code>GRPOTrainer</code> abstracts the loop away, so I instrumented two spots directly:</span><span class="ko">TRL <code>GRPOTrainer</code> 는 루프를 추상화해 버려서, 직접 두 군데를 계측했다:</span></p>
 <ul>
-<li><strong>rollout+채점 단계</strong>: <code>GRPOTrainer._generate_and_score_completions()</code> 를 monkeypatch 로 감싸 시간 측정. 이 함수가 "생성 → 보상 → logprob" 묶음을 담당한다.</li>
-<li><strong>스텝 전체</strong>: <code>TrainerCallback.on_step_begin/on_step_end</code> 로 스텝 벽시계. <em>전체 − rollout = 학습(backward/optimizer)</em>.</li>
+<li><span class="en"><strong>rollout + scoring stage</strong>: wrap <code>GRPOTrainer._generate_and_score_completions()</code> with a monkeypatch to time it. This function handles the "generation → reward → logprob" bundle.</span><span class="ko"><strong>rollout+채점 단계</strong>: <code>GRPOTrainer._generate_and_score_completions()</code> 를 monkeypatch 로 감싸 시간 측정. 이 함수가 "생성 → 보상 → logprob" 묶음을 담당한다.</span></li>
+<li><span class="en"><strong>whole step</strong>: step wall-clock via <code>TrainerCallback.on_step_begin/on_step_end</code>. <em>whole − rollout = training (backward/optimizer)</em>.</span><span class="ko"><strong>스텝 전체</strong>: <code>TrainerCallback.on_step_begin/on_step_end</code> 로 스텝 벽시계. <em>전체 − rollout = 학습(backward/optimizer)</em>.</span></li>
 </ul>
 <pre><code># 핵심 계측 (grpo_bench.py 발췌)
 orig = trainer._generate_and_score_completions
@@ -154,9 +157,9 @@ trainer._generate_and_score_completions = timed   # rollout 시간·생성 토�
 </div>
 
 <!-- ============================================================ -->
-<h2 id="flow">4. 코드 흐름 — RL 한 스텝의 해부</h2>
+<h2 id="flow"><span class="en">4. Code flow — anatomy of one RL step</span><span class="ko">4. 코드 흐름 — RL 한 스텝의 해부</span></h2>
 <div class="card">
-<p>"vLLM 이 어디를 빠르게 하나"를 알려면 한 스텝이 실제로 어떤 코드 경로를 타는지를 봐야 한다. TRL 1.6.0 <code>grpo_trainer.py</code> 기준:</p>
+<p><span class="en">To know "where vLLM speeds things up," you have to see which code path one step actually takes. Based on TRL 1.6.0 <code>grpo_trainer.py</code>:</span><span class="ko">"vLLM 이 어디를 빠르게 하나"를 알려면 한 스텝이 실제로 어떤 코드 경로를 타는지를 봐야 한다. TRL 1.6.0 <code>grpo_trainer.py</code> 기준:</span></p>
 
 <figure>
 <svg viewBox="0 0 980 250" width="100%" role="img" aria-label="GRPO 한 스텝 코드 흐름">
@@ -166,21 +169,21 @@ trainer._generate_and_score_completions = timed   # rollout 시간·생성 토�
   <!-- boxes -->
   <rect x="10"  y="70" width="150" height="64" rx="9" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
   <text x="85" y="95" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--blue-ink)">① rollout</text>
-  <text x="85" y="113" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">생성 (vLLM / HF)</text>
+  <text x="85" y="113" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)"><tspan class="en">generation (vLLM / HF)</tspan><tspan class="ko">생성 (vLLM / HF)</tspan></text>
   <text x="85" y="127" text-anchor="middle" font-size="9.5" fill="var(--muted)">_generate_single_turn</text>
 
   <rect x="185" y="70" width="135" height="64" rx="9" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
   <text x="252" y="98" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--amber)">② reward</text>
-  <text x="252" y="116" text-anchor="middle" font-size="10.5" fill="var(--amber)">규칙 채점</text>
+  <text x="252" y="116" text-anchor="middle" font-size="10.5" fill="var(--amber)"><tspan class="en">rule scoring</tspan><tspan class="ko">규칙 채점</tspan></text>
 
   <rect x="345" y="70" width="150" height="64" rx="9" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
   <text x="420" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--gray-ink)">③ logprob/ref</text>
   <text x="420" y="110" text-anchor="middle" font-size="10" fill="var(--gray-ink)">old_log_prob + KL</text>
-  <text x="420" y="124" text-anchor="middle" font-size="9.5" fill="var(--muted)">(beta=0이면 생략)</text>
+  <text x="420" y="124" text-anchor="middle" font-size="9.5" fill="var(--muted)"><tspan class="en">(skipped if beta=0)</tspan><tspan class="ko">(beta=0이면 생략)</tspan></text>
 
   <rect x="520" y="70" width="120" height="64" rx="9" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
   <text x="580" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="var(--gray-ink)">④ advantage</text>
-  <text x="580" y="116" text-anchor="middle" font-size="10" fill="var(--gray-ink)">그룹 정규화</text>
+  <text x="580" y="116" text-anchor="middle" font-size="10" fill="var(--gray-ink)"><tspan class="en">group normalization</tspan><tspan class="ko">그룹 정규화</tspan></text>
 
   <rect x="665" y="70" width="150" height="64" rx="9" fill="var(--green-bg)" stroke="var(--green-bd)"/>
   <text x="740" y="92" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--green-ink)">⑤ train</text>
@@ -189,7 +192,7 @@ trainer._generate_and_score_completions = timed   # rollout 시간·생성 토�
 
   <rect x="840" y="70" width="130" height="64" rx="9" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
   <text x="905" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--purple-ink)">⑥ weight-sync</text>
-  <text x="905" y="110" text-anchor="middle" font-size="10" fill="var(--purple-ink)">→ vLLM 적재</text>
+  <text x="905" y="110" text-anchor="middle" font-size="10" fill="var(--purple-ink)"><tspan class="en">→ load into vLLM</tspan><tspan class="ko">→ vLLM 적재</tspan></text>
   <text x="905" y="124" text-anchor="middle" font-size="9.5" fill="var(--muted)">sync_weights()</text>
 
   <!-- arrows -->
@@ -200,18 +203,18 @@ trainer._generate_and_score_completions = timed   # rollout 시간·생성 토�
   <line x1="815" y1="102" x2="838" y2="102" stroke="#7a7468" marker-end="url(#ah)"/>
   <!-- loop back -->
   <path d="M905,134 L905,180 L85,180 L85,136" fill="none" stroke="#7a7468" stroke-dasharray="4 3" marker-end="url(#ah)"/>
-  <text x="495" y="197" text-anchor="middle" font-size="10.5" fill="var(--muted)">다음 스텝 — 동기화된 가중치로 다시 생성</text>
+  <text x="495" y="197" text-anchor="middle" font-size="10.5" fill="var(--muted)"><tspan class="en">next step — generate again with synced weights</tspan><tspan class="ko">다음 스텝 — 동기화된 가중치로 다시 생성</tspan></text>
 
   <!-- accelerator tags -->
   <rect x="20" y="20" width="180" height="26" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
-  <text x="110" y="37" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">vLLM 이 빠르게 하는 곳 →①</text>
+  <text x="110" y="37" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)"><tspan class="en">where vLLM speeds up →①</tspan><tspan class="ko">vLLM 이 빠르게 하는 곳 →①</tspan></text>
   <rect x="660" y="20" width="180" height="26" rx="6" fill="var(--green-bg)" stroke="var(--green-bd)"/>
-  <text x="750" y="37" text-anchor="middle" font-size="10.5" fill="var(--green-ink)">Unsloth 가 노리는 곳 →⑤</text>
+  <text x="750" y="37" text-anchor="middle" font-size="10.5" fill="var(--green-ink)"><tspan class="en">where Unsloth aims →⑤</tspan><tspan class="ko">Unsloth 가 노리는 곳 →⑤</tspan></text>
 </svg>
-<figcaption>그림 1 — GRPO 한 스텝의 6단계와 각 도구가 노리는 지점. vLLM 은 ①생성, Unsloth 는 ⑤backward 를 겨냥한다. (TRL 1.6.0 <code>grpo_trainer.py</code> 코드 경로 기준, 직접 작성)</figcaption>
+<figcaption><span class="en">Figure 1 — the 6 stages of one GRPO step and the spot each tool targets. vLLM aims at ① generation, Unsloth at ⑤ backward. (Based on the TRL 1.6.0 <code>grpo_trainer.py</code> code path, authored directly)</span><span class="ko">그림 1 — GRPO 한 스텝의 6단계와 각 도구가 노리는 지점. vLLM 은 ①생성, Unsloth 는 ⑤backward 를 겨냥한다. (TRL 1.6.0 <code>grpo_trainer.py</code> 코드 경로 기준, 직접 작성)</span></figcaption>
 </figure>
 
-<h4>①에서 vLLM vs HF 가 갈리는 분기</h4>
+<h4><span class="en">The branch in ① where vLLM vs HF diverge</span><span class="ko">①에서 vLLM vs HF 가 갈리는 분기</span></h4>
 <pre><code># grpo_trainer.py · _generate_single_turn()  (line ~1353)
 if self.use_vllm:
     if self.state.global_step != self._last_loaded_step:
@@ -223,14 +226,14 @@ else:
     with ..., torch.no_grad(), self._dist.summon_full_params(...):
         prompt_completion_ids = unwrapped_model.generate(   # ← 평범한 HF 자기회귀 생성
             **generate_inputs, generation_config=self.generation_config)</code></pre>
-<p>핵심은 두 가지다. (1) <strong>HF 경로</strong>는 FSDP 파라미터를 <code>summon_full_params</code> 로 모은 뒤 <code>model.generate()</code> 를 도는 단순 자기회귀 디코딩 — KV 페이징도, continuous batching 도 없다. 그래서 느리다(측정값 ~520 tok/s). (2) <strong>vLLM colocate 경로</strong>는 같은 GPU·같은 프로세스 안의 vLLM 엔진에 토큰을 넘긴다. 매 스텝 생성 직전 <code>sync_weights()</code> 로 가중치를 vLLM 으로 밀어넣는데(⑥), <strong>colocate 라 네트워크 전송이 아니라 in-process state_dict 적재</strong>라서 싸다 — 이게 분산 RL 의 weight-sync 와 결정적으로 다른 점이다.</p>
+<p><span class="en">There are two key points. (1) The <strong>HF path</strong> gathers FSDP parameters via <code>summon_full_params</code> and then runs <code>model.generate()</code> — plain autoregressive decoding with no KV paging and no continuous batching. So it's slow (measured ~520 tok/s). (2) The <strong>vLLM colocate path</strong> hands tokens to a vLLM engine inside the same GPU and same process. Right before generation each step it pushes weights into vLLM via <code>sync_weights()</code> (⑥), but <strong>because it's colocate, it's an in-process state_dict load rather than a network transfer</strong>, so it's cheap — and that is the decisive difference from weight-sync in distributed RL.</span><span class="ko">핵심은 두 가지다. (1) <strong>HF 경로</strong>는 FSDP 파라미터를 <code>summon_full_params</code> 로 모은 뒤 <code>model.generate()</code> 를 도는 단순 자기회귀 디코딩 — KV 페이징도, continuous batching 도 없다. 그래서 느리다(측정값 ~520 tok/s). (2) <strong>vLLM colocate 경로</strong>는 같은 GPU·같은 프로세스 안의 vLLM 엔진에 토큰을 넘긴다. 매 스텝 생성 직전 <code>sync_weights()</code> 로 가중치를 vLLM 으로 밀어넣는데(⑥), <strong>colocate 라 네트워크 전송이 아니라 in-process state_dict 적재</strong>라서 싸다 — 이게 분산 RL 의 weight-sync 와 결정적으로 다른 점이다.</span></p>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="trl">5. 결과 ① — TRL GRPO 2×2 (vLLM × Unsloth full-param)</h2>
+<h2 id="trl"><span class="en">5. Result ① — TRL GRPO 2×2 (vLLM × Unsloth full-param)</span><span class="ko">5. 결과 ① — TRL GRPO 2×2 (vLLM × Unsloth full-param)</span></h2>
 <div class="card">
 <table>
-<tr><th>조건</th><th>backend</th><th>vLLM</th><th>total (s)</th><th>s/step (정상)</th><th>rollout (s)</th><th>생성 tok/s</th><th>rollout 비중</th></tr>
+<tr><th><span class="en">condition</span><span class="ko">조건</span></th><th>backend</th><th>vLLM</th><th>total (s)</th><th><span class="en">s/step (normal)</span><span class="ko">s/step (정상)</span></th><th>rollout (s)</th><th><span class="en">gen tok/s</span><span class="ko">생성 tok/s</span></th><th><span class="en">rollout share</span><span class="ko">rollout 비중</span></th></tr>
 <tr><td>A</td><td>HF</td><td>off</td><td>51.73</td><td>7.885</td><td>47.49</td><td>517.5</td><td>91.8%</td></tr>
 <tr><td><strong>B</strong></td><td>HF</td><td><strong>on</strong></td><td><strong>13.96</strong></td><td><strong>1.694</strong></td><td>10.78</td><td><strong>2,279.6</strong></td><td>77.2%</td></tr>
 <tr><td>C</td><td>Unsloth</td><td>off</td><td>48.07</td><td>7.235</td><td>44.13</td><td>556.9</td><td>91.8%</td></tr>
@@ -249,7 +252,7 @@ else:
     <line x1="60" y1="144" x2="620" y2="144" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="147" text-anchor="end">1200</text>
     <line x1="60" y1="101" x2="620" y2="101" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="104" text-anchor="end">1800</text>
     <line x1="60" y1="58"  x2="620" y2="58"  stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="61" text-anchor="end">2400</text>
-    <text x="20" y="130" text-anchor="middle" transform="rotate(-90 20 130)" fill="var(--muted)">생성 tok/s</text>
+    <text x="20" y="130" text-anchor="middle" transform="rotate(-90 20 130)" fill="var(--muted)"><tspan class="en">gen tok/s</tspan><tspan class="ko">생성 tok/s</tspan></text>
   </g>
   <!-- bars: scale 1 tok/s = 0.0717 px (600->43px) ; y=230 - val*0.0717 -->
   <!-- A 517.5 -> 37 -->
@@ -273,28 +276,28 @@ else:
   <text x="525" y="246" text-anchor="middle" font-size="10.5" fill="var(--muted)">D · Unsloth</text>
   <text x="525" y="259" text-anchor="middle" font-size="9.5" fill="var(--blue-ink)">vLLM on</text>
   <!-- speedup bracket -->
-  <text x="330" y="280" text-anchor="middle" font-size="11" fill="var(--green-ink)">vLLM on/off = 4.4× (생성), 3.7× (루프 전체)</text>
+  <text x="330" y="280" text-anchor="middle" font-size="11" fill="var(--green-ink)"><tspan class="en">vLLM on/off = 4.4× (generation), 3.7× (whole loop)</tspan><tspan class="ko">vLLM on/off = 4.4× (생성), 3.7× (루프 전체)</tspan></text>
 </svg>
-<figcaption>그림 2 — 조건별 생성 처리량. vLLM 켜짐(파랑)이 4.4×. Unsloth(A↔C, B↔D)는 막대 높이를 거의 바꾸지 못한다. (본 실험 측정값)</figcaption>
+<figcaption><span class="en">Figure 2 — generation throughput by condition. vLLM on (blue) is 4.4×. Unsloth (A↔C, B↔D) barely changes the bar height. (this experiment's measurements)</span><span class="ko">그림 2 — 조건별 생성 처리량. vLLM 켜짐(파랑)이 4.4×. Unsloth(A↔C, B↔D)는 막대 높이를 거의 바꾸지 못한다. (본 실험 측정값)</span></figcaption>
 </figure>
 
-<h3>5-1. 읽기 — 세 가지가 보인다</h3>
-<div class="win"><strong>① vLLM rollout 이 거의 전부다.</strong> HF→vLLM 으로 켜는 것만으로 생성 4.40× (517→2,280 tok/s), 스텝당 4.66×, 루프 전체 3.71×. 이유는 그림 1 그대로 — rollout 이 루프의 <strong>91.8%</strong>를 먹고 있었으니, 그걸 빠르게 하면 전체가 빨라진다.</div>
+<h3><span class="en">5-1. Reading it — three things stand out</span><span class="ko">5-1. 읽기 — 세 가지가 보인다</span></h3>
+<div class="win"><span class="en"><strong>① vLLM rollout is almost everything.</strong> Just switching HF→vLLM gives 4.40× generation (517→2,280 tok/s), 4.66× per step, 3.71× for the whole loop. The reason is exactly Figure 1 — rollout was eating <strong>91.8%</strong> of the loop, so speeding it up speeds up everything.</span><span class="ko"><strong>① vLLM rollout 이 거의 전부다.</strong> HF→vLLM 으로 켜는 것만으로 생성 4.40× (517→2,280 tok/s), 스텝당 4.66×, 루프 전체 3.71×. 이유는 그림 1 그대로 — rollout 이 루프의 <strong>91.8%</strong>를 먹고 있었으니, 그걸 빠르게 하면 전체가 빨라진다.</span></div>
 
-<p><strong>② Unsloth 는 (이 토글에선) 거의 무효과.</strong> vLLM off 끼리(A↔C) 517→557 tok/s, +7.6%. vLLM on 끼리(B↔D)는 사실상 동률(2,280 vs 2,269, 노이즈 범위). 왜? Unsloth 의 커널 패칭은 <strong>backward/옵티마이저(⑤)</strong>를 노리는데, 생성이 80~92%인 이 루프에선 거기를 아무리 깎아도 총시간이 안 움직인다. 실제로 학습부만 보면 — B 의 비-rollout 시간 0.530 s/step → D 0.435 s/step 으로 <strong>backward 는 ~18% 빨라졌다</strong>. 다만 그게 루프의 작은 조각이라 묻힌 것.</p>
+<p><span class="en"><strong>② Unsloth has (under this toggle) almost no effect.</strong> Among vLLM-off pairs (A↔C), 517→557 tok/s, +7.6%. Among vLLM-on pairs (B↔D), essentially a tie (2,280 vs 2,269, within noise). Why? Unsloth's kernel patching aims at <strong>backward/optimizer (⑤)</strong>, but in this loop where generation is 80–92%, no matter how much you shave there the total time doesn't move. In fact, looking at just the training portion — B's non-rollout time 0.530 s/step → D 0.435 s/step, so <strong>backward got ~18% faster</strong>. It's just buried because it's a small slice of the loop.</span><span class="ko"><strong>② Unsloth 는 (이 토글에선) 거의 무효과.</strong> vLLM off 끼리(A↔C) 517→557 tok/s, +7.6%. vLLM on 끼리(B↔D)는 사실상 동률(2,280 vs 2,269, 노이즈 범위). 왜? Unsloth 의 커널 패칭은 <strong>backward/옵티마이저(⑤)</strong>를 노리는데, 생성이 80~92%인 이 루프에선 거기를 아무리 깎아도 총시간이 안 움직인다. 실제로 학습부만 보면 — B 의 비-rollout 시간 0.530 s/step → D 0.435 s/step 으로 <strong>backward 는 ~18% 빨라졌다</strong>. 다만 그게 루프의 작은 조각이라 묻힌 것.</span></p>
 
-<div class="note"><strong>Unsloth 에게 공정한가?</strong> 아니다 — 의도적으로 그렇게 설계했다. 우리는 A/B 와 apple-to-apple 을 위해 <strong>full-parameter, LoRA 없음, <code>fast_inference=False</code></strong> 로 Unsloth 를 "커널 패칭만" 상태로 토글했다. Unsloth 의 진짜 강점은 (a) LoRA/4-bit 학습 메모리·속도, (b) 자체 vLLM 추론 경로다 — 둘 다 이 토글이 끈 영역. 즉 본 결과는 "Unsloth 가 나쁘다"가 아니라 <strong>"생성이 병목인 루프에서 학습부 커널 최적화는 지렛대가 못 된다"</strong>는 뜻이다.</div>
+<div class="note"><span class="en"><strong>Is this fair to Unsloth?</strong> No — it was designed that way on purpose. For apple-to-apple with A/B we toggled Unsloth in a "kernel-patching only" state: <strong>full-parameter, no LoRA, <code>fast_inference=False</code></strong>. Unsloth's real strengths are (a) LoRA/4-bit training memory and speed, and (b) its own vLLM inference path — both areas this toggle turned off. In other words, this result doesn't mean "Unsloth is bad," it means <strong>"in a loop where generation is the bottleneck, kernel optimization of the training portion can't be a lever."</strong></span><span class="ko"><strong>Unsloth 에게 공정한가?</strong> 아니다 — 의도적으로 그렇게 설계했다. 우리는 A/B 와 apple-to-apple 을 위해 <strong>full-parameter, LoRA 없음, <code>fast_inference=False</code></strong> 로 Unsloth 를 "커널 패칭만" 상태로 토글했다. Unsloth 의 진짜 강점은 (a) LoRA/4-bit 학습 메모리·속도, (b) 자체 vLLM 추론 경로다 — 둘 다 이 토글이 끈 영역. 즉 본 결과는 "Unsloth 가 나쁘다"가 아니라 <strong>"생성이 병목인 루프에서 학습부 커널 최적화는 지렛대가 못 된다"</strong>는 뜻이다.</span></div>
 
-<p><strong>③ vLLM 을 켜도 rollout 은 여전히 최대 단계(77~81%)다.</strong> 4.4× 빨라졌어도 생성이 제일 크다 → "그럼 생성을 학습과 떼어 비동기로 돌리면?"이 자연스러운 다음 질문이고, 그게 veRL 의 설계 동기다.</p>
+<p><span class="en"><strong>③ Even with vLLM on, rollout is still the largest stage (77–81%).</strong> Even after the 4.4× speedup, generation is the biggest → "then what if we detach generation from training and run it asynchronously?" is the natural next question, and that's the design motivation of veRL.</span><span class="ko"><strong>③ vLLM 을 켜도 rollout 은 여전히 최대 단계(77~81%)다.</strong> 4.4× 빨라졌어도 생성이 제일 크다 → "그럼 생성을 학습과 떼어 비동기로 돌리면?"이 자연스러운 다음 질문이고, 그게 veRL 의 설계 동기다.</span></p>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="lora">6. 결과 ② — LoRA·4bit·Unsloth 진짜 경로 + 입력/출력 길이</h2>
+<h2 id="lora"><span class="en">6. Result ② — LoRA · 4bit · Unsloth's real path + input/output length</span><span class="ko">6. 결과 ② — LoRA·4bit·Unsloth 진짜 경로 + 입력/출력 길이</span></h2>
 <div class="card">
-<p>앞 절 끝의 질문 — <strong>"그럼 Unsloth/LoRA 로 학습부를 줄이면 병목이 줄어드나?"</strong> — 에 답하려고, 같은 1 GCD·같은 설정에서 <strong>full-param ↔ bf16 LoRA(PEFT) ↔ 4bit QLoRA(bitsandbytes+PEFT)</strong> 를 vLLM on/off 로 교차해 측정했다. LoRA 는 r=16, α=32, 7개 선형층 타깃.</p>
+<p><span class="en">To answer the question from the end of the last section — <strong>"so does shrinking the training portion with Unsloth/LoRA shrink the bottleneck?"</strong> — I measured <strong>full-param ↔ bf16 LoRA (PEFT) ↔ 4bit QLoRA (bitsandbytes+PEFT)</strong> crossed with vLLM on/off, on the same 1 GCD and same settings. LoRA was r=16, α=32, targeting 7 linear layers.</span><span class="ko">앞 절 끝의 질문 — <strong>"그럼 Unsloth/LoRA 로 학습부를 줄이면 병목이 줄어드나?"</strong> — 에 답하려고, 같은 1 GCD·같은 설정에서 <strong>full-param ↔ bf16 LoRA(PEFT) ↔ 4bit QLoRA(bitsandbytes+PEFT)</strong> 를 vLLM on/off 로 교차해 측정했다. LoRA 는 r=16, α=32, 7개 선형층 타깃.</span></p>
 
 <table>
-<tr><th>구성</th><th>vLLM</th><th>생성 tok/s</th><th>train/step (s)</th><th>rollout 비중</th><th>total (s)</th></tr>
+<tr><th><span class="en">config</span><span class="ko">구성</span></th><th>vLLM</th><th><span class="en">gen tok/s</span><span class="ko">생성 tok/s</span></th><th>train/step (s)</th><th><span class="en">rollout share</span><span class="ko">rollout 비중</span></th><th>total (s)</th></tr>
 <tr><td>full-param (A/B)</td><td>off</td><td>517</td><td>0.71</td><td>91.8%</td><td>51.7</td></tr>
 <tr><td>full-param (A/B)</td><td><strong>on</strong></td><td><strong>2,280</strong></td><td>0.530</td><td>77.2%</td><td>14.0</td></tr>
 <tr><td>bf16 LoRA (E/F)</td><td>off</td><td>325</td><td>0.659</td><td>95.0%</td><td>79.5</td></tr>
@@ -313,7 +316,7 @@ else:
     <line x1="60" y1="134" x2="645" y2="134" stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="137" text-anchor="end">1200</text>
     <line x1="60" y1="96"  x2="645" y2="96"  stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="99" text-anchor="end">1800</text>
     <line x1="60" y1="58"  x2="645" y2="58"  stroke="var(--line)" stroke-dasharray="2 3"/><text x="54" y="61" text-anchor="end">2400</text>
-    <text x="18" y="120" text-anchor="middle" transform="rotate(-90 18 120)">생성 tok/s</text>
+    <text x="18" y="120" text-anchor="middle" transform="rotate(-90 18 120)"><tspan class="en">gen tok/s</tspan><tspan class="ko">생성 tok/s</tspan></text>
   </g>
   <!-- scale 1 tok/s = 0.06333 px ; y=210 - v*0.06333 -->
   <!-- group vLLM OFF -->
@@ -328,52 +331,52 @@ else:
   <rect x="390" y="66"  width="58" height="144" rx="3" fill="var(--blue)"/><text x="419" y="59" text-anchor="middle" font-size="10" font-weight="700" fill="var(--blue-ink)">2,280</text><text x="419" y="246" text-anchor="middle" font-size="9" fill="var(--muted)">full</text>
   <rect x="470" y="73"  width="58" height="137" rx="3" fill="var(--blue)"/><text x="499" y="66" text-anchor="middle" font-size="10" font-weight="700" fill="var(--blue-ink)">2,171</text><text x="499" y="246" text-anchor="middle" font-size="9" fill="var(--muted)">LoRA</text>
   <rect x="550" y="147" width="58" height="63"  rx="3" fill="var(--blue-bd)"/><text x="579" y="140" text-anchor="middle" font-size="10" font-weight="700" fill="var(--blue-ink)">998</text><text x="579" y="246" text-anchor="middle" font-size="9" fill="var(--muted)">4bit</text>
-  <text x="350" y="270" text-anchor="middle" font-size="10.5" fill="var(--red)">LoRA·4bit 는 생성(병목)을 오히려 느리게 한다 — vLLM off/on 양쪽 모두</text>
+  <text x="350" y="270" text-anchor="middle" font-size="10.5" fill="var(--red)"><tspan class="en">LoRA · 4bit actually slow down generation (the bottleneck) — both vLLM off and on</tspan><tspan class="ko">LoRA·4bit 는 생성(병목)을 오히려 느리게 한다 — vLLM off/on 양쪽 모두</tspan></text>
 </svg>
-<figcaption>그림 4 — full-param vs bf16 LoRA vs 4bit QLoRA 의 생성 처리량. 두 그룹 모두 full ≥ LoRA ≥ 4bit. LoRA 어댑터 행렬곱과 4bit 디퀀트가 토큰마다 붙어 디코딩을 느리게 한다. (본 실험 측정값)</figcaption>
+<figcaption><span class="en">Figure 4 — generation throughput of full-param vs bf16 LoRA vs 4bit QLoRA. In both groups, full ≥ LoRA ≥ 4bit. The LoRA adapter matmul and 4bit dequant attach to every token and slow down decoding. (this experiment's measurements)</span><span class="ko">그림 4 — full-param vs bf16 LoRA vs 4bit QLoRA 의 생성 처리량. 두 그룹 모두 full ≥ LoRA ≥ 4bit. LoRA 어댑터 행렬곱과 4bit 디퀀트가 토큰마다 붙어 디코딩을 느리게 한다. (본 실험 측정값)</span></figcaption>
 </figure>
 
-<h3>6-1. 답: 병목은 줄지 않는다 — 오히려 더 깊어진다</h3>
-<p>두 흐름을 분리해 보면 분명하다:</p>
+<h3><span class="en">6-1. Answer: the bottleneck doesn't shrink — it gets deeper</span><span class="ko">6-1. 답: 병목은 줄지 않는다 — 오히려 더 깊어진다</span></h3>
+<p><span class="en">Separating the two flows makes it clear:</span><span class="ko">두 흐름을 분리해 보면 분명하다:</span></p>
 <ul>
-<li><strong>학습부(train/step)는 줄긴 한다 — 아주 조금.</strong> vLLM on 기준 full 0.530 → bf16 LoRA 0.512 → 4bit QLoRA 0.464 → Unsloth full-param 0.435 s/step. 0.5B 라 옵티마이저/메모리 절감 효과가 미미하다(LoRA 의 이득은 모델이 클수록, 메모리 바운드일수록 커진다).</li>
-<li><strong>그런데 병목(생성)은 더 나빠진다.</strong> HF 생성 517 → 325 → 192 tok/s, vLLM 2,280 → 998 tok/s(4bit). LoRA 는 어댑터 행렬곱을, 4bit 는 디퀀트를 <em>매 토큰</em> 추가하기 때문. 게다가 4bit+vLLM 은 매 스텝 LoRA 를 4bit 베이스에 머지해 vLLM 에 다시 싣느라(peft 가 "4-bit 머지 시 rounding 차이" 경고까지 낸다) 더 느리다.</li>
-<li><strong>그래서 rollout 비중이 오히려 올라간다</strong>(91.8% → 95.0% → 97.5%, vLLM off). 병목이 학습부로 <em>옮겨가는</em> 게 아니라 생성에 <em>더 쏠린다</em>. 작은 모델에선 LoRA/4bit 가 RL 을 전체적으로 <strong>더 느리게</strong> 만든다.</li>
+<li><span class="en"><strong>The training portion (train/step) does shrink — just barely.</strong> On the vLLM-on side: full 0.530 → bf16 LoRA 0.512 → 4bit QLoRA 0.464 → Unsloth full-param 0.435 s/step. Because it's 0.5B, the optimizer/memory savings are negligible (LoRA's gain grows the larger the model and the more memory-bound it is).</span><span class="ko"><strong>학습부(train/step)는 줄긴 한다 — 아주 조금.</strong> vLLM on 기준 full 0.530 → bf16 LoRA 0.512 → 4bit QLoRA 0.464 → Unsloth full-param 0.435 s/step. 0.5B 라 옵티마이저/메모리 절감 효과가 미미하다(LoRA 의 이득은 모델이 클수록, 메모리 바운드일수록 커진다).</span></li>
+<li><span class="en"><strong>But the bottleneck (generation) gets worse.</strong> HF generation 517 → 325 → 192 tok/s, vLLM 2,280 → 998 tok/s (4bit). Because LoRA adds an adapter matmul and 4bit adds a dequant <em>every token</em>. On top of that, 4bit+vLLM merges LoRA into the 4bit base every step and reloads it into vLLM (peft even warns about "rounding differences when merging into 4-bit"), making it slower still.</span><span class="ko"><strong>그런데 병목(생성)은 더 나빠진다.</strong> HF 생성 517 → 325 → 192 tok/s, vLLM 2,280 → 998 tok/s(4bit). LoRA 는 어댑터 행렬곱을, 4bit 는 디퀀트를 <em>매 토큰</em> 추가하기 때문. 게다가 4bit+vLLM 은 매 스텝 LoRA 를 4bit 베이스에 머지해 vLLM 에 다시 싣느라(peft 가 "4-bit 머지 시 rounding 차이" 경고까지 낸다) 더 느리다.</span></li>
+<li><span class="en"><strong>So the rollout share actually goes up</strong> (91.8% → 95.0% → 97.5%, vLLM off). The bottleneck doesn't <em>move</em> to the training portion — it <em>concentrates more</em> on generation. On small models, LoRA/4bit makes RL <strong>slower</strong> overall.</span><span class="ko"><strong>그래서 rollout 비중이 오히려 올라간다</strong>(91.8% → 95.0% → 97.5%, vLLM off). 병목이 학습부로 <em>옮겨가는</em> 게 아니라 생성에 <em>더 쏠린다</em>. 작은 모델에선 LoRA/4bit 가 RL 을 전체적으로 <strong>더 느리게</strong> 만든다.</span></li>
 </ul>
-<div class="note"><strong>그러니 "Unsloth/LoRA 쓰면 병목 줄어?"의 답</strong>: 이 규모에선 <strong>아니오</strong>. LoRA/4bit/Unsloth 는 <em>학습부</em>를 노리는 도구인데, 여기선 학습부가 병목이 아니다. 의미가 생기는 건 (a) 모델이 커서 full-param 이 메모리에 안 들어갈 때(그땐 LoRA/4bit 가 "되게 만드는" 유일한 길), (b) 생성을 별도 엔진/GPU 로 떼어내 학습부가 진짜 병목이 됐을 때다.</div>
+<div class="note"><span class="en"><strong>So the answer to "does using Unsloth/LoRA shrink the bottleneck?"</strong>: at this scale, <strong>no</strong>. LoRA/4bit/Unsloth are tools that aim at the <em>training portion</em>, but here the training portion isn't the bottleneck. They become meaningful when (a) the model is so large that full-param doesn't fit in memory (then LoRA/4bit is the only way to "make it work"), or (b) generation is split out to a separate engine/GPU so the training portion becomes the real bottleneck.</span><span class="ko"><strong>그러니 "Unsloth/LoRA 쓰면 병목 줄어?"의 답</strong>: 이 규모에선 <strong>아니오</strong>. LoRA/4bit/Unsloth 는 <em>학습부</em>를 노리는 도구인데, 여기선 학습부가 병목이 아니다. 의미가 생기는 건 (a) 모델이 커서 full-param 이 메모리에 안 들어갈 때(그땐 LoRA/4bit 가 "되게 만드는" 유일한 길), (b) 생성을 별도 엔진/GPU 로 떼어내 학습부가 진짜 병목이 됐을 때다.</span></div>
 
-<h3>6-2. Unsloth 의 진짜 경로(LoRA+4bit 커널)는 이 스택에서 로드 실패</h3>
-<p>Unsloth 의 커스텀 커널을 쓰는 <code>FastLanguageModel</code> + 4bit + <code>get_peft_model</code> 경로는 본 컨테이너(transformers 5.11)에서 <strong>import 자체가 실패</strong>했다. Unsloth 2026.6.7 이 transformers 모델 소스를 동적으로 재작성·<code>exec</code> 하는데, 그 코드가 이 버전에 없는 심볼들을 연쇄적으로 참조한다:</p>
+<h3><span class="en">6-2. Unsloth's real path (LoRA+4bit kernels) fails to load on this stack</span><span class="ko">6-2. Unsloth 의 진짜 경로(LoRA+4bit 커널)는 이 스택에서 로드 실패</span></h3>
+<p><span class="en">The <code>FastLanguageModel</code> + 4bit + <code>get_peft_model</code> path that uses Unsloth's custom kernels <strong>failed to import at all</strong> in this container (transformers 5.11). Unsloth 2026.6.7 dynamically rewrites and <code>exec</code>s the transformers model source, and that code chains references to symbols not present in this version:</span><span class="ko">Unsloth 의 커스텀 커널을 쓰는 <code>FastLanguageModel</code> + 4bit + <code>get_peft_model</code> 경로는 본 컨테이너(transformers 5.11)에서 <strong>import 자체가 실패</strong>했다. Unsloth 2026.6.7 이 transformers 모델 소스를 동적으로 재작성·<code>exec</code> 하는데, 그 코드가 이 버전에 없는 심볼들을 연쇄적으로 참조한다:</span></p>
 <pre><code>NameError: name 'auto_docstring' is not defined   # → 주입
 NameError: name 'strict' is not defined           # → 주입
 NameError: name 'interval' is not defined          # → 또…  (whack-a-mole)</code></pre>
-<p>import 순서 교정, 심볼 주입 등 여러 차례 우회했지만 끝이 없어 <span class="status-fail">중단</span>했다(transformers 를 내리면 vLLM 0.22.1 요구·기존 baseline 이 깨진다). 대신 <strong>동일 메커니즘인 4bit QLoRA(bitsandbytes + PEFT)</strong> 로 측정한 게 위 표의 I/J 다 — Unsloth 가 감싸는 바로 그 4bit+LoRA 수학을, 커스텀 커널만 없이 잰 셈. 결론(생성이 병목, 학습부 최적화는 지렛대 아님)은 그대로다.</p>
+<p><span class="en">I worked around it several times (fixing import order, injecting symbols, etc.) but there was no end, so I <span class="status-fail">stopped</span> (downgrading transformers breaks vLLM 0.22.1's requirement and the existing baseline). Instead, I/J in the table above measure the <strong>same mechanism, 4bit QLoRA (bitsandbytes + PEFT)</strong> — i.e., the very 4bit+LoRA math that Unsloth wraps, just without the custom kernels. The conclusion (generation is the bottleneck, training-portion optimization isn't a lever) is unchanged.</span><span class="ko">import 순서 교정, 심볼 주입 등 여러 차례 우회했지만 끝이 없어 <span class="status-fail">중단</span>했다(transformers 를 내리면 vLLM 0.22.1 요구·기존 baseline 이 깨진다). 대신 <strong>동일 메커니즘인 4bit QLoRA(bitsandbytes + PEFT)</strong> 로 측정한 게 위 표의 I/J 다 — Unsloth 가 감싸는 바로 그 4bit+LoRA 수학을, 커스텀 커널만 없이 잰 셈. 결론(생성이 병목, 학습부 최적화는 지렛대 아님)은 그대로다.</span></p>
 
-<h3>6-3. 입력·출력 토큰 길이 (모든 조건 공통)</h3>
-<p>같은 데이터셋(gsm8k)이라 길이 분포는 조건 무관하게 동일하다. 토크나이저로 직접 측정:</p>
+<h3><span class="en">6-3. Input/output token lengths (common to all conditions)</span><span class="ko">6-3. 입력·출력 토큰 길이 (모든 조건 공통)</span></h3>
+<p><span class="en">Since it's the same dataset (gsm8k), the length distribution is identical regardless of condition. Measured directly with the tokenizer:</span><span class="ko">같은 데이터셋(gsm8k)이라 길이 분포는 조건 무관하게 동일하다. 토크나이저로 직접 측정:</span></p>
 <table>
-<tr><th></th><th>평균</th><th>min</th><th>max</th><th>p95</th><th>비고</th></tr>
-<tr><td><strong>입력</strong> (프롬프트, chat 템플릿 적용)</td><td>99</td><td>63</td><td>152</td><td>137</td><td>gsm8k 문제 + 지시문</td></tr>
-<tr><td><strong>출력</strong> (생성, 벤치 maxlen=256)</td><td>256</td><td>256</td><td>256</td><td>256</td><td><strong>전부 cap 포화</strong> (clip 1.0)</td></tr>
-<tr><td><strong>출력</strong> (자연 길이, maxlen=512)</td><td>395</td><td>321</td><td>479</td><td>~470</td><td>EOS 자연 종료 (clip 0)</td></tr>
+<tr><th></th><th><span class="en">mean</span><span class="ko">평균</span></th><th>min</th><th>max</th><th>p95</th><th><span class="en">note</span><span class="ko">비고</span></th></tr>
+<tr><td><span class="en"><strong>input</strong> (prompt, chat template applied)</span><span class="ko"><strong>입력</strong> (프롬프트, chat 템플릿 적용)</span></td><td>99</td><td>63</td><td>152</td><td>137</td><td><span class="en">gsm8k question + instruction</span><span class="ko">gsm8k 문제 + 지시문</span></td></tr>
+<tr><td><span class="en"><strong>output</strong> (generation, bench maxlen=256)</span><span class="ko"><strong>출력</strong> (생성, 벤치 maxlen=256)</span></td><td>256</td><td>256</td><td>256</td><td>256</td><td><span class="en"><strong>all saturate the cap</strong> (clip 1.0)</span><span class="ko"><strong>전부 cap 포화</strong> (clip 1.0)</span></td></tr>
+<tr><td><span class="en"><strong>output</strong> (natural length, maxlen=512)</span><span class="ko"><strong>출력</strong> (자연 길이, maxlen=512)</span></td><td>395</td><td>321</td><td>479</td><td>~470</td><td><span class="en">natural EOS termination (clip 0)</span><span class="ko">EOS 자연 종료 (clip 0)</span></td></tr>
 </table>
-<div class="tip"><strong>왜 두 줄로 나눴나.</strong> RL-미학습 0.5B 가 gsm8k CoT 를 자연스럽게 ~395 토큰 생성한다 — 즉 벤치의 <code>maxlen=256</code> 에선 <strong>모든 응답이 256 에서 잘렸다</strong>(그래서 A~J 의 생성 토큰 수가 정확히 같아 tok/s 가 깨끗한 비교 지표였다). 진짜 출력 길이를 보려면 cap 을 512 로 풀어야 했고, 그때 평균 395·최대 479 로 EOS 가 자연 종료됐다. 입력:출력 ≈ 1:4 비율 — 생성이 비싼 이유가 길이에서도 보인다.</div>
+<div class="tip"><span class="en"><strong>Why split into two rows.</strong> An RL-untrained 0.5B naturally generates ~395 tokens of gsm8k CoT — i.e., at the bench's <code>maxlen=256</code>, <strong>every response was cut off at 256</strong> (which is why A~J had exactly the same generation token count, making tok/s a clean comparison metric). To see the real output length, the cap had to be lifted to 512, and then the mean was 395 and the max 479 as EOS terminated naturally. Input:output ≈ 1:4 ratio — the length also shows why generation is expensive.</span><span class="ko"><strong>왜 두 줄로 나눴나.</strong> RL-미학습 0.5B 가 gsm8k CoT 를 자연스럽게 ~395 토큰 생성한다 — 즉 벤치의 <code>maxlen=256</code> 에선 <strong>모든 응답이 256 에서 잘렸다</strong>(그래서 A~J 의 생성 토큰 수가 정확히 같아 tok/s 가 깨끗한 비교 지표였다). 진짜 출력 길이를 보려면 cap 을 512 로 풀어야 했고, 그때 평균 395·최대 479 로 EOS 가 자연 종료됐다. 입력:출력 ≈ 1:4 비율 — 생성이 비싼 이유가 길이에서도 보인다.</span></div>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="verl">7. 결과 ③ — veRL 로 확장: 단계별 분해</h2>
+<h2 id="verl"><span class="en">7. Result ③ — scaling to veRL: per-stage breakdown</span><span class="ko">7. 결과 ③ — veRL 로 확장: 단계별 분해</span></h2>
 <div class="card">
-<p>veRL 0.8.0 을 같은 모델·데이터로 돌렸다. 구성: <strong>FSDP(학습) + vLLM(rollout) colocate, Ray 오케스트레이션, 2 GCD, n=8, KL loss on</strong>. veRL 은 친절하게도 단계별 <code>timing_s/*</code> 를 매 스텝 로깅해 — 우리가 TRL 에서 손으로 계측한 분해를 공짜로 준다.</p>
+<p><span class="en">I ran veRL 0.8.0 with the same model and data. Setup: <strong>FSDP (training) + vLLM (rollout) colocate, Ray orchestration, 2 GCD, n=8, KL loss on</strong>. veRL kindly logs per-stage <code>timing_s/*</code> every step — giving us for free the breakdown we instrumented by hand in TRL.</span><span class="ko">veRL 0.8.0 을 같은 모델·데이터로 돌렸다. 구성: <strong>FSDP(학습) + vLLM(rollout) colocate, Ray 오케스트레이션, 2 GCD, n=8, KL loss on</strong>. veRL 은 친절하게도 단계별 <code>timing_s/*</code> 를 매 스텝 로깅해 — 우리가 TRL 에서 손으로 계측한 분해를 공짜로 준다.</span></p>
 
 <table>
-<tr><th>단계</th><th>의미</th><th>시간 (대표 스텝)</th><th>비중</th></tr>
-<tr><td><code>gen</code></td><td>vLLM rollout (생성)</td><td>2.36 s</td><td>~27%</td></tr>
-<tr><td><code>reward</code></td><td>gsm8k 규칙 채점 (128 시퀀스, CPU)</td><td>1.93 s</td><td>~24%</td></tr>
+<tr><th><span class="en">stage</span><span class="ko">단계</span></th><th><span class="en">meaning</span><span class="ko">의미</span></th><th><span class="en">time (representative step)</span><span class="ko">시간 (대표 스텝)</span></th><th><span class="en">share</span><span class="ko">비중</span></th></tr>
+<tr><td><code>gen</code></td><td><span class="en">vLLM rollout (generation)</span><span class="ko">vLLM rollout (생성)</span></td><td>2.36 s</td><td>~27%</td></tr>
+<tr><td><code>reward</code></td><td><span class="en">gsm8k rule scoring (128 sequences, CPU)</span><span class="ko">gsm8k 규칙 채점 (128 시퀀스, CPU)</span></td><td>1.93 s</td><td>~24%</td></tr>
 <tr><td><code>update_actor</code></td><td>backward + optimizer</td><td>2.50 s</td><td>~28%</td></tr>
-<tr><td><code>ref</code></td><td>reference 모델 forward (KL용)</td><td>1.15 s</td><td>~13%</td></tr>
-<tr><td><code>old_log_prob</code></td><td>현재 정책으로 rollout logprob 재계산</td><td>0.75 s</td><td>~8%</td></tr>
-<tr><td><code>adv</code></td><td>그룹 정규화 (GRPO advantage)</td><td>0.003 s</td><td>~0%</td></tr>
-<tr><td colspan="2"><strong>step 총합 (정상 스텝)</strong></td><td colspan="2"><strong>~8.2–8.7 s</strong></td></tr>
+<tr><td><code>ref</code></td><td><span class="en">reference model forward (for KL)</span><span class="ko">reference 모델 forward (KL용)</span></td><td>1.15 s</td><td>~13%</td></tr>
+<tr><td><code>old_log_prob</code></td><td><span class="en">recompute rollout logprob with current policy</span><span class="ko">현재 정책으로 rollout logprob 재계산</span></td><td>0.75 s</td><td>~8%</td></tr>
+<tr><td><code>adv</code></td><td><span class="en">group normalization (GRPO advantage)</span><span class="ko">그룹 정규화 (GRPO advantage)</span></td><td>0.003 s</td><td>~0%</td></tr>
+<tr><td colspan="2"><span class="en"><strong>step total (normal step)</strong></span><span class="ko"><strong>step 총합 (정상 스텝)</strong></span></td><td colspan="2"><strong>~8.2–8.7 s</strong></td></tr>
 </table>
 
 <figure>
@@ -393,86 +396,86 @@ NameError: name 'interval' is not defined          # → 또…  (whack-a-mole)<
     <text x="575" y="64" text-anchor="middle" font-size="8.5" fill="#fff">olp</text>
     <text x="575" y="76" text-anchor="middle" font-size="8.5" fill="#fff">8%</text>
   </g>
-  <text x="30" y="28" font-size="11" fill="var(--muted)">veRL GRPO · 한 스텝 ≈ 8.4 s (FSDP + vLLM colocate, 2 GCD)</text>
-  <text x="30" y="112" font-size="11" fill="var(--ink)">→ 생성(gen)은 27%뿐. update_actor·reward·ref 가 비등하게 나눠 가진다.</text>
-  <text x="30" y="130" font-size="10" fill="var(--muted)">cf. TRL-B(vLLM on, KL off)는 rollout 이 77%. 차이의 핵심은 KL/ref forward + reward 비용.</text>
+  <text x="30" y="28" font-size="11" fill="var(--muted)"><tspan class="en">veRL GRPO · one step ≈ 8.4 s (FSDP + vLLM colocate, 2 GCD)</tspan><tspan class="ko">veRL GRPO · 한 스텝 ≈ 8.4 s (FSDP + vLLM colocate, 2 GCD)</tspan></text>
+  <text x="30" y="112" font-size="11" fill="var(--ink)"><tspan class="en">→ generation (gen) is only 27%. update_actor · reward · ref split it comparably.</tspan><tspan class="ko">→ 생성(gen)은 27%뿐. update_actor·reward·ref 가 비등하게 나눠 가진다.</tspan></text>
+  <text x="30" y="130" font-size="10" fill="var(--muted)"><tspan class="en">cf. TRL-B (vLLM on, KL off) has rollout at 77%. The key difference is the KL/ref forward + reward cost.</tspan><tspan class="ko">cf. TRL-B(vLLM on, KL off)는 rollout 이 77%. 차이의 핵심은 KL/ref forward + reward 비용.</tspan></text>
 </svg>
-<figcaption>그림 3 — veRL 한 스텝의 단계 분해(대표 스텝). 단계 합이 step 총시간과 약간 다른 건 Ray async 파이프라이닝으로 일부 겹치기 때문. (veRL <code>timing_s/*</code> 로그)</figcaption>
+<figcaption><span class="en">Figure 3 — per-stage breakdown of one veRL step (representative step). The stage sum differs slightly from the step total because Ray async pipelining overlaps some of them. (veRL <code>timing_s/*</code> logs)</span><span class="ko">그림 3 — veRL 한 스텝의 단계 분해(대표 스텝). 단계 합이 step 총시간과 약간 다른 건 Ray async 파이프라이닝으로 일부 겹치기 때문. (veRL <code>timing_s/*</code> 로그)</span></figcaption>
 </figure>
 
-<h3>6-1. TRL 과 정반대인 시간 분포 — 왜?</h3>
-<p>TRL-B 에선 rollout 이 77%였는데 veRL 에선 gen 이 27%다. 같은 모델·데이터인데 왜 뒤집혔나? 세 가지가 합쳐진 결과다(그리고 셋 다 교훈이다):</p>
+<h3><span class="en">6-1. A time distribution opposite to TRL — why?</span><span class="ko">6-1. TRL 과 정반대인 시간 분포 — 왜?</span></h3>
+<p><span class="en">In TRL-B rollout was 77%, but in veRL gen is 27%. Same model and data — why is it flipped? It's the combination of three things (and all three are lessons):</span><span class="ko">TRL-B 에선 rollout 이 77%였는데 veRL 에선 gen 이 27%다. 같은 모델·데이터인데 왜 뒤집혔나? 세 가지가 합쳐진 결과다(그리고 셋 다 교훈이다):</span></p>
 <ol>
-<li><strong>KL/reference 를 켰다.</strong> TRL 측은 <code>beta=0</code> 으로 reference forward 를 통째로 생략했지만, veRL 은 <code>use_kl_loss=True</code> → <code>ref</code>(1.15s) + <code>old_log_prob</code>(0.75s) 두 번의 추가 forward 가 붙는다. <strong>KL 제어 한 줄이 학습부에 forward 두 개를 더한다</strong>는 걸 시간으로 본 셈.</li>
-<li><strong>reward 가 생각보다 비싸다(1.9s).</strong> gsm8k 규칙 채점을 128개 시퀀스에 대해 CPU 파이썬으로 도는 비용. 작은 모델일수록 생성이 싸지니 <strong>reward 가 상대적으로 큰 단계</strong>가 된다 — 대규모에선 verifier 병렬화가 필요하다는 실전 신호.</li>
-<li><strong>generate_sequences(순수 생성)는 1.3s, gen(2.36s)과의 차이</strong> ≈ vLLM 엔진 wake/sleep + 가중치 reshard 오버헤드. colocate 라 학습과 생성이 같은 GPU 메모리를 번갈아 쓰며 깨우고 재우는 비용이 여기 숨어 있다.</li>
+<li><span class="en"><strong>KL/reference was turned on.</strong> The TRL side skipped the reference forward entirely with <code>beta=0</code>, but veRL has <code>use_kl_loss=True</code> → two extra forwards attach: <code>ref</code> (1.15s) + <code>old_log_prob</code> (0.75s). It's seeing in time terms that <strong>one line of KL control adds two forwards to the training portion</strong>.</span><span class="ko"><strong>KL/reference 를 켰다.</strong> TRL 측은 <code>beta=0</code> 으로 reference forward 를 통째로 생략했지만, veRL 은 <code>use_kl_loss=True</code> → <code>ref</code>(1.15s) + <code>old_log_prob</code>(0.75s) 두 번의 추가 forward 가 붙는다. <strong>KL 제어 한 줄이 학습부에 forward 두 개를 더한다</strong>는 걸 시간으로 본 셈.</span></li>
+<li><span class="en"><strong>reward is costlier than expected (1.9s).</strong> The cost of running gsm8k rule scoring in CPU Python over 128 sequences. The smaller the model, the cheaper generation gets, so <strong>reward becomes a relatively large stage</strong> — a real-world signal that verifier parallelization is needed at scale.</span><span class="ko"><strong>reward 가 생각보다 비싸다(1.9s).</strong> gsm8k 규칙 채점을 128개 시퀀스에 대해 CPU 파이썬으로 도는 비용. 작은 모델일수록 생성이 싸지니 <strong>reward 가 상대적으로 큰 단계</strong>가 된다 — 대규모에선 verifier 병렬화가 필요하다는 실전 신호.</span></li>
+<li><span class="en"><strong>generate_sequences (pure generation) is 1.3s; the gap to gen (2.36s)</strong> ≈ vLLM engine wake/sleep + weight reshard overhead. Because it's colocate, training and generation alternate over the same GPU memory, and the cost of waking and putting it to sleep hides here.</span><span class="ko"><strong>generate_sequences(순수 생성)는 1.3s, gen(2.36s)과의 차이</strong> ≈ vLLM 엔진 wake/sleep + 가중치 reshard 오버헤드. colocate 라 학습과 생성이 같은 GPU 메모리를 번갈아 쓰며 깨우고 재우는 비용이 여기 숨어 있다.</span></li>
 </ol>
 
-<div class="win"><strong>이게 핵심 통찰이다.</strong> "vLLM rollout 을 켜라"는 필요조건이지 충분조건이 아니다. 일단 빠른 생성 엔진을 깔면 병목이 <strong>생성 → (KL forward + reward + backward)</strong> 로 이동한다. 그래서 대규모 RL 프레임워크는 생성만 빠르게 하는 데서 멈추지 않고, ref/logprob forward·reward·backward 를 각각 떼어 비동기로 겹치려 한다(disaggregated rollout).</div>
+<div class="win"><span class="en"><strong>This is the key insight.</strong> "Turn on vLLM rollout" is a necessary but not sufficient condition. Once you lay down a fast generation engine, the bottleneck moves <strong>generation → (KL forward + reward + backward)</strong>. That's why large-scale RL frameworks don't stop at just making generation fast — they detach ref/logprob forward, reward, and backward each and try to overlap them asynchronously (disaggregated rollout).</span><span class="ko"><strong>이게 핵심 통찰이다.</strong> "vLLM rollout 을 켜라"는 필요조건이지 충분조건이 아니다. 일단 빠른 생성 엔진을 깔면 병목이 <strong>생성 → (KL forward + reward + backward)</strong> 로 이동한다. 그래서 대규모 RL 프레임워크는 생성만 빠르게 하는 데서 멈추지 않고, ref/logprob forward·reward·backward 를 각각 떼어 비동기로 겹치려 한다(disaggregated rollout).</span></div>
 
-<h3>6-2. veRL 0.8.0 의 발견 — 빠른 롤아웃 엔진은 사실상 필수</h3>
-<p>veRL 안에서도 vLLM on/off 를 비교하려 <code>rollout.name=hf</code> 로 바꿔봤다. 결과:</p>
+<h3><span class="en">6-2. A finding in veRL 0.8.0 — a fast rollout engine is effectively mandatory</span><span class="ko">6-2. veRL 0.8.0 의 발견 — 빠른 롤아웃 엔진은 사실상 필수</span></h3>
+<p><span class="en">To compare vLLM on/off within veRL too, I tried switching to <code>rollout.name=hf</code>. Result:</span><span class="ko">veRL 안에서도 vLLM on/off 를 비교하려 <code>rollout.name=hf</code> 로 바꿔봤다. 결과:</span></p>
 <pre><code># rollout.name=hf →
 AssertionError: Rollout hf with mode async not found
 # rollout.name=hf + rollout.mode=sync →
 ValueError: Rollout mode 'sync' has been removed.
           Please set actor_rollout_ref.rollout.mode=async or remove the mode setting entirely.</code></pre>
-<p><strong>verl 0.8.0 은 async(agent_loop) 롤아웃만 지원하고, HF 롤아웃은 async 를 못 탄다.</strong> 즉 이 버전에서 <strong>HF 단독 롤아웃은 사실상 막혀 있고, vLLM/SGLang 같은 빠른 엔진이 기본 전제</strong>다. TRL 의 "vLLM off" 같은 비교 자체가 veRL 에선 (의도적으로) 불가능해진 것 — 프레임워크가 "느린 생성은 선택지가 아니다"라고 못박은 셈. <span class="status-fail">의도적 negative result</span>로 기록.</p>
+<p><span class="en"><strong>verl 0.8.0 supports only async (agent_loop) rollout, and HF rollout can't ride async.</strong> That is, in this version <strong>HF-only rollout is effectively blocked, and a fast engine like vLLM/SGLang is the default premise</strong>. A comparison like TRL's "vLLM off" has become (deliberately) impossible in veRL — the framework has nailed down "slow generation is not an option." Recorded as a <span class="status-fail">deliberate negative result</span>.</span><span class="ko"><strong>verl 0.8.0 은 async(agent_loop) 롤아웃만 지원하고, HF 롤아웃은 async 를 못 탄다.</strong> 즉 이 버전에서 <strong>HF 단독 롤아웃은 사실상 막혀 있고, vLLM/SGLang 같은 빠른 엔진이 기본 전제</strong>다. TRL 의 "vLLM off" 같은 비교 자체가 veRL 에선 (의도적으로) 불가능해진 것 — 프레임워크가 "느린 생성은 선택지가 아니다"라고 못박은 셈. <span class="status-fail">의도적 negative result</span>로 기록.</span></p>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="debug">8. 만난 문제들 — 디버깅 로그 (실패 포함)</h2>
+<h2 id="debug"><span class="en">8. Problems hit — debugging log (failures included)</span><span class="ko">8. 만난 문제들 — 디버깅 로그 (실패 포함)</span></h2>
 <div class="card">
-<p>"실패해도 바로 포기 말고 될 때까지" — 실제로 막힌 지점과 우회를 순서대로.</p>
+<p><span class="en">"Even if it fails, don't give up right away — go until it works" — the spots that actually got stuck and the workarounds, in order.</span><span class="ko">"실패해도 바로 포기 말고 될 때까지" — 실제로 막힌 지점과 우회를 순서대로.</span></p>
 
-<details><summary>① 컨테이너 ENTRYPOINT 가 <code>vllm</code> 이라 <code>bash -lc</code> 가 vllm 인자로 먹힘</summary>
-<p>이미지가 <code>vllm</code> 을 엔트리포인트로 박아둬 <code>docker run ... bash</code> 가 <code>vllm: error: unrecognized arguments</code>. → <strong>해결</strong>: <code>--entrypoint python</code>/<code>--entrypoint sleep</code> 명시, 스크립트는 노드에 파일로 두고 <code>-v</code> 마운트(따옴표 지옥도 회피, 재현성↑).</p></details>
+<details><summary><span class="en">① The container ENTRYPOINT is <code>vllm</code>, so <code>bash -lc</code> gets swallowed as a vllm argument</span><span class="ko">① 컨테이너 ENTRYPOINT 가 <code>vllm</code> 이라 <code>bash -lc</code> 가 vllm 인자로 먹힘</span></summary>
+<p><span class="en">The image bakes in <code>vllm</code> as the entrypoint, so <code>docker run ... bash</code> gives <code>vllm: error: unrecognized arguments</code>. → <strong>fix</strong>: specify <code>--entrypoint python</code>/<code>--entrypoint sleep</code>, keep the script as a file on the node and <code>-v</code> mount it (also avoids quoting hell, raises reproducibility).</span><span class="ko">이미지가 <code>vllm</code> 을 엔트리포인트로 박아둬 <code>docker run ... bash</code> 가 <code>vllm: error: unrecognized arguments</code>. → <strong>해결</strong>: <code>--entrypoint python</code>/<code>--entrypoint sleep</code> 명시, 스크립트는 노드에 파일로 두고 <code>-v</code> 마운트(따옴표 지옥도 회피, 재현성↑).</span></p></details>
 
-<details><summary>② Unsloth 설치가 transformers·trl 을 말없이 다운그레이드 → trl 임포트가 <code>vllm_ascend</code> 를 찾다 폭발</summary>
+<details><summary><span class="en">② Installing Unsloth silently downgrades transformers · trl → trl import blows up looking for <code>vllm_ascend</code></span><span class="ko">② Unsloth 설치가 transformers·trl 을 말없이 다운그레이드 → trl 임포트가 <code>vllm_ascend</code> 를 찾다 폭발</span></summary>
 <pre><code>RuntimeError: Failed to import trl.trainer.grpo_trainer ...
 ModuleNotFoundError: No module named 'vllm_ascend'</code></pre>
-<p><code>pip install unsloth</code> 가 transformers 5.11→5.5.0, trl 1.6→구버전으로 끌어내렸다. 구버전 trl 의 <code>extras/vllm_client.py</code> 는 Ascend(NPU) 전용 모듈을 무조건 import 하다 ROCm 에서 죽는다. → <strong>해결</strong>: <code>pip install --force-reinstall --no-deps trl==1.6.0 transformers==5.11.0</code> 로 복원. 그 뒤 unsloth+trl+vllm 셋이 동시에 임포트됨을 확인하고 진행.</p></details>
+<p><span class="en"><code>pip install unsloth</code> pulled transformers 5.11→5.5.0 and trl 1.6→an old version down. The old trl's <code>extras/vllm_client.py</code> unconditionally imports an Ascend (NPU)-only module and dies on ROCm. → <strong>fix</strong>: restore with <code>pip install --force-reinstall --no-deps trl==1.6.0 transformers==5.11.0</code>. Then confirmed unsloth+trl+vllm all import together and proceeded.</span><span class="ko"><code>pip install unsloth</code> 가 transformers 5.11→5.5.0, trl 1.6→구버전으로 끌어내렸다. 구버전 trl 의 <code>extras/vllm_client.py</code> 는 Ascend(NPU) 전용 모듈을 무조건 import 하다 ROCm 에서 죽는다. → <strong>해결</strong>: <code>pip install --force-reinstall --no-deps trl==1.6.0 transformers==5.11.0</code> 로 복원. 그 뒤 unsloth+trl+vllm 셋이 동시에 임포트됨을 확인하고 진행.</span></p></details>
 
-<details><summary>③ veRL: rollout 의 <code>log_prob_micro_batch_size</code> 미설정</summary>
+<details><summary><span class="en">③ veRL: rollout's <code>log_prob_micro_batch_size</code> not set</span><span class="ko">③ veRL: rollout 의 <code>log_prob_micro_batch_size</code> 미설정</span></summary>
 <pre><code>ValueError: [actor_rollout_ref.rollout] Please set at least one of
   'log_prob_micro_batch_size' or 'log_prob_micro_batch_size_per_gpu'.</code></pre>
-<p>→ <strong>해결</strong>: <code>actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8</code> 추가.</p></details>
+<p><span class="en">→ <strong>fix</strong>: add <code>actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8</code>.</span><span class="ko">→ <strong>해결</strong>: <code>actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8</code> 추가.</span></p></details>
 
-<details><summary>④ veRL: HF 롤아웃이 sync/async 어느 쪽도 안 됨 (위 §6-2 → 현재 §7-2)</summary>
-<p>async 는 HF 미지원, sync 는 제거됨. → <strong>판정</strong>: 우회 불가(아키텍처적 제거). vLLM 롤아웃으로 본 실험 확정.</p></details>
+<details><summary><span class="en">④ veRL: HF rollout works in neither sync nor async (the §6-2 above → now §7-2)</span><span class="ko">④ veRL: HF 롤아웃이 sync/async 어느 쪽도 안 됨 (위 §6-2 → 현재 §7-2)</span></summary>
+<p><span class="en">async is unsupported for HF, sync was removed. → <strong>verdict</strong>: no workaround (architecturally removed). Confirmed this experiment with vLLM rollout.</span><span class="ko">async 는 HF 미지원, sync 는 제거됨. → <strong>판정</strong>: 우회 불가(아키텍처적 제거). vLLM 롤아웃으로 본 실험 확정.</span></p></details>
 
-<details><summary>⑤ LoRA 재실험: unsloth 가 <code>huggingface_hub</code> 까지 0.36 으로 내려 transformers import 실패</summary>
+<details><summary><span class="en">⑤ LoRA re-run: unsloth pulled even <code>huggingface_hub</code> down to 0.36, breaking transformers import</span><span class="ko">⑤ LoRA 재실험: unsloth 가 <code>huggingface_hub</code> 까지 0.36 으로 내려 transformers import 실패</span></summary>
 <pre><code>ImportError: cannot import name 'is_offline_mode' from 'huggingface_hub'</code></pre>
-<p>transformers 5.11 은 <code>huggingface_hub&gt;=1.5</code> 가 필요한데 unsloth 가 0.36.2 로 끌어내렸다. → <strong>해결</strong>: <code>pip install --force-reinstall --no-deps "huggingface_hub&gt;=1.5.0,&lt;2.0"</code> (→ 1.19.0). 이후 trl·transformers·peft·bnb·vllm 동시 import 확인.</p></details>
+<p><span class="en">transformers 5.11 needs <code>huggingface_hub&gt;=1.5</code>, but unsloth pulled it down to 0.36.2. → <strong>fix</strong>: <code>pip install --force-reinstall --no-deps "huggingface_hub&gt;=1.5.0,&lt;2.0"</code> (→ 1.19.0). Afterward confirmed trl · transformers · peft · bnb · vllm import together.</span><span class="ko">transformers 5.11 은 <code>huggingface_hub&gt;=1.5</code> 가 필요한데 unsloth 가 0.36.2 로 끌어내렸다. → <strong>해결</strong>: <code>pip install --force-reinstall --no-deps "huggingface_hub&gt;=1.5.0,&lt;2.0"</code> (→ 1.19.0). 이후 trl·transformers·peft·bnb·vllm 동시 import 확인.</span></p></details>
 
-<details><summary>⑥ Unsloth 커널 LoRA+4bit 경로: 동적 <code>exec</code> 가 transformers 5.11 에 없는 심볼 연쇄 참조 → 중단</summary>
+<details><summary><span class="en">⑥ Unsloth kernel LoRA+4bit path: dynamic <code>exec</code> chains references to symbols missing in transformers 5.11 → stopped</span><span class="ko">⑥ Unsloth 커널 LoRA+4bit 경로: 동적 <code>exec</code> 가 transformers 5.11 에 없는 심볼 연쇄 참조 → 중단</span></summary>
 <pre><code># from unsloth import FastLanguageModel  (4bit/get_peft_model 경로)
 NameError: name 'auto_docstring' is not defined   # 주입
 NameError: name 'strict' is not defined           # 주입
 NameError: name 'interval' is not defined          # 또… 끝없음</code></pre>
-<p>Unsloth 2026.6.7 이 transformers 모델 소스를 재작성·<code>exec(config, globals())</code> 하는데 globals 에 이 버전에 없는 데코레이터/심볼이 계속 빠진다. import 순서 교정·심볼 주입을 여러 번 시도했지만 whack-a-mole 이라 <span class="status-fail">중단</span>. transformers 를 내리면 vLLM 0.22.1 요구·기존 baseline 이 깨져 불가. → <strong>대체</strong>: 동일 메커니즘 4bit QLoRA(bnb+PEFT)로 측정(§6 I/J).</p></details>
+<p><span class="en">Unsloth 2026.6.7 rewrites and <code>exec(config, globals())</code>s the transformers model source, but globals keep missing decorators/symbols absent in this version. I tried fixing import order and injecting symbols several times, but it's whack-a-mole, so <span class="status-fail">stopped</span>. Downgrading transformers is impossible since it breaks vLLM 0.22.1's requirement and the existing baseline. → <strong>substitute</strong>: measured the same mechanism, 4bit QLoRA (bnb+PEFT) (§6 I/J).</span><span class="ko">Unsloth 2026.6.7 이 transformers 모델 소스를 재작성·<code>exec(config, globals())</code> 하는데 globals 에 이 버전에 없는 데코레이터/심볼이 계속 빠진다. import 순서 교정·심볼 주입을 여러 번 시도했지만 whack-a-mole 이라 <span class="status-fail">중단</span>. transformers 를 내리면 vLLM 0.22.1 요구·기존 baseline 이 깨져 불가. → <strong>대체</strong>: 동일 메커니즘 4bit QLoRA(bnb+PEFT)로 측정(§6 I/J).</span></p></details>
 
-<p>총 디버깅 <strong>~9회</strong> — ①②⑤⑥은 2×2/LoRA 환경, ③④는 veRL. ⑥(Unsloth 커널)만 우회 불가로 대체했고, 나머지(full·bf16 LoRA·4bit QLoRA × vLLM on/off 8조건 + veRL vLLM 경로)는 전부 수치를 냈다.</p>
+<p><span class="en">Total debugging <strong>~9 times</strong> — ①②⑤⑥ in the 2×2/LoRA environment, ③④ in veRL. Only ⑥ (Unsloth kernel) was substituted as un-workaroundable; the rest (full · bf16 LoRA · 4bit QLoRA × vLLM on/off, 8 conditions + the veRL vLLM path) all produced numbers.</span><span class="ko">총 디버깅 <strong>~9회</strong> — ①②⑤⑥은 2×2/LoRA 환경, ③④는 veRL. ⑥(Unsloth 커널)만 우회 불가로 대체했고, 나머지(full·bf16 LoRA·4bit QLoRA × vLLM on/off 8조건 + veRL vLLM 경로)는 전부 수치를 냈다.</span></p>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="concl">9. 결론 — 레버와 병목</h2>
+<h2 id="concl"><span class="en">9. Conclusion — levers and bottlenecks</span><span class="ko">9. 결론 — 레버와 병목</span></h2>
 <div class="card">
 <ol>
-<li><strong>vLLM rollout 은 RL 루프 가속의 거의 유일한 큰 레버.</strong> 단일 GCD 에서 생성 4.4×, 루프 3.7×. rollout 이 루프의 80~92%를 먹고 있었기 때문.</li>
-<li><strong>Unsloth·LoRA·4bit 는 이 루프에서 지렛대가 아니다 — 오히려 역효과.</strong> 셋 다 <em>학습부(backward)</em>를 노리는데(full 0.530 → bf16 LoRA 0.512 → 4bit 0.464 s/step, ~12% 절감), 학습부는 병목이 아니다. 게다가 LoRA 어댑터·4bit 디퀀트가 <em>병목인 생성</em>을 더 느리게 만든다(생성 517 → 325 → 192 tok/s, vLLM-off). 결과적으로 rollout 비중이 91.8%→97.5%로 더 쏠리고 0.5B 규모에선 RL 이 전체적으로 느려진다. LoRA/4bit 가 빛나는 건 모델이 커서 full-param 이 메모리에 안 들어갈 때다.</li>
-<li><strong>입력:출력 ≈ 1:4.</strong> gsm8k 프롬프트 ~99 tok, RL-미학습 0.5B 의 자연 생성 ~395 tok. 생성이 비싼 이유가 길이에서도 드러난다(긴 출력 = 긴 자기회귀 디코딩).</li>
-<li><strong>병목은 고정이 아니라 이동한다.</strong> vLLM 을 켜면 생성이 빠져나가고, 다음 후보는 KL/reference forward 와 reward 계산이다(veRL: gen 27% / reward 24% / update 28% / ref+logprob 21%). "KL 한 줄 = forward 두 개"라는 비용을 시간으로 확인.</li>
-<li><strong>veRL 0.8.0 은 빠른 롤아웃 엔진을 사실상 강제</strong>한다(HF 단독 롤아웃 경로 제거). 프레임워크 차원에서 "느린 생성은 선택지가 아님"을 못박은 것.</li>
-<li><strong>colocate 의 weight-sync 는 싸다.</strong> 같은 프로세스 in-process 적재라 네트워크 전송이 없다 — 분산(멀티노드) RL 의 weight-sync 비용과는 별개 문제이며, 그건 다음 실험감.</li>
+<li><span class="en"><strong>vLLM rollout is almost the only big lever for RL loop acceleration.</strong> On a single GCD, 4.4× generation, 3.7× loop. Because rollout was eating 80–92% of the loop.</span><span class="ko"><strong>vLLM rollout 은 RL 루프 가속의 거의 유일한 큰 레버.</strong> 단일 GCD 에서 생성 4.4×, 루프 3.7×. rollout 이 루프의 80~92%를 먹고 있었기 때문.</span></li>
+<li><span class="en"><strong>Unsloth · LoRA · 4bit are not levers in this loop — they backfire.</strong> All three aim at the <em>training portion (backward)</em> (full 0.530 → bf16 LoRA 0.512 → 4bit 0.464 s/step, ~12% saved), but the training portion isn't the bottleneck. On top of that, the LoRA adapter and 4bit dequant make the <em>generation that IS the bottleneck</em> slower (generation 517 → 325 → 192 tok/s, vLLM-off). As a result the rollout share concentrates further, 91.8%→97.5%, and at 0.5B scale RL gets slower overall. LoRA/4bit shines when the model is large enough that full-param doesn't fit in memory.</span><span class="ko"><strong>Unsloth·LoRA·4bit 는 이 루프에서 지렛대가 아니다 — 오히려 역효과.</strong> 셋 다 <em>학습부(backward)</em>를 노리는데(full 0.530 → bf16 LoRA 0.512 → 4bit 0.464 s/step, ~12% 절감), 학습부는 병목이 아니다. 게다가 LoRA 어댑터·4bit 디퀀트가 <em>병목인 생성</em>을 더 느리게 만든다(생성 517 → 325 → 192 tok/s, vLLM-off). 결과적으로 rollout 비중이 91.8%→97.5%로 더 쏠리고 0.5B 규모에선 RL 이 전체적으로 느려진다. LoRA/4bit 가 빛나는 건 모델이 커서 full-param 이 메모리에 안 들어갈 때다.</span></li>
+<li><span class="en"><strong>input:output ≈ 1:4.</strong> gsm8k prompt ~99 tok, RL-untrained 0.5B natural generation ~395 tok. The length also reveals why generation is expensive (long output = long autoregressive decoding).</span><span class="ko"><strong>입력:출력 ≈ 1:4.</strong> gsm8k 프롬프트 ~99 tok, RL-미학습 0.5B 의 자연 생성 ~395 tok. 생성이 비싼 이유가 길이에서도 드러난다(긴 출력 = 긴 자기회귀 디코딩).</span></li>
+<li><span class="en"><strong>The bottleneck isn't fixed — it moves.</strong> Turn on vLLM and generation drops out; the next candidates are the KL/reference forward and reward computation (veRL: gen 27% / reward 24% / update 28% / ref+logprob 21%). Confirmed in time terms the cost of "one line of KL = two forwards."</span><span class="ko"><strong>병목은 고정이 아니라 이동한다.</strong> vLLM 을 켜면 생성이 빠져나가고, 다음 후보는 KL/reference forward 와 reward 계산이다(veRL: gen 27% / reward 24% / update 28% / ref+logprob 21%). "KL 한 줄 = forward 두 개"라는 비용을 시간으로 확인.</span></li>
+<li><span class="en"><strong>veRL 0.8.0 effectively forces a fast rollout engine</strong> (the HF-only rollout path was removed). At the framework level it has nailed down "slow generation is not an option."</span><span class="ko"><strong>veRL 0.8.0 은 빠른 롤아웃 엔진을 사실상 강제</strong>한다(HF 단독 롤아웃 경로 제거). 프레임워크 차원에서 "느린 생성은 선택지가 아님"을 못박은 것.</span></li>
+<li><span class="en"><strong>colocate weight-sync is cheap.</strong> It's an in-process load in the same process, so there's no network transfer — a separate problem from the weight-sync cost of distributed (multi-node) RL, which is the next experiment.</span><span class="ko"><strong>colocate 의 weight-sync 는 싸다.</strong> 같은 프로세스 in-process 적재라 네트워크 전송이 없다 — 분산(멀티노드) RL 의 weight-sync 비용과는 별개 문제이며, 그건 다음 실험감.</span></li>
 </ol>
-<div class="note"><strong>주의 — 비교의 한계.</strong> TRL(1 GCD, KL off)과 veRL(2 GCD, KL on) 의 총시간을 직접 맞대지 말 것. 본 실험은 (a) TRL 안에서의 vLLM/Unsloth 토글 효과, (b) veRL 의 <em>단계 분포</em> 두 가지를 따로 보는 것이다. 0.5B·6스텝 규모라 절대 수치보다 <strong>비율·병목 구조</strong>가 메시지다.</div>
+<div class="note"><span class="en"><strong>Caution — limits of comparison.</strong> Do not directly pit the total times of TRL (1 GCD, KL off) and veRL (2 GCD, KL on) against each other. This experiment looks at two things separately: (a) the vLLM/Unsloth toggle effect within TRL, and (b) veRL's <em>stage distribution</em>. At 0.5B · 6-step scale, the message is the <strong>ratios and bottleneck structure</strong>, not absolute numbers.</span><span class="ko"><strong>주의 — 비교의 한계.</strong> TRL(1 GCD, KL off)과 veRL(2 GCD, KL on) 의 총시간을 직접 맞대지 말 것. 본 실험은 (a) TRL 안에서의 vLLM/Unsloth 토글 효과, (b) veRL 의 <em>단계 분포</em> 두 가지를 따로 보는 것이다. 0.5B·6스텝 규모라 절대 수치보다 <strong>비율·병목 구조</strong>가 메시지다.</span></div>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="repro">10. 재현 — 명령 전부</h2>
+<h2 id="repro"><span class="en">10. Reproduction — all commands</span><span class="ko">10. 재현 — 명령 전부</span></h2>
 <div class="card">
-<h3>10-1. TRL 2×2 (full-param) + LoRA·4bit</h3>
+<h3><span class="en">10-1. TRL 2×2 (full-param) + LoRA · 4bit</span><span class="ko">10-1. TRL 2×2 (full-param) + LoRA·4bit</span></h3>
 <pre><code># 환경: trl 설치 → unsloth 설치(deps 흔듦) → 핀 복원이 핵심 (§8 ②④ 참고)
 pip install -q trl unsloth unsloth_zoo
 pip install -q --force-reinstall --no-deps trl==1.6.0 transformers==5.11.0
@@ -491,7 +494,7 @@ done
 #   beta=0.0, bf16=True); bnb_lora는 model_init_kwargs로 BitsAndBytesConfig(nf4) 주입
 # 길이 프로브(자연 출력): --backend hf --use_vllm 1 --maxlen 512</code></pre>
 
-<h3>10-2. veRL GRPO</h3>
+<h3><span class="en">10-2. veRL GRPO</span><span class="ko">10-2. veRL GRPO</span></h3>
 <pre><code>pip install verl                       # 0.8.0
 git clone --depth 1 -b v0.8.0 https://github.com/volcengine/verl.git verl_src
 python verl_src/examples/data_preprocess/gsm8k.py --local_dir /work/data/gsm8k
@@ -514,31 +517,31 @@ HIP_VISIBLE_DEVICES=0,1 python3 -m verl.trainer.main_ppo \
   trainer.logger=[console] trainer.n_gpus_per_node=2 trainer.nnodes=1 \
   trainer.val_before_train=False trainer.total_epochs=1 trainer.total_training_steps=4</code></pre>
 
-<h3>10-3. 정리 (bench hygiene)</h3>
+<h3><span class="en">10-3. Cleanup (bench hygiene)</span><span class="ko">10-3. 정리 (bench hygiene)</span></h3>
 <pre><code>docker rm -f rlbench verlbench    # 실행 직후 컨테이너 제거, GPU 반납
 rocm-smi --showuse                # GPU use 0% 확인</code></pre>
 </div>
 
 <!-- ============================================================ -->
-<h2 id="next">11. 다음 — agentic RL 프로젝트 아이디어</h2>
+<h2 id="next"><span class="en">11. Next — agentic RL project ideas</span><span class="ko">11. 다음 — agentic RL 프로젝트 아이디어</span></h2>
 <div class="card">
-<p>이번 실험은 "한 번 생성 → 채점 → 업데이트"의 <strong>단일턴 GRPO</strong>였다. 다음은 모델이 <strong>여러 턴에 걸쳐 도구를 쓰고 환경 피드백을 받는</strong> agentic RL 로 확장한다. veRL 로그에 이미 <code>num_turns:2</code> 와 tool-call 훅이 보였으니(§7) 길은 열려 있다. 우리 발견(생성이 병목, reward 가 24%, weight-sync)을 다음 설계의 측정 포인트로 그대로 잇는다.</p>
+<p><span class="en">This experiment was <strong>single-turn GRPO</strong> of "generate once → score → update." Next I extend to agentic RL where the model <strong>uses tools over multiple turns and receives environment feedback</strong>. The veRL logs already showed <code>num_turns:2</code> and tool-call hooks (§7), so the path is open. I carry our findings (generation is the bottleneck, reward is 24%, weight-sync) straight into the next design as measurement points.</span><span class="ko">이번 실험은 "한 번 생성 → 채점 → 업데이트"의 <strong>단일턴 GRPO</strong>였다. 다음은 모델이 <strong>여러 턴에 걸쳐 도구를 쓰고 환경 피드백을 받는</strong> agentic RL 로 확장한다. veRL 로그에 이미 <code>num_turns:2</code> 와 tool-call 훅이 보였으니(§7) 길은 열려 있다. 우리 발견(생성이 병목, reward 가 24%, weight-sync)을 다음 설계의 측정 포인트로 그대로 잇는다.</span></p>
 
 <table>
-<tr><th>#</th><th>아이디어</th><th>왜 agentic / 보상</th><th>인프라 적합도 (MI250 Docker)</th><th>측정 포인트</th><th>난이도</th></tr>
-<tr><td>A ⭐</td><td><strong>도구 쓰는 수학 에이전트</strong> — <code>&lt;python&gt;…&lt;/python&gt;</code> 계산기/코드 실행을 루프에 넣어 multi-turn 풀이 (verl <code>multi_turn</code> + tool)</td><td>턴마다 도구 호출·결과 수신; 보상 = 최종 정답 일치(RLVR, gsm8k/MATH)</td><td>verl 이미 작동 + agent_loop 가 tool 지원. 바로 확장 가능</td><td>턴당 생성비 × 턴수, 도구 실행 지연, 턴 증가 시 rollout 폭증</td><td>낮음</td></tr>
-<tr><td>B</td><td><strong>코드 에이전트(테스트 통과 보상)</strong> — 코드 작성→테스트 실행→실패 보고→수정 반복</td><td>edit→run→fix 멀티턴; 보상 = 유닛테스트 통과(MBPP/HumanEval+)</td><td>샌드박스 실행기 필요(Docker-in-Docker/제한 exec). 중간 난도</td><td>테스트 실행이 reward 단계 비용 지배 — §7 reward 24% 의 확장판</td><td>중간</td></tr>
-<tr><td>C</td><td><strong>검색(RAG) 에이전트</strong> — 질의 발행→로컬 문서 검색→읽고 답</td><td>도구=retriever; 보상 = 답 정확도(HotpotQA/TriviaQA EM)</td><td>로컬 임베딩 인덱스 + 검색 서버. 중간</td><td>도구 지연 vs 생성, 멀티홉 턴 수</td><td>중간</td></tr>
-<tr><td>D</td><td><strong>GenRM — 보상 모델을 루프에 </strong> — 규칙 채점이 불가능한 과제용 LLM-as-judge 보상</td><td>검증기 없는 개방형 과제로 RL 확장; 보상 = 별도 RM 점수</td><td>학습 GPU + RM 서빙 GPU 분리(052+053)</td><td>reward 단계가 별도 추론 — reward 가 병목이 되는 첫 사례, reward hacking 관찰</td><td>중간</td></tr>
-<tr><td>E</td><td><strong>disaggregated 멀티노드 롤아웃</strong> — 롤아웃 GPU 와 학습 GPU 를 052/053 으로 분리, 네트워크 weight-sync 측정</td><td>(systems) 비동기 롤아웃·idle·RCCL weight-sync</td><td>052+053 양 노드, RCCL/네트워크. 높음</td><td>colocate 와 달리 weight-sync 가 네트워크 비용 — §9 결론 ⑤의 직접 후속</td><td>높음</td></tr>
+<tr><th>#</th><th><span class="en">idea</span><span class="ko">아이디어</span></th><th><span class="en">why agentic / reward</span><span class="ko">왜 agentic / 보상</span></th><th><span class="en">infra fit (MI250 Docker)</span><span class="ko">인프라 적합도 (MI250 Docker)</span></th><th><span class="en">measurement point</span><span class="ko">측정 포인트</span></th><th><span class="en">difficulty</span><span class="ko">난이도</span></th></tr>
+<tr><td>A ⭐</td><td><span class="en"><strong>Tool-using math agent</strong> — put a <code>&lt;python&gt;…&lt;/python&gt;</code> calculator/code execution into the loop for multi-turn solving (verl <code>multi_turn</code> + tool)</span><span class="ko"><strong>도구 쓰는 수학 에이전트</strong> — <code>&lt;python&gt;…&lt;/python&gt;</code> 계산기/코드 실행을 루프에 넣어 multi-turn 풀이 (verl <code>multi_turn</code> + tool)</span></td><td><span class="en">tool call and result receipt each turn; reward = final answer match (RLVR, gsm8k/MATH)</span><span class="ko">턴마다 도구 호출·결과 수신; 보상 = 최종 정답 일치(RLVR, gsm8k/MATH)</span></td><td><span class="en">verl already works + agent_loop supports tools. Can extend right away</span><span class="ko">verl 이미 작동 + agent_loop 가 tool 지원. 바로 확장 가능</span></td><td><span class="en">generation cost per turn × number of turns, tool execution latency, rollout explosion as turns grow</span><span class="ko">턴당 생성비 × 턴수, 도구 실행 지연, 턴 증가 시 rollout 폭증</span></td><td><span class="en">low</span><span class="ko">낮음</span></td></tr>
+<tr><td>B</td><td><span class="en"><strong>Code agent (test-pass reward)</strong> — write code → run tests → report failure → fix, repeat</span><span class="ko"><strong>코드 에이전트(테스트 통과 보상)</strong> — 코드 작성→테스트 실행→실패 보고→수정 반복</span></td><td><span class="en">edit→run→fix multi-turn; reward = unit tests pass (MBPP/HumanEval+)</span><span class="ko">edit→run→fix 멀티턴; 보상 = 유닛테스트 통과(MBPP/HumanEval+)</span></td><td><span class="en">needs a sandbox executor (Docker-in-Docker/restricted exec). Medium difficulty</span><span class="ko">샌드박스 실행기 필요(Docker-in-Docker/제한 exec). 중간 난도</span></td><td><span class="en">test execution dominates the reward stage cost — an extension of §7's reward 24%</span><span class="ko">테스트 실행이 reward 단계 비용 지배 — §7 reward 24% 의 확장판</span></td><td><span class="en">medium</span><span class="ko">중간</span></td></tr>
+<tr><td>C</td><td><span class="en"><strong>Search (RAG) agent</strong> — issue query → search local documents → read and answer</span><span class="ko"><strong>검색(RAG) 에이전트</strong> — 질의 발행→로컬 문서 검색→읽고 답</span></td><td><span class="en">tool = retriever; reward = answer accuracy (HotpotQA/TriviaQA EM)</span><span class="ko">도구=retriever; 보상 = 답 정확도(HotpotQA/TriviaQA EM)</span></td><td><span class="en">local embedding index + search server. Medium</span><span class="ko">로컬 임베딩 인덱스 + 검색 서버. 중간</span></td><td><span class="en">tool latency vs generation, number of multi-hop turns</span><span class="ko">도구 지연 vs 생성, 멀티홉 턴 수</span></td><td><span class="en">medium</span><span class="ko">중간</span></td></tr>
+<tr><td>D</td><td><span class="en"><strong>GenRM — reward model in the loop</strong> — LLM-as-judge reward for tasks where rule scoring is impossible</span><span class="ko"><strong>GenRM — 보상 모델을 루프에 </strong> — 규칙 채점이 불가능한 과제용 LLM-as-judge 보상</span></td><td><span class="en">extend RL to open-ended tasks with no verifier; reward = a separate RM score</span><span class="ko">검증기 없는 개방형 과제로 RL 확장; 보상 = 별도 RM 점수</span></td><td><span class="en">separate training GPU + RM serving GPU (052+053)</span><span class="ko">학습 GPU + RM 서빙 GPU 분리(052+053)</span></td><td><span class="en">the reward stage becomes a separate inference — the first case where reward is the bottleneck, observe reward hacking</span><span class="ko">reward 단계가 별도 추론 — reward 가 병목이 되는 첫 사례, reward hacking 관찰</span></td><td><span class="en">medium</span><span class="ko">중간</span></td></tr>
+<tr><td>E</td><td><span class="en"><strong>disaggregated multi-node rollout</strong> — split rollout GPU and training GPU across 052/053, measure network weight-sync</span><span class="ko"><strong>disaggregated 멀티노드 롤아웃</strong> — 롤아웃 GPU 와 학습 GPU 를 052/053 으로 분리, 네트워크 weight-sync 측정</span></td><td><span class="en">(systems) async rollout · idle · RCCL weight-sync</span><span class="ko">(systems) 비동기 롤아웃·idle·RCCL weight-sync</span></td><td><span class="en">both nodes 052+053, RCCL/network. High</span><span class="ko">052+053 양 노드, RCCL/네트워크. 높음</span></td><td><span class="en">unlike colocate, weight-sync becomes a network cost — a direct follow-up to §9 conclusion ⑤</span><span class="ko">colocate 와 달리 weight-sync 가 네트워크 비용 — §9 결론 ⑤의 직접 후속</span></td><td><span class="en">high</span><span class="ko">높음</span></td></tr>
 </table>
 
-<div class="tip"><strong>추천 시작점: A (도구 쓰는 수학 에이전트).</strong> verl 이 이미 도는 데다 multi-turn+tool 훅이 있어 최소 변경으로 "진짜 agentic" 루프가 된다. 단일턴 GRPO(이번) → 도구 1개 멀티턴(A) → 코드/검색(B/C) → 보상모델·멀티노드(D/E) 순으로 한 칸씩 올리는 게 자연스럽다. 공통 측정 축은 이번과 동일: <strong>턴/도구가 늘 때 rollout 이 어떻게 폭증하고, reward·weight-sync 가 언제 병목이 되는가.</strong></div>
+<div class="tip"><span class="en"><strong>Recommended starting point: A (tool-using math agent).</strong> verl already runs and has multi-turn+tool hooks, so with minimal changes it becomes a "real agentic" loop. The natural progression is one notch at a time: single-turn GRPO (this) → one-tool multi-turn (A) → code/search (B/C) → reward model · multi-node (D/E). The common measurement axis is the same as this time: <strong>how rollout explodes as turns/tools grow, and when reward · weight-sync become the bottleneck.</strong></span><span class="ko"><strong>추천 시작점: A (도구 쓰는 수학 에이전트).</strong> verl 이 이미 도는 데다 multi-turn+tool 훅이 있어 최소 변경으로 "진짜 agentic" 루프가 된다. 단일턴 GRPO(이번) → 도구 1개 멀티턴(A) → 코드/검색(B/C) → 보상모델·멀티노드(D/E) 순으로 한 칸씩 올리는 게 자연스럽다. 공통 측정 축은 이번과 동일: <strong>턴/도구가 늘 때 rollout 이 어떻게 폭증하고, reward·weight-sync 가 언제 병목이 되는가.</strong></span></div>
 </div>
 
 <footer>
-작성일 2026-06-14 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · 모든 수치는 본 세션 직접 측정값. ·
-참고: <a href="../post-training/frameworks-survey.html">포스트트레이닝 프레임워크 조사</a>, <a href="../post-training/methodology-survey.html">방법론 조사</a>
+<span class="en">Created 2026-06-14 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · all numbers are direct measurements from this session. · See also: <a href="../post-training/frameworks-survey.html">Post-training frameworks survey</a>, <a href="../post-training/methodology-survey.html">Methodology survey</a></span><span class="ko">작성일 2026-06-14 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · 모든 수치는 본 세션 직접 측정값. ·
+참고: <a href="../post-training/frameworks-survey.html">포스트트레이닝 프레임워크 조사</a>, <a href="../post-training/methodology-survey.html">방법론 조사</a></span>
 </footer>
 
 </div>

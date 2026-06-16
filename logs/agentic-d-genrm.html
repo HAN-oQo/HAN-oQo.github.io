@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ko" data-lang="ko">
+<html lang="en" data-lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agentic RL ④ — GenRM 보상모델 루프 (negative result, MI250)</title>
+<title>Agentic RL ④ — GenRM reward-model loop (negative result, MI250)</title>
 <link rel="stylesheet" href="../assets/theme.css">
 <link rel="stylesheet" href="../assets/i18n.css">
 <script defer src="../assets/i18n.js"></script>
@@ -41,94 +41,104 @@
 <body>
 <div class="wrap">
 
-<p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · 시리즈: <a href="agentic-a-tool-math.html">A</a> · <a href="agentic-b-code.html">B</a> · <a href="agentic-c-rag.html">C</a> · D · <a href="agentic-e-disagg.html">E</a></p>
+<p class="crumb"><a href="../">← <span class="en">Home</span><span class="ko">홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <span class="en">Series:</span><span class="ko">시리즈:</span> <a href="agentic-a-tool-math.html">A</a> · <a href="agentic-b-code.html">B</a> · <a href="agentic-c-rag.html">C</a> · D · <a href="agentic-e-disagg.html">E</a></p>
 
-<p><span class="ser">Agentic RL 시리즈 ④ / 5</span></p>
-<h1>GenRM — 보상모델을 루프에 넣기 (negative result · 아키텍처 교훈, MI250)</h1>
-<p class="sub">환경: <code>mi250-052</code> (MI250, ROCm 7.2.3) · Docker 전용 · verl 0.8.0 GRPO · Qwen2.5-0.5B · LLM-as-judge 보상 · 2 GCD</p>
-<p class="post-meta"><time datetime="2026-06-15">2026-06-15</time></p>
+<p><span class="ser"><span class="en">Agentic RL series ④ / 5</span><span class="ko">Agentic RL 시리즈 ④ / 5</span></span></p>
+<h1><span class="en">GenRM — putting the reward model in the loop (negative result · architectural lesson, MI250)</span><span class="ko">GenRM — 보상모델을 루프에 넣기 (negative result · 아키텍처 교훈, MI250)</span></h1>
+<p class="sub"><span class="en">Environment:</span><span class="ko">환경:</span> <code>mi250-052</code> <span class="en">(MI250, ROCm 7.2.3) · Docker only · verl 0.8.0 GRPO · Qwen2.5-0.5B · LLM-as-judge reward · 2 GCD</span><span class="ko">(MI250, ROCm 7.2.3) · Docker 전용 · verl 0.8.0 GRPO · Qwen2.5-0.5B · LLM-as-judge 보상 · 2 GCD</span></p>
+<p class="post-meta"><time datetime="2026-06-15">2026-06-15</time>
+  <span class="sep">·</span>
+  <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
+  <time datetime="2026-06-16">2026-06-16</time></p>
 
 <div class="card">
-<p><strong>한 줄 요약.</strong> 보상을 규칙/테스트가 아니라 <strong>LLM-as-judge(별도 모델 추론)</strong>로 만들려 했다. 결과는 <span class="status-fail">실패(negative result)</span>지만 교훈이 명확하다: <strong>모델-as-보상은 colocate GRPO 트레이너의 reward 함수에 그냥 끼워넣을 수 없다.</strong> judge를 <strong>GPU에 올리면</strong> FSDP 학습의 RCCL 집합통신과 충돌해 NCCL이 타임아웃되고, <strong>CPU에 올리면</strong> 너무 느려 동기화된 학습 루프를 NCCL watchdog(1800초)·잡 타임아웃까지 마비시킨다(4샘플에서도). 즉 <strong>보상이 "또 하나의 모델 추론"이 되는 순간, 그것은 전용 서빙 인프라(자체 GPU·자체 프로세스 그룹)를 요구한다</strong> — 실제 GenRM/RM-in-the-loop 시스템이 보상모델을 별도 워커/서버로 띄우는 이유다.</p>
+<p><strong><span class="en">One-line summary.</span><span class="ko">한 줄 요약.</span></strong> <span class="en">I tried to build the reward not from rules/tests but from an <strong>LLM-as-judge (a separate model inference)</strong>. The result is a <span class="status-fail">failure (negative result)</span>, but the lesson is clear: <strong>model-as-reward cannot simply be dropped into the reward function of a colocate GRPO trainer.</strong> Put the judge <strong>on the GPU</strong> and it clashes with the RCCL collective communication of FSDP training, so NCCL times out; put it <strong>on the CPU</strong> and it is so slow that it paralyzes the synchronized training loop all the way to the NCCL watchdog (1800s) / job timeout (even with 4 samples). In other words, <strong>the moment the reward becomes "yet another model inference," it demands dedicated serving infrastructure (its own GPU, its own process group)</strong> — which is exactly why real GenRM / RM-in-the-loop systems stand the reward model up as a separate worker/server.</span><span class="ko">보상을 규칙/테스트가 아니라 <strong>LLM-as-judge(별도 모델 추론)</strong>로 만들려 했다. 결과는 <span class="status-fail">실패(negative result)</span>지만 교훈이 명확하다: <strong>모델-as-보상은 colocate GRPO 트레이너의 reward 함수에 그냥 끼워넣을 수 없다.</strong> judge를 <strong>GPU에 올리면</strong> FSDP 학습의 RCCL 집합통신과 충돌해 NCCL이 타임아웃되고, <strong>CPU에 올리면</strong> 너무 느려 동기화된 학습 루프를 NCCL watchdog(1800초)·잡 타임아웃까지 마비시킨다(4샘플에서도). 즉 <strong>보상이 "또 하나의 모델 추론"이 되는 순간, 그것은 전용 서빙 인프라(자체 GPU·자체 프로세스 그룹)를 요구한다</strong> — 실제 GenRM/RM-in-the-loop 시스템이 보상모델을 별도 워커/서버로 띄우는 이유다.</span></p>
 </div>
 
 <div class="card toc">
-<strong>목차</strong>
+<strong><span class="en">Contents</span><span class="ko">목차</span></strong>
 <ul style="list-style: none; padding-left: 0; margin: 8px 0;">
-  <li><a href="#goal">1. 목표 — 보상이 모델이 될 때</a></li>
-  <li><a href="#try">2. 시도와 실패 — 4가지 벽</a></li>
-  <li><a href="#why">3. 왜 막히는가 — colocate의 구조적 한계</a></li>
-  <li><a href="#lesson">4. 교훈 + 옳은 설계 + 다음(E)</a></li>
+  <li><a href="#goal"><span class="en">1. Goal — when the reward becomes a model</span><span class="ko">1. 목표 — 보상이 모델이 될 때</span></a></li>
+  <li><a href="#try"><span class="en">2. Attempts and failures — 4 walls</span><span class="ko">2. 시도와 실패 — 4가지 벽</span></a></li>
+  <li><a href="#why"><span class="en">3. Why it gets stuck — the structural limit of colocate</span><span class="ko">3. 왜 막히는가 — colocate의 구조적 한계</span></a></li>
+  <li><a href="#lesson"><span class="en">4. Lesson + the right design + next (E)</span><span class="ko">4. 교훈 + 옳은 설계 + 다음(E)</span></a></li>
 </ul>
 </div>
 
-<h2 id="goal">1. 목표 — 보상이 모델이 될 때</h2>
+<h2 id="goal"><span class="en">1. Goal — when the reward becomes a model</span><span class="ko">1. 목표 — 보상이 모델이 될 때</span></h2>
 <div class="card">
-<p>시리즈의 보상 비용은 단조 증가해 왔다: <strong>A</strong>(규칙 일치)≈0 → <strong>B</strong>(유닛테스트 실행) 14~24% → 여기 <strong>D</strong>는 보상 자체가 <strong>또 다른 LLM 추론</strong>(judge가 "이 답이 맞나?"를 생성으로 판정). 규칙·테스트로 검증 불가능한 개방형 과제(요약·대화·선호)로 RL을 확장하는 길이다. 측정하려던 것: reward가 모델 forward가 되면 단계 시간을 얼마나 먹는가.</p>
-<p>설계: 비-agent 단일턴 경로(B와 동일, custom_reward_function 존중) + <code>reward_genrm.py</code> — Qwen2.5-0.5B judge를 한 번 로드하고, 각 응답마다 "Yes/No" 한 토큰을 생성해 점수화.</p>
+<p><span class="en">The reward cost across the series has risen monotonically: <strong>A</strong> (rule match) ≈ 0 → <strong>B</strong> (running unit tests) 14–24% → here <strong>D</strong>, where the reward itself is <strong>yet another LLM inference</strong> (the judge decides "is this answer correct?" by generation). This is the path to extending RL to open-ended tasks (summarization, dialogue, preference) that rules/tests cannot verify. What I wanted to measure: once the reward becomes a model forward, how much step time does it eat?</span><span class="ko">시리즈의 보상 비용은 단조 증가해 왔다: <strong>A</strong>(규칙 일치)≈0 → <strong>B</strong>(유닛테스트 실행) 14~24% → 여기 <strong>D</strong>는 보상 자체가 <strong>또 다른 LLM 추론</strong>(judge가 "이 답이 맞나?"를 생성으로 판정). 규칙·테스트로 검증 불가능한 개방형 과제(요약·대화·선호)로 RL을 확장하는 길이다. 측정하려던 것: reward가 모델 forward가 되면 단계 시간을 얼마나 먹는가.</span></p>
+<p><span class="en">Design: a non-agent single-turn path (same as B, respecting custom_reward_function) + <code>reward_genrm.py</code> — load a Qwen2.5-0.5B judge once and, for each response, generate a single "Yes/No" token to score it.</span><span class="ko">설계: 비-agent 단일턴 경로(B와 동일, custom_reward_function 존중) + <code>reward_genrm.py</code> — Qwen2.5-0.5B judge를 한 번 로드하고, 각 응답마다 "Yes/No" 한 토큰을 생성해 점수화.</span></p>
 </div>
 
-<h2 id="try">2. 시도와 실패 — 4가지 벽</h2>
+<h2 id="try"><span class="en">2. Attempts and failures — 4 walls</span><span class="ko">2. 시도와 실패 — 4가지 벽</span></h2>
 <div class="card">
 <table>
-<tr><th>#</th><th>구성</th><th>결과</th></tr>
-<tr><td>1</td><td>judge를 <strong>GPU(cuda:0)</strong>에 로드, batch 16</td><td><span class="status-fail">RCCL 집합통신 타임아웃</span> — rank1 NCCL fail. judge의 CUDA 컨텍스트가 FSDP 학습 프로세스 그룹과 충돌</td></tr>
-<tr><td>2</td><td>judge를 <strong>CPU</strong>로, batch 8 (64 샘플)</td><td><span class="status-fail">NCCL watchdog 1800초 타임아웃</span> — <code>_ALLGATHER_BASE ran for 1800005ms before timing out</code>. 느린 CPU judge가 학습 collective를 30분 넘게 대기시켜 프로세스 강제종료</td></tr>
-<tr><td>3</td><td>CPU judge, batch 4 (16 샘플), max_new_tokens 1</td><td><span class="status-fail">15분 타임아웃</span> — 스텝 1도 완료 못 함</td></tr>
-<tr><td>4</td><td>CPU judge, batch 2 (4 샘플), 스레드 32</td><td><span class="status-fail">15분 타임아웃</span> — 4샘플에도 스텝 미완</td></tr>
-<tr><td>+</td><td>judge 단독 벤치(verl 없이, CPU)</td><td>transformers 5.11 <code>generate</code> 퀴크까지 (<code>AttributeError</code>) — 이 스택에선 judge 추론 자체도 매끄럽지 않음</td></tr>
+<tr><th>#</th><th><span class="en">Configuration</span><span class="ko">구성</span></th><th><span class="en">Result</span><span class="ko">결과</span></th></tr>
+<tr><td>1</td><td><span class="en">judge loaded on <strong>GPU (cuda:0)</strong>, batch 16</span><span class="ko">judge를 <strong>GPU(cuda:0)</strong>에 로드, batch 16</span></td><td><span class="status-fail"><span class="en">RCCL collective timeout</span><span class="ko">RCCL 집합통신 타임아웃</span></span> <span class="en">— rank1 NCCL fail. The judge's CUDA context clashes with the FSDP training process group</span><span class="ko">— rank1 NCCL fail. judge의 CUDA 컨텍스트가 FSDP 학습 프로세스 그룹과 충돌</span></td></tr>
+<tr><td>2</td><td><span class="en">judge on <strong>CPU</strong>, batch 8 (64 samples)</span><span class="ko">judge를 <strong>CPU</strong>로, batch 8 (64 샘플)</span></td><td><span class="status-fail"><span class="en">NCCL watchdog 1800s timeout</span><span class="ko">NCCL watchdog 1800초 타임아웃</span></span> <span class="en">— <code>_ALLGATHER_BASE ran for 1800005ms before timing out</code>. The slow CPU judge made the training collective wait over 30 minutes, force-killing the process</span><span class="ko">— <code>_ALLGATHER_BASE ran for 1800005ms before timing out</code>. 느린 CPU judge가 학습 collective를 30분 넘게 대기시켜 프로세스 강제종료</span></td></tr>
+<tr><td>3</td><td><span class="en">CPU judge, batch 4 (16 samples), max_new_tokens 1</span><span class="ko">CPU judge, batch 4 (16 샘플), max_new_tokens 1</span></td><td><span class="status-fail"><span class="en">15-minute timeout</span><span class="ko">15분 타임아웃</span></span> <span class="en">— couldn't even complete step 1</span><span class="ko">— 스텝 1도 완료 못 함</span></td></tr>
+<tr><td>4</td><td><span class="en">CPU judge, batch 2 (4 samples), 32 threads</span><span class="ko">CPU judge, batch 2 (4 샘플), 스레드 32</span></td><td><span class="status-fail"><span class="en">15-minute timeout</span><span class="ko">15분 타임아웃</span></span> <span class="en">— couldn't finish a step even with 4 samples</span><span class="ko">— 4샘플에도 스텝 미완</span></td></tr>
+<tr><td>+</td><td><span class="en">judge standalone bench (no verl, CPU)</span><span class="ko">judge 단독 벤치(verl 없이, CPU)</span></td><td><span class="en">got as far as the transformers 5.11 <code>generate</code> quirk (<code>AttributeError</code>) — even judge inference itself is not smooth on this stack</span><span class="ko">transformers 5.11 <code>generate</code> 퀴크까지 (<code>AttributeError</code>) — 이 스택에선 judge 추론 자체도 매끄럽지 않음</span></td></tr>
 </table>
-<div class="fail"><strong>관찰된 실제 에러.</strong><br>
-GPU judge: <code>[Rank 1] Some NCCL operations have failed or timed out.</code><br>
-CPU judge: <code>Watchdog caught collective operation timeout: WorkNCCL(SeqNum=53, OpType=_ALLGATHER_BASE ...) ran for 1800005 milliseconds before timing out</code> → <code>we are taking the entire process down.</code></div>
+<div class="fail"><strong><span class="en">Actual errors observed.</span><span class="ko">관찰된 실제 에러.</span></strong><br>
+<span class="en">GPU judge:</span><span class="ko">GPU judge:</span> <code>[Rank 1] Some NCCL operations have failed or timed out.</code><br>
+<span class="en">CPU judge:</span><span class="ko">CPU judge:</span> <code>Watchdog caught collective operation timeout: WorkNCCL(SeqNum=53, OpType=_ALLGATHER_BASE ...) ran for 1800005 milliseconds before timing out</code> → <code>we are taking the entire process down.</code></div>
 </div>
 
-<h2 id="why">3. 왜 막히는가 — colocate의 구조적 한계</h2>
+<h2 id="why"><span class="en">3. Why it gets stuck — the structural limit of colocate</span><span class="ko">3. 왜 막히는가 — colocate의 구조적 한계</span></h2>
 <div class="card">
 <figure>
-<svg viewBox="0 0 900 220" width="100%" role="img" aria-label="GenRM가 colocate에서 막히는 두 경로">
+<svg viewBox="0 0 900 220" width="100%" role="img" aria-label="The two paths by which GenRM gets stuck under colocate">
   <defs><marker id="x" markerWidth="10" markerHeight="10" refX="5" refY="5"><path d="M1,1 L9,9 M9,1 L1,9" stroke="var(--red)" stroke-width="1.6"/></marker></defs>
   <!-- training group -->
   <rect x="30" y="80" width="200" height="80" rx="10" fill="var(--green-bg)" stroke="var(--green-bd)"/>
-  <text x="130" y="108" text-anchor="middle" font-size="12" font-weight="700" fill="var(--green-ink)">FSDP 학습 (rank0/1)</text>
+  <text x="130" y="108" text-anchor="middle" font-size="12" font-weight="700" fill="var(--green-ink)" class="en">FSDP training (rank0/1)</text>
+  <text x="130" y="108" text-anchor="middle" font-size="12" font-weight="700" fill="var(--green-ink)" class="ko">FSDP 학습 (rank0/1)</text>
   <text x="130" y="128" text-anchor="middle" font-size="10.5" fill="var(--green-ink)">RCCL all-gather/reduce</text>
-  <text x="130" y="144" text-anchor="middle" font-size="10" fill="var(--muted)">동기 · 1800s watchdog</text>
+  <text x="130" y="144" text-anchor="middle" font-size="10" fill="var(--muted)" class="en">sync · 1800s watchdog</text>
+  <text x="130" y="144" text-anchor="middle" font-size="10" fill="var(--muted)" class="ko">동기 · 1800s watchdog</text>
   <!-- GPU judge path -->
   <rect x="330" y="20" width="240" height="64" rx="10" fill="var(--red-bg)" stroke="var(--red-bd)"/>
   <text x="450" y="44" text-anchor="middle" font-size="12" font-weight="700" fill="var(--red)">judge on GPU</text>
-  <text x="450" y="62" text-anchor="middle" font-size="10.5" fill="var(--red)">CUDA 컨텍스트 충돌 → NCCL fail</text>
+  <text x="450" y="62" text-anchor="middle" font-size="10.5" fill="var(--red)" class="en">CUDA context clash → NCCL fail</text>
+  <text x="450" y="62" text-anchor="middle" font-size="10.5" fill="var(--red)" class="ko">CUDA 컨텍스트 충돌 → NCCL fail</text>
   <line x1="232" y1="100" x2="330" y2="70" stroke="var(--red)" stroke-width="1.6" marker-end="url(#x)"/>
   <!-- CPU judge path -->
   <rect x="330" y="140" width="240" height="64" rx="10" fill="var(--red-bg)" stroke="var(--red-bd)"/>
   <text x="450" y="164" text-anchor="middle" font-size="12" font-weight="700" fill="var(--red)">judge on CPU</text>
-  <text x="450" y="182" text-anchor="middle" font-size="10.5" fill="var(--red)">너무 느림 → collective 대기 → 타임아웃</text>
+  <text x="450" y="182" text-anchor="middle" font-size="10.5" fill="var(--red)" class="en">too slow → collective waits → timeout</text>
+  <text x="450" y="182" text-anchor="middle" font-size="10.5" fill="var(--red)" class="ko">너무 느림 → collective 대기 → 타임아웃</text>
   <line x1="232" y1="140" x2="330" y2="170" stroke="var(--red)" stroke-width="1.6" marker-end="url(#x)"/>
   <!-- right: correct -->
   <rect x="650" y="80" width="220" height="80" rx="10" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
-  <text x="760" y="104" text-anchor="middle" font-size="12" font-weight="700" fill="var(--blue-ink)">옳은 설계</text>
-  <text x="760" y="123" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">RM = 별도 서버/워커</text>
-  <text x="760" y="139" text-anchor="middle" font-size="10" fill="var(--muted)">자체 GPU · 자체 프로세스 그룹</text>
+  <text x="760" y="104" text-anchor="middle" font-size="12" font-weight="700" fill="var(--blue-ink)" class="en">the right design</text>
+  <text x="760" y="104" text-anchor="middle" font-size="12" font-weight="700" fill="var(--blue-ink)" class="ko">옳은 설계</text>
+  <text x="760" y="123" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)" class="en">RM = separate server/worker</text>
+  <text x="760" y="123" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)" class="ko">RM = 별도 서버/워커</text>
+  <text x="760" y="139" text-anchor="middle" font-size="10" fill="var(--muted)" class="en">own GPU · own process group</text>
+  <text x="760" y="139" text-anchor="middle" font-size="10" fill="var(--muted)" class="ko">자체 GPU · 자체 프로세스 그룹</text>
   <text x="610" y="116" text-anchor="middle" font-size="20" fill="var(--muted)">⇒</text>
 </svg>
-<figcaption>그림 1 — colocate GRPO에서 모델-보상을 reward 함수에 끼우면 두 경로 모두 막힌다. RM은 학습과 분리된 서빙이어야 한다. (본 실험 관찰 기반 작성)</figcaption>
+<figcaption><span class="en">Figure 1 — under colocate GRPO, dropping model-reward into the reward function blocks both paths. The RM must be serving that is separated from training. (Written from observations in this experiment.)</span><span class="ko">그림 1 — colocate GRPO에서 모델-보상을 reward 함수에 끼우면 두 경로 모두 막힌다. RM은 학습과 분리된 서빙이어야 한다. (본 실험 관찰 기반 작성)</span></figcaption>
 </figure>
-<p>핵심은 <strong>동기화</strong>다. verl의 FSDP 학습은 rank들이 RCCL collective(all-gather 등)로 보조를 맞춘다. reward 단계는 그 사이에 끼어 있어, reward가 (a) 같은 GPU를 건드리면 collective용 CUDA 스트림/메모리를 교란하고, (b) 오래 걸리면 다음 collective가 watchdog 타임아웃(기본 1800s)에 걸린다. 규칙·테스트 보상은 빠르거나(≈0) GPU를 안 써서(B의 subprocess) 무사했지만, <strong>모델 judge는 둘 다 위반</strong>한다.</p>
+<p><span class="en">The crux is <strong>synchronization</strong>. verl's FSDP training keeps the ranks in lockstep via RCCL collectives (all-gather, etc.). The reward step sits in between them, so the reward, if it (a) touches the same GPU, disturbs the CUDA streams/memory used by the collective, and if it (b) takes long, the next collective hits the watchdog timeout (1800s by default). Rule/test rewards were safe because they were fast (≈0) or didn't use the GPU (B's subprocess), but <strong>a model judge violates both</strong>.</span><span class="ko">핵심은 <strong>동기화</strong>다. verl의 FSDP 학습은 rank들이 RCCL collective(all-gather 등)로 보조를 맞춘다. reward 단계는 그 사이에 끼어 있어, reward가 (a) 같은 GPU를 건드리면 collective용 CUDA 스트림/메모리를 교란하고, (b) 오래 걸리면 다음 collective가 watchdog 타임아웃(기본 1800s)에 걸린다. 규칙·테스트 보상은 빠르거나(≈0) GPU를 안 써서(B의 subprocess) 무사했지만, <strong>모델 judge는 둘 다 위반</strong>한다.</span></p>
 </div>
 
-<h2 id="lesson">4. 교훈 + 옳은 설계 + 다음(E)</h2>
+<h2 id="lesson"><span class="en">4. Lesson + the right design + next (E)</span><span class="ko">4. 교훈 + 옳은 설계 + 다음(E)</span></h2>
 <div class="card">
 <ol>
-<li><strong>모델-as-보상은 reward 함수에 인라인으로 못 넣는다.</strong> GPU면 학습 NCCL을 깨고, CPU면 동기 루프를 마비시킨다 — 이 스택(verl colocate + ROCm)에서 4가지 구성 모두 실패.</li>
-<li><strong>옳은 설계는 "분리된 RM 서빙"</strong>: 보상모델을 자체 GPU·자체 프로세스 그룹의 별도 서버(예: vLLM RM 서버, 또는 verl의 <code>reward_model</code> 워커)로 띄우고, 학습 루프는 그 서버에 비동기로 점수를 요청한다. 그래야 학습 collective와 격리된다.</li>
-<li><strong>시리즈의 큰 그림</strong>: 보상/도구의 "비-정책 연산"이 A(≈0)→B(테스트 14~24%)→D(모델, 전용 인프라 요구)로 escalate한다. 검증기가 무거워질수록 RL은 "정책 학습"에서 "분산 서빙 오케스트레이션" 문제로 바뀐다.</li>
+<li><strong><span class="en">Model-as-reward cannot be put inline in the reward function.</span><span class="ko">모델-as-보상은 reward 함수에 인라인으로 못 넣는다.</span></strong> <span class="en">On GPU it breaks training NCCL; on CPU it paralyzes the synchronous loop — on this stack (verl colocate + ROCm), all 4 configurations failed.</span><span class="ko">GPU면 학습 NCCL을 깨고, CPU면 동기 루프를 마비시킨다 — 이 스택(verl colocate + ROCm)에서 4가지 구성 모두 실패.</span></li>
+<li><strong><span class="en">The right design is "separated RM serving"</span><span class="ko">옳은 설계는 "분리된 RM 서빙"</span></strong>: <span class="en">stand the reward model up as a separate server with its own GPU and its own process group (e.g. a vLLM RM server, or verl's <code>reward_model</code> worker), and have the training loop request scores from that server asynchronously. Only then is it isolated from the training collective.</span><span class="ko">보상모델을 자체 GPU·자체 프로세스 그룹의 별도 서버(예: vLLM RM 서버, 또는 verl의 <code>reward_model</code> 워커)로 띄우고, 학습 루프는 그 서버에 비동기로 점수를 요청한다. 그래야 학습 collective와 격리된다.</span></li>
+<li><strong><span class="en">The series' big picture</span><span class="ko">시리즈의 큰 그림</span></strong>: <span class="en">the "non-policy compute" of reward/tools escalates A (≈0) → B (tests 14–24%) → D (model, demands dedicated infra). The heavier the verifier, the more RL turns from a "policy-learning" problem into a "distributed-serving-orchestration" problem.</span><span class="ko">보상/도구의 "비-정책 연산"이 A(≈0)→B(테스트 14~24%)→D(모델, 전용 인프라 요구)로 escalate한다. 검증기가 무거워질수록 RL은 "정책 학습"에서 "분산 서빙 오케스트레이션" 문제로 바뀐다.</span></li>
 </ol>
-<div class="tip"><strong>다음에 D를 성공시키려면</strong>: (1) verl <code>reward_model.enable=True</code> + 호환 RM 체크포인트(verl이 RM 워커를 자체 프로세스 그룹으로 관리 → 인라인 충돌 회피), 또는 (2) 별도 GCD에 vLLM judge 서버를 띄우고 custom reward가 HTTP로 호출(비동기). 둘 다 "RM을 학습에서 떼어내는" 같은 원칙. 단 ROCm NCCL 취약성(본 실험 다수 관찰) 때문에 추가 디버깅 필요.</div>
-<p><strong>다음(E — 멀티노드 disaggregation):</strong> D가 "보상을 떼어내라"였다면, E는 "<strong>롤아웃을 떼어내라</strong>" — 롤아웃 GPU와 학습 GPU를 노드 단위로 분리하고, 그때 weight-sync(A에서 본 update_weights ~20%)가 <strong>네트워크 비용</strong>으로 바뀌는지 본다.</p>
+<div class="tip"><strong><span class="en">To make D succeed next time</span><span class="ko">다음에 D를 성공시키려면</span></strong>: <span class="en">(1) verl <code>reward_model.enable=True</code> + a compatible RM checkpoint (verl manages the RM worker in its own process group → avoids the inline clash), or (2) stand up a vLLM judge server on a separate GCD and have the custom reward call it over HTTP (asynchronous). Both follow the same principle of "detaching the RM from training." But because of ROCm NCCL fragility (observed many times in this experiment), extra debugging is needed.</span><span class="ko">(1) verl <code>reward_model.enable=True</code> + 호환 RM 체크포인트(verl이 RM 워커를 자체 프로세스 그룹으로 관리 → 인라인 충돌 회피), 또는 (2) 별도 GCD에 vLLM judge 서버를 띄우고 custom reward가 HTTP로 호출(비동기). 둘 다 "RM을 학습에서 떼어내는" 같은 원칙. 단 ROCm NCCL 취약성(본 실험 다수 관찰) 때문에 추가 디버깅 필요.</span></div>
+<p><strong><span class="en">Next (E — multi-node disaggregation):</span><span class="ko">다음(E — 멀티노드 disaggregation):</span></strong> <span class="en">if D was "detach the reward," E is "<strong>detach the rollout</strong>" — separate the rollout GPUs and training GPUs at the node level, and see whether weight-sync (the update_weights ~20% seen in A) then turns into a <strong>network cost</strong>.</span><span class="ko">D가 "보상을 떼어내라"였다면, E는 "<strong>롤아웃을 떼어내라</strong>" — 롤아웃 GPU와 학습 GPU를 노드 단위로 분리하고, 그때 weight-sync(A에서 본 update_weights ~20%)가 <strong>네트워크 비용</strong>으로 바뀌는지 본다.</span></p>
 </div>
 
 <footer>
-작성일 2026-06-15 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · 정직한 negative result — 4회 시도 모두 기록. ·
-시리즈: <a href="agentic-a-tool-math.html">A 도구수학</a> · <a href="agentic-b-code.html">B 코드</a> · <a href="agentic-c-rag.html">C 검색</a> · D(현재) · <a href="agentic-e-disagg.html">E 멀티노드</a>
+<span class="en">Written 2026-06-15 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · honest negative result — all 4 attempts recorded. ·</span><span class="ko">작성일 2026-06-15 · mi250-052 (MI250, ROCm 7.2.3) · Docker <code>vllm-022-rocm</code> · verl 0.8.0 · 정직한 negative result — 4회 시도 모두 기록. ·</span>
+<span class="en">Series:</span><span class="ko">시리즈:</span> <a href="agentic-a-tool-math.html"><span class="en">A tool-math</span><span class="ko">A 도구수학</span></a> · <a href="agentic-b-code.html"><span class="en">B code</span><span class="ko">B 코드</span></a> · <a href="agentic-c-rag.html"><span class="en">C retrieval</span><span class="ko">C 검색</span></a> · <span class="en">D (current)</span><span class="ko">D(현재)</span> · <a href="agentic-e-disagg.html"><span class="en">E multi-node</span><span class="ko">E 멀티노드</span></a>
 </footer>
 
 </div>
