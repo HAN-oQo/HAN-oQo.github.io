@@ -66,12 +66,12 @@
 
 <header class="hero">
   <h1>
-    <span class="en">Parallelism × communication — DP/TP/EP, the collectives, vLLM's code path, and the hardware underneath</span>
-    <span class="ko">병렬화 × 통신 — DP/TP/EP, 통신 primitive, vLLM 코드 경로, 그 아래 하드웨어</span>
+    <span class="en">Parallelism × communication — DP/TP/EP/CP, the collectives, vLLM's code path, and the hardware underneath</span>
+    <span class="ko">병렬화 × 통신 — DP/TP/EP/CP, 통신 primitive, vLLM 코드 경로, 그 아래 하드웨어</span>
   </h1>
   <p class="lede">
-    <span class="en">A full path from theory to silicon: (1) the communication primitives (all-reduce, all-gather, reduce-scatter, all-to-all, p2p…) and their cost; (2) what DP/TP/EP each split, compute, and which collective they need where; (3) how vLLM's main branch wires that down to the actual <code>ncclAllReduce</code> call (with permalinks); (4) which physical link the call hits, the max bandwidth, and how to check the wiring on a real machine (with a live MI250 example). Concise, diagram-first, every claim sourced.</span>
-    <span class="ko">이론에서 실리콘까지 한 줄로: (1) 통신 primitive(all-reduce·all-gather·reduce-scatter·all-to-all·p2p…)와 비용; (2) DP/TP/EP가 각각 무엇을 쪼개고 어떤 연산·통신을 하는지; (3) vLLM main이 그걸 실제 <code>ncclAllReduce</code> 호출까지 어떻게 잇는지(permalink); (4) 그 호출이 어떤 물리 링크를 타고 최대 대역폭은 얼마이며 실제 장비에서 배선을 어떻게 확인하는지(MI250 실측 포함). 간결·그림 중심·전부 출처.</span>
+    <span class="en">A full path from theory to silicon, with <b>animated</b> diagrams: (1) the communication primitives (all-reduce, all-gather, reduce-scatter, all-to-all, p2p…) and their cost; (2) what DP/TP/EP/CP each split, compute, and which collective they need where; (3) how vLLM's main branch wires that down to the actual <code>ncclAllReduce</code> call (with permalinks); (4) which physical link the call hits, the max bandwidth, and how to check the wiring on a real machine (with a live MI250 example). Concise, diagram-first, every claim sourced.</span>
+    <span class="ko">이론에서 실리콘까지 한 줄로, <b>애니메이션</b> 그림과 함께: (1) 통신 primitive(all-reduce·all-gather·reduce-scatter·all-to-all·p2p…)와 비용; (2) DP/TP/EP/CP가 각각 무엇을 쪼개고 어떤 연산·통신을 하는지; (3) vLLM main이 그걸 실제 <code>ncclAllReduce</code> 호출까지 어떻게 잇는지(permalink); (4) 그 호출이 어떤 물리 링크를 타고 최대 대역폭은 얼마이며 실제 장비에서 배선을 어떻게 확인하는지(MI250 실측 포함). 간결·그림 중심·전부 출처.</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">NCCL collectives</a></span>
@@ -85,7 +85,7 @@
   <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
   <ol>
     <li><a href="#s1"><span class="en">1. Communication primitives &amp; their cost</span><span class="ko">1. 통신 primitive와 비용</span></a></li>
-    <li><a href="#s2"><span class="en">2. DP / TP / EP — what each splits &amp; which collective</span><span class="ko">2. DP / TP / EP — 무엇을 쪼개고 어떤 통신</span></a></li>
+    <li><a href="#s2"><span class="en">2. DP / TP / EP / CP — what each splits &amp; which collective</span><span class="ko">2. DP / TP / EP / CP — 무엇을 쪼개고 어떤 통신</span></a></li>
     <li><a href="#s3"><span class="en">3. vLLM code path (permalinks)</span><span class="ko">3. vLLM 코드 경로 (permalink)</span></a></li>
     <li><a href="#s4"><span class="en">4. The hardware underneath + how to check</span><span class="ko">4. 그 아래 하드웨어 + 확인법</span></a></li>
     <li><a href="#s5"><span class="en">5. Sources</span><span class="ko">5. 출처</span></a></li>
@@ -94,8 +94,8 @@
 
 <div class="callout c-blue">
   <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
-  <span class="en"><b>TP</b> needs <b>2 all-reduce per layer</b> (after attention, after MLP); <b>EP</b> (MoE) needs <b>2 all-to-all per MoE layer</b> (dispatch + combine); <b>DP</b> at inference needs <b>~no collective</b> (replicas are independent) — except vLLM's DP-attention+EP, which adds a tiny coordination all-reduce + lockstep dummy passes. In vLLM main these route layer → <code>tensor_model_parallel_all_reduce</code> → <code>GroupCoordinator.all_reduce</code> → custom-allreduce or pynccl → the <code>ncclAllReduce</code> ctypes binding (RCCL on AMD, same path). At init NCCL/RCCL has already picked the link per GPU pair (P2P→SHM→NET); check it with <code>nvidia-smi topo -m</code> / <code>rocm-smi --shownodesbw</code> / <code>ibstat</code>, and measure with nccl-tests <b>busbw</b>.</span>
-  <span class="ko"><b>TP</b>는 <b>레이어당 all-reduce 2회</b>(attn 후, MLP 후); <b>EP</b>(MoE)는 <b>MoE 레이어당 all-to-all 2회</b>(dispatch+combine); <b>DP</b>는 추론에선 <b>collective 거의 없음</b>(replica 독립) — 단 vLLM의 DP-attention+EP는 작은 조정용 all-reduce + lockstep dummy pass 추가. vLLM main에선 layer → <code>tensor_model_parallel_all_reduce</code> → <code>GroupCoordinator.all_reduce</code> → custom-allreduce 또는 pynccl → <code>ncclAllReduce</code> ctypes 바인딩(AMD는 RCCL 동일경로). init 때 NCCL/RCCL이 GPU 쌍별 링크를 이미 선택(P2P→SHM→NET); <code>nvidia-smi topo -m</code>/<code>rocm-smi --shownodesbw</code>/<code>ibstat</code>로 확인하고 nccl-tests <b>busbw</b>로 측정.</span>
+  <span class="en"><b>TP</b> needs <b>2 all-reduce per layer</b> (after attention, after MLP); <b>EP</b> (MoE) needs <b>2 all-to-all per MoE layer</b> (dispatch + combine); <b>DP</b> at inference needs <b>~no collective</b> (replicas are independent) — except vLLM's DP-attention+EP, which adds a tiny coordination all-reduce + lockstep dummy passes. In vLLM main these route layer → <code>tensor_model_parallel_all_reduce</code> → <code>GroupCoordinator.all_reduce</code> → custom-allreduce or pynccl → the <code>ncclAllReduce</code> ctypes binding (RCCL on AMD, same path). At init NCCL/RCCL has already picked the link per GPU pair (P2P→SHM→NET); check it with <code>nvidia-smi topo -m</code> / <code>rocm-smi --shownodesbw</code> / <code>ibstat</code>, and measure with nccl-tests <b>busbw</b>. <b>CP</b> (context parallel, for long context) shards the sequence: attention exchanges K/V via <b>ring p2p</b> or <b>all-to-all</b> (Ulysses); in vLLM it appears as decode-context-parallel <code>-dcp</code>.</span>
+  <span class="ko"><b>TP</b>는 <b>레이어당 all-reduce 2회</b>(attn 후, MLP 후); <b>EP</b>(MoE)는 <b>MoE 레이어당 all-to-all 2회</b>(dispatch+combine); <b>DP</b>는 추론에선 <b>collective 거의 없음</b>(replica 독립) — 단 vLLM의 DP-attention+EP는 작은 조정용 all-reduce + lockstep dummy pass 추가. vLLM main에선 layer → <code>tensor_model_parallel_all_reduce</code> → <code>GroupCoordinator.all_reduce</code> → custom-allreduce 또는 pynccl → <code>ncclAllReduce</code> ctypes 바인딩(AMD는 RCCL 동일경로). init 때 NCCL/RCCL이 GPU 쌍별 링크를 이미 선택(P2P→SHM→NET); <code>nvidia-smi topo -m</code>/<code>rocm-smi --shownodesbw</code>/<code>ibstat</code>로 확인하고 nccl-tests <b>busbw</b>로 측정. <b>CP</b>(context parallel, 롱컨텍스트용)는 시퀀스를 쪼갬: attention이 K/V를 <b>ring p2p</b> 또는 <b>all-to-all</b>(Ulysses)로 교환; vLLM에선 decode-context-parallel <code>-dcp</code>로 등장.</span>
 </div>
 
 
@@ -147,6 +147,7 @@
 <circle class="n" cx="45" cy="120" r="15"/><text class="lbl" x="45" y="124">2</text>
 <circle class="n" cx="165" cy="120" r="15"/><text class="lbl" x="165" y="124">3</text>
 <path class="e" d="M60,40 L150,40" marker-end="url(#aM)"/>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="1.4s" repeatCount="indefinite" path="M60,40 L150,40"/></circle>
 <text class="cap" x="0" y="158">1 → 1, matched pair · PP handoff · 1 msg</text>
 </g>
 
@@ -160,6 +161,9 @@
 <path class="e" d="M60,40 L150,40" marker-end="url(#aM)"/>
 <path class="e" d="M45,55 L45,105" marker-end="url(#aM)"/>
 <path class="e" d="M58,48 L150,110" marker-end="url(#aM)"/>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="1.4s" begin="0s" repeatCount="indefinite" path="M60,40 L150,40"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="1.4s" begin="0.25s" repeatCount="indefinite" path="M45,55 L45,105"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="1.4s" begin="0.5s" repeatCount="indefinite" path="M58,48 L150,110"/></circle>
 <text class="cap" x="0" y="158">root → all (same copy) · N−1 msgs</text>
 </g>
 
@@ -173,6 +177,9 @@
 <path class="e" d="M150,40 L60,40" marker-end="url(#aM)"/>
 <path class="e" d="M45,105 L45,55" marker-end="url(#aM)"/>
 <path class="e" d="M150,110 L58,48" marker-end="url(#aM)"/>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="1.4s" begin="0s" repeatCount="indefinite" path="M150,40 L60,40"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="1.4s" begin="0.25s" repeatCount="indefinite" path="M45,105 L45,55"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="1.4s" begin="0.5s" repeatCount="indefinite" path="M150,110 L58,48"/></circle>
 <text class="cap" x="0" y="158">all → root (combined) · N−1 msgs</text>
 </g>
 
@@ -189,6 +196,12 @@
 <circle class="n" cx="165" cy="40" r="15"/><text class="lbl" x="165" y="44">1</text>
 <circle class="n" cx="45" cy="120" r="15"/><text class="lbl" x="45" y="124">2</text>
 <circle class="n" cx="165" cy="120" r="15"/><text class="lbl" x="165" y="124">3</text>
+<circle r="3.5" fill="var(--green-ink)"><animateMotion dur="2.6s" begin="0s" repeatCount="indefinite" path="M60,40 L150,40 L60,40"/></circle>
+<circle r="3.5" fill="var(--green-ink)"><animateMotion dur="2.6s" begin="0.2s" repeatCount="indefinite" path="M60,120 L150,120 L60,120"/></circle>
+<circle r="3.5" fill="var(--green-ink)"><animateMotion dur="2.6s" begin="0.4s" repeatCount="indefinite" path="M45,55 L45,105 L45,55"/></circle>
+<circle r="3.5" fill="var(--green-ink)"><animateMotion dur="2.6s" begin="0.6s" repeatCount="indefinite" path="M165,55 L165,105 L165,55"/></circle>
+<circle r="3.5" fill="var(--green-ink)"><animateMotion dur="2.6s" begin="0.8s" repeatCount="indefinite" path="M58,48 L150,110 L58,48"/></circle>
+<circle r="3.5" fill="var(--green-ink)"><animateMotion dur="2.6s" begin="1s" repeatCount="indefinite" path="M152,48 L60,110 L152,48"/></circle>
 <text class="cap" x="0" y="158">each → all (own block) · ≈N(N−1) msgs</text>
 </g>
 
@@ -205,6 +218,12 @@
 <circle class="n" cx="165" cy="40" r="15"/><text class="lbl" x="165" y="44">1</text>
 <circle class="n" cx="45" cy="120" r="15"/><text class="lbl" x="45" y="124">2</text>
 <circle class="n" cx="165" cy="120" r="15"/><text class="lbl" x="165" y="124">3</text>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="2.6s" begin="0s" repeatCount="indefinite" path="M60,40 L150,40 L60,40"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="2.6s" begin="0.2s" repeatCount="indefinite" path="M60,120 L150,120 L60,120"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="2.6s" begin="0.4s" repeatCount="indefinite" path="M45,55 L45,105 L45,55"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="2.6s" begin="0.6s" repeatCount="indefinite" path="M165,55 L165,105 L165,55"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="2.6s" begin="0.8s" repeatCount="indefinite" path="M58,48 L150,110 L58,48"/></circle>
+<circle r="3.5" fill="var(--muted)"><animateMotion dur="2.6s" begin="1s" repeatCount="indefinite" path="M152,48 L60,110 L152,48"/></circle>
 <text class="cap" x="0" y="158">chunk_j → owner j, summed · each keeps 1 chunk</text>
 </g>
 
@@ -221,7 +240,13 @@
 <circle class="n" cx="165" cy="40" r="15"/><text class="lbl" x="165" y="44">1</text>
 <circle class="n" cx="45" cy="120" r="15"/><text class="lbl" x="45" y="124">2</text>
 <circle class="n" cx="165" cy="120" r="15"/><text class="lbl" x="165" y="124">3</text>
-<circle cx="105" cy="80" r="13" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text class="lbl" x="105" y="84" fill="var(--blue-ink)">Σ</text>
+<circle r="3.5" fill="var(--blue-ink)"><animateMotion dur="2.6s" begin="0s" repeatCount="indefinite" path="M60,40 L150,40 L60,40"/></circle>
+<circle r="3.5" fill="var(--blue-ink)"><animateMotion dur="2.6s" begin="0.2s" repeatCount="indefinite" path="M60,120 L150,120 L60,120"/></circle>
+<circle r="3.5" fill="var(--blue-ink)"><animateMotion dur="2.6s" begin="0.4s" repeatCount="indefinite" path="M45,55 L45,105 L45,55"/></circle>
+<circle r="3.5" fill="var(--blue-ink)"><animateMotion dur="2.6s" begin="0.6s" repeatCount="indefinite" path="M165,55 L165,105 L165,55"/></circle>
+<circle r="3.5" fill="var(--blue-ink)"><animateMotion dur="2.6s" begin="0.8s" repeatCount="indefinite" path="M58,48 L150,110 L58,48"/></circle>
+<circle r="3.5" fill="var(--blue-ink)"><animateMotion dur="2.6s" begin="1s" repeatCount="indefinite" path="M152,48 L60,110 L152,48"/></circle>
+<circle cx="105" cy="80" r="13" fill="var(--blue-bg)" stroke="var(--blue-bd)"><animate attributeName="r" values="11;14;11" dur="1.3s" repeatCount="indefinite"/></circle><text class="lbl" x="105" y="84" fill="var(--blue-ink)">Σ</text>
 <text class="cap" x="0" y="158">= reduce-scatter + all-gather · all get the sum</text>
 </g>
 
@@ -238,6 +263,12 @@
 <circle class="n" cx="165" cy="40" r="15"/><text class="lbl" x="165" y="44">1</text>
 <circle class="n" cx="45" cy="120" r="15"/><text class="lbl" x="45" y="124">2</text>
 <circle class="n" cx="165" cy="120" r="15"/><text class="lbl" x="165" y="124">3</text>
+<circle r="3.5" fill="var(--amber-ink)"><animateMotion dur="2.6s" begin="0s" repeatCount="indefinite" path="M60,40 L150,40 L60,40"/></circle>
+<circle r="3.5" fill="var(--amber-ink)"><animateMotion dur="2.6s" begin="0.2s" repeatCount="indefinite" path="M60,120 L150,120 L60,120"/></circle>
+<circle r="3.5" fill="var(--amber-ink)"><animateMotion dur="2.6s" begin="0.4s" repeatCount="indefinite" path="M45,55 L45,105 L45,55"/></circle>
+<circle r="3.5" fill="var(--amber-ink)"><animateMotion dur="2.6s" begin="0.6s" repeatCount="indefinite" path="M165,55 L165,105 L165,55"/></circle>
+<circle r="3.5" fill="var(--amber-ink)"><animateMotion dur="2.6s" begin="0.8s" repeatCount="indefinite" path="M58,48 L150,110 L58,48"/></circle>
+<circle r="3.5" fill="var(--amber-ink)"><animateMotion dur="2.6s" begin="1s" repeatCount="indefinite" path="M152,48 L60,110 L152,48"/></circle>
 <text class="cap" x="0" y="158">i → distinct block to every j (transpose) · ≈N² msgs</text>
 </g>
 
@@ -252,7 +283,7 @@
 <text class="cap" x="18" y="146" style="font-size:11px">⇒ NCCL lays the mesh ones out as a Ring or Tree (Fig 2)</text>
 </g>
 </svg>
-<p class="figcap"><span class="en">Fig 1 — every primitive on <b>4 GPUs (nodes 0–3)</b> with all message arrows. Amber node = root. Star patterns (broadcast/reduce/p2p) send ≤ N−1 messages; mesh patterns (all-gather/reduce-scatter/all-reduce/all-to-all) are everyone↔everyone (≈ N² messages). Patterns per NCCL [2].</span><span class="ko">그림 1 — <b>GPU 4개(노드 0–3)</b>에서 각 primitive의 모든 메시지 화살표. 앰버 노드 = root. star(broadcast/reduce/p2p)는 ≤ N−1 메시지, mesh(all-gather/reduce-scatter/all-reduce/all-to-all)는 everyone↔everyone(≈ N² 메시지). 패턴 정의는 NCCL [2].</span></p>
+<p class="figcap"><span class="en">Fig 1 — every primitive on <b>4 GPUs (nodes 0–3)</b>, <b>animated</b>: the moving dots are the data packets, so you can see the actual flow. Amber node = root. Star patterns (broadcast/reduce/p2p) send ≤ N−1 messages; mesh patterns (all-gather/reduce-scatter/all-reduce/all-to-all) are everyone↔everyone (≈ N² messages). Patterns per NCCL [2].</span><span class="ko">그림 1 — <b>GPU 4개(노드 0–3)</b>, <b>애니메이션</b>: 움직이는 점이 데이터 패킷이라 실제 흐름이 보인다. 앰버 노드 = root. star(broadcast/reduce/p2p)는 ≤ N−1 메시지, mesh(all-gather/reduce-scatter/all-reduce/all-to-all)는 everyone↔everyone(≈ N² 메시지). 패턴 정의는 NCCL [2].</span></p>
 
 <h3><span class="en">Ring vs Tree — how NCCL actually lays a collective on the wire</span><span class="ko">Ring vs Tree — NCCL이 collective를 실제 배선에 까는 방식</span></h3>
 <p><span class="en"><b>Ring and Tree are not collectives</b> — they are the two main <b>schedules of point-to-point sends</b> NCCL uses to <i>realize</i> a mesh collective (above all, all-reduce) across N GPUs. Same result, different message order. NCCL picks one automatically from message size, GPU count, and topology; you only override (<code class="inl">NCCL_ALGO=Ring|Tree|NVLS</code>) to debug.</span>
@@ -296,6 +327,8 @@
 <circle class="n2" cx="190" cy="185" r="16"/><text class="l2" x="190" y="189">2</text>
 <circle class="n2" cx="125" cy="115" r="16"/><text class="l2" x="125" y="119">3</text>
 <text class="c2" x="190" y="118" text-anchor="middle" fill="var(--blue-ink)">↻</text>
+<circle r="4.5" fill="var(--blue-ink)"><animateMotion dur="4s" repeatCount="indefinite" path="M190,45 L255,115 L190,185 L125,115 L190,45"/></circle>
+<circle r="4.5" fill="var(--blue-ink)" opacity="0.55"><animateMotion dur="4s" begin="-2s" repeatCount="indefinite" path="M190,45 L255,115 L190,185 L125,115 L190,45"/></circle>
 <text class="c2" x="20" y="212">↔ 2 neighbors · 2(N−1) steps · per-GPU 2(N−1)/N·S, N-independent · latency ∝ N</text>
 <!-- TREE -->
 <text class="t2" x="410" y="22">Tree — log N hops, latency-light</text>
@@ -308,16 +341,22 @@
 <circle class="n2" cx="505" cy="115" r="16"/><text class="l2" x="505" y="119">1</text>
 <circle class="n2" cx="615" cy="115" r="16"/><text class="l2" x="615" y="119">2</text>
 <circle class="n2" cx="505" cy="185" r="16"/><text class="l2" x="505" y="189">3</text>
+<circle r="4.5" fill="var(--green-ink)"><animateMotion dur="2.4s" calcMode="linear" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.21;1" path="M505,185 L505,115"/></circle>
+<circle r="4.5" fill="var(--green-ink)"><animateMotion dur="2.4s" calcMode="linear" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.21;0.42;1" path="M505,115 L560,45"/></circle>
+<circle r="4.5" fill="var(--green-ink)"><animateMotion dur="2.4s" calcMode="linear" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.21;0.42;1" path="M615,115 L560,45"/></circle>
+<circle r="4.5" fill="var(--muted)"><animateMotion dur="2.4s" calcMode="linear" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.5;0.71;1" path="M560,45 L505,115"/></circle>
+<circle r="4.5" fill="var(--muted)"><animateMotion dur="2.4s" calcMode="linear" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.5;0.71;1" path="M560,45 L615,115"/></circle>
+<circle r="4.5" fill="var(--muted)"><animateMotion dur="2.4s" calcMode="linear" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.71;0.92;1" path="M505,115 L505,185"/></circle>
 <text class="c2" x="648" y="60" fill="var(--green-ink)">↑ reduce</text>
 <text class="c2" x="648" y="78" fill="var(--muted)">↓ broadcast</text>
 <text class="c2" x="410" y="212">≈log₂N hops up + down · small-msg / many-GPU friendly · NCCL uses double binary trees</text>
 </svg>
-<p class="figcap"><span class="en">Fig 2 — the same all-reduce, two schedules. <b>Ring</b>: data circulates neighbor-to-neighbor (bandwidth-optimal, latency ∝ N). <b>Tree</b>: reduce up then broadcast down (latency ∝ log N). NCCL auto-picks by message size &amp; N. Sources: [3], [4].</span><span class="ko">그림 2 — 같은 all-reduce, 두 스케줄. <b>Ring</b>: 데이터가 이웃끼리 순환(대역폭 최적, 지연 ∝ N). <b>Tree</b>: reduce 올리고 broadcast 내림(지연 ∝ log N). NCCL이 메시지 크기·N으로 자동 선택. 출처: [3], [4].</span></p>
+<p class="figcap"><span class="en">Fig 2 — the same all-reduce, two schedules, <b>animated</b>. <b>Ring</b>: the dot circulates neighbor-to-neighbor (bandwidth-optimal, latency ∝ N). <b>Tree</b>: green dots reduce up, then grey dots broadcast down (latency ∝ log N). NCCL auto-picks by message size &amp; N. Sources: [3], [4].</span><span class="ko">그림 2 — 같은 all-reduce, 두 스케줄, <b>애니메이션</b>. <b>Ring</b>: 점이 이웃끼리 순환(대역폭 최적, 지연 ∝ N). <b>Tree</b>: 초록 점이 reduce 올라가고, 회색 점이 broadcast 내려옴(지연 ∝ log N). NCCL이 메시지 크기·N으로 자동 선택. 출처: [3], [4].</span></p>
 </section>
 
 
 <section id="s2">
-<h2><span class="num">2</span><span class="en">DP / TP / EP — what each splits &amp; which collective</span><span class="ko">DP / TP / EP — 무엇을 쪼개고 어떤 통신</span></h2>
+<h2><span class="num">2</span><span class="en">DP / TP / EP / CP — what each splits &amp; which collective</span><span class="ko">DP / TP / EP / CP — 무엇을 쪼개고 어떤 통신</span></h2>
 <table>
 <tr><th><span class="en">Strategy</span><span class="ko">전략</span></th><th><span class="en">Splits</span><span class="ko">쪼개는 것</span></th><th><span class="en">Collective / layer (fwd)</span><span class="ko">레이어당 collective(fwd)</span></th><th><span class="en">Cross-node?</span><span class="ko">노드 넘으면?</span></th></tr>
 <tr><td><b>TP</b> <span class="muted">(Megatron)</span></td><td><span class="en">heads + GEMM weights (col→row)</span><span class="ko">head + GEMM 가중치(col→row)</span></td><td><b>2 × all-reduce</b> <span class="en">(after attn, after MLP)</span><span class="ko">(attn 후·MLP 후)</span></td><td><span class="en">expensive → keep on NVLink/xGMI</span><span class="ko">비쌈 → NVLink/xGMI 내</span></td></tr>
@@ -326,6 +365,7 @@
 <tr><td><b>DP</b> <span class="muted">(dense inference)</span></td><td><span class="en">requests (full model replicated)</span><span class="ko">요청(모델 전체 복제)</span></td><td><b>0</b> <span class="en">— replicas independent</span><span class="ko">— replica 독립</span></td><td>n/a</td></tr>
 <tr><td><b>DP-attn + EP</b> <span class="muted">(vLLM MoE)</span></td><td><span class="en">attn = DP, experts = EP</span><span class="ko">attn=DP, expert=EP</span></td><td><span class="en">EP all-to-all + tiny coord all-reduce + lockstep dummy passes</span><span class="ko">EP all-to-all + 작은 조정 all-reduce + lockstep dummy</span></td><td><span class="en">yes (experts)</span><span class="ko">예 (expert)</span></td></tr>
 <tr><td><b>PP</b> <span class="muted">(완전성)</span></td><td><span class="en">layers/stages</span><span class="ko">레이어/stage</span></td><td><span class="en">p2p send/recv at boundary</span><span class="ko">경계서 p2p send/recv</span></td><td><span class="en">cheap, can cross nodes</span><span class="ko">쌈, 노드 가능</span></td></tr>
+<tr><td><b>CP</b> <span class="muted">(context/seq, long-ctx)</span></td><td><span class="en">sequence / KV along tokens</span><span class="ko">시퀀스 / KV를 토큰축으로</span></td><td><span class="en">attention only: <b>ring p2p of K/V</b> or <b>2 all-to-all</b> (Ulysses); nothing elsewhere</span><span class="ko">attention만: <b>K/V ring p2p</b> 또는 <b>all-to-all 2회</b>(Ulysses); 그 외 없음</span></td><td><span class="en">yes — that's the point (long context)</span><span class="ko">예 — 그게 목적 (롱컨텍스트)</span></td></tr>
 </table>
 
 <p><span class="en"><b>TP</b> shards each GEMM (first weight column-parallel, second row-parallel) so GeLU needs no sync; the row-parallel output is summed with an all-reduce. Megatron: "two all-reduces in the forward path and two in the backward path" — at inference (no backward) that's <b>2 per layer</b> <a class="src" href="https://arxiv.org/abs/1909.08053">[5]</a>. Each all-reduce moves the <code class="inl">b·s·h</code> activation tensor, not weights.</span>
@@ -358,6 +398,42 @@
 <text x="385" y="135" class="k">→ 0 / layer (MoE DP-attn: lockstep + coord all-reduce)</text>
 </svg>
 <p class="figcap"><span class="en">Fig 3 — collective placement per layer. Sources: Megatron [5], DeepSeek-V3 [8], vLLM DP docs [15].</span><span class="ko">그림 3 — 레이어당 collective 위치. 출처: Megatron [5], DeepSeek-V3 [8], vLLM DP 문서 [15].</span></p>
+
+<h3><span class="en">CP — context (sequence) parallel, for long context</span><span class="ko">CP — context(sequence) parallel, 롱컨텍스트용</span></h3>
+<p><span class="en"><b>CP shards the sequence</b> — each GPU holds part of the tokens. Everything except attention is token-independent and needs <b>no</b> communication; attention is the catch, because every query must see <i>all</i> keys/values. Two schemes. <b>Ring attention</b> keeps Q in place and <b>rotates the K/V blocks neighbor-to-neighbor (p2p)</b>, overlapping the transfer with blockwise attention — it scales with the number of GPUs and works for GQA/MQA, but the small blocks cost some FlashAttention efficiency <a class="src" href="https://arxiv.org/abs/2310.01889">[16C]</a>. <b>DeepSpeed-Ulysses</b> instead does <b>2 all-to-all per attention layer</b> to transpose sequence↔heads (each GPU then computes whole heads locally) — very efficient intra-node, but the parallel degree is <b>capped by the head count</b> (poor for GQA/MQA) <a class="src" href="https://arxiv.org/abs/2309.14509">[17C]</a>; USP fuses the two. In <b>vLLM main</b> CP shows up as <b>Decode Context Parallel</b>: <code class="inl">-dcp &lt;size&gt;</code> shards the <b>KV cache</b> along the token axis to cut KV duplication once TP exceeds the KV-head count (MLA/GQA), and the MLA chunked-prefill path runs a <b>Context-KV all-gather</b>; <b>Prefill Context Parallel (PCP)</b> is an open RFC for better TTFT <a class="src" href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">[18C]</a>. (Not traced in §3 — that section is TP/EP/DP.)</span>
+  <span class="ko"><b>CP는 시퀀스를 쪼갠다</b> — 각 GPU가 토큰의 일부만 보유. attention을 뺀 나머지는 토큰 독립이라 통신이 <b>없고</b>, 문제는 attention이다 — 모든 query가 <i>전체</i> key/value를 봐야 하기 때문. 방식은 둘. <b>Ring attention</b>은 Q를 고정하고 <b>K/V 블록을 이웃끼리 p2p로 회전</b>시키며 blockwise attention과 전송을 겹친다 — GPU 수만큼 확장되고 GQA/MQA에도 동작하지만 작은 블록이 FlashAttention 효율을 깎는다 <a class="src" href="https://arxiv.org/abs/2310.01889">[16C]</a>. <b>DeepSpeed-Ulysses</b>는 대신 <b>attention당 all-to-all 2회</b>로 sequence↔heads를 transpose해(각 GPU가 head 전체를 로컬 계산) 노드 내에서 매우 효율적이지만 병렬도가 <b>head 수에 묶인다</b>(GQA/MQA 불리) <a class="src" href="https://arxiv.org/abs/2309.14509">[17C]</a>; USP가 둘을 결합. <b>vLLM main</b>에선 CP가 <b>Decode Context Parallel</b>로 등장: <code class="inl">-dcp &lt;size&gt;</code>가 TP가 KV-head 수를 넘을 때(MLA/GQA) KV 중복을 줄이려 <b>KV 캐시</b>를 토큰축으로 샤딩하고, MLA chunked-prefill 경로는 <b>Context-KV all-gather</b>를 수행; <b>Prefill Context Parallel(PCP)</b>은 TTFT 개선용 RFC 상태 <a class="src" href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">[18C]</a>. (§3에선 미추적 — 그 섹션은 TP/EP/DP.)</span></p>
+
+<svg class="fig" viewBox="0 0 760 210" role="img" aria-label="context parallel ring attention">
+<style>
+.t4{font:700 12px -apple-system,sans-serif;fill:var(--ink)}
+.n4{fill:var(--card);stroke:var(--line);stroke-width:1.2}
+.l4{font:600 11px -apple-system,sans-serif;fill:var(--ink);text-anchor:middle}
+.c4{font:11px -apple-system,sans-serif;fill:var(--muted)}
+.e4{stroke:var(--amber-bd);stroke-width:1.3;fill:none;opacity:.8}
+</style>
+<defs><marker id="ka" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--amber-bd)"/></marker></defs>
+<line x1="345" y1="18" x2="345" y2="195" stroke="var(--line)"/>
+<text class="t4" x="20" y="20">Ring attention — Q fixed, K/V rotate</text>
+<path class="e4" d="M212,58 L253,102" marker-end="url(#ka)"/>
+<path class="e4" d="M253,128 L212,172" marker-end="url(#ka)"/>
+<path class="e4" d="M188,172 L147,128" marker-end="url(#ka)"/>
+<path class="e4" d="M147,102 L188,58" marker-end="url(#ka)"/>
+<circle class="n4" cx="200" cy="45" r="18"/><text class="l4" x="200" y="49">Q0</text>
+<circle class="n4" cx="265" cy="115" r="18"/><text class="l4" x="265" y="119">Q1</text>
+<circle class="n4" cx="200" cy="185" r="18"/><text class="l4" x="200" y="189">Q2</text>
+<circle class="n4" cx="135" cy="115" r="18"/><text class="l4" x="135" y="119">Q3</text>
+<text class="c4" x="200" y="119" text-anchor="middle" fill="var(--amber-ink)">K/V ↻</text>
+<circle r="6" fill="var(--amber-ink)"><animateMotion dur="5s" repeatCount="indefinite" path="M200,45 L265,115 L200,185 L135,115 L200,45"/></circle>
+<circle r="6" fill="var(--amber-ink)" opacity="0.5"><animateMotion dur="5s" begin="-2.5s" repeatCount="indefinite" path="M200,45 L265,115 L200,185 L135,115 L200,45"/></circle>
+<text class="c4" x="370" y="40">• non-attention layers: token-independent → no comm</text>
+<text class="c4" x="370" y="68">• ring attention (shown): Q fixed, K/V rotate p2p</text>
+<text class="c4" x="384" y="86" fill="var(--muted)">→ GQA-friendly, scales with #GPUs</text>
+<text class="c4" x="370" y="114">• Ulysses: 2× all-to-all (sequence ↔ heads)</text>
+<text class="c4" x="384" y="132" fill="var(--muted)">→ fast intra-node, capped by #heads</text>
+<text class="c4" x="370" y="160">• vLLM: decode-context-parallel  -dcp  shards KV cache</text>
+<text class="c4" x="384" y="178" fill="var(--muted)">→ MLA/GQA; prefill CP (PCP) is an RFC</text>
+</svg>
+<p class="figcap"><span class="en">Fig 4 — context parallel, <b>animated</b>. Ring attention: queries stay on their GPU while the K/V blocks circulate p2p around the ring (the dots). Ulysses is the all-to-all alternative. Sources: ring attention [16C], Ulysses [17C], vLLM CP docs [18C].</span><span class="ko">그림 4 — context parallel, <b>애니메이션</b>. Ring attention: query는 자기 GPU에 머물고 K/V 블록이 ring을 p2p로 순환(점). Ulysses는 all-to-all 대안. 출처: ring attention [16C], Ulysses [17C], vLLM CP 문서 [18C].</span></p>
 </section>
 
 
@@ -441,6 +517,7 @@ $ rocm-smi --showbus             # GPU0-3 on PCIe root 0000:29-32, GPU4-7 on 000
 <li>[5] Megatron-LM (2 all-reduce/layer) — <a href="https://arxiv.org/abs/1909.08053">arXiv:1909.08053</a> · [6] sequence parallelism (AG+RS, same bytes) — <a href="https://arxiv.org/abs/2205.05198">arXiv:2205.05198</a></li>
 <li>[7] GShard — <a href="https://arxiv.org/abs/2006.16668">arXiv:2006.16668</a> · Switch Transformer (capacity) — <a href="https://arxiv.org/abs/2101.03961">arXiv:2101.03961</a> · [8] DeepSeek-V3 (dispatch/combine, 1:1) — <a href="https://arxiv.org/abs/2412.19437">arXiv:2412.19437</a></li>
 <li>[15] vLLM Data-Parallel Deployment (DP-attn lockstep, dummy passes) — <a href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">docs.vllm.ai/…/data_parallel_deployment</a> · RFC #16037 — <a href="https://github.com/vllm-project/vllm/issues/16037">github #16037</a></li>
+<li><b>CP (context parallel):</b> [16C] Ring Attention (Liu et al.) — <a href="https://arxiv.org/abs/2310.01889">arXiv:2310.01889</a> · [17C] DeepSpeed-Ulysses — <a href="https://arxiv.org/abs/2309.14509">arXiv:2309.14509</a> · [18C] vLLM Context Parallel Deployment (DCP <code>-dcp</code>) — <a href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">docs.vllm.ai/…/context_parallel_deployment</a> · DCP-for-GQA PR — <a href="https://github.com/vllm-project/vllm/pull/24864">#24864</a> · PCP RFC — <a href="https://github.com/vllm-project/vllm/issues/25749">#25749</a> · USP (hybrid) — <a href="https://github.com/feifeibear/long-context-attention">feifeibear/long-context-attention</a></li>
 <li>vLLM code @ <code>6607a80</code> — <a href="https://github.com/vllm-project/vllm/tree/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed">vllm/distributed</a> (parallel_state, communication_op, device_communicators/{cuda_communicator,pynccl,pynccl_wrapper,custom_all_reduce,all2all})</li>
 <li>HW: NCCL transport source — <a href="https://github.com/NVIDIA/nccl/blob/master/src/include/graph.h">graph.h</a> / <a href="https://github.com/NVIDIA/nccl/blob/master/src/graph/paths.cc">paths.cc</a> · NCCL GPU troubleshooting — <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html">[7H]</a> · NVSwitch Hot Chips 2022 — <a href="https://hc34.hotchips.org/assets/program/conference/day2/Network%20and%20Switches/NVSwitch%20HotChips%202022%20r5.pdf">[13]</a> · PCIe — <a href="https://www.rambus.com/blogs/pci-express-5-vs-4/">[16]</a> · IB XDR manual — <a href="https://docs.nvidia.com/networking/display/xdrswitchesum/interfaces">[17]</a> · MI250 arch — <a href="https://rocm.docs.amd.com/en/latest/conceptual/gpu-arch/mi250.html">[19]</a> · MI300X datasheet — <a href="https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf">[20]</a></li>
 <li>Tools: nvidia-smi — <a href="https://docs.nvidia.com/deploy/nvidia-smi/index.html">[22]</a> · p2pBandwidthLatencyTest — <a href="https://github.com/NVIDIA/cuda-samples/tree/master/cpp/5_Domain_Specific/p2pBandwidthLatencyTest">[23]</a> · nccl-tests + PERFORMANCE.md (busbw) — <a href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">[25]</a> · rocm-smi — <a href="https://manpages.ubuntu.com/manpages/noble/man1/rocm-smi.1.html">[26]</a> · rocm-bandwidth-test — <a href="https://github.com/ROCm/rocm_bandwidth_test">[29]</a> · RCCL/xGMI blog — <a href="https://rocm.blogs.amd.com/software-tools-optimization/mi300x-rccl-xgmi/README.html">[32]</a> · RCCL — <a href="https://rocm.docs.amd.com/projects/rccl/en/latest/what-is-rccl.html">[11]</a></li>
