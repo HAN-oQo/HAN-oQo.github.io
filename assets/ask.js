@@ -305,7 +305,12 @@
       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   }
   function mdToHtml(src) {
-    var lines = mdEsc(String(src || "").trim()).replace(/\r\n?/g, "\n").split("\n");
+    // protect LaTeX math ($$…$$, $…$, \[…\], \(…\)) from markdown mangling; restored at the end for KaTeX
+    var math = [];
+    var prepped = String(src || "").trim().replace(
+      /\$\$[\s\S]+?\$\$|\$[^\n$]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)/g,
+      function (m) { math.push(m); return "M" + (math.length - 1) + ""; });
+    var lines = mdEsc(prepped).replace(/\r\n?/g, "\n").split("\n");
     var out = [], code = null, list = null, listBuf = [], para = [];
     function flushList() { if (list) { out.push("<" + list + ">" + listBuf.join("") + "</" + list + ">"); list = null; listBuf = []; } }
     function flushPara() { if (para.length) { out.push("<p>" + para.map(mdInline).join("<br>") + "</p>"); para = []; } }
@@ -326,7 +331,49 @@
     });
     if (code !== null) out.push("<pre><code>" + code.join("\n") + "</code></pre>");
     flushAll();
-    return out.join("");
+    var html = out.join("");
+    if (math.length) html = html.replace(/M(\d+)/g, function (_, i) { return mdEsc(math[+i]); });  // restore LaTeX (HTML-escaped) for KaTeX
+    return html;
+  }
+
+  /* ---------------- KaTeX (math) — lazy-loaded only when an answer contains LaTeX ---------------- */
+  var KX = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/";
+  var katexReady = null;   // Promise once loading starts
+  function loadCss(href) {
+    if (document.querySelector('link[href="' + href + '"]')) return;
+    var l = document.createElement("link"); l.rel = "stylesheet"; l.href = href; document.head.appendChild(l);
+  }
+  function loadScript(src) {
+    return new Promise(function (res, rej) {
+      var s = document.createElement("script"); s.src = src; s.async = true;
+      s.onload = res; s.onerror = function () { rej(new Error("load " + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  function ensureKatex() {
+    if (katexReady) return katexReady;
+    loadCss(KX + "katex.min.css");
+    katexReady = loadScript(KX + "katex.min.js")
+      .then(function () { return loadScript(KX + "contrib/auto-render.min.js"); });
+    return katexReady;
+  }
+  var MATH_RE = /\$\$[\s\S]+?\$\$|\$[^\n$]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)/;
+  function typesetMath(elem) {
+    if (!elem || !MATH_RE.test(elem.textContent || "")) return;   // no math → skip the network entirely
+    ensureKatex().then(function () {
+      if (!window.renderMathInElement) return;
+      try {
+        window.renderMathInElement(elem, {
+          delimiters: [
+            { left: "$$", right: "$$", display: true },
+            { left: "\\[", right: "\\]", display: true },
+            { left: "\\(", right: "\\)", display: false },
+            { left: "$", right: "$", display: false }
+          ],
+          throwOnError: false, ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"]
+        });
+      } catch (e) {}
+    }, function () {});
   }
 
   /* ---------------- UI ---------------- */
@@ -355,6 +402,7 @@
       } else {
         var md = el("div", { class: "askai-md" });
         md.innerHTML = mdToHtml(m.content);     // bot answers render as Markdown
+        typesetMath(md);                        // render any LaTeX ($…$, \[…\]) via KaTeX
         b.appendChild(md);
       }
       if (m.role === "assistant" && m.cites && m.cites.length) {
@@ -374,6 +422,7 @@
       if (partial && partial.trim()) {                       // streaming the answer-so-far
         var pm = el("div", { class: "askai-md" });
         pm.innerHTML = mdToHtml(partial) + '<span class="askai-cursor">▍</span>';
+        typesetMath(pm);                        // typeset math in the streaming partial too
         pb.appendChild(pm);
       } else if (thinking && thinking.trim()) {              // reasoning streaming before the answer
         var head = el("div", { class: "askai-think" }, ["💭 " + t("reasoning", "생각하는 중") + (sec ? " · " + sec + "s" : "")]);
