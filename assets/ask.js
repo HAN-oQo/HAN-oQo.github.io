@@ -244,7 +244,7 @@
     ".askai-hd button{cursor:pointer;color:var(--muted,#86807a);background:none;border:none;font-size:16px;line-height:1}" +
     ".askai-body{padding:12px 14px;overflow-y:auto;flex:1}" +
     ".askai-thread{display:flex;flex-direction:column;gap:10px}" +
-    ".askai-msg{max-width:88%;padding:8px 11px;border-radius:11px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}" +
+    ".askai-msg{max-width:88%;padding:8px 11px;border-radius:11px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;min-width:0}" +
     ".askai-u{align-self:flex-end;background:var(--blue-bg,#e6f1fb);color:var(--blue-ink,#0c447c)}" +
     ".askai-b{align-self:flex-start;background:var(--gray-bg,#f1efe8);color:var(--ink,#1f1e1b)}" +
     ".askai-empty{color:var(--muted,#86807a);font-size:12.5px;text-align:center;padding:18px 6px}" +
@@ -254,7 +254,10 @@
     ".askai-cursor{display:inline-block;color:var(--muted,#86807a);animation:askblink 1s steps(1) infinite;margin-left:1px}" +
     "@keyframes askblink{50%{opacity:.25}}" +
     "@media(prefers-reduced-motion:reduce){.askai-dots,.askai-cursor{animation:none}}" +
-    ".askai-md{white-space:normal}" +
+    ".askai-md{white-space:normal;overflow-wrap:anywhere;max-width:100%}" +
+    ".askai-md .katex-display{overflow-x:auto;overflow-y:hidden;max-width:100%;margin:6px 0;padding:2px 0}" +   /* long display math scrolls inside the bubble */
+    ".askai-md table{display:block;width:max-content;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:6px 0}" +
+    ".askai-md img{max-width:100%;height:auto}" +
     ".askai-md p{margin:0 0 8px}.askai-md p:last-child{margin-bottom:0}" +
     ".askai-md pre{background:var(--code-bg,#2b2a27);color:var(--code-ink,#f3f1ea);padding:9px 11px;border-radius:8px;overflow-x:auto;margin:6px 0;font:12.5px/1.45 ui-monospace,Menlo,Consolas,monospace}" +
     ".askai-md pre code{background:none;padding:0;font-size:inherit;color:inherit}" +
