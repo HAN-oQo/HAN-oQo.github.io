@@ -36,6 +36,54 @@
     <span class="ko">LLM 추론 내부 구조 학습 노트 — 서빙 시스템, 디버깅, 비교.</span>
   </p>
 
+  <a class="card" href="sglang-context-parallelism.html">
+    <span class="tag t-green">
+      <span class="en">Deep dive · code-walk</span>
+      <span class="ko">딥다이브 · 코드 분석</span>
+    </span>
+    <h2>
+      <span class="en">SGLang Context Parallelism — why long context needs it, and what's actually in main</span>
+      <span class="ko">SGLang Context Parallelism — 긴 컨텍스트에 왜 필요한가, 그리고 main에 실제로 뭐가 있나</span>
+    </h2>
+    <p>
+      <span class="en">Context parallelism (CP) is the one parallelism that splits a <b>single sequence</b> across GPUs along the token axis — the only fix for a context so long its KV won't fit on a GPU (KV grows linearly) or its prefill is too slow (attention is O(length²)). TP/DP/PP can't: TP keeps full-length KV per rank, DP splits requests, PP splits layers. Explains the why first (with KV-size numbers: Llama-3 70B @1M ≈ 328 GB), the CP attention menu (ring attention vs all-to-all/Ulysses vs all-gather), then — honestly — <b>what SGLang merged vs the #21788 roadmap</b>: the merged path is <b>prefill-only, all-gather-KV (NOT ring attention), FA3-only, single-machine tp≤8, Hopper-experimental</b>, so it splits prefill compute, not KV memory. Decode CP / Helix / ring seq-dim KV sharding (#25846) and the unified <code class="inl">layers/cp/</code> module are still NotImplementedError stubs. Diagrams + code flow with permalinks @ d86a7e7. Driven by issue #21788.</span>
+      <span class="ko">Context parallelism(CP)은 <b>하나의 시퀀스</b>를 토큰 축으로 GPU들에 쪼개는 유일한 병렬화 — 컨텍스트가 너무 길어 KV가 GPU에 안 들어가거나(KV 선형 증가) prefill이 너무 느릴(어텐션 O(길이²)) 때의 유일한 해법. TP/DP/PP는 못 함: TP는 rank마다 전체 길이 KV 유지, DP는 요청 분할, PP는 레이어 분할. 먼저 왜(KV 크기: Llama-3 70B @1M ≈ 328 GB), CP 어텐션 메뉴(ring attention vs all-to-all/Ulysses vs all-gather), 그다음 — 정직하게 — <b>SGLang 머지 vs #21788 로드맵</b>: 머지된 경로는 <b>prefill 전용, all-gather-KV(ring attention 아님), FA3 전용, 단일 머신 tp≤8, Hopper 실험적</b>이라 KV 메모리가 아니라 prefill 연산을 나눔. Decode CP / Helix / ring seq-dim KV 샤딩(#25846), 통합 <code class="inl">layers/cp/</code> 모듈은 아직 NotImplementedError 스텁. 다이어그램 + permalink 코드 흐름 @ d86a7e7. 이슈 #21788 기반.</span>
+    </p>
+    <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time></p>
+  </a>
+
+  <a class="card" href="sglang-lplb-moe-load-balancer.html">
+    <span class="tag t-green">
+      <span class="en">Deep dive · code-walk</span>
+      <span class="ko">딥다이브 · 코드 분석</span>
+    </span>
+    <h2>
+      <span class="en">SGLang LPLB — a linear-programming load balancer for MoE expert parallelism</span>
+      <span class="ko">SGLang LPLB — MoE expert parallelism을 위한 선형계획 부하 분산기</span>
+    </h2>
+    <p>
+      <span class="en">What commit <code class="inl">92b42c8</code> (PR #24515) actually does — and it's <b>not</b> context parallelism, it's MoE expert-parallel load balancing. Under EP, routing skew makes one GPU's experts "hot" → that GPU is a straggler and the all-to-all combine waits on it. DeepSeek's EPLB fixes the static part (duplicate hot experts); <b>LPLB</b> (also DeepSeek's, ported here) fixes the dynamic per-batch part: each MoE layer solves a tiny <b>linear program on a single GPU SM</b> (interior-point, cuBLASDx/cuSolverDx) to split each token's load across an expert's replicas so the busiest GPU is minimized. Covers the straggler why, the LP/IPM mechanism, what this commit ports into SGLang (<code class="inl">--ep-dispatch-algorithm lp</code>, empty-rank deadlock handling, model allowlist), code flow @ 92b42c8, and an honest read: DeepSeek built it for <i>training</i>, SGLang applies it to inference, NVIDIA-only, and the PR's speedup is an n=3 self-bench with p&gt;0.05 (not significant).</span>
+      <span class="ko">커밋 <code class="inl">92b42c8</code>(PR #24515)이 실제로 하는 일 — 그리고 이건 context parallelism이 <b>아니라</b> MoE expert-parallel 부하 분산이다. EP에서 라우팅 쏠림이 한 GPU의 expert를 "hot"하게 → 그 GPU가 straggler가 되고 all-to-all combine이 그걸 기다린다. DeepSeek의 EPLB가 정적 부분 해결(hot expert 복제); <b>LPLB</b>(역시 DeepSeek 것, 여기로 포팅)가 동적 per-batch 부분 해결: 매 MoE 레이어가 <b>GPU SM 하나에서 작은 선형계획</b>(interior-point, cuBLASDx/cuSolverDx)을 풀어 각 토큰 부하를 expert 복제본들에 나눠 가장 바쁜 GPU를 최소화. straggler 왜, LP/IPM 메커니즘, 이 커밋이 SGLang에 포팅하는 것(<code class="inl">--ep-dispatch-algorithm lp</code>, 빈 rank deadlock 처리, 모델 allowlist), 코드 흐름 @ 92b42c8, 정직한 해석: DeepSeek은 <i>학습용</i>, SGLang은 추론에 적용, NVIDIA 전용, PR 속도 향상은 n=3 셀프벤치 p&gt;0.05(유의하지 않음).</span>
+    </p>
+    <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time></p>
+  </a>
+
+  <a class="card" href="service-induced-congestion-llm-serving.html">
+    <span class="tag t-blue">
+      <span class="en">Paper note</span>
+      <span class="ko">논문 정리</span>
+    </span>
+    <h2>
+      <span class="en">Service-Induced Congestion in Memory-Constrained LLM Serving</span>
+      <span class="ko">메모리 제약 LLM 서빙의 서비스 유발 혼잡</span>
+    </h2>
+    <p>
+      <span class="en">A 101-page math.OC theory paper (Ao, Dong, Luo, Simchi-Levi — MIT/Columbia/PKU) modeling continuous-batching serving as a discrete-time dynamical system where each request's KV cache grows one token per decode step — so service creates its own future congestion, something classical fixed-capacity queueing never sees. Main results: (1) homogeneous workloads — the eviction-free equilibrium is provably unstable; greedy admission rolls to a worst-case eviction limit cycle losing up to 50% throughput (Theorem 2, via imbalance amplification). (2) Heterogeneous — the equilibrium is stable iff the decode lengths are coprime (Theorem 3, GCD condition); a shared divisor synchronizes completions into memory pulses (roots on the unit circle), and the finite-input stability threshold scales as l₁,₂³ (Prop 4). Two cheap fixes: rate-limited admission (cap at the eviction-free rate x*) and request mixing (route coprime lengths together). Vidur+A800 confirm: rate-limiting cut evictions 2,232→0 and raised throughput +28.3%; coprime mixing cut evictions −94.2%. Plain-language math throughout (the 4-step map, the GCD/roots-of-unity mechanism, the cubic threshold), verbatim quotes + anchors, diagrams. No code (theory). The "why" behind the cascades CacheWise/Tropical engineer around.</span>
+      <span class="ko">101쪽 math.OC 이론 논문(Ao, Dong, Luo, Simchi-Levi — MIT/컬럼비아/베이징대). continuous-batching 서빙을, 각 요청 KV 캐시가 decode 스텝마다 토큰 하나씩 자라는 이산시간 동역학계로 모델링 — 서비스가 제 미래 혼잡을 만든다, 고전 고정용량 큐잉은 못 보는 현상. 주요 결과: (1) 동질 워크로드 — 무축출 평형이 증명 가능하게 불안정; 탐욕 admission이 처리량 최대 50% 잃는 최악의 축출 주기로 굴러감(정리 2, 불균형 증폭). (2) 이질 — 평형은 decode 길이가 서로소일 때만 안정(정리 3, GCD 조건); 공약수는 완료를 메모리 펄스로 동기화(단위원 위 근), 유한 입력 안정 임계는 l₁,₂³로 스케일(명제 4). 값싼 처방 둘: rate-limited admission(무축출 속도 x*로 캡)과 request mixing(서로소 길이를 같이 라우팅). Vidur+A800 확인: rate-limiting은 축출 2,232→0, 처리량 +28.3%; 서로소 mixing은 축출 −94.2%. 수식 쉬운 설명 전반(4단계 사상, GCD/단위근 메커니즘, 세제곱 임계), 원문 인용+앵커, 다이어그램. 코드 없음(이론). CacheWise/Tropical이 우회 설계하는 cascade의 "왜".</span>
+    </p>
+    <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time></p>
+  </a>
+
   <a class="card" href="tropical-slo-aware-multiplexing.html">
     <span class="tag t-blue">
       <span class="en">Paper note</span>

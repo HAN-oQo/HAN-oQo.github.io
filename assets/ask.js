@@ -255,6 +255,7 @@
     "@keyframes askblink{50%{opacity:.25}}" +
     "@media(prefers-reduced-motion:reduce){.askai-dots,.askai-cursor{animation:none}}" +
     ".askai-md{white-space:normal;overflow-wrap:anywhere;max-width:100%}" +
+    ".askai-md .katex{font-size:1.05em}" +   /* KaTeX defaults to 1.21em — pull math back near the 13.5px body size */
     ".askai-md .katex-display{overflow-x:auto;overflow-y:hidden;max-width:100%;margin:6px 0;padding:2px 0}" +   /* long display math scrolls inside the bubble */
     ".askai-md table{display:block;width:max-content;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:6px 0}" +
     ".askai-md img{max-width:100%;height:auto}" +
