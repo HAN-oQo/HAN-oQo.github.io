@@ -339,40 +339,82 @@
 <tr><td><b>CP</b> <span class="muted">(context/seq, long-ctx)</span></td><td><span class="en">sequence / KV along tokens</span><span class="ko">시퀀스 / KV를 토큰축으로</span></td><td><span class="en">attention only: <b>ring p2p of K/V</b> or <b>2 all-to-all</b> (Ulysses); nothing elsewhere</span><span class="ko">attention만: <b>K/V ring p2p</b> 또는 <b>all-to-all 2회</b>(Ulysses); 그 외 없음</span></td><td><span class="en">yes — that's the point (long context)</span><span class="ko">예 — 그게 목적 (롱컨텍스트)</span></td></tr>
 </table>
 
-<p><span class="en"><b>TP</b> shards each GEMM (first weight column-parallel, second row-parallel) so GeLU needs no sync; the row-parallel output is summed with an all-reduce. Megatron: "two all-reduces in the forward path and two in the backward path" — at inference (no backward) that's <b>2 per layer</b> <a class="src" href="https://arxiv.org/abs/1909.08053">[5]</a>. Each all-reduce moves the <code class="inl">b·s·h</code> activation tensor, not weights.</span>
-  <span class="ko"><b>TP</b>는 각 GEMM을 샤딩(첫 가중치 column-parallel, 둘째 row-parallel)해 GeLU에 동기가 필요 없게 하고, row-parallel 출력을 all-reduce로 합산. Megatron: "forward 2회 + backward 2회 all-reduce" — 추론(backward 없음)은 <b>레이어당 2회</b> <a class="src" href="https://arxiv.org/abs/1909.08053">[5]</a>. 각 all-reduce는 가중치가 아니라 <code class="inl">b·s·h</code> activation을 옮긴다.</span></p>
-<p><span class="en"><b>EP</b> shards experts; each MoE layer routes tokens to the GPU holding their expert (<b>all-to-all dispatch</b>) and sends results back (<b>all-to-all combine</b>) <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>. Buffers are fixed-size (expert <i>capacity</i>; overflow tokens skip via the residual) <a class="src" href="https://arxiv.org/abs/2101.03961">[7]</a>. Cross-node all-to-all dominates: DeepSeek-V3 measures a "computation-to-communication ratio of approximately 1:1" <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>.</span>
-  <span class="ko"><b>EP</b>는 expert를 샤딩; 각 MoE 레이어가 토큰을 해당 expert의 GPU로(<b>all-to-all dispatch</b>) 보내고 결과를 돌려받음(<b>all-to-all combine</b>) <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>. 버퍼는 고정 크기(expert <i>capacity</i>; 초과 토큰은 residual로 우회) <a class="src" href="https://arxiv.org/abs/2101.03961">[7]</a>. 노드 간 all-to-all이 지배적: DeepSeek-V3는 "연산-통신 비 ≈1:1" 측정 <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>.</span></p>
-<p><span class="en"><b>DP</b> at <i>inference</i> replicates the full model on independent request batches → <b>no per-layer collective</b> (unlike DP-<i>training</i>, which all-reduces gradients). The exception is vLLM's <b>DP-attention</b> for MoE/MLA: attention runs DP (avoids duplicating the KV cache) while experts run EP/TP, so all ranks must step in <b>lockstep</b> — vLLM inserts "empty 'dummy' forward passes … in all ranks that don't currently have any requests" and runs "a collective operation … every N steps to determine when all ranks become idle" <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span>
-  <span class="ko"><b>DP</b>는 <i>추론</i>에선 모델 전체를 독립 요청 배치에 복제 → <b>레이어당 collective 없음</b>(gradient를 all-reduce하는 DP-<i>학습</i>과 다름). 예외는 MoE/MLA용 vLLM <b>DP-attention</b>: attention은 DP(KV cache 중복 회피), expert는 EP/TP라 전 rank가 <b>lockstep</b>이어야 함 — vLLM은 "요청 없는 rank에 빈 dummy forward를 넣고", "N스텝마다 collective로 전 rank idle 여부 판정" <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span></p>
+<p><span class="en"><b>TP</b> (tensor parallel) — <b>split the model</b>:</span><span class="ko"><b>TP</b>(텐서 병렬) — <b>모델을 쪼갬</b>:</span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+<li><span class="en">shards each GEMM (1st weight column-parallel, 2nd row-parallel) so GeLU needs no sync; the row-parallel output is summed by an all-reduce.</span><span class="ko">각 GEMM을 샤딩(첫 가중치 column-parallel, 둘째 row-parallel)해 GeLU 동기 불필요; row-parallel 출력을 all-reduce로 합산.</span></li>
+<li><span class="en"><b>weights split, activations stay full</b> (kept identical by the all-reduce). Megatron: 2 all-reduce fwd + 2 bwd → at inference <b>2 per layer</b> <a class="src" href="https://arxiv.org/abs/1909.08053">[5]</a>; each moves the <code class="inl">b·s·h</code> activation, not the weights.</span><span class="ko"><b>가중치는 쪼개고 activation은 full 유지</b>(all-reduce로 동일하게 유지). Megatron: forward 2 + backward 2 → 추론 <b>레이어당 2회</b> <a class="src" href="https://arxiv.org/abs/1909.08053">[5]</a>; 각 all-reduce는 가중치가 아니라 <code class="inl">b·s·h</code> activation을 옮김.</span></li>
+</ul>
+<p><span class="en"><b>EP</b> (expert parallel, MoE) — <b>split the experts</b>:</span><span class="ko"><b>EP</b>(expert 병렬, MoE) — <b>expert를 쪼갬</b>:</span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+<li><span class="en">each MoE layer routes tokens to the GPU holding their expert (<b>all-to-all dispatch</b>) and sends results back (<b>all-to-all combine</b>) <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>. Buffers are fixed-size (expert <i>capacity</i>; overflow skips via the residual) <a class="src" href="https://arxiv.org/abs/2101.03961">[7]</a>.</span><span class="ko">각 MoE 레이어가 토큰을 해당 expert의 GPU로(<b>all-to-all dispatch</b>) 보내고 결과를 돌려받음(<b>all-to-all combine</b>) <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>. 버퍼는 고정 크기(expert <i>capacity</i>; 초과는 residual 우회) <a class="src" href="https://arxiv.org/abs/2101.03961">[7]</a>.</span></li>
+<li><span class="en">cross-node all-to-all dominates — DeepSeek-V3 measures a "computation-to-communication ratio of approximately 1:1" <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>.</span><span class="ko">노드 간 all-to-all이 지배적 — DeepSeek-V3는 "연산-통신 비 ≈1:1" 측정 <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>.</span></li>
+</ul>
+<p><span class="en"><b>DP</b> (data parallel) — <b>replicate the model</b>:</span><span class="ko"><b>DP</b>(데이터 병렬) — <b>모델을 복제</b>:</span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+<li><span class="en">at inference each GPU holds the <b>full model</b> and runs a <b>different request batch</b> → <b>no per-layer collective</b> (unlike DP-<i>training</i>, which all-reduces gradients). The <b>mirror image of TP</b>.</span><span class="ko">추론에선 각 GPU가 <b>모델 전체</b>를 갖고 <b>다른 요청 배치</b>를 처리 → <b>레이어당 collective 없음</b>(gradient를 all-reduce하는 DP-<i>학습</i>과 다름). <b>TP의 거울상</b>.</span></li>
+<li><span class="en">exception — vLLM <b>DP-attention</b> (MoE/MLA): attention runs DP (avoids duplicating the KV cache), experts run EP/TP, so ranks step in <b>lockstep</b> — vLLM inserts dummy forward passes + a tiny coordination all-reduce every N steps <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span><span class="ko">예외 — vLLM <b>DP-attention</b>(MoE/MLA): attention은 DP(KV cache 중복 회피), expert는 EP/TP → 전 rank가 <b>lockstep</b>; vLLM은 dummy forward + N스텝마다 작은 조정 all-reduce 삽입 <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span></li>
+</ul>
 
-<svg class="fig" viewBox="0 0 760 150" role="img" aria-label="collective placement in a layer">
-<style>.t{font:600 11px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.blk{rx:5}</style>
-<text x="20" y="16" class="t">One transformer layer — where the collective sits</text>
-<!-- TP row -->
-<text x="20" y="46" class="k">TP</text>
-<rect x="55" y="32" width="90" height="22" rx="5" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="100" y="47" class="k" text-anchor="middle">attention</text>
-<rect x="150" y="32" width="60" height="22" rx="5" fill="var(--coral-bg)" stroke="var(--coral-bd)"/><text x="180" y="47" class="k" text-anchor="middle" fill="var(--coral-ink)">all-reduce</text>
-<rect x="215" y="32" width="90" height="22" rx="5" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="260" y="47" class="k" text-anchor="middle">MLP</text>
-<rect x="310" y="32" width="60" height="22" rx="5" fill="var(--coral-bg)" stroke="var(--coral-bd)"/><text x="340" y="47" class="k" text-anchor="middle" fill="var(--coral-ink)">all-reduce</text>
-<text x="385" y="47" class="k">→ 2 / layer (sum sharded outputs)</text>
-<!-- EP row -->
-<text x="20" y="92" class="k">EP</text>
-<rect x="55" y="78" width="80" height="22" rx="5" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="95" y="93" class="k" text-anchor="middle">attn + gate</text>
-<rect x="140" y="78" width="74" height="22" rx="5" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="177" y="93" class="k" text-anchor="middle" fill="var(--amber-ink)">a2a dispatch</text>
-<rect x="219" y="78" width="70" height="22" rx="5" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="254" y="93" class="k" text-anchor="middle">experts</text>
-<rect x="294" y="78" width="74" height="22" rx="5" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="331" y="93" class="k" text-anchor="middle" fill="var(--amber-ink)">a2a combine</text>
-<text x="385" y="93" class="k">→ 2 all-to-all / MoE layer</text>
-<!-- DP row -->
-<text x="20" y="134" class="k">DP</text>
-<rect x="55" y="120" width="250" height="22" rx="5" fill="var(--gray-bg)" stroke="var(--gray-bd)"/><text x="180" y="135" class="k" text-anchor="middle">full layer, own requests — no collective</text>
-<text x="385" y="135" class="k">→ 0 / layer (MoE DP-attn: lockstep + coord all-reduce)</text>
-</svg>
-<p class="figcap"><span class="en">Fig 3 — collective placement per layer. Sources: Megatron [5], DeepSeek-V3 [8], vLLM DP docs [15].</span><span class="ko">그림 3 — 레이어당 collective 위치. 출처: Megatron [5], DeepSeek-V3 [8], vLLM DP 문서 [15].</span></p>
+<p><span class="en"><b>What each GPU actually holds</b> — switch the strategy and watch how the <b>weights</b> and the <b>activations</b> get distributed across 4 GPUs:</span><span class="ko"><b>각 GPU가 실제로 무엇을 갖는가</b> — 전략을 바꿔가며 <b>weight</b>와 <b>activation</b>이 GPU 4개에 어떻게 분배되는지 보자:</span></p>
+<div class="calc">
+  <div class="ctrl">
+    <span class="seg" id="pseg"><button type="button" data-p="TP" class="on">TP</button><button type="button" data-p="EP">EP</button><button type="button" data-p="DP">DP</button><button type="button" data-p="CP">CP</button></span>
+    <span style="color:var(--muted)"><span class="en">distinct colours = sharded · grey = replicated (same on every GPU)</span><span class="ko">다른 색 = 샤딩 · 회색 = 복제(전 GPU 동일)</span></span>
+  </div>
+  <svg viewBox="0 0 760 224" role="img" aria-label="per-GPU weight and activation distribution" style="display:block;max-width:100%;height:auto;margin:6px 0 2px" font-family="-apple-system,system-ui,sans-serif">
+    <text x="225" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">Weights (params)</text>
+    <text x="535" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">Activations (data)</text>
+    <text id="whdr" x="225" y="37" text-anchor="middle" font-size="10" fill="var(--muted)">sharded across GPUs</text>
+    <text id="ahdr" x="535" y="37" text-anchor="middle" font-size="10" fill="var(--muted)">full on each — synced by all-reduce</text>
+    <text x="40" y="75" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G0</text>
+    <rect id="wr0" x="80" y="54" width="290" height="32" rx="6" fill="var(--blue-bd)"/><text id="wt0" x="225" y="74" text-anchor="middle" font-size="12" fill="var(--ink)">W shard 0</text>
+    <rect id="ar0" x="390" y="54" width="290" height="32" rx="6" fill="var(--gray-bd)"/><text id="at0" x="535" y="74" text-anchor="middle" font-size="12" fill="var(--ink)">act (full)</text>
+    <text x="40" y="117" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G1</text>
+    <rect id="wr1" x="80" y="96" width="290" height="32" rx="6" fill="var(--green-bd)"/><text id="wt1" x="225" y="116" text-anchor="middle" font-size="12" fill="var(--ink)">W shard 1</text>
+    <rect id="ar1" x="390" y="96" width="290" height="32" rx="6" fill="var(--gray-bd)"/><text id="at1" x="535" y="116" text-anchor="middle" font-size="12" fill="var(--ink)">act (full)</text>
+    <text x="40" y="159" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G2</text>
+    <rect id="wr2" x="80" y="138" width="290" height="32" rx="6" fill="var(--amber-bd)"/><text id="wt2" x="225" y="158" text-anchor="middle" font-size="12" fill="var(--ink)">W shard 2</text>
+    <rect id="ar2" x="390" y="138" width="290" height="32" rx="6" fill="var(--gray-bd)"/><text id="at2" x="535" y="158" text-anchor="middle" font-size="12" fill="var(--ink)">act (full)</text>
+    <text x="40" y="201" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G3</text>
+    <rect id="wr3" x="80" y="180" width="290" height="32" rx="6" fill="var(--coral-bd)"/><text id="wt3" x="225" y="200" text-anchor="middle" font-size="12" fill="var(--ink)">W shard 3</text>
+    <rect id="ar3" x="390" y="180" width="290" height="32" rx="6" fill="var(--gray-bd)"/><text id="at3" x="535" y="200" text-anchor="middle" font-size="12" fill="var(--ink)">act (full)</text>
+  </svg>
+  <div class="eq" id="commline">per-layer comm: 2× all-reduce (after attn, after MLP)</div>
+  <div id="pdesc" style="font-size:13px;color:var(--ink);margin-top:4px;line-height:1.55">Split the model — each GPU holds a slice of every weight matrix; activations stay full on every GPU, kept identical by an all-reduce after attention and after the MLP.</div>
+</div>
+<script>
+(function(){
+  var COL=['var(--blue-bd)','var(--green-bd)','var(--amber-bd)','var(--coral-bd)'], GRY='var(--gray-bd)';
+  var D={
+    TP:{w:['W shard 0','W shard 1','W shard 2','W shard 3'],wr:0,a:['act (full)','act (full)','act (full)','act (full)'],ar:1,ws:'sharded across GPUs',as:'full on each — synced by all-reduce',comm:'per-layer comm: 2× all-reduce (after attn, after MLP)',desc:'Split the model — each GPU holds a slice of every weight matrix; activations stay full on every GPU, kept identical by an all-reduce after attention and after the MLP.'},
+    EP:{w:['experts {0,1}','experts {2,3}','experts {4,5}','experts {6,7}'],wr:0,a:['its tokens','its tokens','its tokens','its tokens'],ar:0,ws:'experts split across GPUs',as:'tokens routed to their expert (all-to-all)',comm:'per-layer comm: 2× all-to-all (dispatch + combine), MoE layers',desc:'Split the experts — each GPU holds a subset. Every token is routed (all-to-all dispatch) to the GPU with its expert, then the result is routed back (all-to-all combine).'},
+    DP:{w:['W (full copy)','W (full copy)','W (full copy)','W (full copy)'],wr:1,a:['batch 0','batch 1','batch 2','batch 3'],ar:0,ws:'replicated — full copy on each',as:'split by request / batch',comm:'per-layer comm: none (replicas are independent)',desc:'Replicate the model — every GPU runs the whole network on a different batch of requests. The mirror image of TP. No per-layer collective (vLLM DP-attention adds only a tiny coordination all-reduce).'},
+    CP:{w:['W (full copy)','W (full copy)','W (full copy)','W (full copy)'],wr:1,a:['seq chunk 0','seq chunk 1','seq chunk 2','seq chunk 3'],ar:0,ws:'replicated — full copy on each',as:'split by sequence (tokens)',comm:'comm: attention only — ring-p2p / all-to-all of K/V',desc:'Replicate the model, split the sequence — each GPU holds part of the tokens. Only attention needs comm: every query must see all K/V, exchanged by ring-p2p (ring attention) or all-to-all (Ulysses).'}
+  };
+  var seg=document.getElementById('pseg');
+  function el(id){ return document.getElementById(id); }
+  function set(p){
+    var d=D[p];
+    for(var i=0;i<4;i++){
+      el('wr'+i).setAttribute('fill', d.wr ? GRY : COL[i]); el('wt'+i).textContent=d.w[i];
+      el('ar'+i).setAttribute('fill', d.ar ? GRY : COL[i]); el('at'+i).textContent=d.a[i];
+    }
+    el('whdr').textContent=d.ws; el('ahdr').textContent=d.as;
+    el('commline').textContent=d.comm; el('pdesc').textContent=d.desc;
+  }
+  seg.addEventListener('click', function(e){ var b=e.target.closest('button'); if(!b) return; var bs=seg.querySelectorAll('button'); for(var i=0;i<bs.length;i++) bs[i].classList.toggle('on', bs[i]===b); set(b.getAttribute('data-p')); });
+  set('TP');
+})();
+</script>
+<p class="figcap"><span class="en">Fig 3 — per-GPU view: how weights vs activations are distributed (switch strategy). <b>TP and DP are mirror images</b> — TP splits weights/keeps activations full, DP replicates weights/splits the data. Sources: Megatron [5], DeepSeek-V3 [8], vLLM DP docs [15].</span><span class="ko">그림 3 — GPU별 관점: weight와 activation이 어떻게 분배되는지(전략 전환). <b>TP와 DP는 거울상</b> — TP는 weight를 쪼개고 activation은 full, DP는 weight를 복제하고 데이터를 쪼갠다. 출처: Megatron [5], DeepSeek-V3 [8], vLLM DP 문서 [15].</span></p>
 
 <h3><span class="en">CP — context (sequence) parallel, for long context</span><span class="ko">CP — context(sequence) parallel, 롱컨텍스트용</span></h3>
-<p><span class="en"><b>CP shards the sequence</b> — each GPU holds part of the tokens. Everything except attention is token-independent and needs <b>no</b> communication; attention is the catch, because every query must see <i>all</i> keys/values. Two schemes. <b>Ring attention</b> keeps Q in place and <b>rotates the K/V blocks neighbor-to-neighbor (p2p)</b>, overlapping the transfer with blockwise attention — it scales with the number of GPUs and works for GQA/MQA, but the small blocks cost some FlashAttention efficiency <a class="src" href="https://arxiv.org/abs/2310.01889">[16C]</a>. <b>DeepSpeed-Ulysses</b> instead does <b>2 all-to-all per attention layer</b> to transpose sequence↔heads (each GPU then computes whole heads locally) — very efficient intra-node, but the parallel degree is <b>capped by the head count</b> (poor for GQA/MQA) <a class="src" href="https://arxiv.org/abs/2309.14509">[17C]</a>; USP fuses the two. In <b>vLLM main</b> CP shows up as <b>Decode Context Parallel</b>: <code class="inl">-dcp &lt;size&gt;</code> shards the <b>KV cache</b> along the token axis to cut KV duplication once TP exceeds the KV-head count (MLA/GQA), and the MLA chunked-prefill path runs a <b>Context-KV all-gather</b>; <b>Prefill Context Parallel (PCP)</b> is an open RFC for better TTFT <a class="src" href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">[18C]</a>. (Not traced in §3 — that section is TP/EP/DP.)</span>
-  <span class="ko"><b>CP는 시퀀스를 쪼갠다</b> — 각 GPU가 토큰의 일부만 보유. attention을 뺀 나머지는 토큰 독립이라 통신이 <b>없고</b>, 문제는 attention이다 — 모든 query가 <i>전체</i> key/value를 봐야 하기 때문. 방식은 둘. <b>Ring attention</b>은 Q를 고정하고 <b>K/V 블록을 이웃끼리 p2p로 회전</b>시키며 blockwise attention과 전송을 겹친다 — GPU 수만큼 확장되고 GQA/MQA에도 동작하지만 작은 블록이 FlashAttention 효율을 깎는다 <a class="src" href="https://arxiv.org/abs/2310.01889">[16C]</a>. <b>DeepSpeed-Ulysses</b>는 대신 <b>attention당 all-to-all 2회</b>로 sequence↔heads를 transpose해(각 GPU가 head 전체를 로컬 계산) 노드 내에서 매우 효율적이지만 병렬도가 <b>head 수에 묶인다</b>(GQA/MQA 불리) <a class="src" href="https://arxiv.org/abs/2309.14509">[17C]</a>; USP가 둘을 결합. <b>vLLM main</b>에선 CP가 <b>Decode Context Parallel</b>로 등장: <code class="inl">-dcp &lt;size&gt;</code>가 TP가 KV-head 수를 넘을 때(MLA/GQA) KV 중복을 줄이려 <b>KV 캐시</b>를 토큰축으로 샤딩하고, MLA chunked-prefill 경로는 <b>Context-KV all-gather</b>를 수행; <b>Prefill Context Parallel(PCP)</b>은 TTFT 개선용 RFC 상태 <a class="src" href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">[18C]</a>. (§3에선 미추적 — 그 섹션은 TP/EP/DP.)</span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+<li><span class="en"><b>CP shards the sequence</b> — each GPU holds part of the tokens. Everything except attention is token-independent → <b>no comm</b>; attention is the catch (every query must see <i>all</i> K/V).</span><span class="ko"><b>CP는 시퀀스를 쪼갬</b> — 각 GPU가 토큰 일부만 보유. attention 외엔 토큰 독립 → <b>통신 없음</b>; attention만 문제(모든 query가 <i>전체</i> K/V를 봐야 함).</span></li>
+<li><span class="en"><b>Ring attention</b>: Q stays put, the <b>K/V blocks rotate neighbor-to-neighbor (p2p)</b>, overlapping transfer with blockwise attention — scales with #GPUs, works for GQA/MQA, but small blocks cost some FlashAttention efficiency <a class="src" href="https://arxiv.org/abs/2310.01889">[16C]</a>.</span><span class="ko"><b>Ring attention</b>: Q 고정, <b>K/V 블록을 이웃끼리 p2p로 회전</b>, 전송과 blockwise attention을 겹침 — GPU 수만큼 확장·GQA/MQA 가능하지만 작은 블록이 FlashAttention 효율을 깎음 <a class="src" href="https://arxiv.org/abs/2310.01889">[16C]</a>.</span></li>
+<li><span class="en"><b>DeepSpeed-Ulysses</b>: <b>2 all-to-all per attention</b> to transpose sequence↔heads — very efficient intra-node, but parallel degree is <b>capped by head count</b> (poor for GQA/MQA) <a class="src" href="https://arxiv.org/abs/2309.14509">[17C]</a>; USP fuses the two.</span><span class="ko"><b>DeepSpeed-Ulysses</b>: <b>attention당 all-to-all 2회</b>로 sequence↔heads transpose — 노드 내 매우 효율적이나 병렬도가 <b>head 수에 묶임</b>(GQA/MQA 불리) <a class="src" href="https://arxiv.org/abs/2309.14509">[17C]</a>; USP가 둘을 결합.</span></li>
+<li><span class="en"><b>vLLM main</b>: <b>Decode Context Parallel</b> <code class="inl">-dcp &lt;size&gt;</code> shards the <b>KV cache</b> along tokens to cut KV duplication once TP exceeds the KV-head count (MLA/GQA); MLA chunked-prefill runs a <b>Context-KV all-gather</b>. <b>Prefill CP (PCP)</b> is an open RFC for TTFT <a class="src" href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">[18C]</a>. (Not traced in §3.)</span><span class="ko"><b>vLLM main</b>: <b>Decode Context Parallel</b> <code class="inl">-dcp &lt;size&gt;</code>가 TP가 KV-head 수를 넘으면(MLA/GQA) <b>KV 캐시</b>를 토큰축으로 샤딩; MLA chunked-prefill은 <b>Context-KV all-gather</b> 수행. <b>Prefill CP(PCP)</b>는 TTFT용 RFC <a class="src" href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">[18C]</a>. (§3 미추적.)</span></li>
+</ul>
 
 <svg class="fig" viewBox="0 0 760 210" role="img" aria-label="context parallel ring attention">
 <style>
