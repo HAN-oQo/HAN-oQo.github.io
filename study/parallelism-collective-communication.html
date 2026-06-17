@@ -465,58 +465,91 @@
 <li><span class="en">exception — vLLM <b>DP-attention</b> (MoE/MLA): attention runs DP (avoids duplicating the KV cache), experts run EP/TP, so ranks step in <b>lockstep</b> — vLLM inserts dummy forward passes + a tiny coordination all-reduce every N steps <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span><span class="ko">예외 — vLLM <b>DP-attention</b>(MoE/MLA): attention은 DP(KV cache 중복 회피), expert는 EP/TP → 전 rank가 <b>lockstep</b>; vLLM은 dummy forward + N스텝마다 작은 조정 all-reduce 삽입 <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span></li>
 </ul>
 
-<p><span class="en"><b>What each GPU actually holds</b> — switch the strategy and watch how the <b>weights</b> and the <b>activations</b> get distributed across 4 GPUs:</span><span class="ko"><b>각 GPU가 실제로 무엇을 갖는가</b> — 전략을 바꿔가며 <b>weight</b>와 <b>activation</b>이 GPU 4개에 어떻게 분배되는지 보자:</span></p>
+<p><span class="en"><b>What each GPU actually holds</b> — switch strategy and watch, for the three tensors (<b>input</b> X, <b>weights</b> W, <b>activation</b> Y), their <b>shape</b>, <b>which axis is split</b>, <b>what slice each GPU keeps</b>, and the <b>collective</b> that merges/splits them. All strategies from the table above are included.</span><span class="ko"><b>각 GPU가 실제로 무엇을 갖는가</b> — 전략을 바꿔가며 세 텐서(<b>입력</b> X, <b>가중치</b> W, <b>activation</b> Y)의 <b>shape</b>, <b>어느 축으로 쪼개지는지</b>, <b>GPU별로 어떤 슬라이스를 갖는지</b>, 그리고 그것들을 <b>합치고 나누는 통신</b>을 한눈에 보자. 위 표의 전략을 모두 포함한다.</span></p>
 <div class="calc">
   <div class="ctrl">
-    <span class="seg" id="pseg"><button type="button" data-p="TP" class="on">TP</button><button type="button" data-p="EP">EP</button><button type="button" data-p="DP">DP</button><button type="button" data-p="CP">CP</button></span>
-    <span style="color:var(--muted)"><span class="en">distinct colours = sharded · grey = replicated (same on every GPU)</span><span class="ko">다른 색 = 샤딩 · 회색 = 복제(전 GPU 동일)</span></span>
+    <span class="seg" id="pseg" style="flex-wrap:wrap"><button type="button" data-p="TP" class="on">TP</button><button type="button" data-p="TPSP">TP+SP</button><button type="button" data-p="EP">EP</button><button type="button" data-p="DP">DP</button><button type="button" data-p="DPEP">DP+EP</button><button type="button" data-p="PP">PP</button><button type="button" data-p="CP">CP</button></span>
+    <span style="color:var(--muted)"><span class="en">colour = sharded (per-GPU slice) · grey = replicated (identical on every GPU)</span><span class="ko">색 = 샤딩(GPU별 슬라이스) · 회색 = 복제(전 GPU 동일)</span></span>
   </div>
-  <svg viewBox="0 0 760 224" role="img" aria-label="per-GPU weight and activation distribution" style="display:block;max-width:100%;height:auto;margin:6px 0 2px" font-family="-apple-system,system-ui,sans-serif">
-    <text x="225" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">Weights (params)</text>
-    <text x="535" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">Activations (data)</text>
-    <text id="whdr" x="225" y="37" text-anchor="middle" font-size="10" fill="var(--muted)">sharded across GPUs</text>
-    <text id="ahdr" x="535" y="37" text-anchor="middle" font-size="10" fill="var(--muted)">full on each — synced by all-reduce</text>
-    <text x="40" y="75" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G0</text>
-    <rect id="wr0" x="80" y="54" width="290" height="32" rx="6" fill="var(--blue-bd)"/><text id="wt0" x="225" y="74" text-anchor="middle" font-size="12" fill="var(--ink)">W shard 0</text>
-    <rect id="ar0" x="390" y="54" width="290" height="32" rx="6" fill="var(--gray-bd)"/><text id="at0" x="535" y="74" text-anchor="middle" font-size="12" fill="var(--ink)">act (full)</text>
-    <text x="40" y="117" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G1</text>
-    <rect id="wr1" x="80" y="96" width="290" height="32" rx="6" fill="var(--green-bd)"/><text id="wt1" x="225" y="116" text-anchor="middle" font-size="12" fill="var(--ink)">W shard 1</text>
-    <rect id="ar1" x="390" y="96" width="290" height="32" rx="6" fill="var(--gray-bd)"/><text id="at1" x="535" y="116" text-anchor="middle" font-size="12" fill="var(--ink)">act (full)</text>
-    <text x="40" y="159" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G2</text>
-    <rect id="wr2" x="80" y="138" width="290" height="32" rx="6" fill="var(--amber-bd)"/><text id="wt2" x="225" y="158" text-anchor="middle" font-size="12" fill="var(--ink)">W shard 2</text>
-    <rect id="ar2" x="390" y="138" width="290" height="32" rx="6" fill="var(--gray-bd)"/><text id="at2" x="535" y="158" text-anchor="middle" font-size="12" fill="var(--ink)">act (full)</text>
-    <text x="40" y="201" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G3</text>
-    <rect id="wr3" x="80" y="180" width="290" height="32" rx="6" fill="var(--coral-bd)"/><text id="wt3" x="225" y="200" text-anchor="middle" font-size="12" fill="var(--ink)">W shard 3</text>
-    <rect id="ar3" x="390" y="180" width="290" height="32" rx="6" fill="var(--gray-bd)"/><text id="at3" x="535" y="200" text-anchor="middle" font-size="12" fill="var(--ink)">act (full)</text>
+  <svg viewBox="0 0 760 316" role="img" aria-label="per-GPU input, weight, activation distribution by strategy" style="display:block;max-width:100%;height:auto;margin:6px 0 2px" font-family="-apple-system,system-ui,sans-serif">
+  <text x="38" y="92" font-size="9.5" fill="var(--faint)" text-anchor="middle">GPU</text>
+  <text x="163" y="18" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">Input / data</text>
+  <text id="sh_in" x="163" y="34" text-anchor="middle" font-size="10.5" fill="var(--muted)">[b, s, h]</text>
+  <rect id="g_in_0" x="141" y="42.0" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_in_1" x="141" y="48.5" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_in_2" x="141" y="55.0" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_in_3" x="141" y="61.5" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <text id="sp_in" x="163" y="86" text-anchor="middle" font-size="10" font-weight="600" fill="var(--ink)">replicated</text>
+  <text x="390" y="18" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">Weights / params</text>
+  <text id="sh_w" x="390" y="34" text-anchor="middle" font-size="10.5" fill="var(--muted)">[b, s, h]</text>
+  <rect id="g_w_0" x="368" y="42.0" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_w_1" x="368" y="48.5" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_w_2" x="368" y="55.0" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_w_3" x="368" y="61.5" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <text id="sp_w" x="390" y="86" text-anchor="middle" font-size="10" font-weight="600" fill="var(--ink)">replicated</text>
+  <text x="617" y="18" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">Activation / output</text>
+  <text id="sh_act" x="617" y="34" text-anchor="middle" font-size="10.5" fill="var(--muted)">[b, s, h]</text>
+  <rect id="g_act_0" x="595" y="42.0" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_act_1" x="595" y="48.5" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_act_2" x="595" y="55.0" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <rect id="g_act_3" x="595" y="61.5" width="44" height="6" rx="1" fill="var(--gray-bd)"/>
+  <text id="sp_act" x="617" y="86" text-anchor="middle" font-size="10" font-weight="600" fill="var(--ink)">replicated</text>
+  <line x1="14" y1="98" x2="746" y2="98" stroke="var(--line)"/>
+  <text x="38" y="134" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G0</text>
+  <rect id="cr_in_0" x="63" y="112" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_in_0" x="163" y="134" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <rect id="cr_w_0" x="290" y="112" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_w_0" x="390" y="134" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <rect id="cr_act_0" x="517" y="112" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_act_0" x="617" y="134" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <text x="38" y="176" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G1</text>
+  <rect id="cr_in_1" x="63" y="154" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_in_1" x="163" y="176" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <rect id="cr_w_1" x="290" y="154" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_w_1" x="390" y="176" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <rect id="cr_act_1" x="517" y="154" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_act_1" x="617" y="176" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <text x="38" y="218" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G2</text>
+  <rect id="cr_in_2" x="63" y="196" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_in_2" x="163" y="218" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <rect id="cr_w_2" x="290" y="196" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_w_2" x="390" y="218" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <rect id="cr_act_2" x="517" y="196" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_act_2" x="617" y="218" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <text x="38" y="260" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">G3</text>
+  <rect id="cr_in_3" x="63" y="238" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_in_3" x="163" y="260" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <rect id="cr_w_3" x="290" y="238" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_w_3" x="390" y="260" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <rect id="cr_act_3" x="517" y="238" width="200" height="34" rx="6" fill="var(--gray-bd)"/><text id="ct_act_3" x="617" y="260" text-anchor="middle" font-size="11" fill="var(--ink)">—</text>
+  <line x1="14" y1="278" x2="746" y2="278" stroke="var(--line)"/>
+  <text x="38" y="299" font-size="10.5" font-weight="700" fill="var(--ink)">comm</text>
+  <rect id="commbox" x="66" y="285" width="680" height="22" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="1"/>
+  <text id="commbadge" x="406" y="300" text-anchor="middle" font-size="11" font-weight="700" fill="var(--blue-ink)">2× all-reduce / layer</text>
   </svg>
-  <div class="eq" id="commline">per-layer comm: 2× all-reduce (after attn, after MLP)</div>
-  <div id="pdesc" style="font-size:13px;color:var(--ink);margin-top:4px;line-height:1.55">Split the model — each GPU holds a slice of every weight matrix; activations stay full on every GPU, kept identical by an all-reduce after attention and after the MLP.</div>
+  <div class="eq" id="commline">per-layer comm: 2x all-reduce</div>
+  <div id="pdesc" style="font-size:13px;color:var(--ink);margin-top:4px;line-height:1.55">desc</div>
 </div>
 <script>
 (function(){
   var COL=['var(--blue-bd)','var(--green-bd)','var(--amber-bd)','var(--coral-bd)'], GRY='var(--gray-bd)';
-  var D={
-    TP:{w:['W shard 0','W shard 1','W shard 2','W shard 3'],wr:0,a:['act (full)','act (full)','act (full)','act (full)'],ar:1,ws:'sharded across GPUs',as:'full on each — synced by all-reduce',comm:'per-layer comm: 2× all-reduce (after attn, after MLP)',desc:'Split the model — each GPU holds a slice of every weight matrix; activations stay full on every GPU, kept identical by an all-reduce after attention and after the MLP.'},
-    EP:{w:['experts {0,1}','experts {2,3}','experts {4,5}','experts {6,7}'],wr:0,a:['its tokens','its tokens','its tokens','its tokens'],ar:0,ws:'experts split across GPUs',as:'tokens routed to their expert (all-to-all)',comm:'per-layer comm: 2× all-to-all (dispatch + combine), MoE layers',desc:'Split the experts — each GPU holds a subset. Every token is routed (all-to-all dispatch) to the GPU with its expert, then the result is routed back (all-to-all combine).'},
-    DP:{w:['W (full copy)','W (full copy)','W (full copy)','W (full copy)'],wr:1,a:['batch 0','batch 1','batch 2','batch 3'],ar:0,ws:'replicated — full copy on each',as:'split by request / batch',comm:'per-layer comm: none (replicas are independent)',desc:'Replicate the model — every GPU runs the whole network on a different batch of requests. The mirror image of TP. No per-layer collective (vLLM DP-attention adds only a tiny coordination all-reduce).'},
-    CP:{w:['W (full copy)','W (full copy)','W (full copy)','W (full copy)'],wr:1,a:['seq chunk 0','seq chunk 1','seq chunk 2','seq chunk 3'],ar:0,ws:'replicated — full copy on each',as:'split by sequence (tokens)',comm:'comm: attention only — ring-p2p / all-to-all of K/V',desc:'Replicate the model, split the sequence — each GPU holds part of the tokens. Only attention needs comm: every query must see all K/V, exchanged by ring-p2p (ring attention) or all-to-all (Ulysses).'}
-  };
-  var seg=document.getElementById('pseg');
-  function el(id){ return document.getElementById(id); }
-  function set(p){
-    var d=D[p];
-    for(var i=0;i<4;i++){
-      el('wr'+i).setAttribute('fill', d.wr ? GRY : COL[i]); el('wt'+i).textContent=d.w[i];
-      el('ar'+i).setAttribute('fill', d.ar ? GRY : COL[i]); el('at'+i).textContent=d.a[i];
-    }
-    el('whdr').textContent=d.ws; el('ahdr').textContent=d.as;
-    el('commline').textContent=d.comm; el('pdesc').textContent=d.desc;
+  var cols=['in','w','act'], cx={in:163,w:390,act:617};
+  var D={TP:{inn:{shape:'[b, s, h]',split:'replicated ■ (identical)',g:'rep',shard:false,cells:['X (full)','X (full)','X (full)','X (full)']},w:{shape:'[h, d_out]',split:'split ↔ out-dim (col-parallel)',g:'v',shard:true,cells:['W[:, 0:d/4]','W[:, d/4:d/2]','W[:, d/2:3d/4]','W[:, 3d/4:d]']},act:{shape:'[b, s, h]',split:'partial → all-reduce → full',g:'v',shard:true,cells:['Y partial 0','Y partial 1','Y partial 2','Y partial 3']},badge:'2× all-reduce / layer (sum partials → full)',commline:'Weights split, activations full — all-reduce sums the partial outputs into one identical full activation on every GPU.',desc:'TP (Megatron): shard every GEMM along the feature/head dim. The input activation is identical on all GPUs; each computes a partial output; an all-reduce after attention and after the MLP sums them back to the full [b,s,h].'},
+TPSP:{inn:{shape:'[b, s/4, h]',split:'split ↕ sequence (norm/dropout)',g:'h',shard:true,cells:['X[:, s0]','X[:, s1]','X[:, s2]','X[:, s3]']},w:{shape:'[h, d_out]',split:'split ↔ out-dim',g:'v',shard:true,cells:['W[:, 0:d/4]','W[:, d/4:d/2]','W[:, d/2:3d/4]','W[:, 3d/4:d]']},act:{shape:'[b, s/4, h] ↔ [b, s, h]',split:'all-gather ↑ / reduce-scatter ↓',g:'h',shard:true,cells:['seq-shard ↔ full','seq-shard ↔ full','seq-shard ↔ full','seq-shard ↔ full']},badge:'all-gather + reduce-scatter (= 1 all-reduce of bytes)',commline:'Same weight split as TP; norm/dropout regions shard activations along the sequence — all-gather before each GEMM, reduce-scatter after.',desc:'TP + sequence-parallel: the all-reduce is split into all-gather (gather the sequence before the GEMM) + reduce-scatter (re-shard after). Activation memory drops; total bytes moved are unchanged.'},
+EP:{inn:{shape:'[n_tok, h]',split:'tokens routed to me (all-to-all)',g:'h',shard:true,cells:['my tokens','my tokens','my tokens','my tokens']},w:{shape:'E experts',split:'split ↔ expert index',g:'v',shard:true,cells:['experts {0,1}','experts {2,3}','experts {4,5}','experts {6,7}']},act:{shape:'[n_tok, h]',split:'results → combine (all-to-all)',g:'h',shard:true,cells:['expert out → back','expert out → back','expert out → back','expert out → back']},badge:'2× all-to-all / MoE layer (dispatch + combine)',commline:'Experts split across GPUs. Each token is dispatched (all-to-all) to the GPU holding its expert, then combined (all-to-all) back — MoE layers only.',desc:'EP (MoE): the router picks experts per token; all-to-all dispatch sends each token to the GPU holding its expert, all-to-all combine returns the output. DeepSeek-V3 reports ~1:1 compute:comm — the bottleneck.'},
+DP:{inn:{shape:'[b/4, s, h]',split:'split ↕ requests / batch',g:'h',shard:true,cells:['batch 0','batch 1','batch 2','batch 3']},w:{shape:'full model',split:'replicated ■',g:'rep',shard:false,cells:['W (full copy)','W (full copy)','W (full copy)','W (full copy)']},act:{shape:'[b/4, s, h]',split:'per-batch (independent)',g:'h',shard:true,cells:['act batch 0','act batch 1','act batch 2','act batch 3']},badge:'none — replicas independent',commline:'Replicate the full model on every GPU; each runs a different request batch. No per-layer collective — the mirror image of TP.',desc:'DP (dense inference): every GPU holds the whole network and processes its own batch of requests. Replicas are independent (unlike DP-training, which all-reduces gradients).'},
+DPEP:{inn:{shape:'[b/4, s, h] → routed',split:'DP batch (attn) → routed (experts)',g:'h',shard:true,cells:['batch 0 → route','batch 1 → route','batch 2 → route','batch 3 → route']},w:{shape:'attn full · experts split',split:'attn replicated ■ · experts ↔',g:'v',shard:true,cells:['attn full + exp{0,1}','attn full + exp{2,3}','attn full + exp{4,5}','attn full + exp{6,7}']},act:{shape:'[b/4, s, h] / routed',split:'DP attn · EP combine',g:'h',shard:true,cells:['attn b0 · exp comb','attn b1 · exp comb','attn b2 · exp comb','attn b3 · exp comb']},badge:'EP all-to-all + tiny coord all-reduce',commline:'vLLM MoE: attention runs DP (no KV duplication), experts run EP. Ranks step in lockstep — EP all-to-all plus a tiny coordination all-reduce and dummy passes.',desc:'DP-attention + EP (vLLM): attention is data-parallel so the KV cache is not duplicated; experts are expert-parallel. A small periodic all-reduce + dummy forwards keep ranks in lockstep.'},
+PP:{inn:{shape:'[b_micro, s, h]',split:'microbatch enters G0, flows on',g:'h',shard:true,cells:['X in (stage 0)','act ← G0','act ← G1','act ← G2']},w:{shape:'layers / depth',split:'split ↕ layers (stages)',g:'h',shard:true,cells:['layers 0–k','layers k–2k','layers 2k–3k','layers 3k–L']},act:{shape:'[b_micro, s, h]',split:'passed at boundary (p2p)',g:'h',shard:true,cells:['→ p2p to G1','→ p2p to G2','→ p2p to G3','→ output']},badge:'p2p send/recv at stage boundary',commline:'Split the layers into stages; a microbatch flows G0→G1→G2→G3, with only a p2p send/recv of the activation at each boundary (cheap; can cross nodes).',desc:'PP (pipeline): each GPU owns a contiguous block of layers. Activations are handed off by point-to-point send/recv at stage boundaries — the cheapest collective, so PP is the usual way to cross slow node links.'},
+CP:{inn:{shape:'[b, s/4, h]',split:'split ↕ sequence (tokens)',g:'h',shard:true,cells:['X[:, s0]','X[:, s1]','X[:, s2]','X[:, s3]']},w:{shape:'full model',split:'replicated ■',g:'rep',shard:false,cells:['W (full copy)','W (full copy)','W (full copy)','W (full copy)']},act:{shape:'[b, s/4, h]',split:'per-chunk; attn needs all K/V',g:'h',shard:true,cells:['act seq 0','act seq 1','act seq 2','act seq 3']},badge:'attention only: ring-p2p K/V (or all-to-all)',commline:'Replicate the model, split the sequence. Only attention needs comm: every query must see all K/V — ring-p2p (ring attention) or 2 all-to-all (Ulysses).',desc:'CP (context parallel): each GPU holds a chunk of tokens. Non-attention layers are token-independent (no comm); attention rotates K/V around a ring (p2p) or transposes seq↔heads with all-to-all.'}};
+  function el(id){return document.getElementById(id);}
+  function glyph(key,t){
+    var c=cx[key];
+    for(var i=0;i<4;i++){var g=el('g_'+key+'_'+i); var col=t.shard?COL[i]:GRY;
+      if(t.g==='v'){ g.setAttribute('x',c-22+i*11); g.setAttribute('y',42); g.setAttribute('width',10); g.setAttribute('height',26);} 
+      else { g.setAttribute('x',c-22); g.setAttribute('y',(t.g==='rep'?42+i*6.5:42+i*6.5)); g.setAttribute('width',44); g.setAttribute('height',(t.g==='rep'?6.5:6)); }
+      g.setAttribute('fill',col);}
   }
-  seg.addEventListener('click', function(e){ var b=e.target.closest('button'); if(!b) return; var bs=seg.querySelectorAll('button'); for(var i=0;i<bs.length;i++) bs[i].classList.toggle('on', bs[i]===b); set(b.getAttribute('data-p')); });
+  function setTensor(key,t){
+    el('sh_'+key).textContent=t.shape; el('sp_'+key).textContent=t.split; glyph(key,t);
+    for(var i=0;i<4;i++){ el('cr_'+key+'_'+i).setAttribute('fill', t.shard?COL[i]:GRY); el('ct_'+key+'_'+i).textContent=t.cells[i]; }
+  }
+  function set(p){ var d=D[p]; setTensor('in',d.inn); setTensor('w',d.w); setTensor('act',d.act);
+    el('commbadge').textContent=d.badge; el('commline').textContent=d.commline; el('pdesc').textContent=d.desc; }
+  var seg=el('pseg');
+  seg.addEventListener('click',function(e){var b=e.target.closest('button'); if(!b)return; var bs=seg.querySelectorAll('button'); for(var i=0;i<bs.length;i++) bs[i].classList.toggle('on',bs[i]===b); set(b.getAttribute('data-p'));});
   set('TP');
 })();
 </script>
-<p class="figcap"><span class="en">Fig 3 — per-GPU view: how weights vs activations are distributed (switch strategy). <b>TP and DP are mirror images</b> — TP splits weights/keeps activations full, DP replicates weights/splits the data. Sources: Megatron [5], DeepSeek-V3 [8], vLLM DP docs [15].</span><span class="ko">그림 3 — GPU별 관점: weight와 activation이 어떻게 분배되는지(전략 전환). <b>TP와 DP는 거울상</b> — TP는 weight를 쪼개고 activation은 full, DP는 weight를 복제하고 데이터를 쪼갠다. 출처: Megatron [5], DeepSeek-V3 [8], vLLM DP 문서 [15].</span></p>
+<p class="figcap"><span class="en">Fig 3 — per-GPU view across <b>all</b> table strategies: for input X, weights W, and activation Y, each header shows the <b>shape</b> + which <b>axis is split</b> (a glyph: horizontal bands = split along sequence/batch/depth, vertical = along feature/expert, solid grey = replicated); the grid shows <b>what each GPU holds</b>; the footer shows the <b>collective</b> that merges/splits. <b>TP and DP are mirror images.</b> Sources: Megatron [5], seq-parallel [6], DeepSeek-V3 [8], vLLM DP/CP docs [15][18C].</span><span class="ko">그림 3 — 표의 <b>모든</b> 전략을 GPU별로: 입력 X·가중치 W·activation Y마다 헤더에 <b>shape</b>와 <b>분할 축</b>(글리프: 가로 띠=시퀀스/배치/depth로 분할, 세로=feature/expert로 분할, 회색 단색=복제), 그리드에 <b>각 GPU가 갖는 것</b>, 푸터에 합치고 나누는 <b>통신</b>. <b>TP와 DP는 거울상.</b> 출처: Megatron [5], seq-parallel [6], DeepSeek-V3 [8], vLLM DP/CP 문서 [15][18C].</span></p>
 
 <h3><span class="en">CP — context (sequence) parallel, for long context</span><span class="ko">CP — context(sequence) parallel, 롱컨텍스트용</span></h3>
 <ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
