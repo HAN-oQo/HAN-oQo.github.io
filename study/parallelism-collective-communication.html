@@ -176,7 +176,7 @@
 <ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
   <li><span class="en">reduce up to the root (≈log₂N steps) + broadcast back down (≈log₂N) → <b>latency O(log N)</b>.</span><span class="ko">root까지 reduce 올림(≈log₂N스텝) + 다시 broadcast 내림(≈log₂N) → <b>지연 O(log N)</b>.</span></li>
   <li><span class="en">far better when N is large or the message is <b>small</b>.</span><span class="ko">N이 크거나 메시지가 <b>작을</b> 때 훨씬 유리.</span></li>
-  <li><span class="en">a plain tree drives only half the links per phase → NCCL uses <b>double binary trees</b> for full bandwidth both ways <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span><span class="ko">단순 트리는 단계마다 링크 절반만 사용 → NCCL은 <b>double binary tree</b>로 양방향 풀 대역폭 <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span></li>
+  <li><span class="en"><b>catch:</b> a simple tree ships the <b>full S over every hop</b> → byte term ≈ <code class="inl">2·log₂N·S</code> (vs ring’s ~2S), so <b>ring wins the bandwidth term for large S</b>. NCCL’s <b>double-binary trees</b> recover ~2S bandwidth while keeping log-latency <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span><span class="ko"><b>단점:</b> 단순 트리는 매 홉 <b>전체 S</b>를 보내 바이트 항이 ≈ <code class="inl">2·log₂N·S</code>(ring의 ~2S 대비) → <b>큰 S에선 대역폭 항에서 ring이 이긴다</b>. NCCL의 <b>double-binary tree</b>는 ~2S 대역폭을 회복하며 log 지연 유지 <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span></li>
 </ul>
 <table>
 <tr><th></th><th>Ring</th><th>Tree</th></tr>
@@ -244,19 +244,19 @@
 <p><span class="en"><b>① Assumptions</b></span><span class="ko"><b>① 가정</b></span></p>
 <ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
 <li><span class="en"><b>N</b> GPUs on one fabric · link bandwidth <b>B</b> · per-hop latency <b>α</b> · per-byte time <b>β = 1/B</b> · message size <b>S</b> (the all-reduce tensor).</span><span class="ko"><b>N</b>개 GPU가 한 패브릭에 · 링크 대역폭 <b>B</b> · 홉당 지연 <b>α</b> · 바이트당 시간 <b>β = 1/B</b> · 메시지 크기 <b>S</b>(all-reduce 텐서).</span></li>
-<li><span class="en">general cost = <code class="inl">(rounds)·α + (bytes/GPU)·β</code>. The <b>bytes/GPU term is identical</b> for ring and tree — <code class="inl">2(N−1)/N·S</code> — so <b>only the round count differs</b>.</span><span class="ko">일반 비용 = <code class="inl">(라운드)·α + (GPU당 바이트)·β</code>. <b>GPU당 바이트 항은 ring·tree가 동일</b>(<code class="inl">2(N−1)/N·S</code>) → <b>라운드 수만 다르다</b>.</span></li>
+<li><span class="en">general cost = <code class="inl">(rounds)·α + (bytes/GPU)·β</code>. Ring and tree differ on <b>both</b> terms: a ring takes <b>more hops</b> but ships only <code class="inl">S/N</code> per hop; a simple tree takes <b>fewer hops</b> but ships the <b>full S</b> every hop. So tree wins the latency term, <b>ring wins the bandwidth term</b>.</span><span class="ko">일반 비용 = <code class="inl">(라운드)·α + (GPU당 바이트)·β</code>. ring·tree는 <b>두 항 모두</b> 다르다: ring은 <b>홉이 많지만</b> 홉당 <code class="inl">S/N</code>만, 단순 tree는 <b>홉이 적지만</b> 매 홉 <b>전체 S</b>를 보낸다. 그래서 지연 항은 tree, <b>대역폭 항은 ring</b>이 유리하다.</span></li>
 </ul>
 
 <p><span class="en"><b>② Ring cost</b></span><span class="ko"><b>② Ring 비용</b></span></p>
 <ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
 <li><span class="en">rounds = reduce-scatter <code class="inl">(N−1)</code> + all-gather <code class="inl">(N−1)</code> = <code class="inl">2(N−1)</code></span><span class="ko">라운드 = reduce-scatter <code class="inl">(N−1)</code> + all-gather <code class="inl">(N−1)</code> = <code class="inl">2(N−1)</code></span></li>
-<li><code class="inl">T_ring = 2(N−1)·α + (2(N−1)/N)·S·β</code></li>
+<li><code class="inl">T_ring = 2(N−1)·α + (2(N−1)/N)·S·β</code> &nbsp;<span class="en">— byte term ≈ <b>2S</b>, independent of N (<b>bandwidth-optimal</b>); latency ∝ N.</span><span class="ko">— 바이트 항 ≈ <b>2S</b>, N 무관(<b>대역폭 최적</b>); 지연 ∝ N.</span></li>
 </ul>
 
 <p><span class="en"><b>③ Tree cost</b></span><span class="ko"><b>③ Tree 비용</b></span></p>
 <ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
 <li><span class="en">rounds = reduce up <code class="inl">log₂N</code> + broadcast down <code class="inl">log₂N</code> = <code class="inl">2·log₂N</code></span><span class="ko">라운드 = reduce 올림 <code class="inl">log₂N</code> + broadcast 내림 <code class="inl">log₂N</code> = <code class="inl">2·log₂N</code></span></li>
-<li><code class="inl">T_tree = 2·log₂N·α + (2(N−1)/N)·S·β</code> &nbsp;<span class="en">(double-binary tree ≈ bandwidth-optimal; a <i>naive single</i> tree's byte term balloons to <code class="inl">2·log₂N·S·β</code>)</span><span class="ko">(double-binary tree ≈ 대역폭 최적; <i>단순 single</i> tree는 바이트 항이 <code class="inl">2·log₂N·S·β</code>로 폭증)</span></li>
+<li><code class="inl">T_tree = 2·log₂N·α + (2·log₂N)·S·β</code> &nbsp;<span class="en">— fewer hops (O(log N)) but it moves the <b>full S</b> each hop → byte term <b>grows with log₂N</b> (≈ log₂N × ring's). NCCL’s <i>double-binary</i> tree is a smarter variant that recovers ring-like ~2S bandwidth while keeping log-latency.</span><span class="ko">— 홉은 적지만(O(log N)) 매 홉 <b>전체 S</b>를 옮겨 바이트 항이 <b>log₂N에 비례 증가</b>(ring의 ≈ log₂N배). NCCL의 <i>double-binary</i> tree는 ring 수준 ~2S 대역폭을 회복하며 log 지연을 유지하는 개선판.</span></li>
 </ul>
 
 <p><span class="en"><b>④ Try it</b> — drag the message size and switch N; both costs recompute live (α = 5 µs, B = 200 GB/s held fixed):</span><span class="ko"><b>④ 직접 해보기</b> — 메시지 크기를 끌고 N을 바꾸면 두 비용이 실시간 재계산(α = 5 µs, B = 200 GB/s 고정):</span></p>
@@ -268,7 +268,7 @@
     <input type="range" id="srange" min="10" max="30" step="1" value="20" style="width:200px" aria-label="message size">
   </div>
   <div class="eq" id="ringeq">Ring: rounds 2(8−1)=<span class="v">14</span> → 14×5µs + 1.8 MiB×β = <span class="v">70.0</span> + <span class="v">9.2</span> = <span class="v">79.2 µs</span></div>
-  <div class="eq" id="treeeq">Tree: rounds 2·log₂8=<span class="v">6</span> → 6×5µs + 1.8 MiB×β = <span class="v">30.0</span> + <span class="v">9.2</span> = <span class="v">39.2 µs</span></div>
+  <div class="eq" id="treeeq">Tree: rounds 2·log₂8=<span class="v">6</span> → 6×5µs + 6 MiB×β = <span class="v">30.0</span> + <span class="v">31.5</span> = <span class="v">61.5 µs</span></div>
   <svg viewBox="0 0 760 92" role="img" aria-label="live ring vs tree cost bars" style="display:block;max-width:100%;height:auto;margin:10px 0 2px" font-family="-apple-system,system-ui,sans-serif">
     <text x="6" y="22" font-size="11" font-weight="700" fill="var(--ink)">Ring</text>
     <rect id="rA" x="78" y="8" width="495" height="20" rx="3" fill="var(--blue-bd)"/>
@@ -276,12 +276,12 @@
     <text id="rT" x="644" y="23" font-size="11" font-weight="700" fill="var(--ink)">79.2 µs</text>
     <text x="6" y="52" font-size="11" font-weight="700" fill="var(--ink)">Tree</text>
     <rect id="tA" x="78" y="38" width="212" height="20" rx="3" fill="var(--blue-bd)"/>
-    <rect id="tB" x="290" y="38" width="65" height="20" rx="3" fill="var(--green-bd)"/>
-    <text id="tT" x="361" y="53" font-size="11" font-weight="700" fill="var(--ink)">39.2 µs</text>
+    <rect id="tB" x="290" y="38" width="222" height="20" rx="3" fill="var(--green-bd)"/>
+    <text id="tT" x="518" y="53" font-size="11" font-weight="700" fill="var(--ink)">61.5 µs</text>
     <rect x="78" y="73" width="11" height="11" rx="2" fill="var(--blue-bd)"/><text x="94" y="82" font-size="10" fill="var(--muted)">α-term (latency = rounds × α)</text>
-    <rect x="320" y="73" width="11" height="11" rx="2" fill="var(--green-bd)"/><text x="336" y="82" font-size="10" fill="var(--muted)">β-term (bytes = 2(N−1)/N·S ÷ B)</text>
+    <rect x="320" y="73" width="11" height="11" rx="2" fill="var(--green-bd)"/><text x="336" y="82" font-size="10" fill="var(--muted)">β-term = bytes moved ÷ B  (ring ≈ 2S · simple tree ≈ 2·log₂N·S)</text>
   </svg>
-  <div class="win" id="win" style="color:var(--green-ink)">→ Tree wins, 2.02× faster (latency-bound)</div>
+  <div class="win" id="win" style="color:var(--green-ink)">→ Tree wins, 1.29× faster (latency-bound) — slide S up to 256 MiB and ring wins</div>
 </div>
 <script>
 (function(){
@@ -292,15 +292,16 @@
   function log2(x){ return Math.round(Math.log(x)/Math.LN2); }
   function el(id){ return document.getElementById(id); }
   function upd(){
-    var S=Math.pow(2,+slider.value), bpg=2*(N-1)/N*S;
+    var S=Math.pow(2,+slider.value);
     var rr=2*(N-1), tr=2*log2(N);
-    var aR=rr*alpha*1e6, aT=tr*alpha*1e6, bt=bpg*beta*1e6;
-    var TR=aR+bt, TT=aT+bt;
+    var ringBytes=2*(N-1)/N*S, treeBytes=tr*S; // ring ships S/N per hop; a simple tree ships the full S per hop
+    var aR=rr*alpha*1e6, aT=tr*alpha*1e6, btR=ringBytes*beta*1e6, btT=treeBytes*beta*1e6;
+    var TR=aR+btR, TT=aT+btT;
     el('sval').textContent=fmtBytes(S);
-    el('ringeq').innerHTML='Ring: rounds 2('+N+'−1)=<span class="v">'+rr+'</span> → '+rr+'×5µs + '+fmtBytes(bpg)+'×β = <span class="v">'+aR.toFixed(1)+'</span> + <span class="v">'+bt.toFixed(1)+'</span> = <span class="v">'+fmtT(TR)+'</span>';
-    el('treeeq').innerHTML='Tree: rounds 2·log₂'+N+'=<span class="v">'+tr+'</span> → '+tr+'×5µs + '+fmtBytes(bpg)+'×β = <span class="v">'+aT.toFixed(1)+'</span> + <span class="v">'+bt.toFixed(1)+'</span> = <span class="v">'+fmtT(TT)+'</span>';
+    el('ringeq').innerHTML='Ring: rounds 2('+N+'−1)=<span class="v">'+rr+'</span> → '+rr+'×5µs + '+fmtBytes(ringBytes)+'×β = <span class="v">'+aR.toFixed(1)+'</span> + <span class="v">'+btR.toFixed(1)+'</span> = <span class="v">'+fmtT(TR)+'</span>';
+    el('treeeq').innerHTML='Tree: rounds 2·log₂'+N+'=<span class="v">'+tr+'</span> → '+tr+'×5µs + '+fmtBytes(treeBytes)+'×β = <span class="v">'+aT.toFixed(1)+'</span> + <span class="v">'+btT.toFixed(1)+'</span> = <span class="v">'+fmtT(TT)+'</span>';
     var scale=560/Math.max(TR,TT,1e-9);
-    var rAw=aR*scale, rBw=bt*scale, tAw=aT*scale, tBw=bt*scale;
+    var rAw=aR*scale, rBw=btR*scale, tAw=aT*scale, tBw=btT*scale;
     el('rA').setAttribute('width',rAw.toFixed(1));
     el('rB').setAttribute('x',(78+rAw).toFixed(1)); el('rB').setAttribute('width',rBw.toFixed(1));
     el('rT').setAttribute('x',(78+rAw+rBw+6).toFixed(1)); el('rT').textContent=fmtT(TR);
@@ -318,7 +319,8 @@
 })();
 </script>
 <ul style="margin:12px 0;padding-left:22px;line-height:1.65">
-<li><span class="en"><b>Read it:</b> small S → the α-term (blue) dominates → <b>tree</b> wins (fewer rounds). Large S → the β-term (green) dominates → ring ≈ double-tree (bandwidth-bound), and a naive single tree would be far worse. Exactly the rule NCCL auto-switches on.</span><span class="ko"><b>읽는 법:</b> 작은 S → α 항(파랑) 지배 → <b>tree</b> 승(라운드 적음). 큰 S → β 항(초록) 지배 → ring ≈ double-tree(대역폭 바운드), 단순 single tree는 훨씬 느림. NCCL이 자동 전환하는 규칙 그대로.</span></li>
+<li><span class="en"><b>Is tree always better than ring? No.</b> A tree has fewer hops (O(log N) vs O(N)) → it wins for <b>small</b> messages (α-term, blue). But a simple tree ships the <b>full S</b> every hop, so for <b>large</b> messages it moves ≈ log₂N × more bytes than a ring (β-term, green) and <b>ring wins</b>. (Slide S above ~2 MiB to watch the flip.)</span><span class="ko"><b>tree가 항상 ring보다 좋은가? 아니다.</b> tree는 홉이 적어(O(log N) vs O(N)) <b>작은</b> 메시지에서 유리(α 항, 파랑). 그러나 단순 tree는 매 홉 <b>전체 S</b>를 보내므로 <b>큰</b> 메시지에선 ring보다 ≈ log₂N배 많은 바이트를 옮겨(β 항, 초록) <b>ring이 이긴다</b>. (S를 ~2 MiB 위로 끌면 역전.)</span></li>
+<li><span class="en"><b>Bottom line:</b> small S / many GPUs → <b>tree</b> (latency); large S → <b>ring</b> (bandwidth). The big tensors TP &amp; EP move every layer are large, so a ring — or NCCL’s bandwidth-optimal double-tree — carries them. NCCL auto-picks per size &amp; N.</span><span class="ko"><b>요점:</b> 작은 S / 많은 GPU → <b>tree</b>(지연); 큰 S → <b>ring</b>(대역폭). TP·EP가 매 레이어 옮기는 텐서는 크므로 ring(또는 NCCL의 대역폭 최적 double-tree)이 담당. NCCL이 크기·N로 자동 선택.</span></li>
 <li><span class="en">(α and B are illustrative; real values vary by hardware — measure with nccl-tests <b>busbw</b>, §4.)</span><span class="ko">(α·B는 예시값; 실제는 하드웨어마다 다름 — §4의 nccl-tests <b>busbw</b>로 측정.)</span></li>
 </ul>
 </section>
