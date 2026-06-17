@@ -172,7 +172,8 @@
     // the live list is fetched from <bot>/models and replaces these in the dropdown.
     models: ["claude-moreh-Qwen3.6-27B", "claude-moreh-gemma-4-31B-it", "claude-moreh-DeepSeek-V4-Flash",
       "claude-moreh-deepseek/deepseek-v4-pro", "claude-moreh-xiaomi/mimo-v2.5-pro", "claude-moreh-z-ai/glm-5.1"],
-    // Claude cloud models stay available too (routed via the gateway → Anthropic = subscription).
+    // Anthropic-direct Claude (paid) — kept here for reference but HIDDEN from the dropdown
+    // by isPaidCloud() so the blog never bills the subscription. Only claude-moreh-* (free) show.
     cloudModels: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
     defModel: "claude-moreh-Qwen3.6-27B",
     url: function () {
@@ -488,14 +489,15 @@
     modelSelect.innerHTML = "";
     list.forEach(function (m) { modelSelect.appendChild(optFor(m, saved)); });
   }
-  // Bot dropdown keeps BOTH: Claude cloud (subscription) and local gateway models (free).
+  // Anthropic-direct Claude (claude-opus/sonnet/haiku…) = paid → hidden from the dropdown.
+  // claude-moreh-* are local vLLM via the gateway (free) and stay.
+  function isPaidCloud(id) { return /^claude-/.test(String(id)) && !/^claude-moreh-/.test(String(id)); }
+  // Bot dropdown shows ONLY the free local gateway models.
   function fillBotModels(localList, saved) {
+    if (isPaidCloud(saved)) { saved = PROVIDERS.bot.defModel; lsset(modelLS("bot"), ""); }  // drop a stale paid pick so requests don't bill
     modelSelect.innerHTML = "";
-    var gc = el("optgroup", { label: t("Claude — cloud (subscription)", "Claude — 클라우드 (구독)") });
-    (PROVIDERS.bot.cloudModels || []).forEach(function (m) { gc.appendChild(optFor(m, saved)); });
     var gl = el("optgroup", { label: t("Local — gateway (free)", "로컬 — 게이트웨이 (무료)") });
-    (localList || []).forEach(function (m) { gl.appendChild(optFor(m, saved)); });
-    if (gc.children.length) modelSelect.appendChild(gc);
+    (localList || []).filter(function (m) { return !isPaidCloud(m); }).forEach(function (m) { gl.appendChild(optFor(m, saved)); });
     if (gl.children.length) modelSelect.appendChild(gl);
   }
   function fetchBotModels() {                                                 // live discovery from <bot>/models
