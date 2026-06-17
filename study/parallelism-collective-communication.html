@@ -57,6 +57,14 @@
   ul.srcs{font-size:12.5px;line-height:1.5;padding-left:20px} ul.srcs li{margin:5px 0}
   ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
   footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+  .calc{border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:#fafbfd;margin:16px 0}
+  .calc .ctrl{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-size:13px;margin-bottom:12px}
+  .calc .seg button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:3px 11px;border-radius:7px;cursor:pointer;margin-right:4px}
+  .calc .seg button.on{background:var(--blue-ink);color:#fff;border-color:var(--blue-ink)}
+  .calc input[type=range]{vertical-align:middle;accent-color:var(--blue-ink)}
+  .calc .eq{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.75;margin:3px 0;color:var(--ink)}
+  .calc .eq .v{font-weight:700}
+  .calc .win{font-weight:700;margin-top:8px;font-size:13.5px}
 </style>
 </head>
 <body>
@@ -231,38 +239,87 @@
 </svg>
 <p class="figcap"><span class="en">Fig 2 — the same all-reduce, two schedules, <b>animated</b>. <b>Ring</b>: the dot circulates neighbor-to-neighbor (bandwidth-optimal, latency ∝ N). <b>Tree</b>: green dots reduce up, then grey dots broadcast down (latency ∝ log N). NCCL auto-picks by message size &amp; N. Sources: [3], [4].</span><span class="ko">그림 2 — 같은 all-reduce, 두 스케줄, <b>애니메이션</b>. <b>Ring</b>: 점이 이웃끼리 순환(대역폭 최적, 지연 ∝ N). <b>Tree</b>: 초록 점이 reduce 올라가고, 회색 점이 broadcast 내려옴(지연 ∝ log N). NCCL이 메시지 크기·N으로 자동 선택. 출처: [3], [4].</span></p>
 
-<h3><span class="en">Worked example — ring vs tree, with real numbers</span><span class="ko">계산 예시 — ring vs tree를 실제 숫자로</span></h3>
-<p><span class="en">Take one collective, an <b>all-reduce across N = 8 GPUs</b>, and plug in illustrative numbers: link <b>200 GB/s</b> (so β = 1/200 GB/s = 5 ps/byte) and <b>α = 5 µs</b> per hop. Cost = <code class="inl">rounds·α + (2(N−1)/N)·S·β</code>; ring uses <b>2(N−1) = 14</b> rounds, a (double-binary) tree uses <b>2·log₂8 = 6</b>. The byte term is the same for both — only the <b>round count</b> (the α-term) differs.</span><span class="ko">collective 하나, <b>GPU N = 8개 all-reduce</b>에 예시 숫자를 대입: 링크 <b>200 GB/s</b>(β = 1/200 GB/s = 5 ps/byte), 홉당 <b>α = 5 µs</b>. 비용 = <code class="inl">라운드·α + (2(N−1)/N)·S·β</code>; ring은 <b>2(N−1) = 14</b> 라운드, (double-binary) tree는 <b>2·log₂8 = 6</b>. 바이트 항은 둘이 같고 <b>라운드 수</b>(α 항)만 다르다.</span></p>
+<h3><span class="en">Worked example — ring vs tree, computed step by step</span><span class="ko">계산 예시 — ring vs tree를 한 단계씩 계산</span></h3>
 
-<svg class="fig" viewBox="0 0 760 142" role="img" aria-label="ring vs tree cost breakdown for a 1 MB all-reduce on 8 GPUs">
-<g font-family="-apple-system,system-ui,Segoe UI,Roboto,sans-serif">
-<text x="10" y="16" font-size="12" font-weight="700" fill="var(--ink)">all-reduce of S = 1 MB across 8 GPUs  (α = 5 µs/hop, link = 200 GB/s)</text>
-<text x="10" y="60" font-size="11" font-weight="700" fill="var(--ink)">Ring</text>
-<rect x="120" y="44" width="490" height="26" rx="3" fill="var(--blue-bd)"/>
-<rect x="610" y="44" width="61" height="26" rx="3" fill="var(--green-bd)"/>
-<text x="679" y="61" font-size="11" font-weight="700" fill="var(--ink)">= 78.8 µs</text>
-<text x="10" y="98" font-size="11" font-weight="700" fill="var(--ink)">Tree</text>
-<rect x="120" y="82" width="210" height="26" rx="3" fill="var(--blue-bd)"/>
-<rect x="330" y="82" width="61" height="26" rx="3" fill="var(--green-bd)"/>
-<text x="399" y="99" font-size="11" font-weight="700" fill="var(--ink)">= 38.8 µs</text>
-<rect x="120" y="120" width="12" height="12" rx="2" fill="var(--blue-bd)"/>
-<text x="138" y="130" font-size="10" fill="var(--muted)">α-term = rounds × 5 µs (Ring 14→70, Tree 6→30)</text>
-<rect x="430" y="120" width="12" height="12" rx="2" fill="var(--green-bd)"/>
-<text x="448" y="130" font-size="10" fill="var(--muted)">β-term = 1.75 MB ÷ 200 GB/s = 8.75 µs (same for both)</text>
-</g>
-</svg>
-<p class="figcap"><span class="en">Fig 2b — same byte term (green), but the tree’s shorter round count shrinks the <b>α-term</b> (blue) → here the tree is ~2× faster. (Static chart, illustrative values.)</span><span class="ko">그림 2b — 바이트 항(초록)은 같고, tree는 라운드가 적어 <b>α 항</b>(파랑)이 줄어든다 → 여기선 tree가 약 2배 빠름. (정적 차트, 예시값.)</span></p>
+<p><span class="en"><b>① Assumptions</b></span><span class="ko"><b>① 가정</b></span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+<li><span class="en"><b>N</b> GPUs on one fabric · link bandwidth <b>B</b> · per-hop latency <b>α</b> · per-byte time <b>β = 1/B</b> · message size <b>S</b> (the all-reduce tensor).</span><span class="ko"><b>N</b>개 GPU가 한 패브릭에 · 링크 대역폭 <b>B</b> · 홉당 지연 <b>α</b> · 바이트당 시간 <b>β = 1/B</b> · 메시지 크기 <b>S</b>(all-reduce 텐서).</span></li>
+<li><span class="en">general cost = <code class="inl">(rounds)·α + (bytes/GPU)·β</code>. The <b>bytes/GPU term is identical</b> for ring and tree — <code class="inl">2(N−1)/N·S</code> — so <b>only the round count differs</b>.</span><span class="ko">일반 비용 = <code class="inl">(라운드)·α + (GPU당 바이트)·β</code>. <b>GPU당 바이트 항은 ring·tree가 동일</b>(<code class="inl">2(N−1)/N·S</code>) → <b>라운드 수만 다르다</b>.</span></li>
+</ul>
 
-<table>
-<tr><th><span class="en">message S</span><span class="ko">메시지 S</span></th><th>Ring = 14·α + 1.75·S·β</th><th>Tree = 6·α + 1.75·S·β</th><th><span class="en">winner</span><span class="ko">승자</span></th></tr>
-<tr><td><span class="en">1 MB (small)</span><span class="ko">1 MB (작음)</span></td><td>70 + 8.75 = <b>78.8 µs</b></td><td>30 + 8.75 = <b>38.8 µs</b></td><td><span class="en"><b>Tree</b> — half the latency</span><span class="ko"><b>Tree</b> — 지연 절반</span></td></tr>
-<tr><td><span class="en">256 MB (large)</span><span class="ko">256 MB (큼)</span></td><td>70 + 2240 = <b>2310 µs</b></td><td>30 + 2240 = <b>2270 µs</b></td><td><span class="en">≈ tie — bandwidth-bound</span><span class="ko">≈ 무승부 — 대역폭 바운드</span></td></tr>
-<tr><td><span class="en">256 MB, naive single tree</span><span class="ko">256 MB, 단순 single tree</span></td><td>—</td><td>30 + 6·S·β ≈ <b>7710 µs</b></td><td><span class="en">Ring / double-tree (naive ≈3.3× worse)</span><span class="ko">Ring / double-tree (단순 트리 ≈3.3배 느림)</span></td></tr>
-</table>
-<ul style="margin:10px 0;padding-left:22px;line-height:1.65">
-<li><span class="en"><b>Small message:</b> the <b>α-term dominates</b> → fewer rounds wins → <b>tree</b> (6 vs 14 hops ≈ half the time).</span><span class="ko"><b>작은 메시지:</b> <b>α 항이 지배</b> → 라운드 적은 쪽 → <b>tree</b>(6 vs 14홉 ≈ 절반).</span></li>
-<li><span class="en"><b>Large message:</b> the <b>β-term dominates</b> → the 40 µs latency gap is noise; moving few bytes is what matters → <b>ring</b> (or a bandwidth-optimal double-tree). A naive single tree moves ≈log₂N× the bytes → far worse.</span><span class="ko"><b>큰 메시지:</b> <b>β 항이 지배</b> → 40 µs 지연 차이는 무시; 바이트를 적게 옮기는 게 관건 → <b>ring</b>(또는 대역폭 최적 double-tree). 단순 single tree는 바이트를 ≈log₂N배 옮겨 훨씬 느림.</span></li>
-<li><span class="en">This is exactly the rule NCCL bakes in, and why it auto-switches. (α and bandwidth here are illustrative; real values vary by hardware — measure with nccl-tests <b>busbw</b>, §4.)</span><span class="ko">이게 바로 NCCL이 내장한 규칙이자 자동 전환하는 이유. (여기 α·대역폭은 예시값; 실제는 하드웨어마다 다름 — §4의 nccl-tests <b>busbw</b>로 측정.)</span></li>
+<p><span class="en"><b>② Ring cost</b></span><span class="ko"><b>② Ring 비용</b></span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+<li><span class="en">rounds = reduce-scatter <code class="inl">(N−1)</code> + all-gather <code class="inl">(N−1)</code> = <code class="inl">2(N−1)</code></span><span class="ko">라운드 = reduce-scatter <code class="inl">(N−1)</code> + all-gather <code class="inl">(N−1)</code> = <code class="inl">2(N−1)</code></span></li>
+<li><code class="inl">T_ring = 2(N−1)·α + (2(N−1)/N)·S·β</code></li>
+</ul>
+
+<p><span class="en"><b>③ Tree cost</b></span><span class="ko"><b>③ Tree 비용</b></span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+<li><span class="en">rounds = reduce up <code class="inl">log₂N</code> + broadcast down <code class="inl">log₂N</code> = <code class="inl">2·log₂N</code></span><span class="ko">라운드 = reduce 올림 <code class="inl">log₂N</code> + broadcast 내림 <code class="inl">log₂N</code> = <code class="inl">2·log₂N</code></span></li>
+<li><code class="inl">T_tree = 2·log₂N·α + (2(N−1)/N)·S·β</code> &nbsp;<span class="en">(double-binary tree ≈ bandwidth-optimal; a <i>naive single</i> tree's byte term balloons to <code class="inl">2·log₂N·S·β</code>)</span><span class="ko">(double-binary tree ≈ 대역폭 최적; <i>단순 single</i> tree는 바이트 항이 <code class="inl">2·log₂N·S·β</code>로 폭증)</span></li>
+</ul>
+
+<p><span class="en"><b>④ Try it</b> — drag the message size and switch N; both costs recompute live (α = 5 µs, B = 200 GB/s held fixed):</span><span class="ko"><b>④ 직접 해보기</b> — 메시지 크기를 끌고 N을 바꾸면 두 비용이 실시간 재계산(α = 5 µs, B = 200 GB/s 고정):</span></p>
+<div class="calc">
+  <div class="ctrl">
+    <span><span class="en">GPUs N</span><span class="ko">GPU 수 N</span></span>
+    <span class="seg" id="nseg"><button type="button" data-n="2">2</button><button type="button" data-n="4">4</button><button type="button" data-n="8" class="on">8</button><button type="button" data-n="16">16</button><button type="button" data-n="32">32</button></span>
+    <span><span class="en">message S</span><span class="ko">메시지 S</span> = <b id="sval">1 MiB</b></span>
+    <input type="range" id="srange" min="10" max="30" step="1" value="20" style="width:200px" aria-label="message size">
+  </div>
+  <div class="eq" id="ringeq">Ring: rounds 2(8−1)=<span class="v">14</span> → 14×5µs + 1.8 MiB×β = <span class="v">70.0</span> + <span class="v">9.2</span> = <span class="v">79.2 µs</span></div>
+  <div class="eq" id="treeeq">Tree: rounds 2·log₂8=<span class="v">6</span> → 6×5µs + 1.8 MiB×β = <span class="v">30.0</span> + <span class="v">9.2</span> = <span class="v">39.2 µs</span></div>
+  <svg viewBox="0 0 760 92" role="img" aria-label="live ring vs tree cost bars" style="display:block;max-width:100%;height:auto;margin:10px 0 2px" font-family="-apple-system,system-ui,sans-serif">
+    <text x="6" y="22" font-size="11" font-weight="700" fill="var(--ink)">Ring</text>
+    <rect id="rA" x="78" y="8" width="495" height="20" rx="3" fill="var(--blue-bd)"/>
+    <rect id="rB" x="573" y="8" width="65" height="20" rx="3" fill="var(--green-bd)"/>
+    <text id="rT" x="644" y="23" font-size="11" font-weight="700" fill="var(--ink)">79.2 µs</text>
+    <text x="6" y="52" font-size="11" font-weight="700" fill="var(--ink)">Tree</text>
+    <rect id="tA" x="78" y="38" width="212" height="20" rx="3" fill="var(--blue-bd)"/>
+    <rect id="tB" x="290" y="38" width="65" height="20" rx="3" fill="var(--green-bd)"/>
+    <text id="tT" x="361" y="53" font-size="11" font-weight="700" fill="var(--ink)">39.2 µs</text>
+    <rect x="78" y="73" width="11" height="11" rx="2" fill="var(--blue-bd)"/><text x="94" y="82" font-size="10" fill="var(--muted)">α-term (latency = rounds × α)</text>
+    <rect x="320" y="73" width="11" height="11" rx="2" fill="var(--green-bd)"/><text x="336" y="82" font-size="10" fill="var(--muted)">β-term (bytes = 2(N−1)/N·S ÷ B)</text>
+  </svg>
+  <div class="win" id="win" style="color:var(--green-ink)">→ Tree wins, 2.02× faster (latency-bound)</div>
+</div>
+<script>
+(function(){
+  var alpha=5e-6, B=200e9, beta=1/B;
+  var N=8, slider=document.getElementById('srange'), seg=document.getElementById('nseg');
+  function fmtBytes(b){ if(b>=1073741824) return (b/1073741824).toFixed(b%1073741824?1:0)+' GiB'; if(b>=1048576) return (b/1048576).toFixed(b%1048576?1:0)+' MiB'; if(b>=1024) return (b/1024).toFixed(0)+' KiB'; return b+' B'; }
+  function fmtT(us){ return us>=1000 ? (us/1000).toFixed(2)+' ms' : us.toFixed(1)+' µs'; }
+  function log2(x){ return Math.round(Math.log(x)/Math.LN2); }
+  function el(id){ return document.getElementById(id); }
+  function upd(){
+    var S=Math.pow(2,+slider.value), bpg=2*(N-1)/N*S;
+    var rr=2*(N-1), tr=2*log2(N);
+    var aR=rr*alpha*1e6, aT=tr*alpha*1e6, bt=bpg*beta*1e6;
+    var TR=aR+bt, TT=aT+bt;
+    el('sval').textContent=fmtBytes(S);
+    el('ringeq').innerHTML='Ring: rounds 2('+N+'−1)=<span class="v">'+rr+'</span> → '+rr+'×5µs + '+fmtBytes(bpg)+'×β = <span class="v">'+aR.toFixed(1)+'</span> + <span class="v">'+bt.toFixed(1)+'</span> = <span class="v">'+fmtT(TR)+'</span>';
+    el('treeeq').innerHTML='Tree: rounds 2·log₂'+N+'=<span class="v">'+tr+'</span> → '+tr+'×5µs + '+fmtBytes(bpg)+'×β = <span class="v">'+aT.toFixed(1)+'</span> + <span class="v">'+bt.toFixed(1)+'</span> = <span class="v">'+fmtT(TT)+'</span>';
+    var scale=560/Math.max(TR,TT,1e-9);
+    var rAw=aR*scale, rBw=bt*scale, tAw=aT*scale, tBw=bt*scale;
+    el('rA').setAttribute('width',rAw.toFixed(1));
+    el('rB').setAttribute('x',(78+rAw).toFixed(1)); el('rB').setAttribute('width',rBw.toFixed(1));
+    el('rT').setAttribute('x',(78+rAw+rBw+6).toFixed(1)); el('rT').textContent=fmtT(TR);
+    el('tA').setAttribute('width',tAw.toFixed(1));
+    el('tB').setAttribute('x',(78+tAw).toFixed(1)); el('tB').setAttribute('width',tBw.toFixed(1));
+    el('tT').setAttribute('x',(78+tAw+tBw+6).toFixed(1)); el('tT').textContent=fmtT(TT);
+    var w=el('win'), r=TR/TT;
+    if(r>1.15){ w.style.color='var(--green-ink)'; w.textContent='→ Tree wins, '+r.toFixed(2)+'× faster (latency-bound)'; }
+    else if(r<0.87){ w.style.color='var(--blue-ink)'; w.textContent='→ Ring wins, '+(1/r).toFixed(2)+'× faster (bandwidth-bound)'; }
+    else { w.style.color='var(--muted)'; w.textContent='→ ≈ tie ('+r.toFixed(2)+'×) — bandwidth-bound, the latency gap is noise'; }
+  }
+  seg.addEventListener('click', function(e){ var b=e.target.closest('button'); if(!b) return; N=+b.getAttribute('data-n'); var bs=seg.querySelectorAll('button'); for(var i=0;i<bs.length;i++) bs[i].classList.toggle('on', bs[i]===b); upd(); });
+  slider.addEventListener('input', upd);
+  upd();
+})();
+</script>
+<ul style="margin:12px 0;padding-left:22px;line-height:1.65">
+<li><span class="en"><b>Read it:</b> small S → the α-term (blue) dominates → <b>tree</b> wins (fewer rounds). Large S → the β-term (green) dominates → ring ≈ double-tree (bandwidth-bound), and a naive single tree would be far worse. Exactly the rule NCCL auto-switches on.</span><span class="ko"><b>읽는 법:</b> 작은 S → α 항(파랑) 지배 → <b>tree</b> 승(라운드 적음). 큰 S → β 항(초록) 지배 → ring ≈ double-tree(대역폭 바운드), 단순 single tree는 훨씬 느림. NCCL이 자동 전환하는 규칙 그대로.</span></li>
+<li><span class="en">(α and B are illustrative; real values vary by hardware — measure with nccl-tests <b>busbw</b>, §4.)</span><span class="ko">(α·B는 예시값; 실제는 하드웨어마다 다름 — §4의 nccl-tests <b>busbw</b>로 측정.)</span></li>
 </ul>
 </section>
 
