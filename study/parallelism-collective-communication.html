@@ -113,8 +113,18 @@
 
 <section id="s1">
 <h2><span class="num">1</span><span class="en">Communication primitives &amp; their cost</span><span class="ko">통신 primitive와 비용</span></h2>
-<p><span class="en"><b>Cost model.</b> Any collective costs <code class="inl">α·(rounds/hops) + β·(bytes moved)</code> — α = per-message latency, β = per-byte transfer (the alpha-beta / Hockney model) <a class="src" href="https://en.wikipedia.org/wiki/Collective_operation">[1]</a>. Small messages are <b>latency-bound</b> (α dominates → fewer rounds win); large messages are <b>bandwidth-bound</b> (β dominates → bytes moved win).</span>
-  <span class="ko"><b>비용 모델.</b> 어떤 collective든 비용 = <code class="inl">α·(라운드/홉) + β·(이동 바이트)</code> — α=메시지당 지연, β=바이트당 전송(alpha-beta/Hockney 모델) <a class="src" href="https://en.wikipedia.org/wiki/Collective_operation">[1]</a>. 작은 메시지는 <b>지연 바운드</b>(α 지배 → 라운드 적은 게 유리), 큰 메시지는 <b>대역폭 바운드</b>(β 지배 → 이동 바이트가 관건).</span></p>
+<p><span class="en"><b>What is a “collective”?</b> A communication op where a whole group of GPUs acts together in one coordinated call — unlike point-to-point (p2p), which is just one sender and one receiver.</span><span class="ko"><b>“collective(집합 통신)”란?</b> GPU 그룹 전체가 하나의 호출로 함께 움직이는 통신 연산 — 보내는 쪽·받는 쪽 둘뿐인 point-to-point(p2p)와 대비된다.</span></p>
+<ul style="margin:10px 0;padding-left:22px;line-height:1.65">
+  <li><span class="en"><b>p2p</b> = 2 ranks (one send + one recv); a <b>collective</b> = every rank in the group (the “communicator”) joins the same op.</span><span class="ko"><b>p2p</b> = rank 2개(send+recv); <b>collective</b> = 그룹(“communicator”) 안 모든 rank가 같은 연산에 참여.</span></li>
+  <li><span class="en">“rank” = one GPU’s slot in the group; <b>N</b> ranks = world size. The library (<b>NCCL</b> on NVIDIA, <b>RCCL</b> on AMD) ships a fixed menu of them — the table below.</span><span class="ko">“rank” = 그룹 내 GPU 한 자리; <b>N</b>개 rank = world size. 라이브러리(NVIDIA <b>NCCL</b>, AMD <b>RCCL</b>)가 고정된 메뉴를 제공 — 아래 표.</span></li>
+  <li><span class="en">Each collective has a <b>fixed pattern + a known cost</b>. Choosing a parallelism strategy = choosing which collective runs, and how often.</span><span class="ko">각 collective는 <b>고정된 패턴 + 정해진 비용</b>을 가짐. 병렬화 전략을 고르는 것 = 어떤 collective가 얼마나 자주 도는지를 고르는 것.</span></li>
+</ul>
+<p><span class="en"><b>Cost model</b> — every collective ≈ <code class="inl">α·(#rounds) + β·(bytes moved)</code> (the alpha-beta / Hockney model) <a class="src" href="https://en.wikipedia.org/wiki/Collective_operation">[1]</a>:</span><span class="ko"><b>비용 모델</b> — 모든 collective ≈ <code class="inl">α·(라운드 수) + β·(이동 바이트)</code> (alpha-beta / Hockney 모델) <a class="src" href="https://en.wikipedia.org/wiki/Collective_operation">[1]</a>:</span></p>
+<ul style="margin:10px 0;padding-left:22px;line-height:1.65">
+  <li><span class="en"><b>α</b> = per-message latency (the fixed startup cost of each hop); <b>β</b> = per-byte time = <b>1 / bandwidth</b>.</span><span class="ko"><b>α</b> = 메시지당 지연(홉마다 드는 고정 비용); <b>β</b> = 바이트당 시간 = <b>1 / 대역폭</b>.</span></li>
+  <li><span class="en"><b>small message → latency-bound</b> (α dominates): fewer rounds win → favors a <b>tree</b>.</span><span class="ko"><b>작은 메시지 → 지연 바운드</b>(α 지배): 라운드 적은 쪽이 유리 → <b>tree</b> 유리.</span></li>
+  <li><span class="en"><b>large message → bandwidth-bound</b> (β dominates): moving fewer bytes wins → favors a <b>ring</b>.</span><span class="ko"><b>큰 메시지 → 대역폭 바운드</b>(β 지배): 바이트를 적게 옮기는 쪽이 유리 → <b>ring</b> 유리.</span></li>
+</ul>
 
 <table>
 <tr><th>Primitive</th><th><span class="en">Pattern (who → whom)</span><span class="ko">패턴 (누가→누구)</span></th><th><span class="en">Use</span><span class="ko">용도</span></th></tr>
@@ -128,8 +138,10 @@
 </table>
 
 <div class="callout c-amber"><span class="tag"><span class="en">two facts that explain everything</span><span class="ko">전부를 설명하는 두 사실</span></span>
-<span class="en"><b>① all-reduce = reduce-scatter + all-gather.</b> NCCL says it verbatim: "Executing ReduceScatter, followed by AllGather, is equivalent to the AllReduce operation" <a class="src" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">[2]</a>. This is why sequence-parallel TP can swap one all-reduce for AG+RS at <b>identical bytes</b>. <b>② Ring vs Tree.</b> Ring all-reduce is <b>bandwidth-optimal</b> — per-rank traffic ≈ <code class="inl">2(N−1)/N · data</code>, independent of N <a class="src" href="https://www.cs.fsu.edu/~xyuan/paper/09jpdc.pdf">[3]</a> — but its <b>latency grows linearly with N</b>; NCCL's double-binary <b>trees</b> give <b>O(log N)</b> latency for small/medium messages and auto-switch back to rings for bandwidth <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span>
-<span class="ko"><b>① all-reduce = reduce-scatter + all-gather.</b> NCCL 원문: "ReduceScatter 후 AllGather 실행은 AllReduce와 동등" <a class="src" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">[2]</a>. 그래서 sequence-parallel TP가 all-reduce 하나를 <b>같은 바이트</b>로 AG+RS로 바꿀 수 있다. <b>② Ring vs Tree.</b> Ring all-reduce는 <b>대역폭 최적</b> — rank당 트래픽 ≈ <code class="inl">2(N−1)/N · data</code>, N 무관 <a class="src" href="https://www.cs.fsu.edu/~xyuan/paper/09jpdc.pdf">[3]</a> — 그러나 <b>지연이 N에 선형</b>; NCCL의 double-binary <b>tree</b>는 작은/중간 메시지에 <b>O(log N)</b> 지연이고 대역폭이 필요하면 ring으로 자동 전환 <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span></div>
+<ul style="margin:8px 0 0;padding-left:20px;line-height:1.6">
+<li><span class="en"><b>① all-reduce = reduce-scatter + all-gather.</b> NCCL, verbatim: “Executing ReduceScatter, followed by AllGather, is equivalent to the AllReduce operation” <a class="src" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">[2]</a> — so sequence-parallel TP can swap one all-reduce for AG+RS at <b>identical bytes</b>.</span><span class="ko"><b>① all-reduce = reduce-scatter + all-gather.</b> NCCL 원문: “ReduceScatter 후 AllGather 실행은 AllReduce와 동등” <a class="src" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">[2]</a> — 그래서 sequence-parallel TP가 all-reduce 하나를 <b>같은 바이트</b>로 AG+RS로 치환 가능.</span></li>
+<li><span class="en"><b>② Ring vs Tree.</b> Ring all-reduce is <b>bandwidth-optimal</b> (per-rank ≈ <code class="inl">2(N−1)/N·data</code>, N-independent <a class="src" href="https://www.cs.fsu.edu/~xyuan/paper/09jpdc.pdf">[3]</a>) but its <b>latency grows ∝ N</b>; NCCL’s double-binary <b>trees</b> give <b>O(log N)</b> latency for small messages, auto-switching to rings for bandwidth <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>. (Worked out with numbers at the end of this section.)</span><span class="ko"><b>② Ring vs Tree.</b> Ring all-reduce는 <b>대역폭 최적</b>(rank당 ≈ <code class="inl">2(N−1)/N·data</code>, N 무관 <a class="src" href="https://www.cs.fsu.edu/~xyuan/paper/09jpdc.pdf">[3]</a>)이지만 <b>지연이 N에 비례</b>; NCCL의 double-binary <b>tree</b>는 작은 메시지에 <b>O(log N)</b> 지연을 주고 대역폭이 필요하면 ring으로 자동 전환 <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>. (이 섹션 끝에서 숫자로 계산.)</span></li>
+</ul></div>
 
 <svg class="fig" viewBox="0 0 760 478" role="img" aria-label="four collectives as an animated step-by-step data grid">
 <g font-family="-apple-system,system-ui,Segoe UI,Roboto,sans-serif">
@@ -143,12 +155,21 @@
 <p class="figcap"><span class="en">Fig 1 — the four mesh collectives as a <b>data grid</b> (rows = the 4 GPUs, columns = data blocks), <b>animated step-by-step</b>. Watch one column light up per step and the colour-coded letters move: all-gather <b>spreads</b> (each column fills with its block), reduce-scatter <b>collapses</b> (each column sums into its owner = Σ), all-reduce does <b>both</b> (RS then AG → all Σ), all-to-all <b>transposes</b> (grouping flips row→column). In reality the steps run in parallel/pipelined — sequenced here only for clarity. (broadcast/reduce/p2p are the simple star cases in the table above.) Patterns per NCCL [2].</span><span class="ko">그림 1 — 네 mesh collective를 <b>데이터 격자</b>(행 = GPU 4개, 열 = 데이터 블록)로, <b>한 단계씩 애니메이션</b>. 한 스텝에 한 열이 켜지고 색·글자가 움직인다: all-gather는 <b>퍼짐</b>(각 열이 자기 블록으로 채워짐), reduce-scatter는 <b>모임</b>(각 열이 주인에게 합산 = Σ), all-reduce는 <b>둘 다</b>(RS 후 AG → 전부 Σ), all-to-all은 <b>transpose</b>(그룹이 행→열로 뒤집힘). 실제로는 단계들이 병렬/파이프라인으로 동시에 일어나지만 여기선 이해를 위해 순서대로 보여준다. (broadcast/reduce/p2p는 위 표의 단순 star 케이스.) 패턴 정의는 NCCL [2].</span></p>
 
 <h3><span class="en">Ring vs Tree — how NCCL actually lays a collective on the wire</span><span class="ko">Ring vs Tree — NCCL이 collective를 실제 배선에 까는 방식</span></h3>
-<p><span class="en"><b>Ring and Tree are not collectives</b> — they are the two main <b>schedules of point-to-point sends</b> NCCL uses to <i>realize</i> a mesh collective (above all, all-reduce) across N GPUs. Same result, different message order. NCCL picks one automatically from message size, GPU count, and topology; you only override (<code class="inl">NCCL_ALGO=Ring|Tree|NVLS</code>) to debug.</span>
-  <span class="ko"><b>Ring과 Tree는 collective가 아니다</b> — mesh collective(특히 all-reduce)를 N개 GPU에서 <i>실현</i>하려고 NCCL이 쓰는 두 가지 <b>point-to-point 송신 스케줄</b>이다. 결과는 같고 메시지 순서만 다르다. NCCL이 메시지 크기·GPU 수·토폴로지로 자동 선택하며, 디버깅할 때만 <code class="inl">NCCL_ALGO=Ring|Tree|NVLS</code>로 강제한다.</span></p>
-<p><span class="en"><b>Ring.</b> Put the N GPUs in a logical circle; each GPU only ever talks to its <b>2 neighbors</b>. All-reduce = a reduce-scatter phase (N−1 steps: forward a chunk to the right neighbor, adding as it goes) then an all-gather phase (N−1 steps: the finished chunks circulate). Per-GPU traffic = <code class="inl">2(N−1)/N · size</code> — <b>independent of N → bandwidth-optimal</b> <a class="src" href="https://www.cs.fsu.edu/~xyuan/paper/09jpdc.pdf">[3]</a>. The catch: <b>2(N−1) sequential hops → latency grows linearly with N</b>. Best for <b>large</b> messages.</span>
-  <span class="ko"><b>Ring.</b> N개 GPU를 논리적 원으로 배치; 각 GPU는 <b>양옆 2개</b>하고만 통신. all-reduce = reduce-scatter 단계(N−1스텝: 오른쪽 이웃으로 청크 전달하며 합산) + all-gather 단계(N−1스텝: 완성 청크 순환). GPU당 트래픽 = <code class="inl">2(N−1)/N · size</code> — <b>N 무관 → 대역폭 최적</b> <a class="src" href="https://www.cs.fsu.edu/~xyuan/paper/09jpdc.pdf">[3]</a>. 단점: <b>2(N−1) 순차 홉 → 지연이 N에 선형 증가</b>. <b>큰</b> 메시지에 유리.</span></p>
-<p><span class="en"><b>Tree.</b> Arrange the GPUs as a (binary) tree: reduce up to the root (≈log₂N steps), then broadcast back down (≈log₂N steps) → <b>latency O(log N)</b>, far better when N is large or the message is <b>small</b>. The catch: a plain tree drives only half the links per phase, so NCCL uses <b>double binary trees</b> (two interleaved trees) to use full bandwidth in both directions <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span>
-  <span class="ko"><b>Tree.</b> GPU를 (이진) 트리로 배치: root까지 reduce 올림(≈log₂N스텝) 후 다시 broadcast 내림(≈log₂N스텝) → <b>지연 O(log N)</b>, N이 크거나 메시지가 <b>작을</b> 때 훨씬 유리. 단점: 단순 트리는 단계마다 링크의 절반만 써서, NCCL은 <b>double binary tree</b>(두 트리를 엇갈리게)로 양방향 풀 대역폭을 쓴다 <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span></p>
+<ul style="margin:10px 0;padding-left:22px;line-height:1.65">
+<li><span class="en"><b>Ring &amp; Tree are not collectives</b> — they are the two main <b>schedules of point-to-point sends</b> NCCL uses to <i>realize</i> a mesh collective (above all, all-reduce). Same result, different message order; NCCL auto-picks by message size, GPU count, and topology (override <code class="inl">NCCL_ALGO=Ring|Tree|NVLS</code> only to debug).</span><span class="ko"><b>Ring·Tree는 collective가 아니다</b> — mesh collective(특히 all-reduce)를 <i>실현</i>하려고 NCCL이 쓰는 두 가지 <b>p2p 송신 스케줄</b>. 결과는 같고 순서만 다름; NCCL이 크기·GPU 수·토폴로지로 자동 선택(<code class="inl">NCCL_ALGO=Ring|Tree|NVLS</code>는 디버깅용).</span></li>
+</ul>
+<p><span class="en"><b>Ring</b> — N GPUs in a logical circle, each talking only to its 2 neighbors:</span><span class="ko"><b>Ring</b> — N개 GPU를 원으로, 각자 양옆 2개하고만 통신:</span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+  <li><span class="en">all-reduce = reduce-scatter (N−1 steps: pass a chunk to the right neighbor, adding as it goes) + all-gather (N−1 steps: the finished chunks circulate).</span><span class="ko">all-reduce = reduce-scatter(N−1스텝: 오른쪽 이웃에 청크 전달하며 합산) + all-gather(N−1스텝: 완성 청크 순환).</span></li>
+  <li><span class="en">per-GPU traffic = <code class="inl">2(N−1)/N · S</code> → <b>independent of N, bandwidth-optimal</b> <a class="src" href="https://www.cs.fsu.edu/~xyuan/paper/09jpdc.pdf">[3]</a>.</span><span class="ko">GPU당 트래픽 = <code class="inl">2(N−1)/N · S</code> → <b>N 무관, 대역폭 최적</b> <a class="src" href="https://www.cs.fsu.edu/~xyuan/paper/09jpdc.pdf">[3]</a>.</span></li>
+  <li><span class="en">but <b>2(N−1) sequential hops → latency ∝ N</b>. Best for <b>large</b> messages.</span><span class="ko">그러나 <b>2(N−1) 순차 홉 → 지연 ∝ N</b>. <b>큰</b> 메시지에 유리.</span></li>
+</ul>
+<p><span class="en"><b>Tree</b> — the GPUs arranged as a binary tree:</span><span class="ko"><b>Tree</b> — GPU를 이진 트리로 배치:</span></p>
+<ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
+  <li><span class="en">reduce up to the root (≈log₂N steps) + broadcast back down (≈log₂N) → <b>latency O(log N)</b>.</span><span class="ko">root까지 reduce 올림(≈log₂N스텝) + 다시 broadcast 내림(≈log₂N) → <b>지연 O(log N)</b>.</span></li>
+  <li><span class="en">far better when N is large or the message is <b>small</b>.</span><span class="ko">N이 크거나 메시지가 <b>작을</b> 때 훨씬 유리.</span></li>
+  <li><span class="en">a plain tree drives only half the links per phase → NCCL uses <b>double binary trees</b> for full bandwidth both ways <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span><span class="ko">단순 트리는 단계마다 링크 절반만 사용 → NCCL은 <b>double binary tree</b>로 양방향 풀 대역폭 <a class="src" href="https://developer.nvidia.com/blog/massively-scale-deep-learning-training-nccl-2-4/">[4]</a>.</span></li>
+</ul>
 <table>
 <tr><th></th><th>Ring</th><th>Tree</th></tr>
 <tr><td><span class="en">latency (#steps)</span><span class="ko">지연 (스텝 수)</span></td><td>∝ N <span class="muted">(2(N−1) hops)</span></td><td>∝ log N <span class="muted">(≈2·log₂N hops)</span></td></tr>
@@ -209,6 +230,40 @@
 <text class="c2" x="410" y="212">≈log₂N hops up + down · small-msg / many-GPU friendly · NCCL uses double binary trees</text>
 </svg>
 <p class="figcap"><span class="en">Fig 2 — the same all-reduce, two schedules, <b>animated</b>. <b>Ring</b>: the dot circulates neighbor-to-neighbor (bandwidth-optimal, latency ∝ N). <b>Tree</b>: green dots reduce up, then grey dots broadcast down (latency ∝ log N). NCCL auto-picks by message size &amp; N. Sources: [3], [4].</span><span class="ko">그림 2 — 같은 all-reduce, 두 스케줄, <b>애니메이션</b>. <b>Ring</b>: 점이 이웃끼리 순환(대역폭 최적, 지연 ∝ N). <b>Tree</b>: 초록 점이 reduce 올라가고, 회색 점이 broadcast 내려옴(지연 ∝ log N). NCCL이 메시지 크기·N으로 자동 선택. 출처: [3], [4].</span></p>
+
+<h3><span class="en">Worked example — ring vs tree, with real numbers</span><span class="ko">계산 예시 — ring vs tree를 실제 숫자로</span></h3>
+<p><span class="en">Take one collective, an <b>all-reduce across N = 8 GPUs</b>, and plug in illustrative numbers: link <b>200 GB/s</b> (so β = 1/200 GB/s = 5 ps/byte) and <b>α = 5 µs</b> per hop. Cost = <code class="inl">rounds·α + (2(N−1)/N)·S·β</code>; ring uses <b>2(N−1) = 14</b> rounds, a (double-binary) tree uses <b>2·log₂8 = 6</b>. The byte term is the same for both — only the <b>round count</b> (the α-term) differs.</span><span class="ko">collective 하나, <b>GPU N = 8개 all-reduce</b>에 예시 숫자를 대입: 링크 <b>200 GB/s</b>(β = 1/200 GB/s = 5 ps/byte), 홉당 <b>α = 5 µs</b>. 비용 = <code class="inl">라운드·α + (2(N−1)/N)·S·β</code>; ring은 <b>2(N−1) = 14</b> 라운드, (double-binary) tree는 <b>2·log₂8 = 6</b>. 바이트 항은 둘이 같고 <b>라운드 수</b>(α 항)만 다르다.</span></p>
+
+<svg class="fig" viewBox="0 0 760 142" role="img" aria-label="ring vs tree cost breakdown for a 1 MB all-reduce on 8 GPUs">
+<g font-family="-apple-system,system-ui,Segoe UI,Roboto,sans-serif">
+<text x="10" y="16" font-size="12" font-weight="700" fill="var(--ink)">all-reduce of S = 1 MB across 8 GPUs  (α = 5 µs/hop, link = 200 GB/s)</text>
+<text x="10" y="60" font-size="11" font-weight="700" fill="var(--ink)">Ring</text>
+<rect x="120" y="44" width="490" height="26" rx="3" fill="var(--blue-bd)"/>
+<rect x="610" y="44" width="61" height="26" rx="3" fill="var(--green-bd)"/>
+<text x="679" y="61" font-size="11" font-weight="700" fill="var(--ink)">= 78.8 µs</text>
+<text x="10" y="98" font-size="11" font-weight="700" fill="var(--ink)">Tree</text>
+<rect x="120" y="82" width="210" height="26" rx="3" fill="var(--blue-bd)"/>
+<rect x="330" y="82" width="61" height="26" rx="3" fill="var(--green-bd)"/>
+<text x="399" y="99" font-size="11" font-weight="700" fill="var(--ink)">= 38.8 µs</text>
+<rect x="120" y="120" width="12" height="12" rx="2" fill="var(--blue-bd)"/>
+<text x="138" y="130" font-size="10" fill="var(--muted)">α-term = rounds × 5 µs (Ring 14→70, Tree 6→30)</text>
+<rect x="430" y="120" width="12" height="12" rx="2" fill="var(--green-bd)"/>
+<text x="448" y="130" font-size="10" fill="var(--muted)">β-term = 1.75 MB ÷ 200 GB/s = 8.75 µs (same for both)</text>
+</g>
+</svg>
+<p class="figcap"><span class="en">Fig 2b — same byte term (green), but the tree’s shorter round count shrinks the <b>α-term</b> (blue) → here the tree is ~2× faster. (Static chart, illustrative values.)</span><span class="ko">그림 2b — 바이트 항(초록)은 같고, tree는 라운드가 적어 <b>α 항</b>(파랑)이 줄어든다 → 여기선 tree가 약 2배 빠름. (정적 차트, 예시값.)</span></p>
+
+<table>
+<tr><th><span class="en">message S</span><span class="ko">메시지 S</span></th><th>Ring = 14·α + 1.75·S·β</th><th>Tree = 6·α + 1.75·S·β</th><th><span class="en">winner</span><span class="ko">승자</span></th></tr>
+<tr><td><span class="en">1 MB (small)</span><span class="ko">1 MB (작음)</span></td><td>70 + 8.75 = <b>78.8 µs</b></td><td>30 + 8.75 = <b>38.8 µs</b></td><td><span class="en"><b>Tree</b> — half the latency</span><span class="ko"><b>Tree</b> — 지연 절반</span></td></tr>
+<tr><td><span class="en">256 MB (large)</span><span class="ko">256 MB (큼)</span></td><td>70 + 2240 = <b>2310 µs</b></td><td>30 + 2240 = <b>2270 µs</b></td><td><span class="en">≈ tie — bandwidth-bound</span><span class="ko">≈ 무승부 — 대역폭 바운드</span></td></tr>
+<tr><td><span class="en">256 MB, naive single tree</span><span class="ko">256 MB, 단순 single tree</span></td><td>—</td><td>30 + 6·S·β ≈ <b>7710 µs</b></td><td><span class="en">Ring / double-tree (naive ≈3.3× worse)</span><span class="ko">Ring / double-tree (단순 트리 ≈3.3배 느림)</span></td></tr>
+</table>
+<ul style="margin:10px 0;padding-left:22px;line-height:1.65">
+<li><span class="en"><b>Small message:</b> the <b>α-term dominates</b> → fewer rounds wins → <b>tree</b> (6 vs 14 hops ≈ half the time).</span><span class="ko"><b>작은 메시지:</b> <b>α 항이 지배</b> → 라운드 적은 쪽 → <b>tree</b>(6 vs 14홉 ≈ 절반).</span></li>
+<li><span class="en"><b>Large message:</b> the <b>β-term dominates</b> → the 40 µs latency gap is noise; moving few bytes is what matters → <b>ring</b> (or a bandwidth-optimal double-tree). A naive single tree moves ≈log₂N× the bytes → far worse.</span><span class="ko"><b>큰 메시지:</b> <b>β 항이 지배</b> → 40 µs 지연 차이는 무시; 바이트를 적게 옮기는 게 관건 → <b>ring</b>(또는 대역폭 최적 double-tree). 단순 single tree는 바이트를 ≈log₂N배 옮겨 훨씬 느림.</span></li>
+<li><span class="en">This is exactly the rule NCCL bakes in, and why it auto-switches. (α and bandwidth here are illustrative; real values vary by hardware — measure with nccl-tests <b>busbw</b>, §4.)</span><span class="ko">이게 바로 NCCL이 내장한 규칙이자 자동 전환하는 이유. (여기 α·대역폭은 예시값; 실제는 하드웨어마다 다름 — §4의 nccl-tests <b>busbw</b>로 측정.)</span></li>
+</ul>
 </section>
 
 
