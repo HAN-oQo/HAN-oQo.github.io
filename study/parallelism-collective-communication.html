@@ -465,209 +465,165 @@
 <li><span class="en">exception — vLLM <b>DP-attention</b> (MoE/MLA): attention runs DP (avoids duplicating the KV cache), experts run EP/TP, so ranks step in <b>lockstep</b> — vLLM inserts dummy forward passes + a tiny coordination all-reduce every N steps <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span><span class="ko">예외 — vLLM <b>DP-attention</b>(MoE/MLA): attention은 DP(KV cache 중복 회피), expert는 EP/TP → 전 rank가 <b>lockstep</b>; vLLM은 dummy forward + N스텝마다 작은 조정 all-reduce 삽입 <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span></li>
 </ul>
 
-<p><span class="en"><b>What each GPU actually holds — module by module.</b> Switch strategy and read the whole transformer layer top→bottom (LayerNorm, QKV proj, attention core, output proj, MLP up/down — or router + experts for MoE). Each row shows the <b>weights</b> every GPU holds (<b>W</b> strip) and the <b>activation</b> it holds (<b>a</b> strip), plus the <b>collective</b> at that point. Nothing is omitted — TP, for instance, shards <b>both</b> attention (by heads) and the MLP.</span><span class="ko"><b>각 GPU가 실제로 무엇을 갖는가 — 모듈 단위로.</b> 전략을 바꿔가며 트랜스포머 레이어 전체를 위→아래로 읽자(LayerNorm, QKV proj, attention core, output proj, MLP up/down — MoE면 router + experts). 각 행은 GPU별 <b>weight</b>(<b>W</b> 줄)와 <b>activation</b>(<b>a</b> 줄), 그리고 그 지점의 <b>통신</b>을 보여준다. 생략 없음 — 예컨대 TP는 attention(head 단위)<b>과</b> MLP를 <b>둘 다</b> 쪼갠다.</span></p>
+<p><span class="en"><b>What each GPU actually holds — module by module, with shapes &amp; comm.</b> Switch strategy and read one transformer layer top→bottom. Each cell shows the <b>actual shape</b> a GPU holds — e.g. <code class="inl">[b,s,h]</code> sharded along hidden becomes <code class="inl">[b,s,h/4]</code>, along sequence <code class="inl">[b,s/4,h]</code>, along batch <code class="inl">[b/4,s,h]</code>. When a <b>collective fires</b>, a band shows the per-GPU inputs being <b>summed / gathered / routed</b> into the tensor that feeds the next module. <span class="muted">(b=batch, s=seq, h=hidden, 4h=MLP inner, /4 = split over 4 GPUs, E=#experts.)</span></span><span class="ko"><b>각 GPU가 실제로 무엇을 갖는가 — 모듈 단위 + shape + 통신.</b> 전략을 바꿔가며 트랜스포머 레이어 하나를 위→아래로 읽자. 각 셀은 GPU가 든 <b>실제 shape</b>를 보여준다 — 예: <code class="inl">[b,s,h]</code>가 hidden으로 쪼개지면 <code class="inl">[b,s,h/4]</code>, 시퀀스면 <code class="inl">[b,s/4,h]</code>, 배치면 <code class="inl">[b/4,s,h]</code>. <b>통신이 fire되면</b> GPU별 입력이 <b>합쳐지거나(Σ)·모이거나·라우팅되어</b> 다음 모듈 input으로 들어가는 과정을 밴드로 그린다. <span class="muted">(b=배치, s=시퀀스, h=hidden, 4h=MLP 내부, /4 = GPU 4개로 분할, E=expert 수.)</span></span></p>
 <div class="calc">
   <div class="ctrl">
     <span class="seg" id="pseg" style="flex-wrap:wrap"><button type="button" data-p="TP" class="on">TP</button><button type="button" data-p="TPSP">TP+SP</button><button type="button" data-p="EP">EP</button><button type="button" data-p="DP">DP</button><button type="button" data-p="DPEP">DP+EP</button><button type="button" data-p="PP">PP</button><button type="button" data-p="CP">CP</button></span>
-    <span style="color:var(--muted)"><span class="en">colour = sharded (per-GPU) · grey = replicated · faint = not on this GPU</span><span class="ko">색 = 샤딩(GPU별) · 회색 = 복제 · 흐림 = 이 GPU엔 없음</span></span>
+    <span style="color:var(--muted)"><span class="en">colour = sharded (per-GPU) · grey = replicated / full · faint = not on this GPU</span><span class="ko">색 = 샤딩(GPU별) · 회색 = 복제 / full · 흐림 = 이 GPU엔 없음</span></span>
   </div>
-  <svg viewBox="0 0 760 538" role="img" aria-label="per-module per-GPU weight and activation distribution" style="display:block;max-width:100%;height:auto;margin:6px 0 2px" font-family="-apple-system,system-ui,sans-serif">
-  <text x="6" y="16" font-size="10.5" font-weight="700" fill="var(--ink)">One transformer layer, top → bottom</text>
-  <text x="752" y="16" text-anchor="end" font-size="9.5" fill="var(--faint)">G0 G1 G2 G3 across · W = weights · a = activation</text>
-  <line x1="6" y1="24" x2="752" y2="24" stroke="var(--line)"/>
-  <g id="grow0">
-    <text id="rl0" x="8" y="45" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb0" x="600" y="35" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc0" x="676" y="45" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="61" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc0_0" x="28" y="51" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt0_0" x="115" y="61" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc0_1" x="210" y="51" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt0_1" x="297" y="61" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc0_2" x="392" y="51" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt0_2" x="479" y="61" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc0_3" x="574" y="51" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt0_3" x="661" y="61" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="77" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac0_0" x="28" y="67" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at0_0" x="115" y="77" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac0_1" x="210" y="67" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at0_1" x="297" y="77" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac0_2" x="392" y="67" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at0_2" x="479" y="77" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac0_3" x="574" y="67" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at0_3" x="661" y="77" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow1">
-    <text id="rl1" x="8" y="95" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb1" x="600" y="85" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc1" x="676" y="95" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="111" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc1_0" x="28" y="101" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt1_0" x="115" y="111" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc1_1" x="210" y="101" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt1_1" x="297" y="111" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc1_2" x="392" y="101" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt1_2" x="479" y="111" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc1_3" x="574" y="101" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt1_3" x="661" y="111" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="127" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac1_0" x="28" y="117" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at1_0" x="115" y="127" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac1_1" x="210" y="117" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at1_1" x="297" y="127" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac1_2" x="392" y="117" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at1_2" x="479" y="127" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac1_3" x="574" y="117" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at1_3" x="661" y="127" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow2">
-    <text id="rl2" x="8" y="145" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb2" x="600" y="135" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc2" x="676" y="145" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="161" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc2_0" x="28" y="151" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt2_0" x="115" y="161" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc2_1" x="210" y="151" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt2_1" x="297" y="161" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc2_2" x="392" y="151" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt2_2" x="479" y="161" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc2_3" x="574" y="151" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt2_3" x="661" y="161" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="177" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac2_0" x="28" y="167" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at2_0" x="115" y="177" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac2_1" x="210" y="167" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at2_1" x="297" y="177" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac2_2" x="392" y="167" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at2_2" x="479" y="177" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac2_3" x="574" y="167" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at2_3" x="661" y="177" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow3">
-    <text id="rl3" x="8" y="195" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb3" x="600" y="185" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc3" x="676" y="195" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="211" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc3_0" x="28" y="201" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt3_0" x="115" y="211" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc3_1" x="210" y="201" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt3_1" x="297" y="211" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc3_2" x="392" y="201" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt3_2" x="479" y="211" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc3_3" x="574" y="201" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt3_3" x="661" y="211" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="227" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac3_0" x="28" y="217" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at3_0" x="115" y="227" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac3_1" x="210" y="217" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at3_1" x="297" y="227" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac3_2" x="392" y="217" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at3_2" x="479" y="227" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac3_3" x="574" y="217" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at3_3" x="661" y="227" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow4">
-    <text id="rl4" x="8" y="245" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb4" x="600" y="235" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc4" x="676" y="245" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="261" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc4_0" x="28" y="251" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt4_0" x="115" y="261" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc4_1" x="210" y="251" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt4_1" x="297" y="261" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc4_2" x="392" y="251" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt4_2" x="479" y="261" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc4_3" x="574" y="251" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt4_3" x="661" y="261" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="277" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac4_0" x="28" y="267" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at4_0" x="115" y="277" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac4_1" x="210" y="267" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at4_1" x="297" y="277" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac4_2" x="392" y="267" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at4_2" x="479" y="277" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac4_3" x="574" y="267" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at4_3" x="661" y="277" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow5">
-    <text id="rl5" x="8" y="295" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb5" x="600" y="285" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc5" x="676" y="295" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="311" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc5_0" x="28" y="301" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt5_0" x="115" y="311" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc5_1" x="210" y="301" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt5_1" x="297" y="311" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc5_2" x="392" y="301" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt5_2" x="479" y="311" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc5_3" x="574" y="301" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt5_3" x="661" y="311" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="327" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac5_0" x="28" y="317" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at5_0" x="115" y="327" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac5_1" x="210" y="317" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at5_1" x="297" y="327" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac5_2" x="392" y="317" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at5_2" x="479" y="327" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac5_3" x="574" y="317" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at5_3" x="661" y="327" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow6">
-    <text id="rl6" x="8" y="345" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb6" x="600" y="335" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc6" x="676" y="345" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="361" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc6_0" x="28" y="351" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt6_0" x="115" y="361" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc6_1" x="210" y="351" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt6_1" x="297" y="361" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc6_2" x="392" y="351" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt6_2" x="479" y="361" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc6_3" x="574" y="351" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt6_3" x="661" y="361" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="377" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac6_0" x="28" y="367" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at6_0" x="115" y="377" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac6_1" x="210" y="367" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at6_1" x="297" y="377" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac6_2" x="392" y="367" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at6_2" x="479" y="377" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac6_3" x="574" y="367" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at6_3" x="661" y="377" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow7">
-    <text id="rl7" x="8" y="395" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb7" x="600" y="385" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc7" x="676" y="395" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="411" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc7_0" x="28" y="401" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt7_0" x="115" y="411" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc7_1" x="210" y="401" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt7_1" x="297" y="411" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc7_2" x="392" y="401" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt7_2" x="479" y="411" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc7_3" x="574" y="401" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt7_3" x="661" y="411" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="427" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac7_0" x="28" y="417" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at7_0" x="115" y="427" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac7_1" x="210" y="417" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at7_1" x="297" y="427" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac7_2" x="392" y="417" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at7_2" x="479" y="427" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac7_3" x="574" y="417" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at7_3" x="661" y="427" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow8">
-    <text id="rl8" x="8" y="445" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb8" x="600" y="435" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc8" x="676" y="445" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="461" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc8_0" x="28" y="451" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt8_0" x="115" y="461" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc8_1" x="210" y="451" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt8_1" x="297" y="461" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc8_2" x="392" y="451" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt8_2" x="479" y="461" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc8_3" x="574" y="451" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt8_3" x="661" y="461" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="477" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac8_0" x="28" y="467" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at8_0" x="115" y="477" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac8_1" x="210" y="467" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at8_1" x="297" y="477" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac8_2" x="392" y="467" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at8_2" x="479" y="477" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac8_3" x="574" y="467" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at8_3" x="661" y="477" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
-  <g id="grow9">
-    <text id="rl9" x="8" y="495" font-size="10.5" font-weight="700" fill="var(--ink)"></text>
-    <rect id="rcb9" x="600" y="485" width="152" height="14" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)" stroke-width="0.8" opacity="0"/>
-    <text id="rc9" x="676" y="495" text-anchor="middle" font-size="9" font-weight="700" fill="var(--blue-ink)"></text>
-    <text x="6" y="511" font-size="8.5" font-weight="700" fill="var(--faint)">W</text>
-    <rect id="wc9_0" x="28" y="501" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt9_0" x="115" y="511" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc9_1" x="210" y="501" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt9_1" x="297" y="511" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc9_2" x="392" y="501" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt9_2" x="479" y="511" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="wc9_3" x="574" y="501" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="wt9_3" x="661" y="511" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <text x="6" y="527" font-size="8.5" font-weight="700" fill="var(--faint)">a</text>
-    <rect id="ac9_0" x="28" y="517" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at9_0" x="115" y="527" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac9_1" x="210" y="517" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at9_1" x="297" y="527" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac9_2" x="392" y="517" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at9_2" x="479" y="527" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-    <rect id="ac9_3" x="574" y="517" width="175" height="14" rx="3" fill="var(--gray-bd)" stroke="var(--line)" stroke-width="0.5"/><text id="at9_3" x="661" y="527" text-anchor="middle" font-size="9.5" fill="var(--ink)"></text>
-  </g>
+  <svg id="fig3svg" viewBox="0 0 760 720" role="img" aria-label="per-module per-GPU shapes and communication" style="display:block;max-width:100%;height:auto;margin:6px 0 2px" font-family="-apple-system,system-ui,sans-serif">
+    <text x="6" y="16" font-size="10.5" font-weight="700" fill="var(--ink)">One transformer layer, top → bottom — each cell = SHAPE held per GPU (G0 G1 G2 G3)</text>
+    <text x="752" y="16" text-anchor="end" font-size="9.5" fill="var(--faint)">W = weights · a = activation</text>
+    <line x1="6" y1="24" x2="752" y2="24" stroke="var(--line)"/>
+    <g id="rows"></g>
   </svg>
   <div class="eq" id="commline">x</div>
   <div id="pdesc" style="font-size:13px;color:var(--ink);margin-top:4px;line-height:1.55">x</div>
 </div>
 <script>
 (function(){
+  var SVGNS='http://www.w3.org/2000/svg';
   var COL=['var(--blue-bd)','var(--green-bd)','var(--amber-bd)','var(--coral-bd)'], GRY='var(--gray-bd)', FAINT='var(--card)';
-  var MAXR=10;
-  var D={TP:{rows:[{l:'LayerNorm 1 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:false,a:['X full [b,s,h]','X full [b,s,h]','X full [b,s,h]','X full [b,s,h]'],c:''},{l:'QKV proj · W_qkv [h,3h] (col, by heads)',ws:true,w:['W heads g0','W heads g1','W heads g2','W heads g3'],as_:true,a:['Q,K,V g0','Q,K,V g1','Q,K,V g2','Q,K,V g3'],c:''},{l:'Attention core · softmax(QKᵀ)V',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['ctx g0','ctx g1','ctx g2','ctx g3'],c:''},{l:'Output proj · W_o [h,h] (row)',ws:true,w:['W rows g0','W rows g1','W rows g2','W rows g3'],as_:true,a:['partial Σ','partial Σ','partial Σ','partial Σ'],c:'all-reduce → full'},{l:'LayerNorm 2 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:false,a:['X full','X full','X full','X full'],c:''},{l:'MLP up · W_up [h,4h] (col)',ws:true,w:['W cols g0','W cols g1','W cols g2','W cols g3'],as_:true,a:['4h g0','4h g1','4h g2','4h g3'],c:''},{l:'GeLU / SwiGLU · elementwise',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['act g0','act g1','act g2','act g3'],c:''},{l:'MLP down · W_down [4h,h] (row)',ws:true,w:['W rows g0','W rows g1','W rows g2','W rows g3'],as_:true,a:['partial Σ','partial Σ','partial Σ','partial Σ'],c:'all-reduce → full'}],commline:'TP shards BOTH attention (QKV split by heads, output proj row-parallel) AND the MLP (up col, down row). 2 all-reduces per layer — after the attention output proj and after the MLP down proj.',desc:'Each GEMM is sharded: QKV column-parallel by heads, attention runs locally per head, output proj row-parallel then all-reduce; identically for MLP up(col)/down(row). Activations are full and identical between blocks, kept so by the all-reduce.'},
-TPSP:{rows:[{l:'LayerNorm 1 (seq-parallel)',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:true,a:['X seq g0','X seq g1','X seq g2','X seq g3'],c:'all-gather: seq→full'},{l:'QKV proj · W_qkv [h,3h] (col)',ws:true,w:['W heads g0','W heads g1','W heads g2','W heads g3'],as_:true,a:['Q,K,V g0','Q,K,V g1','Q,K,V g2','Q,K,V g3'],c:''},{l:'Attention core · softmax(QKᵀ)V',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['ctx g0','ctx g1','ctx g2','ctx g3'],c:''},{l:'Output proj · W_o [h,h] (row)',ws:true,w:['W rows g0','W rows g1','W rows g2','W rows g3'],as_:true,a:['out seq g0','out seq g1','out seq g2','out seq g3'],c:'reduce-scatter: →seq'},{l:'LayerNorm 2 (seq-parallel)',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:true,a:['X seq g0','X seq g1','X seq g2','X seq g3'],c:'all-gather: seq→full'},{l:'MLP up · W_up [h,4h] (col)',ws:true,w:['W cols g0','W cols g1','W cols g2','W cols g3'],as_:true,a:['4h g0','4h g1','4h g2','4h g3'],c:''},{l:'GeLU / SwiGLU · elementwise',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['act g0','act g1','act g2','act g3'],c:''},{l:'MLP down · W_down [4h,h] (row)',ws:true,w:['W rows g0','W rows g1','W rows g2','W rows g3'],as_:true,a:['out seq g0','out seq g1','out seq g2','out seq g3'],c:'reduce-scatter: →seq'}],commline:'TP + sequence-parallel: same head/MLP weight split as TP, but LayerNorm/dropout regions keep activations sequence-sharded. The TP all-reduce splits into all-gather (enter the GEMM region) + reduce-scatter (exit) — same total bytes.',desc:'The full activation is only materialised inside the TP GEMM regions; outside (norm/dropout) it stays sharded along the sequence. all-gather + reduce-scatter move the same bytes as one all-reduce but cut activation memory.'},
-EP:{rows:[{l:'LayerNorm 1 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:false,a:['X full','X full','X full','X full'],c:''},{l:'QKV proj · W_qkv [h,3h] (col, heads)',ws:true,w:['W heads g0','W heads g1','W heads g2','W heads g3'],as_:true,a:['Q,K,V g0','Q,K,V g1','Q,K,V g2','Q,K,V g3'],c:''},{l:'Attention core · softmax(QKᵀ)V',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['ctx g0','ctx g1','ctx g2','ctx g3'],c:''},{l:'Output proj · W_o [h,h] (row)',ws:true,w:['W rows g0','W rows g1','W rows g2','W rows g3'],as_:true,a:['partial Σ','partial Σ','partial Σ','partial Σ'],c:'all-reduce → full'},{l:'LayerNorm 2 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:false,a:['X full','X full','X full','X full'],c:''},{l:'Router / gate · W_g [h,E]',ws:false,w:['gate (full)','gate (full)','gate (full)','gate (full)'],as_:false,a:['routing logits','routing logits','routing logits','routing logits'],c:''},{l:'all-to-all dispatch · route tokens',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['tokens→exp g0','tokens→exp g1','tokens→exp g2','tokens→exp g3'],c:'all-to-all dispatch'},{l:'Experts (FFN) · E experts split',ws:true,w:['experts {0,1}','experts {2,3}','experts {4,5}','experts {6,7}'],as_:true,a:['exp out g0','exp out g1','exp out g2','exp out g3'],c:''},{l:'all-to-all combine · tokens back',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['back to g0','back to g1','back to g2','back to g3'],c:'all-to-all combine'}],commline:'EP (MoE): attention is sharded by TP (heads) and the FFN is replaced by experts split across GPUs. Each token is routed to its expert by all-to-all dispatch, then the result is returned by all-to-all combine. MoE layers only.',desc:'The router runs on every GPU; all-to-all dispatch regroups tokens by expert, each GPU computes its experts, all-to-all combine returns them. DeepSeek-V3 reports ~1:1 compute:comm — the all-to-all is the bottleneck.'},
-DP:{rows:[{l:'LayerNorm 1 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:true,a:['batch 0','batch 1','batch 2','batch 3'],c:''},{l:'QKV proj · W_qkv [h,3h]',ws:false,w:['W_qkv (full)','W_qkv (full)','W_qkv (full)','W_qkv (full)'],as_:true,a:['Q,K,V b0','Q,K,V b1','Q,K,V b2','Q,K,V b3'],c:''},{l:'Attention core · softmax(QKᵀ)V',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['ctx b0','ctx b1','ctx b2','ctx b3'],c:''},{l:'Output proj · W_o [h,h]',ws:false,w:['W_o (full)','W_o (full)','W_o (full)','W_o (full)'],as_:true,a:['out b0','out b1','out b2','out b3'],c:''},{l:'LayerNorm 2 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:true,a:['batch 0','batch 1','batch 2','batch 3'],c:''},{l:'MLP up · W_up [h,4h]',ws:false,w:['W_up (full)','W_up (full)','W_up (full)','W_up (full)'],as_:true,a:['4h b0','4h b1','4h b2','4h b3'],c:''},{l:'GeLU / SwiGLU · elementwise',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['act b0','act b1','act b2','act b3'],c:''},{l:'MLP down · W_down [4h,h]',ws:false,w:['W_down (full)','W_down (full)','W_down (full)','W_down (full)'],as_:true,a:['out b0','out b1','out b2','out b3'],c:''}],commline:'DP replicates EVERY module (full weights on each GPU) and splits the request batch. No collective anywhere — replicas are independent. The mirror image of TP.',desc:'At inference each GPU runs the whole network on a different batch of requests. No per-layer collective (unlike DP-training, which all-reduces gradients). vLLM DP-attention adds only a tiny coordination all-reduce.'},
-DPEP:{rows:[{l:'LayerNorm 1 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:true,a:['batch 0','batch 1','batch 2','batch 3'],c:''},{l:'QKV proj · W_qkv [h,3h] (DP: full)',ws:false,w:['W_qkv (full)','W_qkv (full)','W_qkv (full)','W_qkv (full)'],as_:true,a:['Q,K,V b0','Q,K,V b1','Q,K,V b2','Q,K,V b3'],c:''},{l:'Attention core (no KV duplication)',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['ctx b0','ctx b1','ctx b2','ctx b3'],c:''},{l:'Output proj · W_o [h,h] (DP: full)',ws:false,w:['W_o (full)','W_o (full)','W_o (full)','W_o (full)'],as_:true,a:['out b0','out b1','out b2','out b3'],c:''},{l:'LayerNorm 2 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:true,a:['batch 0','batch 1','batch 2','batch 3'],c:''},{l:'Router / gate · W_g [h,E]',ws:false,w:['gate (full)','gate (full)','gate (full)','gate (full)'],as_:false,a:['routing logits','routing logits','routing logits','routing logits'],c:''},{l:'all-to-all dispatch · route tokens',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['tokens→exp g0','tokens→exp g1','tokens→exp g2','tokens→exp g3'],c:'all-to-all dispatch'},{l:'Experts (FFN) · E experts split',ws:true,w:['experts {0,1}','experts {2,3}','experts {4,5}','experts {6,7}'],as_:true,a:['exp out g0','exp out g1','exp out g2','exp out g3'],c:''},{l:'all-to-all combine · tokens back',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['back to g0','back to g1','back to g2','back to g3'],c:'all-to-all combine'}],commline:'vLLM DP-attention + EP: attention runs data-parallel (full weights, own batch — the KV cache is NOT duplicated); experts run expert-parallel (all-to-all). A tiny periodic coordination all-reduce + dummy passes keep ranks in lockstep.',desc:'Best of both for MoE serving: DP attention avoids duplicating the KV cache across ranks, EP spreads the experts. Ranks must step together, so vLLM inserts dummy forwards and a small all-reduce every N steps.'},
-PP:{rows:[{l:'Stage 0 — layers 0…k (all modules, full)',ws:true,w:['G0: full layers 0…k','','',''],as_:true,a:['microbatch in → act','','',''],c:'p2p send → G1'},{l:'Stage 1 — layers k…2k',ws:true,w:['','G1: full layers k…2k','',''],as_:true,a:['','act ← G0 → act','',''],c:'p2p send → G2'},{l:'Stage 2 — layers 2k…3k',ws:true,w:['','','G2: full layers 2k…3k',''],as_:true,a:['','','act ← G1 → act',''],c:'p2p send → G3'},{l:'Stage 3 — layers 3k…L',ws:true,w:['','','','G3: full layers 3k…L'],as_:true,a:['','','','act ← G2 → output'],c:'output'}],commline:'PP splits by DEPTH: each GPU holds whole layers (every module inside, at full size). A microbatch flows G0→G1→G2→G3 with only a p2p send/recv of the activation at each stage boundary — the cheapest collective, so PP is how you cross slow node links.',desc:'Unlike TP/EP/CP (which shard within a layer), PP gives each GPU a contiguous block of layers. Faint cells = that stage does not live on that GPU. For large models PP is combined with TP inside each stage.'},
-CP:{rows:[{l:'LayerNorm 1 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:true,a:['seq 0','seq 1','seq 2','seq 3'],c:''},{l:'QKV proj · W_qkv [h,3h] (full)',ws:false,w:['W_qkv (full)','W_qkv (full)','W_qkv (full)','W_qkv (full)'],as_:true,a:['Q,K,V seq0','Q,K,V seq1','Q,K,V seq2','Q,K,V seq3'],c:''},{l:'Attention core — needs ALL K/V',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['attn seq0','attn seq1','attn seq2','attn seq3'],c:'ring-p2p K/V (Ulysses: a2a)'},{l:'Output proj · W_o [h,h] (full)',ws:false,w:['W_o (full)','W_o (full)','W_o (full)','W_o (full)'],as_:true,a:['out seq0','out seq1','out seq2','out seq3'],c:''},{l:'LayerNorm 2 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)','γ,β (full)','γ,β (full)'],as_:true,a:['seq 0','seq 1','seq 2','seq 3'],c:''},{l:'MLP up · W_up [h,4h] (full)',ws:false,w:['W_up (full)','W_up (full)','W_up (full)','W_up (full)'],as_:true,a:['4h seq0','4h seq1','4h seq2','4h seq3'],c:''},{l:'GeLU / SwiGLU · elementwise',ws:false,w:['— no weight','— no weight','— no weight','— no weight'],as_:true,a:['act seq0','act seq1','act seq2','act seq3'],c:''},{l:'MLP down · W_down [4h,h] (full)',ws:false,w:['W_down (full)','W_down (full)','W_down (full)','W_down (full)'],as_:true,a:['out seq0','out seq1','out seq2','out seq3'],c:''}],commline:'CP replicates ALL weights and shards the SEQUENCE (tokens). Every module is token-independent EXCEPT the attention core — there each query must see all K/V, so K/V blocks rotate by ring-p2p (or all-to-all, Ulysses). Just one comm spot per layer.',desc:'Each GPU owns a chunk of tokens through the whole layer; weights are a full copy. Non-attention work is purely local; only attention needs the K/V exchange. This is how you serve very long context.'}};
+  var KIND={blue:['--blue-bg','--blue-bd','--blue-ink'],amber:['--amber-bg','--amber-bd','--amber-ink'],purple:['--purple-bg','--purple-bd','--purple-ink'],green:['--green-bg','--green-bd','--green-ink'],gray:['--gray-bg','--gray-bd','--gray-ink']};
+  function v(t){return 'var('+t+')';}
   function el(id){return document.getElementById(id);}
-  function badge(t){
-    if(/all-reduce/.test(t)) return ['var(--blue-bg)','var(--blue-bd)','var(--blue-ink)'];
-    if(/all-to-all|a2a/.test(t)) return ['var(--amber-bg)','var(--amber-bd)','var(--amber-ink)'];
-    if(/reduce-scatter|all-gather/.test(t)) return ['var(--purple-bg)','var(--purple-bd)','var(--purple-ink)'];
-    if(/p2p/.test(t)) return ['var(--green-bg)','var(--green-bd)','var(--green-ink)'];
-    return ['var(--gray-bg)','var(--gray-bd)','var(--gray-ink)'];
-  }
-  function cell(rect,txt,val,shard,i){
-    if(val===''){ rect.setAttribute('fill',FAINT); rect.setAttribute('stroke','var(--line)'); txt.textContent='·'; txt.setAttribute('fill','var(--faint)'); return; }
-    rect.setAttribute('fill', shard?COL[i]:GRY); rect.setAttribute('stroke','var(--line)'); txt.textContent=val; txt.setAttribute('fill','var(--ink)');
-  }
-  function set(p){
-    var d=D[p], rs=d.rows;
-    for(var r=0;r<MAXR;r++){
-      var g=el('grow'+r);
-      if(r>=rs.length){ g.setAttribute('display','none'); continue; }
-      g.removeAttribute('display');
-      var row=rs[r];
-      el('rl'+r).textContent=row.l;
-      var cb=el('rcb'+r), ct=el('rc'+r);
-      if(row.c){ var col=badge(row.c); cb.setAttribute('opacity','1'); cb.setAttribute('fill',col[0]); cb.setAttribute('stroke',col[1]); ct.textContent=row.c; ct.setAttribute('fill',col[2]); }
-      else { cb.setAttribute('opacity','0'); ct.textContent=''; }
-      for(var i=0;i<4;i++){
-        cell(el('wc'+r+'_'+i), el('wt'+r+'_'+i), row.w[i], row.ws, i);
-        cell(el('ac'+r+'_'+i), el('at'+r+'_'+i), row.a[i], row.as_, i);
-      }
+  function mk(tag,a,txt){var e=document.createElementNS(SVGNS,tag);for(var k in a)e.setAttribute(k,a[k]);if(txt!=null)e.textContent=txt;return e;}
+  var cellX=[28,210,392,574], cellW=175;
+  function cf(val,shard,i){ if(val==='')return [FAINT,'var(--faint)']; return [shard?COL[i]:GRY,'var(--ink)']; }
+  function drawModule(g,top,it){
+    g.appendChild(mk('text',{x:8,y:top+12,'font-size':10.5,'font-weight':700,fill:'var(--ink)'},it.l));
+    g.appendChild(mk('text',{x:6,y:top+28,'font-size':8.5,'font-weight':700,fill:'var(--faint)'},'W'));
+    g.appendChild(mk('text',{x:6,y:top+44,'font-size':8.5,'font-weight':700,fill:'var(--faint)'},'a'));
+    for(var i=0;i<4;i++){
+      var wf=cf(it.w[i],it.ws,i);
+      g.appendChild(mk('rect',{x:cellX[i],y:top+18,width:cellW,height:14,rx:3,fill:wf[0],stroke:'var(--line)','stroke-width':0.5}));
+      g.appendChild(mk('text',{x:cellX[i]+cellW/2,y:top+28,'text-anchor':'middle','font-size':9.5,fill:wf[1]}, it.w[i]===''?'·':it.w[i]));
+      var af=cf(it.a[i],it.as,i);
+      g.appendChild(mk('rect',{x:cellX[i],y:top+34,width:cellW,height:14,rx:3,fill:af[0],stroke:'var(--line)','stroke-width':0.5}));
+      g.appendChild(mk('text',{x:cellX[i]+cellW/2,y:top+44,'text-anchor':'middle','font-size':9.5,fill:af[1]}, it.a[i]===''?'·':it.a[i]));
     }
+    return 50;
+  }
+  function chip(g,x,y,w,fill,txt){
+    g.appendChild(mk('rect',{x:x,y:y,width:w,height:16,rx:3,fill:fill,stroke:'var(--line)','stroke-width':0.5}));
+    g.appendChild(mk('text',{x:x+w/2,y:y+11,'text-anchor':'middle','font-size':8.5,fill:'var(--ink)'},txt));
+  }
+  function drawComm(g,top,it){
+    var k=KIND[it.k]||KIND.gray, H=58;
+    g.appendChild(mk('rect',{x:6,y:top+3,width:746,height:H-6,rx:8,fill:v(k[0]),stroke:v(k[1]),'stroke-width':1}));
+    g.appendChild(mk('text',{x:16,y:top+17,'font-size':10.5,'font-weight':700,fill:v(k[2])}, it.op+'  ('+it.sym+')'));
+    var x=16, y=top+24;
+    if(it.gi!=null){
+      chip(g,x,y,150,COL[it.gi], it.ins[0]); x+=158;
+      g.appendChild(mk('text',{x:x,y:y+12,'font-size':12,'font-weight':700,fill:v(k[2])},'→')); x+=20;
+      chip(g,x,y,180, (it.gi+1<4?COL[it.gi+1]:GRY), it.outs[0].s);
+    } else {
+      var n=it.ins.length, cw=70;
+      for(var i=0;i<n;i++){ chip(g,x,y,cw,COL[i], it.ins[i]); x+=cw+5; }
+      g.appendChild(mk('text',{x:x+2,y:y+12,'font-size':10.5,'font-weight':700,fill:v(k[2])},'→ '+it.sym+' →')); x+=58;
+      if(it.outs.length===1){ chip(g,x,y,150, it.outs[0].full?GRY:COL[0], it.outs[0].s); }
+      else { for(var j=0;j<it.outs.length;j++){ chip(g,x,y,52,COL[j], it.outs[j].s); x+=57; } }
+    }
+    g.appendChild(mk('text',{x:16,y:top+50,'font-size':9.5,fill:v(k[2])}, it.note));
+    return H;
+  }
+  var M=function(l,ws,w,as,a){return {t:'m',l:l,ws:ws,w:w,as:as,a:a};};
+  var FW=function(s){return [s,s,s,s];};
+  var NOW=['—','—','—','—'];
+  var D={
+   TP:{items:[
+     M('LayerNorm 1 · γ,β [h]', false, FW('[h] full'), false, FW('[b,s,h]')),
+     M('QKV proj · W_qkv [h,3h] (col, by heads)', true, FW('[h,3h/4]'), true, FW('[b,s,3h/4]')),
+     M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b,s,h/4]')),
+     M('Output proj · W_o [h,h] (row)', true, FW('[h/4,h]'), true, FW('[b,s,h] partial')),
+     {t:'c',op:'all-reduce',k:'blue',sym:'Σ',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s,h] full',full:true}],note:'sum the 4 partial outputs → identical full [b,s,h] on every GPU → feeds LayerNorm 2'},
+     M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), false, FW('[b,s,h]')),
+     M('MLP up · W_up [h,4h] (col)', true, FW('[h,4h/4]'), true, FW('[b,s,4h/4]')),
+     M('GeLU / SwiGLU · elementwise', false, NOW, true, FW('[b,s,4h/4]')),
+     M('MLP down · W_down [4h,h] (row)', true, FW('[4h/4,h]'), true, FW('[b,s,h] partial')),
+     {t:'c',op:'all-reduce',k:'blue',sym:'Σ',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s,h] full',full:true}],note:'sum the 4 partial MLP outputs → full [b,s,h] → feeds the next layer'}
+   ],commline:'TP shards BOTH attention (QKV col by heads, output proj row) and the MLP (up col / down row). Each row carries the real shape; the two all-reduce bands sum the partial [b,s,h] into the full tensor that enters the next module.',
+     desc:'Weights split, activations full. After the row-parallel GEMMs each GPU has only a PARTIAL [b,s,h]; the all-reduce sums them into one identical full [b,s,h] which becomes the next module input. Two such sums per layer.'},
+   TPSP:{items:[
+     M('LayerNorm 1 (seq-parallel)', false, FW('[h] full'), true, FW('[b,s/4,h]')),
+     {t:'c',op:'all-gather',k:'purple',sym:'⧺ concat',ins:FW('[b,s/4,h]'),outs:[{s:'[b,s,h] full',full:true}],note:'gather the sequence shards → full [b,s,h] → enter the TP GEMM region'},
+     M('QKV proj · W_qkv [h,3h] (col)', true, FW('[h,3h/4]'), true, FW('[b,s,3h/4]')),
+     M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b,s,h/4]')),
+     M('Output proj · W_o [h,h] (row)', true, FW('[h/4,h]'), true, FW('[b,s,h] partial')),
+     {t:'c',op:'reduce-scatter',k:'purple',sym:'Σ + scatter',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s/4,h]'},{s:'[b,s/4,h]'},{s:'[b,s/4,h]'},{s:'[b,s/4,h]'}],note:'sum the partials AND scatter along sequence → each GPU keeps [b,s/4,h]'},
+     M('LayerNorm 2 (seq-parallel)', false, FW('[h] full'), true, FW('[b,s/4,h]')),
+     {t:'c',op:'all-gather',k:'purple',sym:'⧺ concat',ins:FW('[b,s/4,h]'),outs:[{s:'[b,s,h] full',full:true}],note:'gather again → full [b,s,h] for the MLP GEMM region'},
+     M('MLP up · W_up [h,4h] (col)', true, FW('[h,4h/4]'), true, FW('[b,s,4h/4]')),
+     M('GeLU / SwiGLU', false, NOW, true, FW('[b,s,4h/4]')),
+     M('MLP down · W_down [4h,h] (row)', true, FW('[4h/4,h]'), true, FW('[b,s,h] partial')),
+     {t:'c',op:'reduce-scatter',k:'purple',sym:'Σ + scatter',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s/4,h]'},{s:'[b,s/4,h]'},{s:'[b,s/4,h]'},{s:'[b,s/4,h]'}],note:'sum + scatter → [b,s/4,h] back to the sequence-parallel region'}
+   ],commline:'TP + sequence-parallel: same head/MLP weight split, but outside the GEMMs activations stay sequence-sharded [b,s/4,h]. The all-reduce splits into all-gather (→ full, enter region) and reduce-scatter (→ [b,s/4,h], exit) — same bytes.',
+     desc:'The full [b,s,h] only exists INSIDE the TP GEMM regions. all-gather builds it on entry; reduce-scatter sums and re-shards it on exit. Activation memory drops to 1/4 between blocks; total bytes equal one all-reduce.'},
+   EP:{items:[
+     M('LayerNorm 1 · γ,β [h]', false, FW('[h] full'), false, FW('[b,s,h]')),
+     M('QKV proj · W_qkv [h,3h] (col, heads)', true, FW('[h,3h/4]'), true, FW('[b,s,3h/4]')),
+     M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b,s,h/4]')),
+     M('Output proj · W_o [h,h] (row)', true, FW('[h/4,h]'), true, FW('[b,s,h] partial')),
+     {t:'c',op:'all-reduce',k:'blue',sym:'Σ',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s,h] full',full:true}],note:'attention output summed → full [b,s,h] → into the MoE block'},
+     M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), false, FW('[b,s,h]')),
+     M('Router / gate · W_g [h,E]', false, FW('[h,E] full'), false, FW('top-k expert ids')),
+     {t:'c',op:'all-to-all dispatch',k:'amber',sym:'⇄ route',ins:['my tokens','my tokens','my tokens','my tokens'],outs:[{s:'tokens for exp{0,1}'},{s:'…{2,3}'},{s:'…{4,5}'},{s:'…{6,7}'}],note:'each token sent to the GPU holding its expert → regrouped by expert'},
+     M('Experts (FFN) · E experts split', true, ['exp{0,1} [h,4h]','exp{2,3}','exp{4,5}','exp{6,7}'], true, FW('[n_tokₑ, h]')),
+     {t:'c',op:'all-to-all combine',k:'amber',sym:'⇄ route back',ins:['out g0','out g1','out g2','out g3'],outs:[{s:'tokens back, original order',full:true}],note:'expert outputs routed back to each token home GPU → [b,s,h]'}
+   ],commline:'EP (MoE): attention is sharded by TP (heads); the FFN is replaced by experts split across GPUs. all-to-all dispatch regroups tokens by expert, all-to-all combine sends results home. MoE layers only.',
+     desc:'The router (replicated) picks experts per token. all-to-all dispatch carries tokens to the expert GPU, experts compute locally, all-to-all combine returns them in original order. DeepSeek-V3: ~1:1 compute:comm.'},
+   DP:{items:[
+     M('LayerNorm 1 · γ,β [h]', false, FW('[h] full'), true, FW('[b/4,s,h]')),
+     M('QKV proj · W_qkv [h,3h]', false, FW('[h,3h] full'), true, FW('[b/4,s,3h]')),
+     M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b/4,s,h]')),
+     M('Output proj · W_o [h,h]', false, FW('[h,h] full'), true, FW('[b/4,s,h]')),
+     M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), true, FW('[b/4,s,h]')),
+     M('MLP up · W_up [h,4h]', false, FW('[h,4h] full'), true, FW('[b/4,s,4h]')),
+     M('GeLU / SwiGLU', false, NOW, true, FW('[b/4,s,4h]')),
+     M('MLP down · W_down [4h,h]', false, FW('[4h,h] full'), true, FW('[b/4,s,h]'))
+   ],commline:'DP replicates EVERY module (full weights on each GPU) and splits the batch [b→4 → b/4]. No collective anywhere — the activation shape stays [b/4,s,h] throughout. The mirror image of TP.',
+     desc:'Each GPU runs the whole network on its own b/4 requests. No per-layer comm (unlike DP-training, which all-reduces gradients). vLLM DP-attention adds only a tiny coordination all-reduce.'},
+   DPEP:{items:[
+     M('LayerNorm 1 · γ,β [h]', false, FW('[h] full'), true, FW('[b/4,s,h]')),
+     M('QKV proj · W_qkv [h,3h] (DP: full)', false, FW('[h,3h] full'), true, FW('[b/4,s,3h]')),
+     M('Attention core (no KV duplication)', false, NOW, true, FW('[b/4,s,h]')),
+     M('Output proj · W_o [h,h] (DP: full)', false, FW('[h,h] full'), true, FW('[b/4,s,h]')),
+     M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), true, FW('[b/4,s,h]')),
+     M('Router / gate · W_g [h,E]', false, FW('[h,E] full'), false, FW('top-k expert ids')),
+     {t:'c',op:'all-to-all dispatch',k:'amber',sym:'⇄ route',ins:['b0 tokens','b1 tokens','b2 tokens','b3 tokens'],outs:[{s:'exp{0,1}'},{s:'exp{2,3}'},{s:'exp{4,5}'},{s:'exp{6,7}'}],note:'tokens from all DP batches regrouped by expert'},
+     M('Experts (FFN) · E experts split', true, ['exp{0,1} [h,4h]','exp{2,3}','exp{4,5}','exp{6,7}'], true, FW('[n_tokₑ, h]')),
+     {t:'c',op:'all-to-all combine',k:'amber',sym:'⇄ route back',ins:['out g0','out g1','out g2','out g3'],outs:[{s:'back to each batch',full:true}],note:'+ tiny coordination all-reduce every N steps + lockstep dummy passes'}
+   ],commline:'vLLM DP-attention + EP: attention is data-parallel (full weights, own b/4 batch — KV cache NOT duplicated); experts are expert-parallel (all-to-all). A tiny periodic all-reduce + dummy passes keep ranks in lockstep.',
+     desc:'DP attention avoids duplicating the KV cache across ranks; EP spreads the experts. Ranks step together, so vLLM inserts dummy forwards and a small all-reduce every N steps.'},
+   PP:{items:[
+     M('Stage 0 · layers 0…k (all modules, full)', true, ['layers 0…k (full W)','','',''], true, ['[b_micro,s,h]','','','']),
+     {t:'c',op:'p2p send / recv',k:'green',sym:'→',gi:0,ins:['[b_micro,s,h]'],outs:[{s:'[b_micro,s,h] → G1'}],note:'activation handed to Stage 1 on G1 (cheap point-to-point; can cross nodes)'},
+     M('Stage 1 · layers k…2k', true, ['','layers k…2k (full W)','',''], true, ['','[b_micro,s,h]','','']),
+     {t:'c',op:'p2p send / recv',k:'green',sym:'→',gi:1,ins:['[b_micro,s,h]'],outs:[{s:'[b_micro,s,h] → G2'}],note:'activation handed to Stage 2 on G2'},
+     M('Stage 2 · layers 2k…3k', true, ['','','layers 2k…3k (full W)',''], true, ['','','[b_micro,s,h]','']),
+     {t:'c',op:'p2p send / recv',k:'green',sym:'→',gi:2,ins:['[b_micro,s,h]'],outs:[{s:'[b_micro,s,h] → G3'}],note:'activation handed to Stage 3 on G3'},
+     M('Stage 3 · layers 3k…L', true, ['','','','layers 3k…L (full W)'], true, ['','','','[b_micro,s,h] → out'])
+   ],commline:'PP splits by DEPTH: each GPU holds whole layers at full size. A microbatch [b_micro,s,h] flows G0→G1→G2→G3 with only a p2p send/recv of the activation at each boundary — no shape change, just a hand-off.',
+     desc:'Unlike TP/EP/CP (which shard within a layer), PP gives each GPU a contiguous block of layers; faint cells = that stage is not on that GPU. The activation shape is unchanged across the p2p hop. Combine with TP inside each stage for big models.'},
+   CP:{items:[
+     M('LayerNorm 1 · γ,β [h]', false, FW('[h] full'), true, FW('[b,s/4,h]')),
+     M('QKV proj · W_qkv [h,3h] (full)', false, FW('[h,3h] full'), true, FW('[b,s/4,3h]')),
+     {t:'c',op:'ring-p2p K/V (Ulysses: all-to-all)',k:'green',sym:'↻ rotate',ins:['K/V s0','K/V s1','K/V s2','K/V s3'],outs:[{s:'each query sees ALL K/V',full:true}],note:'K/V blocks rotate neighbor→neighbor so every local query attends to the full sequence'},
+     M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b,s/4,h]')),
+     M('Output proj · W_o [h,h] (full)', false, FW('[h,h] full'), true, FW('[b,s/4,h]')),
+     M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), true, FW('[b,s/4,h]')),
+     M('MLP up · W_up [h,4h] (full)', false, FW('[h,4h] full'), true, FW('[b,s/4,4h]')),
+     M('GeLU / SwiGLU', false, NOW, true, FW('[b,s/4,4h]')),
+     M('MLP down · W_down [4h,h] (full)', false, FW('[4h,h] full'), true, FW('[b,s/4,h]'))
+   ],commline:'CP replicates ALL weights and shards the SEQUENCE → activations are [b,s/4,h] everywhere. Every module is token-independent EXCEPT attention, where K/V must be exchanged (ring-p2p, or all-to-all for Ulysses). One comm spot per layer.',
+     desc:'Each GPU owns s/4 tokens through the whole layer; weights are a full copy. Only attention needs the K/V exchange so each local query can see the full sequence. This is how you serve very long context.'}
+  };
+  function set(p){
+    var d=D[p], rows=el('rows');
+    while(rows.firstChild) rows.removeChild(rows.firstChild);
+    var y=30;
+    for(var i=0;i<d.items.length;i++){ var it=d.items[i], g=mk('g',{}); rows.appendChild(g); y += (it.t==='c')?drawComm(g,y,it):drawModule(g,y,it); }
+    el('fig3svg').setAttribute('viewBox','0 0 760 '+(y+6));
     el('commline').textContent=d.commline; el('pdesc').textContent=d.desc;
   }
   var seg=el('pseg');
@@ -675,7 +631,7 @@ CP:{rows:[{l:'LayerNorm 1 · γ,β [h]',ws:false,w:['γ,β (full)','γ,β (full)
   set('TP');
 })();
 </script>
-<p class="figcap"><span class="en">Fig 3 — every strategy, module by module. For one transformer layer (top→bottom) each row shows the <b>weights</b> each GPU holds (W strip) and the <b>activation</b> it holds (a strip), with the <b>collective</b> at that point. Colour = sharded per-GPU, grey = replicated, faint = absent on that GPU. <b>TP shards attention AND MLP; DP replicates everything; CP communicates only at attention; PP splits by depth.</b> Sources: Megatron [5], seq-parallel [6], Switch/DeepSeek MoE [7][8], vLLM DP/CP docs [15][18C].</span><span class="ko">그림 3 — 모든 전략을 모듈 단위로. 트랜스포머 레이어 하나(위→아래)에서 각 행은 GPU별 <b>weight</b>(W 줄)와 <b>activation</b>(a 줄), 그 지점의 <b>통신</b>을 보여준다. 색=GPU별 샤딩, 회색=복제, 흐림=그 GPU엔 없음. <b>TP는 attention과 MLP를 둘 다 쪼개고, DP는 전부 복제, CP는 attention에서만 통신, PP는 depth로 분할.</b> 출처: Megatron [5], seq-parallel [6], Switch/DeepSeek MoE [7][8], vLLM DP/CP 문서 [15][18C].</span></p>
+<p class="figcap"><span class="en">Fig 3 — every strategy, module by module, with real shapes &amp; communication. For one transformer layer (top→bottom) each cell shows the <b>shape</b> a GPU holds (W = weights, a = activation); when a collective fires, a band shows the per-GPU inputs being <b>summed / gathered / routed</b> into the tensor that feeds the next module. Colour = sharded, grey = replicated/full, faint = absent on that GPU. <b>TP shards attention AND MLP (2 all-reduce); DP replicates all; CP communicates only at attention; PP splits by depth.</b> Sources: Megatron [5], seq-parallel [6], Switch/DeepSeek MoE [7][8], vLLM DP/CP docs [15][18C].</span><span class="ko">그림 3 — 모든 전략을 모듈 단위로, 실제 shape와 통신까지. 트랜스포머 레이어 하나(위→아래)에서 각 셀은 GPU가 든 <b>shape</b>(W=weight, a=activation); 통신이 fire되면 GPU별 입력이 <b>합쳐지거나·모이거나·라우팅되어</b> 다음 모듈 input으로 들어가는 밴드를 그린다. 색=샤딩, 회색=복제/full, 흐림=그 GPU엔 없음. <b>TP는 attention과 MLP 둘 다 쪼갬(all-reduce 2회); DP는 전부 복제; CP는 attention에서만 통신; PP는 depth로 분할.</b> 출처: Megatron [5], seq-parallel [6], Switch/DeepSeek MoE [7][8], vLLM DP/CP 문서 [15][18C].</span></p>
 
 <h3><span class="en">CP — context (sequence) parallel, for long context</span><span class="ko">CP — context(sequence) parallel, 롱컨텍스트용</span></h3>
 <ul style="margin:6px 0 10px;padding-left:22px;line-height:1.65">
