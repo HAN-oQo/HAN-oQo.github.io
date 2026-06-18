@@ -504,30 +504,73 @@
     }
     return 50;
   }
-  function chip(g,x,y,w,fill,txt){
+  function chip(g,x,y,w,fill,txt,fs){
     g.appendChild(mk('rect',{x:x,y:y,width:w,height:16,rx:3,fill:fill,stroke:'var(--line)','stroke-width':0.5}));
-    g.appendChild(mk('text',{x:x+w/2,y:y+11,'text-anchor':'middle','font-size':8.5,fill:'var(--ink)'},txt));
+    g.appendChild(mk('text',{x:x+w/2,y:y+11,'text-anchor':'middle','font-size':(fs||8),fill:'var(--ink)'},txt));
   }
   function drawComm(g,top,it){
-    var k=KIND[it.k]||KIND.gray, H=58;
+    var k=KIND[it.k]||KIND.gray, H=58, cy=top+24;
     g.appendChild(mk('rect',{x:6,y:top+3,width:746,height:H-6,rx:8,fill:v(k[0]),stroke:v(k[1]),'stroke-width':1}));
-    g.appendChild(mk('text',{x:16,y:top+17,'font-size':10.5,'font-weight':700,fill:v(k[2])}, it.op+'  ('+it.sym+')'));
-    var x=16, y=top+24;
+    g.appendChild(mk('text',{x:16,y:top+16,'font-size':10.5,'font-weight':700,fill:v(k[2])}, it.op+'  ('+it.sym+')'));
     if(it.gi!=null){
-      chip(g,x,y,150,COL[it.gi], it.ins[0]); x+=158;
-      g.appendChild(mk('text',{x:x,y:y+12,'font-size':12,'font-weight':700,fill:v(k[2])},'→')); x+=20;
-      chip(g,x,y,180, (it.gi+1<4?COL[it.gi+1]:GRY), it.outs[0].s);
+      chip(g,14,cy,150,COL[it.gi], it.ins[0], 8.5);
+      g.appendChild(mk('text',{x:172,y:cy+12,'font-size':13,'font-weight':700,fill:v(k[2])},'→'));
+      chip(g,192,cy,200,(it.gi+1<4?COL[it.gi+1]:GRY), it.outs[0].s, 8.5);
     } else {
-      var n=it.ins.length, cw=70;
-      for(var i=0;i<n;i++){ chip(g,x,y,cw,COL[i], it.ins[i]); x+=cw+5; }
-      g.appendChild(mk('text',{x:x+2,y:y+12,'font-size':10.5,'font-weight':700,fill:v(k[2])},'→ '+it.sym+' →')); x+=58;
-      if(it.outs.length===1){ chip(g,x,y,150, it.outs[0].full?GRY:COL[0], it.outs[0].s); }
-      else { for(var j=0;j<it.outs.length;j++){ chip(g,x,y,52,COL[j], it.outs[j].s); x+=57; } }
+      var n=it.ins.length, cw=70, gap=5, x=14, ox=372;
+      for(var i=0;i<n;i++){ chip(g,x,cy,cw, COL[i], it.ins[i], 8); x+=cw+gap; }
+      // centre the arrow in the gap between the input chips and the output chips, and PIN its
+      // rendered width so a wider system font (e.g. SF Pro) can't make Σ↘/⧺ spill onto the output chips
+      var inEnd=x-gap, arrowCx=(inEnd+ox)/2, arrowLen=Math.min(46,(ox-inEnd)-22);
+      g.appendChild(mk('text',{x:arrowCx,y:cy+12,'text-anchor':'middle','font-size':12,'font-weight':700,fill:v(k[2]),textLength:arrowLen,lengthAdjust:'spacingAndGlyphs'}, '→ '+it.sym+' →'));
+      if(it.outs.length===1){ chip(g,ox,cy,200, it.outs[0].full?GRY:COL[0], it.outs[0].s, 8.5); }
+      else { var ow=90; for(var j=0;j<it.outs.length;j++){ chip(g,ox,cy,ow, COL[j], it.outs[j].s, 8.5); ox+=ow+5; } }
     }
-    g.appendChild(mk('text',{x:16,y:top+50,'font-size':9.5,fill:v(k[2])}, it.note));
+    g.appendChild(mk('text',{x:16,y:top+52,'font-size':9.5,fill:v(k[2])}, it.note));
+    return H;
+  }
+  // ---- animated 4×4 communication grid (rows = 4 GPUs, cols = 4 blocks), reusing Fig 1's idiom ----
+  var BLK=['A','B','C','D'], INK=['var(--blue-ink)','var(--green-ink)','var(--amber-ink)','var(--coral-ink)'], GI='var(--gray-ink)';
+  var ST=[[0.06,0.11],[0.24,0.29],[0.42,0.47],[0.6,0.65]];          // per-column stagger (Fig 1 ④/⑤)
+  function APP(t){return ['0;'+t[0]+';'+t[1]+';0.90;0.96;1','0;0;1;1;0;0'];}  // fade in → hold → fade out before loop reset
+  function OUT(t){return ['0;'+t[0]+';'+t[1]+';1','1;1;0;0'];}                 // visible → fade out (SMIL snaps back at loop start)
+  function gcell(g,x,y,fill,txt,tf,anim){
+    var node=anim?mk('g',{}):g;
+    if(anim) node.appendChild(mk('animate',{attributeName:'opacity',dur:'6s',repeatCount:'indefinite',calcMode:'linear',keyTimes:anim[0],values:anim[1]}));
+    var card=(fill==='var(--card)');
+    node.appendChild(mk('rect',{x:x,y:y,width:24,height:15,rx:3,fill:fill,stroke:card?'var(--line)':fill,'stroke-width':card?1:1.3}));
+    if(txt!=null) node.appendChild(mk('text',{x:x+12,y:y+11,'text-anchor':'middle','font-size':9,'font-weight':700,fill:tf},txt));
+    if(anim) g.appendChild(node);
+  }
+  // each builder returns the on-grid cells (over the empty 16-cell frame), mirroring Fig 1 ④⑤⑥⑦
+  var GRID={
+    'all-gather':function(L){var o=[],c,r;for(c=0;c<4;c++)for(r=0;r<4;r++)
+      o.push(r===c?{r:r,c:c,fill:COL[c],txt:L[c],tf:INK[c]}:{r:r,c:c,fill:COL[c],txt:L[c],tf:INK[c],anim:APP(ST[c])});return o;},
+    'reduce-scatter':function(L){var o=[],c,r;for(c=0;c<4;c++)for(r=0;r<4;r++)
+      o.push(r===c?{r:r,c:c,fill:GRY,txt:'Σ',tf:GI}:{r:r,c:c,fill:COL[r],txt:L[c],tf:INK[r],anim:OUT(ST[c])});return o;},
+    'all-reduce':function(L){var o=[],c,r,dg=[[0.05,0.1],[0.14,0.19],[0.23,0.28],[0.32,0.37]],ag=[[0.5,0.55],[0.59,0.64],[0.68,0.73],[0.77,0.82]];
+      for(c=0;c<4;c++)for(r=0;r<4;r++){ if(r===c){ o.push({r:r,c:c,fill:GRY,txt:'Σ',tf:GI,anim:APP(dg[c])}); }
+        else { o.push({r:r,c:c,fill:COL[r],txt:L[c],tf:INK[r],anim:OUT(dg[c])}); o.push({r:r,c:c,fill:GRY,txt:'Σ',tf:GI,anim:APP(ag[c])}); } }return o;},
+    'all-to-all':function(L){var o=[],c,r;for(c=0;c<4;c++)for(r=0;r<4;r++){ if(r===c){ o.push({r:r,c:c,fill:COL[r],txt:''+r,tf:INK[r]}); }
+        else { o.push({r:r,c:c,fill:COL[r],txt:''+r,tf:INK[r],anim:OUT(ST[c])}); o.push({r:r,c:c,fill:COL[c],txt:''+c,tf:INK[c],anim:APP(ST[c])}); } }return o;},
+    'ring':function(L){return GRID['all-gather'](L);}
+  };
+  function drawCommGrid(g,top,it){
+    var k=KIND[it.k]||KIND.gray, H=122, gx=44, gy=top+35, px=28, py=18, cols=it.cols||BLK, c,r;
+    g.appendChild(mk('rect',{x:6,y:top+3,width:746,height:H-6,rx:8,fill:v(k[0]),stroke:v(k[1]),'stroke-width':1}));
+    g.appendChild(mk('text',{x:16,y:top+18,'font-size':10.5,'font-weight':700,fill:v(k[2])}, it.op+'  ('+it.sym+')'));
+    for(c=0;c<4;c++) g.appendChild(mk('text',{x:gx+c*px+12,y:top+31,'text-anchor':'middle','font-size':8,fill:'var(--faint)'},cols[c]));
+    for(r=0;r<4;r++) g.appendChild(mk('text',{x:gx-6,y:gy+r*py+11,'text-anchor':'end','font-size':8.5,'font-weight':600,fill:'var(--muted)'},'G'+r));
+    for(r=0;r<4;r++)for(c=0;c<4;c++) gcell(g,gx+c*px,gy+r*py,'var(--card)',null,null,null);
+    var cells=(GRID[it.grid]||GRID['all-gather'])(cols);
+    for(var i=0;i<cells.length;i++){var z=cells[i]; gcell(g,gx+z.c*px,gy+z.r*py,z.fill,z.txt,z.tf,z.anim);}
+    var cap=it.cap||[];
+    for(var i=0;i<cap.length;i++) g.appendChild(mk('text',{x:182,y:top+36+i*15,'font-size':9.5,fill:(i===0?v(k[2]):'var(--muted)'),'font-weight':(i===0?700:400)}, cap[i]));
+    g.appendChild(mk('text',{x:16,y:top+H-9,'font-size':9.5,fill:v(k[2])}, it.note));
     return H;
   }
   var M=function(l,ws,w,as,a){return {t:'m',l:l,ws:ws,w:w,as:as,a:a};};
+  var C=function(grid,op,k,sym,note,cols,cap){return {t:'c',grid:grid,op:op,k:k,sym:sym,note:note,cols:cols,cap:cap};};
   var FW=function(s){return [s,s,s,s];};
   var NOW=['—','—','—','—'];
   var D={
@@ -536,27 +579,27 @@
      M('QKV proj · W_qkv [h,3h] (col, by heads)', true, FW('[h,3h/4]'), true, FW('[b,s,3h/4]')),
      M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b,s,h/4]')),
      M('Output proj · W_o [h,h] (row)', true, FW('[h/4,h]'), true, FW('[b,s,h] partial')),
-     {t:'c',op:'all-reduce',k:'blue',sym:'Σ',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s,h] full',full:true}],note:'sum the 4 partial outputs → identical full [b,s,h] on every GPU → feeds LayerNorm 2'},
+     C('all-reduce','all-reduce','blue','Σ','sum the 4 partial outputs → identical full [b,s,h] on every GPU → feeds LayerNorm 2', null, ['cols = [b,s,h] split into 4 blocks; each GPU a PARTIAL','① reduce-scatter: each column sums into its owner (Σ)','② all-gather: Σ spreads → all 16 = the full sum']),
      M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), false, FW('[b,s,h]')),
      M('MLP up · W_up [h,4h] (col)', true, FW('[h,4h/4]'), true, FW('[b,s,4h/4]')),
      M('GeLU / SwiGLU · elementwise', false, NOW, true, FW('[b,s,4h/4]')),
      M('MLP down · W_down [4h,h] (row)', true, FW('[4h/4,h]'), true, FW('[b,s,h] partial')),
-     {t:'c',op:'all-reduce',k:'blue',sym:'Σ',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s,h] full',full:true}],note:'sum the 4 partial MLP outputs → full [b,s,h] → feeds the next layer'}
+     C('all-reduce','all-reduce','blue','Σ','sum the 4 partial MLP outputs → full [b,s,h] → feeds the next layer', null, ['same all-reduce after the MLP','RS (column → Σ) then AG (Σ → all)','end: every GPU has the full summed [b,s,h]'])
    ],commline:'TP shards BOTH attention (QKV col by heads, output proj row) and the MLP (up col / down row). Each row carries the real shape; the two all-reduce bands sum the partial [b,s,h] into the full tensor that enters the next module.',
      desc:'Weights split, activations full. After the row-parallel GEMMs each GPU has only a PARTIAL [b,s,h]; the all-reduce sums them into one identical full [b,s,h] which becomes the next module input. Two such sums per layer.'},
    TPSP:{items:[
      M('LayerNorm 1 (seq-parallel)', false, FW('[h] full'), true, FW('[b,s/4,h]')),
-     {t:'c',op:'all-gather',k:'purple',sym:'⧺ concat',ins:FW('[b,s/4,h]'),outs:[{s:'[b,s,h] full',full:true}],note:'gather the sequence shards → full [b,s,h] → enter the TP GEMM region'},
+     C('all-gather','all-gather','purple','⧺','gather (concat) the sequence shards → full [b,s,h] → enter the TP GEMM region', ['s0','s1','s2','s3'], ['start: each GPU owns 1 seq-shard (the diagonal)','step k: shard k fills column k on every GPU','end: all hold the full [b,s,h]']),
      M('QKV proj · W_qkv [h,3h] (col)', true, FW('[h,3h/4]'), true, FW('[b,s,3h/4]')),
      M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b,s,h/4]')),
      M('Output proj · W_o [h,h] (row)', true, FW('[h/4,h]'), true, FW('[b,s,h] partial')),
-     {t:'c',op:'reduce-scatter',k:'purple',sym:'Σ + scatter',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s/4,h]'},{s:'[b,s/4,h]'},{s:'[b,s/4,h]'},{s:'[b,s/4,h]'}],note:'sum the partials AND scatter along sequence → each GPU keeps [b,s/4,h]'},
+     C('reduce-scatter','reduce-scatter','purple','Σ↘','sum the partials AND scatter along sequence → each GPU keeps [b,s/4,h]', ['s0','s1','s2','s3'], ['start: each GPU has a full partial [b,s,h]','step k: column k sums into its owner Gk (Σ)','end: each GPU keeps only its shard [b,s/4,h]']),
      M('LayerNorm 2 (seq-parallel)', false, FW('[h] full'), true, FW('[b,s/4,h]')),
-     {t:'c',op:'all-gather',k:'purple',sym:'⧺ concat',ins:FW('[b,s/4,h]'),outs:[{s:'[b,s,h] full',full:true}],note:'gather again → full [b,s,h] for the MLP GEMM region'},
+     C('all-gather','all-gather','purple','⧺','gather again → full [b,s,h] for the MLP GEMM region', ['s0','s1','s2','s3'], ['again, before the MLP GEMM region','shard k fills column k across all GPUs','end: full [b,s,h] on every GPU']),
      M('MLP up · W_up [h,4h] (col)', true, FW('[h,4h/4]'), true, FW('[b,s,4h/4]')),
      M('GeLU / SwiGLU', false, NOW, true, FW('[b,s,4h/4]')),
      M('MLP down · W_down [4h,h] (row)', true, FW('[4h/4,h]'), true, FW('[b,s,h] partial')),
-     {t:'c',op:'reduce-scatter',k:'purple',sym:'Σ + scatter',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s/4,h]'},{s:'[b,s/4,h]'},{s:'[b,s/4,h]'},{s:'[b,s/4,h]'}],note:'sum + scatter → [b,s/4,h] back to the sequence-parallel region'}
+     C('reduce-scatter','reduce-scatter','purple','Σ↘','sum + scatter → [b,s/4,h] back to the sequence-parallel region', ['s0','s1','s2','s3'], ['exit of the MLP GEMM region','column k sums into its owner Gk (Σ)','back to seq-sharded [b,s/4,h]'])
    ],commline:'TP + sequence-parallel: same head/MLP weight split, but outside the GEMMs activations stay sequence-sharded [b,s/4,h]. The all-reduce splits into all-gather (→ full, enter region) and reduce-scatter (→ [b,s/4,h], exit) — same bytes.',
      desc:'The full [b,s,h] only exists INSIDE the TP GEMM regions. all-gather builds it on entry; reduce-scatter sums and re-shards it on exit. Activation memory drops to 1/4 between blocks; total bytes equal one all-reduce.'},
    EP:{items:[
@@ -564,12 +607,12 @@
      M('QKV proj · W_qkv [h,3h] (col, heads)', true, FW('[h,3h/4]'), true, FW('[b,s,3h/4]')),
      M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b,s,h/4]')),
      M('Output proj · W_o [h,h] (row)', true, FW('[h/4,h]'), true, FW('[b,s,h] partial')),
-     {t:'c',op:'all-reduce',k:'blue',sym:'Σ',ins:FW('[b,s,h] partial'),outs:[{s:'[b,s,h] full',full:true}],note:'attention output summed → full [b,s,h] → into the MoE block'},
+     C('all-reduce','all-reduce','blue','Σ','attention output summed → full [b,s,h] → into the MoE block', null, ['attention is TP-sharded (heads) → partials','RS (column → Σ) then AG (Σ → all)','full [b,s,h] enters the MoE block']),
      M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), false, FW('[b,s,h]')),
      M('Router / gate · W_g [h,E]', false, FW('[h,E] full'), false, FW('top-k expert ids')),
-     {t:'c',op:'all-to-all dispatch',k:'amber',sym:'⇄ route',ins:['my tokens','my tokens','my tokens','my tokens'],outs:[{s:'tokens for exp{0,1}'},{s:'…{2,3}'},{s:'…{4,5}'},{s:'…{6,7}'}],note:'each token sent to the GPU holding its expert → regrouped by expert'},
+     C('all-to-all','all-to-all dispatch','amber','⇄','each token sent to the GPU holding its expert → tokens regrouped by expert', ['→0','→1','→2','→3'], ['row i = tokens GPU i sends (digit = sender id)','transpose: column j ends up holding sender j','end: each GPU has the tokens for its experts']),
      M('Experts (FFN) · E experts split', true, ['exp{0,1} [h,4h]','exp{2,3}','exp{4,5}','exp{6,7}'], true, FW('[n_tokₑ, h]')),
-     {t:'c',op:'all-to-all combine',k:'amber',sym:'⇄ route back',ins:['out g0','out g1','out g2','out g3'],outs:[{s:'tokens back, original order',full:true}],note:'expert outputs routed back to each token home GPU → [b,s,h]'}
+     C('all-to-all','all-to-all combine','amber','⇄','expert outputs routed back to each token home GPU → full [b,s,h]', ['→0','→1','→2','→3'], ['the inverse all-to-all','expert results transpose back to token homes','end: tokens restored in their original order'])
    ],commline:'EP (MoE): attention is sharded by TP (heads); the FFN is replaced by experts split across GPUs. all-to-all dispatch regroups tokens by expert, all-to-all combine sends results home. MoE layers only.',
      desc:'The router (replicated) picks experts per token. all-to-all dispatch carries tokens to the expert GPU, experts compute locally, all-to-all combine returns them in original order. DeepSeek-V3: ~1:1 compute:comm.'},
    DP:{items:[
@@ -590,9 +633,9 @@
      M('Output proj · W_o [h,h] (DP: full)', false, FW('[h,h] full'), true, FW('[b/4,s,h]')),
      M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), true, FW('[b/4,s,h]')),
      M('Router / gate · W_g [h,E]', false, FW('[h,E] full'), false, FW('top-k expert ids')),
-     {t:'c',op:'all-to-all dispatch',k:'amber',sym:'⇄ route',ins:['b0 tokens','b1 tokens','b2 tokens','b3 tokens'],outs:[{s:'exp{0,1}'},{s:'exp{2,3}'},{s:'exp{4,5}'},{s:'exp{6,7}'}],note:'tokens from all DP batches regrouped by expert'},
+     C('all-to-all','all-to-all dispatch','amber','⇄','tokens from all DP batches regrouped by expert', ['→0','→1','→2','→3'], ['row i = GPU i tokens (its own b/4 batch)','transpose regroups tokens by expert','each GPU receives the tokens for its experts']),
      M('Experts (FFN) · E experts split', true, ['exp{0,1} [h,4h]','exp{2,3}','exp{4,5}','exp{6,7}'], true, FW('[n_tokₑ, h]')),
-     {t:'c',op:'all-to-all combine',k:'amber',sym:'⇄ route back',ins:['out g0','out g1','out g2','out g3'],outs:[{s:'back to each batch',full:true}],note:'+ tiny coordination all-reduce every N steps + lockstep dummy passes'}
+     C('all-to-all','all-to-all combine','amber','⇄','+ tiny coordination all-reduce every N steps + lockstep dummy passes', ['→0','→1','→2','→3'], ['inverse all-to-all sends results home','transpose back to each DP batch','+ periodic tiny all-reduce keeps ranks in lockstep'])
    ],commline:'vLLM DP-attention + EP: attention is data-parallel (full weights, own b/4 batch — KV cache NOT duplicated); experts are expert-parallel (all-to-all). A tiny periodic all-reduce + dummy passes keep ranks in lockstep.',
      desc:'DP attention avoids duplicating the KV cache across ranks; EP spreads the experts. Ranks step together, so vLLM inserts dummy forwards and a small all-reduce every N steps.'},
    PP:{items:[
@@ -608,7 +651,7 @@
    CP:{items:[
      M('LayerNorm 1 · γ,β [h]', false, FW('[h] full'), true, FW('[b,s/4,h]')),
      M('QKV proj · W_qkv [h,3h] (full)', false, FW('[h,3h] full'), true, FW('[b,s/4,3h]')),
-     {t:'c',op:'ring-p2p K/V (Ulysses: all-to-all)',k:'green',sym:'↻ rotate',ins:['K/V s0','K/V s1','K/V s2','K/V s3'],outs:[{s:'each query sees ALL K/V',full:true}],note:'K/V blocks rotate neighbor→neighbor so every local query attends to the full sequence'},
+     C('ring','ring-p2p K/V (Ulysses: all-to-all)','green','↻','K/V blocks rotate neighbor→neighbor so every local query attends to the full sequence', ['s0','s1','s2','s3'], ['start: each GPU owns 1 seq-shard of K/V','blocks rotate neighbor→neighbor (ring p2p)','end: every local query has seen all K/V']),
      M('Attention core · softmax(QKᵀ)V', false, NOW, true, FW('[b,s/4,h]')),
      M('Output proj · W_o [h,h] (full)', false, FW('[h,h] full'), true, FW('[b,s/4,h]')),
      M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), true, FW('[b,s/4,h]')),
@@ -622,7 +665,7 @@
     var d=D[p], rows=el('rows');
     while(rows.firstChild) rows.removeChild(rows.firstChild);
     var y=30;
-    for(var i=0;i<d.items.length;i++){ var it=d.items[i], g=mk('g',{}); rows.appendChild(g); y += (it.t==='c')?drawComm(g,y,it):drawModule(g,y,it); }
+    for(var i=0;i<d.items.length;i++){ var it=d.items[i], g=mk('g',{}); rows.appendChild(g); y += (it.t==='c')?(it.grid?drawCommGrid(g,y,it):drawComm(g,y,it)):drawModule(g,y,it); }
     el('fig3svg').setAttribute('viewBox','0 0 760 '+(y+6));
     el('commline').textContent=d.commline; el('pdesc').textContent=d.desc;
   }
