@@ -576,6 +576,8 @@
       else if(gk==='reduce-scatter'){ bef.push({k:'full',c:i}); aft.push({k:'srowsum',c:i}); }
       else if(gk==='all-to-all'){ bef.push({k:'etok'}); aft.push({k:'esorted',c:i}); }
       else if(gk==='all-to-all-rev'){ bef.push({k:'esorted',c:i}); aft.push({k:'etok'}); }
+      else if(gk==='all-to-all-dp'){ bef.push({k:'esorted',c:i}); aft.push({k:'etok'}); }
+      else if(gk==='all-to-all-dp-rev'){ bef.push({k:'etok'}); aft.push({k:'esorted',c:i}); }
       else { bef.push({k:'full',c:i}); aft.push({k:'sum'}); }
     }
     return {bef:bef,aft:aft};
@@ -586,18 +588,21 @@
     'reduce-scatter':['split axis: S (sequence)','4 full [S,H] partials, summed','each GPU keeps its [S/4,H] strip (Σ)'],
     'all-to-all':['token routing — NOT an S/H split','before: each GPU has tokens for all experts','after: each GPU ← only its expert’s tokens'],
     'all-to-all-rev':['token routing (combine)','before: each GPU holds its expert outputs','after: tokens sent back to their home GPU'],
+    'all-to-all-dp':['DP batch → routed by expert (all-to-all)','before: each GPU = its own b/4 batch (1 colour)','after: each expert ← tokens from ALL batches'],
+    'all-to-all-dp-rev':['combine → back to each DP batch','before: expert outputs (mixed batches)','after: results returned to each GPU’s batch'],
     'ring':['split axis: S (sequence)','K/V S-strips rotate ring-p2p','every local query sees the full S']
   };
   function drawCommGrid(g,top,it){
     var k=KIND[it.k]||KIND.gray, H=96, ty=top+36, bx=26, ax=300, pitch=52, i;
-    var gk=(it.grid==='all-to-all'&&/combine/.test(it.op))?'all-to-all-rev':it.grid;
+    var gk=it.grid;
+    if(/combine/.test(it.op)){ if(gk==='all-to-all')gk='all-to-all-rev'; else if(gk==='all-to-all-dp')gk='all-to-all-dp-rev'; }
     g.appendChild(mk('rect',{x:6,y:top+3,width:746,height:H-6,rx:8,fill:v(k[0]),stroke:v(k[1]),'stroke-width':1}));
     g.appendChild(mk('text',{x:16,y:top+16,'font-size':10.5,'font-weight':700,fill:v(k[2])}, it.op+'  ('+it.sym+')'));
     g.appendChild(mk('text',{x:bx,y:top+27,'font-size':8.5,'font-weight':700,fill:'var(--muted)'},'before'));
     g.appendChild(mk('text',{x:ax,y:top+27,'font-size':8.5,'font-weight':700,fill:'var(--muted)'},'after'));
     // axis key: S×H matrix tiles get H→/S↓; token-routing bands (EP) get a token label instead
-    var tok=(gk==='all-to-all'||gk==='all-to-all-rev');
-    if(tok){ g.appendChild(mk('text',{x:bx,y:ty-3,'font-size':7,'font-weight':600,fill:'var(--faint)'},'tokens · colour = expert')); }
+    var tok=/^all-to-all/.test(gk);
+    if(tok){ g.appendChild(mk('text',{x:bx,y:ty-3,'font-size':7,'font-weight':600,fill:'var(--faint)'}, /dp/.test(gk)?'tokens · colour = source batch (DP rank)':'tokens · colour = expert')); }
     else {
       g.appendChild(mk('text',{x:bx,y:ty-3,'font-size':7,'font-weight':600,fill:'var(--faint)'},'H →'));
       g.appendChild(mk('text',{x:11,y:ty+TH/2+2,'font-size':7,'font-weight':600,fill:'var(--faint)'},'S↓'));
@@ -679,9 +684,9 @@
      M('Output proj · W_o [h,h] (DP: full)', false, FW('[h,h] full'), true, FW('[b/4,s,h]')),
      M('LayerNorm 2 · γ,β [h]', false, FW('[h] full'), true, FW('[b/4,s,h]')),
      M('Router / gate · W_g [h,E]', false, FW('[h,E] full'), false, FW('top-k expert ids')),
-     C('all-to-all','all-to-all dispatch','amber','⇄','tokens from all DP batches regrouped by expert', ['→0','→1','→2','→3'], ['row i = GPU i tokens (its own b/4 batch)','transpose regroups tokens by expert','each GPU receives the tokens for its experts']),
+     C('all-to-all-dp','all-to-all dispatch','amber','⇄','tokens from all DP batches regrouped by expert', ['→0','→1','→2','→3'], ['row i = GPU i tokens (its own b/4 batch)','transpose regroups tokens by expert','each GPU receives the tokens for its experts']),
      M('Experts (FFN) · E experts split', true, ['exp{0,1} [h,4h]','exp{2,3}','exp{4,5}','exp{6,7}'], true, FW('[n_tokₑ, h]')),
-     C('all-to-all','all-to-all combine','amber','⇄','+ tiny coordination all-reduce every N steps + lockstep dummy passes', ['→0','→1','→2','→3'], ['inverse all-to-all sends results home','transpose back to each DP batch','+ periodic tiny all-reduce keeps ranks in lockstep'])
+     C('all-to-all-dp','all-to-all combine','amber','⇄','+ tiny coordination all-reduce every N steps + lockstep dummy passes', ['→0','→1','→2','→3'], ['inverse all-to-all sends results home','transpose back to each DP batch','+ periodic tiny all-reduce keeps ranks in lockstep'])
    ],commline:'vLLM DP-attention + EP: attention is data-parallel (full weights, own b/4 batch — KV cache NOT duplicated); experts are expert-parallel (all-to-all). A tiny periodic all-reduce + dummy passes keep ranks in lockstep.',
      desc:'DP attention avoids duplicating the KV cache across ranks; EP spreads the experts. Ranks step together, so vLLM inserts dummy forwards and a small all-reduce every N steps.'},
    PP:{items:[
