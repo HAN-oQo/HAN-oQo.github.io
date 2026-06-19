@@ -289,7 +289,9 @@
     ".askai-set input,.askai-set select{width:100%;box-sizing:border-box;padding:7px 9px;border-radius:7px;" +
       "border:1px solid var(--line,#e7e2d6);background:var(--bg,#faf9f5);color:var(--ink,#1f1e1b);font:12.5px inherit;margin-top:3px}" +
     ".askai-note{font-size:11.5px;color:var(--muted,#86807a);margin:8px 0 0}" +
-    ".askai-err{color:var(--red,#c5302a);font-size:12.5px;margin-top:8px}";
+    ".askai-err{color:var(--red,#c5302a);font-size:12.5px;margin-top:8px}" +
+    ".askai-cp{transition:color .25s}" +
+    ".askai-cp.ok{color:var(--green-ink,#27500a)!important}";
   document.head.appendChild(el("style", null, [css]));
 
   /* ---------------- page context ---------------- */
@@ -547,13 +549,39 @@
     if (busy) { reqSeq++; clearInterval(curTick); askStart = 0; setIdle(); }   // cancel any in-flight request
     convo = []; curPartial = ""; curThinking = ""; saveConvo(); errBox.textContent = ""; renderThread(false);
   });
+  function convoToText() {
+    var lines = ["Chat · " + (document.title || location.pathname), ""];
+    convo.forEach(function (m) {
+      if (m.role === "divider") return;
+      if (m.role === "user") { lines.push("User: " + m.content); }
+      else {
+        lines.push("Assistant: " + m.content);
+        if (m.cites && m.cites.length)
+          lines.push("(Sources: " + m.cites.map(function (c) { return c.url; }).join(", ") + ")");
+      }
+      lines.push("");
+    });
+    return lines.join("\n").trim();
+  }
+  var copyBtn = tat(el("button", { type: "button", class: "askai-cp" }, ["📋"]), "title", "Copy chat as text", "대화 기록 텍스트로 복사");
+  copyBtn.addEventListener("click", function () {
+    if (!convo.filter(function (m) { return m.role !== "divider"; }).length) return;
+    var txt = convoToText();
+    (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject())
+      .catch(function () {
+        var ta2 = el("textarea", { style: "position:fixed;top:-9999px;left:-9999px" }, [txt]);
+        document.body.appendChild(ta2); ta2.select(); document.execCommand("copy"); document.body.removeChild(ta2);
+      });
+    copyBtn.classList.add("ok"); copyBtn.textContent = "✓";
+    setTimeout(function () { copyBtn.classList.remove("ok"); copyBtn.textContent = "📋"; }, 1800);
+  });
   var closeBtn = tat(el("button", { type: "button", "aria-label": "Minimize" }, ["—"]), "title", "Minimize (keeps the chat)", "최소화 (대화 유지)");
   closeBtn.addEventListener("click", function () { panel.classList.remove("open"); });
 
   var panel = el("div", { class: "askai-panel" }, [
     el("div", { class: "askai-hd" }, [
       el("div", { class: "askai-hdl" }, [el("b", null, [tsp("Ask about this page", "이 페이지에 대해 질문")]), modelTag]),
-      clearBtn, gear, closeBtn]),
+      clearBtn, copyBtn, gear, closeBtn]),
     setBox,
     el("div", { class: "askai-body" }, [thread, errBox]),
     el("div", { class: "askai-foot" }, [ta,
