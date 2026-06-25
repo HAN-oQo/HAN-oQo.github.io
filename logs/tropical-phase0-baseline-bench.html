@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tropical reimpl — Phase 0 baseline bench (vLLM-ROCm, MI250)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.8rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.28rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.04rem; margin-top: 26px; }
+  .sub { color: var(--muted); margin-top: 0; font-size: 0.93rem; }
+  p { margin: 12px 0; }
+  ul, ol { margin: 12px 0; padding-left: 22px; } li { margin: 6px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; margin: 16px 0; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; margin: 12px 0; }
+  pre code { font-family: "SF Mono", Menlo, Consolas, monospace; color: var(--code-ink); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.85rem; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .tip { border-left: 4px solid var(--teal-bd); background: var(--teal-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--teal-ink); }
+  .tip strong { color: var(--teal-ink); }
+  .key { border-left: 4px solid var(--purple-bd); background: var(--purple-bg); padding: 12px 18px; border-radius: 0 10px 10px 0; margin: 16px 0; color: var(--purple-ink); }
+  .key strong { color: var(--purple-ink); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 18px; }
+  .fig { width: 100%; height: auto; background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin: 14px 0 2px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .status-ok { color: var(--green-ink); font-weight: 600; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width:1.7em; height:1.7em; padding:0 .5em; border-radius:999px; background:var(--blue); color:#fff; font-size:0.8rem; font-weight:700; margin-right:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <span class="en">Tropical reimpl — Phase 0 baseline bench</span><span class="ko">Tropical 재구현 — Phase 0 베이스라인 벤치</span></p>
+
+<h1><span class="en">Tropical reimpl — Phase 0: baseline bench on vLLM-ROCm (MI250)</span><span class="ko">Tropical 재구현 — Phase 0: vLLM-ROCm 베이스라인 벤치 (MI250)</span></h1>
+<p class="sub"><span class="en">2026-06-26 · node mi250-052 (MI250, ROCm, Docker-only) · Qwen2.5-7B-Instruct, TP=2 · Status: <b class="status-ok">✓ harness validated, 10-run sweep done</b></span><span class="ko">2026-06-26 · 노드 mi250-052 (MI250, ROCm, Docker 전용) · Qwen2.5-7B-Instruct, TP=2 · 상태: <b class="status-ok">✓ 하네스 검증 + 10-run 스윕 완료</b></span></p>
+
+<div class="tip"><strong><span class="en">What this is</span><span class="ko">이게 뭔지</span></strong><br>
+<span class="en">Step 0 of reimplementing <a href="../study/tropical-slo-aware-multiplexing.html">Tropical</a> (SLO-aware prefill/decode multiplexing; DAC'25 — no official code). Before building the multiplexing toggle, you need the <b>apples-to-apple ground</b>: the baselines the paper compares against, driven by a real trace replay, measured as SLO attainment vs arrival rate. This log is that ground — the harness, the run mechanics, and an honest read of what a single-instance baseline does (and doesn't) show.</span>
+<span class="ko"><a href="../study/tropical-slo-aware-multiplexing.html">Tropical</a>(SLO-aware prefill/decode 멀티플렉싱; DAC'25 — 공식 코드 없음) 재구현의 0단계. 멀티플렉싱 토글을 만들기 전에 <b>apples-to-apple 바닥</b>이 필요하다: 논문이 비교하는 베이스라인들을 실제 트레이스 리플레이로 돌려 arrival rate별 SLO 달성률로 측정. 이 로그가 그 바닥 — 하네스, 실행 방식, 그리고 단일 인스턴스 베이스라인이 보여주는 것과 못 보여주는 것의 정직한 해석.</span></div>
+
+<h2><span class="pchip">1</span><span class="en">The harness</span><span class="ko">하네스</span></h2>
+<p><span class="en">Built at <code>~/tropical-bench</code>, runs on the shared MI250 node, Docker-only (no pip on the node — the existing house rule). The replay client was reused from the repo's <code>tools/replay_jsonl.py</code>; everything else is new.</span>
+<span class="ko"><code>~/tropical-bench</code>에 구축, 공유 MI250 노드에서 Docker 전용으로 실행(노드에 pip 금지 — 기존 규칙). 리플레이 클라이언트는 레포의 <code>tools/replay_jsonl.py</code>를 재활용, 나머지는 신규.</span></p>
+<table>
+  <tr><th><span class="en">file</span><span class="ko">파일</span></th><th><span class="en">role</span><span class="ko">역할</span></th></tr>
+  <tr><td><code>serve/serve_vllm_rocm.sh</code></td><td><span class="en">launch one vLLM-ROCm instance (mode = eager | chunked | prefill | decode)</span><span class="ko">vLLM-ROCm 인스턴스 1개 기동 (모드 = eager | chunked | prefill | decode)</span></td></tr>
+  <tr><td><code>gen_workload.py</code></td><td><span class="en">ShareGPT → LLMServingSim-format JSONL, Poisson arrivals at a target rate</span><span class="ko">ShareGPT → LLMServingSim 포맷 JSONL, 목표 rate의 Poisson 도착</span></td></tr>
+  <tr><td><code>replay_jsonl.py</code></td><td><span class="en">(vendored) async OpenAI replay → per-request TTFT/TPOT/ITL CSV</span><span class="ko">(vendoring) 비동기 OpenAI 리플레이 → 요청별 TTFT/TPOT/ITL CSV</span></td></tr>
+  <tr><td><code>analyze_slo.py</code></td><td><span class="en">CSVs → SLO attainment, p50/p90, attainment-vs-rate, Pareto (stdlib only)</span><span class="ko">CSV → SLO 달성률, p50/p90, attainment-vs-rate, Pareto (stdlib만)</span></td></tr>
+  <tr><td><code>run_one.sh</code></td><td><span class="en">one self-contained sweep point: up → replay → <b>tear down</b> (server hygiene)</span><span class="ko">자체완결 스윕 1점: up → replay → <b>즉시 teardown</b> (서버 위생)</span></td></tr>
+</table>
+
+<h3><span class="en">ROCm debugging walls (recorded)</span><span class="ko">ROCm 디버깅 벽 (기록)</span></h3>
+<ul>
+  <li><span class="en">The image <code>vllm-022-rocm:latest</code> has <code>ENTRYPOINT=[vllm serve]</code> — a <code>python -m vllm…</code> command gets mangled. Fix: override to <code>--entrypoint vllm</code> and pass <code>serve &lt;model&gt; …</code> (portable across both ROCm images).</span>
+  <span class="ko">이미지 <code>vllm-022-rocm:latest</code>의 <code>ENTRYPOINT=[vllm serve]</code>라 <code>python -m vllm…</code> 커맨드가 깨진다. 해결: <code>--entrypoint vllm</code>로 덮고 <code>serve &lt;model&gt; …</code> 전달(두 ROCm 이미지 공통).</span></li>
+  <li><span class="en">This vLLM rejects <code>--enable-chunked-prefill=False</code>; the eager baseline needs <code>--no-enable-chunked-prefill</code> (+ <code>--max-num-batched-tokens 32768</code> so a long prefill isn't forced to chunk).</span>
+  <span class="ko">이 vLLM은 <code>--enable-chunked-prefill=False</code>를 거부 — eager 베이스라인은 <code>--no-enable-chunked-prefill</code> 필요(+ 긴 prefill이 강제로 안 쪼개지게 <code>--max-num-batched-tokens 32768</code>).</span></li>
+  <li><span class="en">7B at TP=2 takes ~95–100s to become healthy (RCCL init + weight load), so the <code>/health</code> wait was bumped 120s → 360s. <code>VLLM_ROCM_USE_AITER=0</code> kept on to dodge the aiter crash.</span>
+  <span class="ko">7B TP=2는 정상화에 ~95–100초(RCCL 초기화 + 가중치 로드)라 <code>/health</code> 대기를 120초 → 360초로. aiter 크래시 회피용 <code>VLLM_ROCM_USE_AITER=0</code> 유지.</span></li>
+</ul>
+
+<h2><span class="pchip">2</span><span class="en">Method</span><span class="ko">방법</span></h2>
+<p><span class="en">Two baselines from the paper (§V-A), single instance each. The third — <b>disaggregated (DistServe-style 2P+2D)</b> — is deferred: its KV transfer is the ROCm-constrained piece (vLLM v1 connectors are largely one-way; NIXL is NVIDIA-only — the wall hit in the <a href="mi250-pd-bidirectional-tp4.html">MI250 PDD</a> log).</span>
+<span class="ko">논문(§V-A)의 베이스라인 둘, 각각 단일 인스턴스. 세 번째 — <b>분리형(DistServe식 2P+2D)</b> — 은 보류: KV 전송이 ROCm 제약 지점(vLLM v1 커넥터는 대체로 단방향, NIXL은 NVIDIA 전용 — <a href="mi250-pd-bidirectional-tp4.html">MI250 PDD</a> 로그에서 부딪힌 벽).</span></p>
+<table>
+  <tr><th><span class="en">system</span><span class="ko">시스템</span></th><th><span class="en">flags</span><span class="ko">플래그</span></th><th><span class="en">idea</span><span class="ko">개념</span></th></tr>
+  <tr><td><code>colocated</code></td><td><code>--no-enable-chunked-prefill</code></td><td><span class="en">eager prefill, prefill+decode in one engine</span><span class="ko">즉시 prefill, prefill+decode 한 엔진</span></td></tr>
+  <tr><td><code>chunked</code></td><td><code>--enable-chunked-prefill --max-num-batched-tokens 2048</code></td><td><span class="en">prefill split into chunks, interleaved with decode</span><span class="ko">prefill을 청크로 쪼개 decode와 인터리브</span></td></tr>
+  <tr><td><code>disagg</code> <span class="en">(deferred)</span><span class="ko">(보류)</span></td><td><span class="en">KV connector</span><span class="ko">KV 커넥터</span></td><td><span class="en">isolated prefill/decode workers</span><span class="ko">prefill/decode 워커 격리</span></td></tr>
+</table>
+<p><span class="en"><b>Config:</b> Qwen2.5-7B-Instruct, TP=2 (2 of 8 GCDs), 200-request ShareGPT workload (input median 60 / max 3448 tok, output median 368 tok), Poisson arrivals swept at <b>2 · 4 · 6 · 8 · 10 rps</b> (identical request content per rate; only arrivals differ). Same <code>--max-inflight 256</code> across systems (apples-to-apple). <b>SLO = 5× light-load (2 rps) p50</b> per system, per the paper: TTFT-SLO ≈ 255 ms, TPOT-SLO ≈ 75 ms. 10 runs total; each brought a fresh server up and tore it down (no idle GPU between runs).</span>
+<span class="ko"><b>설정:</b> Qwen2.5-7B-Instruct, TP=2(8 GCD 중 2개), 200-요청 ShareGPT 워크로드(입력 중앙값 60 / 최대 3448 tok, 출력 중앙값 368 tok), Poisson 도착을 <b>2·4·6·8·10 rps</b>로 스윕(rate별 요청 내용 동일, 도착만 다름). 시스템 간 동일 <code>--max-inflight 256</code>(apples-to-apple). <b>SLO = 시스템별 경부하(2 rps) p50의 5배</b>(논문 방식): TTFT-SLO ≈ 255 ms, TPOT-SLO ≈ 75 ms. 총 10 run, 각 run은 서버를 새로 띄우고 내림(run 사이 유휴 GPU 없음).</span></p>
+
+<h2><span class="pchip">3</span><span class="en">Results</span><span class="ko">결과</span></h2>
+
+<svg class="fig" viewBox="0 0 820 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SLO attainment vs arrival rate: colocated and chunked both decline from ~95% at 2 rps to 77.5% at 10 rps, tracking each other closely; both cross below 90% between 6 and 8 rps.">
+  <text x="20" y="22" font-size="12" font-weight="700" fill="#1f1e1b">SLO attainment vs arrival rate (both systems)</text>
+  <!-- axes -->
+  <line x1="60" y1="40" x2="60" y2="180" stroke="#c2c0b6"/>
+  <line x1="60" y1="180" x2="360" y2="180" stroke="#c2c0b6"/>
+  <!-- y ticks 70/80/90/100 -->
+  <g font-size="9" fill="#6b6a63">
+    <text x="54" y="44" text-anchor="end">100</text><line x1="60" y1="40" x2="360" y2="40" stroke="#eee" />
+    <text x="54" y="90" text-anchor="end">90</text>
+    <text x="54" y="137" text-anchor="end">80</text>
+    <text x="54" y="184" text-anchor="end">70</text>
+  </g>
+  <!-- 90% threshold -->
+  <line x1="60" y1="86.7" x2="360" y2="86.7" stroke="#6b6a63" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="364" y="90" font-size="9" fill="#6b6a63">90% SLO</text>
+  <!-- x labels -->
+  <g font-size="9" fill="#6b6a63" text-anchor="middle">
+    <text x="60" y="194">2</text><text x="135" y="194">4</text><text x="210" y="194">6</text><text x="285" y="194">8</text><text x="360" y="194">10</text>
+    <text x="210" y="212" font-weight="700" fill="#1f1e1b">arrival rate (req/s)</text>
+  </g>
+  <!-- colocated (blue): 95,92,90.5,82.5,77.5 -->
+  <polyline points="60,63 135,77 210,84 285,122 360,145" fill="none" stroke="#0c447c" stroke-width="2.2"/>
+  <g fill="#0c447c"><circle cx="60" cy="63" r="3"/><circle cx="135" cy="77" r="3"/><circle cx="210" cy="84" r="3"/><circle cx="285" cy="122" r="3"/><circle cx="360" cy="145" r="3"/></g>
+  <!-- chunked (amber): 94.5,91.5,89,83.5,77.5 -->
+  <polyline points="60,66 135,80 210,91 285,117 360,145" fill="none" stroke="#6b4a06" stroke-width="2.2" stroke-dasharray="5 3"/>
+  <g fill="#6b4a06"><circle cx="60" cy="66" r="3"/><circle cx="135" cy="80" r="3"/><circle cx="210" cy="91" r="3"/><circle cx="285" cy="117" r="3"/><circle cx="360" cy="145" r="3"/></g>
+  <!-- legend -->
+  <g font-size="10"><rect x="470" y="48" width="14" height="3" fill="#0c447c"/><text x="490" y="52" fill="#1f1e1b">colocated (eager)</text>
+  <rect x="470" y="64" width="14" height="3" fill="#6b4a06"/><text x="490" y="68" fill="#1f1e1b">chunked prefill</text></g>
+  <text x="470" y="96" font-size="10.5" fill="#3f1f72" font-weight="700">TPOT stayed ≤ SLO (100%)</text>
+  <text x="470" y="112" font-size="10.5" fill="#3f1f72">at every rate, both systems.</text>
+  <text x="470" y="134" font-size="10.5" fill="#6f2a12" font-weight="700">All degradation is TTFT / queuing.</text>
+  <text x="470" y="150" font-size="10" fill="#6b6a63">The two curves track each other —</text>
+  <text x="470" y="164" font-size="10" fill="#6b6a63">single instance is queuing-bound,</text>
+  <text x="470" y="178" font-size="10" fill="#6b6a63">not interference-bound.</text>
+</svg>
+<p class="cap"><span class="en">SLO attainment (TTFT ≤ 255 ms AND TPOT ≤ 75 ms) vs arrival rate. Generated by <code>analyze_slo.py</code> over the 10 runs.</span><span class="ko">SLO 달성률(TTFT ≤ 255 ms 그리고 TPOT ≤ 75 ms) vs arrival rate. 10 run에 대해 <code>analyze_slo.py</code>로 산출.</span></p>
+
+<table>
+  <tr><th><span class="en">system</span><span class="ko">시스템</span></th><th class="num">rate</th><th class="num">TTFT p50</th><th class="num">TTFT p90</th><th class="num">TPOT p50</th><th class="num">TPOT p90</th><th class="num">TTFT%</th><th class="num">TPOT%</th><th class="num">SLO%</th></tr>
+  <tr><td>colocated</td><td class="num">2</td><td class="num">51</td><td class="num">146</td><td class="num">15.1</td><td class="num">16.1</td><td class="num">95</td><td class="num">100</td><td class="num">95.0</td></tr>
+  <tr><td>colocated</td><td class="num">4</td><td class="num">58</td><td class="num">209</td><td class="num">17.0</td><td class="num">19.2</td><td class="num">92</td><td class="num">100</td><td class="num">92.0</td></tr>
+  <tr><td>colocated</td><td class="num">6</td><td class="num">66</td><td class="num">240</td><td class="num">19.2</td><td class="num">22.3</td><td class="num">90</td><td class="num">100</td><td class="num">90.5</td></tr>
+  <tr><td>colocated</td><td class="num">8</td><td class="num">80</td><td class="num">824</td><td class="num">22.8</td><td class="num">25.3</td><td class="num">82</td><td class="num">100</td><td class="num">82.5</td></tr>
+  <tr><td>colocated</td><td class="num">10</td><td class="num">102</td><td class="num">1062</td><td class="num">25.8</td><td class="num">28.8</td><td class="num">78</td><td class="num">100</td><td class="num">77.5</td></tr>
+  <tr><td>chunked</td><td class="num">2</td><td class="num">50</td><td class="num">144</td><td class="num">14.7</td><td class="num">15.7</td><td class="num">94</td><td class="num">100</td><td class="num">94.5</td></tr>
+  <tr><td>chunked</td><td class="num">4</td><td class="num">55</td><td class="num">230</td><td class="num">16.5</td><td class="num">18.3</td><td class="num">92</td><td class="num">100</td><td class="num">91.5</td></tr>
+  <tr><td>chunked</td><td class="num">6</td><td class="num">64</td><td class="num">291</td><td class="num">18.7</td><td class="num">21.5</td><td class="num">89</td><td class="num">100</td><td class="num">89.0</td></tr>
+  <tr><td>chunked</td><td class="num">8</td><td class="num">79</td><td class="num">700</td><td class="num">21.6</td><td class="num">23.8</td><td class="num">84</td><td class="num">100</td><td class="num">83.5</td></tr>
+  <tr><td>chunked</td><td class="num">10</td><td class="num">96</td><td class="num">1101</td><td class="num">25.0</td><td class="num">28.3</td><td class="num">78</td><td class="num">100</td><td class="num">77.5</td></tr>
+</table>
+<p class="cap"><span class="en">All latencies in ms. TTFT% / TPOT% = fraction of requests meeting that SLO; SLO% = meeting both. ≥90% held: colocated to 6 rps, chunked to 4 rps.</span><span class="ko">레이턴시 단위 ms. TTFT% / TPOT% = 해당 SLO 충족 비율, SLO% = 둘 다 충족. ≥90% 유지: colocated 6 rps까지, chunked 4 rps까지.</span></p>
+
+<h2><span class="pchip">4</span><span class="en">Honest read — what a single instance shows (and doesn't)</span><span class="ko">정직한 해석 — 단일 인스턴스가 보여주는 것과 못 보여주는 것</span></h2>
+
+<div class="key"><strong><span class="en">The headline</span><span class="ko">핵심</span></strong><br>
+<span class="en">On a single TP=2 instance, <b>TPOT never broke (100% at every rate)</b> — every SLO loss was TTFT/queuing. The two curves track each other almost exactly. So this regime is <b>queuing-bound, not interference-bound</b>, and chunked-prefill's whole reason to exist (smoothing prefill↔decode interference) barely has anything to smooth here.</span>
+<span class="ko">단일 TP=2 인스턴스에선 <b>TPOT가 한 번도 안 깨졌다(전 rate 100%)</b> — SLO 손실은 전부 TTFT/큐잉. 두 곡선이 거의 똑같이 움직인다. 즉 이 체제는 <b>간섭이 아니라 큐잉에 묶인다</b>, 그래서 chunked prefill의 존재 이유(prefill↔decode 간섭 완화)가 여기선 완화할 게 거의 없다.</span></div>
+
+<p><span class="en">Two nuances in the numbers:</span><span class="ko">수치의 두 가지 뉘앙스:</span></p>
+<ul>
+  <li><span class="en"><b>At ≥90%, chunked is slightly worse</b> (holds to 4 rps vs colocated's 6). Chunking interleaves a prefill across several decode steps, adding a little to TTFT at low-to-moderate load — pure cost when there's no interference to pay it back.</span>
+  <span class="ko"><b>≥90% 기준에선 chunked가 약간 손해</b>(4 rps까지 vs colocated 6). 청킹은 prefill을 여러 decode 스텝에 걸쳐 인터리브해 저~중부하에서 TTFT를 조금 늘린다 — 갚아줄 간섭이 없으면 순수 비용.</span></li>
+  <li><span class="en"><b>At the high-load knee, chunked is slightly better</b>: at 8 rps its TTFT p90 is 700 ms vs colocated's 824 ms. Once the queue builds, splitting prefills lets decode requests slip through sooner — the paper's mechanism, just barely visible.</span>
+  <span class="ko"><b>고부하 무릎에선 chunked가 약간 이득</b>: 8 rps에서 TTFT p90이 700 ms vs colocated 824 ms. 큐가 쌓이면 prefill을 쪼개 decode 요청이 더 빨리 빠져나간다 — 논문의 메커니즘이 아주 살짝 보인다.</span></li>
+</ul>
+
+<div class="note"><strong><span class="en">Why the paper's "co-located = TPOT/interference-bound" didn't reproduce</span><span class="ko">논문의 "co-located = TPOT/간섭-bound"가 재현 안 된 이유</span></strong><br>
+<span class="en">The paper runs <b>4 workers × TP=2 behind an InFaaS dispatcher</b>; its co-located baseline is interference-bound because many concurrent decodes get hit by incoming prefills on the same workers. A <b>single</b> instance with <code>max-inflight 256</code> saturates its <i>queue</i> long before its decode batch is pressured enough for TPOT to break. So Phase 0 validates the harness and the queuing story — but to see the interference regime (and thus the real motivation for Tropical's slack-guarded multiplexing), we need the multi-worker + dispatcher setup. That's the next step.</span>
+<span class="ko">논문은 <b>4 워커 × TP=2를 InFaaS 디스패처 뒤</b>에 두고 돌린다; co-located 베이스라인이 간섭-bound인 건 같은 워커에서 다수의 동시 decode가 들어오는 prefill에 얻어맞기 때문. <b>단일</b> 인스턴스 + <code>max-inflight 256</code>은 decode 배치가 TPOT를 깰 만큼 눌리기 한참 전에 <i>큐</i>가 먼저 포화된다. 그래서 Phase 0은 하네스와 큐잉 스토리를 검증하지만, 간섭 체제(= Tropical의 slack-가드 멀티플렉싱의 진짜 동기)를 보려면 멀티워커 + 디스패처가 필요하다. 그게 다음 단계.</span></div>
+
+<h3><span class="en">Next (Phase 0.5 → toggle)</span><span class="ko">다음 (Phase 0.5 → 토글)</span></h3>
+<ol>
+  <li><span class="en"><b>4×TP=2 pool + an InFaaS-style dispatcher</b> (fewest-unfinished-tokens) — reproduces the paper's setup and surfaces the interference/TPOT regime. The dispatcher is also the seed of the Tropical toggle.</span>
+  <span class="ko"><b>4×TP=2 풀 + InFaaS식 디스패처</b>(미완 토큰 최소) — 논문 구성 재현 + 간섭/TPOT 체제 표면화. 디스패처는 Tropical 토글의 씨앗이기도.</span></li>
+  <li><span class="en">Push rates higher / add a heavier model so the decode batch actually feels prefill interference.</span>
+  <span class="ko">rate를 더 올리거나 더 무거운 모델로 — decode 배치가 prefill 간섭을 실제로 느끼게.</span></li>
+  <li><span class="en">Then graft on the toggle: per-request TTFT-slack + per-worker TPOT-slack admission guards, Path ② (chunked-prefill mux) first; Path ① KV transfer stays ROCm-gated.</span>
+  <span class="ko">그 위에 토글 이식: 요청별 TTFT-slack + 워커별 TPOT-slack admission 가드, Path ②(chunked-prefill mux) 먼저; Path ① KV 전송은 ROCm 제약 유지.</span></li>
+</ol>
+
+<footer><span class="en">Tropical reimpl · Phase 0 · 2026-06-26 · mi250-052 · harness ~/tropical-bench · paper note: <a href="../study/tropical-slo-aware-multiplexing.html">study/tropical-slo-aware-multiplexing</a></span><span class="ko">Tropical 재구현 · Phase 0 · 2026-06-26 · mi250-052 · 하네스 ~/tropical-bench · 논문 노트: <a href="../study/tropical-slo-aware-multiplexing.html">study/tropical-slo-aware-multiplexing</a></span></footer>
+
+</div>
+</body>
+</html>
