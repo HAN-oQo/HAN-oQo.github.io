@@ -74,6 +74,9 @@
   .pdetail h4{font-size:14px;font-weight:700;margin:4px 0 4px}
   .pdetail ul{margin:6px 0 10px;padding-left:22px;line-height:1.6}
   .pdetail li{margin:4px 0}
+  .usage{font-size:12.5px;line-height:1.6;margin:6px 0 2px;padding:9px 12px;border-left:3px solid var(--green-bd);background:var(--green-bg);color:var(--green-ink);border-radius:0 8px 8px 0}
+  .usage b{color:var(--green-ink)}
+  .usage code.inl{background:var(--card);color:var(--ink)}
 </style>
 </head>
 <body>
@@ -108,9 +111,10 @@
   <ol>
     <li><a href="#s1"><span class="en">1. Communication primitives &amp; their cost</span><span class="ko">1. 통신 primitive와 비용</span></a></li>
     <li><a href="#s2"><span class="en">2. DP / TP / EP / CP — what each splits &amp; which collective</span><span class="ko">2. DP / TP / EP / CP — 무엇을 쪼개고 어떤 통신</span></a></li>
-    <li><a href="#s3"><span class="en">3. vLLM code path (permalinks)</span><span class="ko">3. vLLM 코드 경로 (permalink)</span></a></li>
-    <li><a href="#s4"><span class="en">4. The hardware underneath + how to check</span><span class="ko">4. 그 아래 하드웨어 + 확인법</span></a></li>
-    <li><a href="#s5"><span class="en">5. Sources</span><span class="ko">5. 출처</span></a></li>
+    <li><a href="#s3"><span class="en">3. Each strategy on the metal — comm stack, ceiling, how to check</span><span class="ko">3. 각 전략을 하드웨어 위에서 — 통신 스택·성능 상한·확인법</span></a></li>
+    <li><a href="#s4"><span class="en">4. vLLM code path (permalinks)</span><span class="ko">4. vLLM 코드 경로 (permalink)</span></a></li>
+    <li><a href="#s5"><span class="en">5. The hardware underneath + how to check</span><span class="ko">5. 그 아래 하드웨어 + 확인법</span></a></li>
+    <li><a href="#s6"><span class="en">6. Sources</span><span class="ko">6. 출처</span></a></li>
   </ol>
 </nav>
 
@@ -440,7 +444,7 @@
 <ul style="margin:12px 0;padding-left:22px;line-height:1.65">
 <li><span class="en"><b>Is tree always better than ring? No.</b> A tree has fewer hops (O(log N) vs O(N)) → it wins for <b>small</b> messages (α-term, blue). But a simple tree ships the <b>full S</b> every hop, so for <b>large</b> messages it moves ≈ log₂N × more bytes than a ring (β-term, green) and <b>ring wins</b>. (Slide S above ~2 MiB to watch the flip.)</span><span class="ko"><b>tree가 항상 ring보다 좋은가? 아니다.</b> tree는 홉이 적어(O(log N) vs O(N)) <b>작은</b> 메시지에서 유리(α 항, 파랑). 그러나 단순 tree는 매 홉 <b>전체 S</b>를 보내므로 <b>큰</b> 메시지에선 ring보다 ≈ log₂N배 많은 바이트를 옮겨(β 항, 초록) <b>ring이 이긴다</b>. (S를 ~2 MiB 위로 끌면 역전.)</span></li>
 <li><span class="en"><b>Bottom line:</b> small S / many GPUs → <b>tree</b> (latency); large S → <b>ring</b> (bandwidth). The big tensors TP &amp; EP move every layer are large, so a ring — or NCCL’s bandwidth-optimal double-tree — carries them. NCCL auto-picks per size &amp; N.</span><span class="ko"><b>요점:</b> 작은 S / 많은 GPU → <b>tree</b>(지연); 큰 S → <b>ring</b>(대역폭). TP·EP가 매 레이어 옮기는 텐서는 크므로 ring(또는 NCCL의 대역폭 최적 double-tree)이 담당. NCCL이 크기·N로 자동 선택.</span></li>
-<li><span class="en">(α and B are illustrative; real values vary by hardware — measure with nccl-tests <b>busbw</b>, §4.)</span><span class="ko">(α·B는 예시값; 실제는 하드웨어마다 다름 — §4의 nccl-tests <b>busbw</b>로 측정.)</span></li>
+<li><span class="en">(α and B are illustrative; real values vary by hardware — measure with nccl-tests <b>busbw</b>, §5.)</span><span class="ko">(α·B는 예시값; 실제는 하드웨어마다 다름 — §5의 nccl-tests <b>busbw</b>로 측정.)</span></li>
 </ul>
 </section>
 
@@ -535,6 +539,7 @@
       <li><span class="en"><b>Weights split, activations stay full</b> (kept identical by the all-reduce). Megatron: 2 all-reduce fwd + 2 bwd → at inference <b>2 per layer</b> <a class="src" href="https://arxiv.org/abs/1909.08053">[5]</a>; each moves the <code class="inl">b·s·h</code> activation, not the weights.</span><span class="ko"><b>가중치는 쪼개고 activation은 full 유지</b>(all-reduce로 동일하게 유지). Megatron: forward 2 + backward 2 → 추론 <b>레이어당 2회</b> <a class="src" href="https://arxiv.org/abs/1909.08053">[5]</a>; 각 all-reduce는 가중치가 아니라 <code class="inl">b·s·h</code> activation을 옮김.</span></li>
       <li><span class="en">After the row-parallel GEMMs each GPU holds only a <b>partial</b> <code class="inl">[b,s,h]</code>; the all-reduce sums the four partials into one identical full tensor that feeds the next module — two such sums per layer.</span><span class="ko">row-parallel GEMM 뒤 각 GPU는 <b>partial</b> <code class="inl">[b,s,h]</code>만 보유; all-reduce가 4개 partial을 합쳐 다음 모듈로 가는 동일한 full 텐서로 만든다 — 레이어당 2회.</span></li>
     </ul>
+    <p class="usage"><span class="en"><b>When:</b> the model is too big for one GPU but fits within a single node. Keep the group inside NVLink/xGMI — TP over slow links is brutal. <b>· Inference win:</b> weights split → per-GPU memory drops so the model fits, and each layer's matmuls run in parallel → <b>lower latency</b> at low concurrency. <b>· vLLM:</b> <code class="inl">--tensor-parallel-size N</code> (<code class="inl">-tp N</code>) — set to #GPUs per node.</span><span class="ko"><b>언제:</b> 모델이 GPU 하나엔 안 들어가지만 노드 하나엔 들어갈 때. 그룹은 NVLink/xGMI 안에 유지 — 느린 링크 위 TP는 치명적. <b>· 추론 이득:</b> 가중치를 쪼개 GPU별 메모리↓(모델이 들어감) + 레이어별 matmul 병렬 → 낮은 동시성에서 <b>지연↓</b>. <b>· vLLM:</b> <code class="inl">--tensor-parallel-size N</code> (<code class="inl">-tp N</code>) — 노드당 GPU 수로 설정.</span></p>
   </div>
   <div class="pdetail" data-p="TPSP" hidden>
     <h4><span class="en">TP + sequence-parallel — shard the LayerNorm/dropout activations too</span><span class="ko">TP + 시퀀스 병렬 — LayerNorm/dropout 활성값까지 쪼갬</span></h4>
@@ -542,6 +547,7 @@
       <li><span class="en">Same head/MLP weight split as TP, but <b>outside</b> the GEMM regions the activations stay sequence-sharded <code class="inl">[b,s/4,h]</code>. The all-reduce splits into <b>all-gather</b> (→ full, on entry) and <b>reduce-scatter</b> (→ [b,s/4,h], on exit) — the same total bytes.</span><span class="ko">head/MLP 가중치 분할은 TP와 동일하나, GEMM 구간 <b>밖</b>에선 activation이 시퀀스-샤딩 <code class="inl">[b,s/4,h]</code>로 유지. all-reduce가 <b>all-gather</b>(→ full, 진입)와 <b>reduce-scatter</b>(→ [b,s/4,h], 이탈)로 갈림 — 총 바이트는 동일.</span></li>
       <li><span class="en">The full <code class="inl">[b,s,h]</code> exists only <b>inside</b> the TP GEMM regions; activation memory drops to ~1/4 between blocks. A pure memory optimization with <b>zero extra communication</b> — always enable it with TP. <span class="muted">[6]</span></span><span class="ko">full <code class="inl">[b,s,h]</code>는 TP GEMM 구간 <b>안에서만</b> 존재; 블록 사이 activation 메모리가 ~1/4로 감소. <b>추가 통신 0</b>인 순수 메모리 최적화 — TP와 항상 함께 켠다. <span class="muted">[6]</span></span></li>
     </ul>
+    <p class="usage"><span class="en"><b>When:</b> already running TP and activation memory (long sequences / large batch) is the bottleneck. <b>· Inference win:</b> cuts activation memory to ~1/T between blocks with <b>zero extra communication</b> → headroom for longer sequences / bigger batch at the same TP. <b>· vLLM:</b> not a top-level serve flag — an internal <code class="inl">torch.compile</code> pass that rides on TP, toggled in the compilation config (<code class="inl">pass_config.enable_sequence_parallelism</code>).</span><span class="ko"><b>언제:</b> 이미 TP를 쓰는데 activation 메모리(긴 시퀀스/큰 배치)가 병목일 때. <b>· 추론 이득:</b> 블록 사이 activation 메모리를 ~1/T로 줄임(<b>추가 통신 0</b>) → 같은 TP에서 더 긴 시퀀스/큰 배치 여유. <b>· vLLM:</b> 단독 serve 플래그가 아님 — TP에 얹히는 내부 <code class="inl">torch.compile</code> 패스로, 컴파일 설정(<code class="inl">pass_config.enable_sequence_parallelism</code>)에서 켬.</span></p>
   </div>
   <div class="pdetail" data-p="EP" hidden>
     <h4><span class="en">EP — expert parallel (MoE): split the experts</span><span class="ko">EP — expert 병렬(MoE): expert를 쪼갬</span></h4>
@@ -550,6 +556,7 @@
       <li><span class="en">Attention is still TP-sharded by heads; only the FFN is replaced by experts split across GPUs, so the all-to-all fires on MoE layers only.</span><span class="ko">attention은 여전히 TP가 head로 샤딩; FFN만 GPU에 분산된 expert로 대체돼 all-to-all은 MoE 레이어에서만 발생.</span></li>
       <li><span class="en">Cross-node all-to-all dominates — DeepSeek-V3 measures a "computation-to-communication ratio of approximately 1:1" <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>.</span><span class="ko">노드 간 all-to-all이 지배적 — DeepSeek-V3는 "연산-통신 비 ≈1:1" 측정 <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>.</span></li>
     </ul>
+    <p class="usage"><span class="en"><b>When:</b> serving a large MoE (DeepSeek, Mixtral, Qwen-MoE…) where replicating every expert on every GPU wastes memory. <b>· Inference win:</b> expert weights are split across GPUs (attention stays replicated) → a huge MoE fits and expert locality improves; <b>TP+EP</b> gives the best low-latency / low-concurrency behaviour. <b>· vLLM:</b> <code class="inl">--enable-expert-parallel</code> (with <code class="inl">-tp</code>/<code class="inl">-dp</code>); EP size = TP × DP. The all-to-all path only engages when <code class="inl">dp_size &gt; 1</code> (TP-only EP still uses all-reduce).</span><span class="ko"><b>언제:</b> 큰 MoE(DeepSeek·Mixtral·Qwen-MoE…)를 서빙하는데 모든 GPU에 expert를 복제하면 메모리 낭비일 때. <b>· 추론 이득:</b> expert 가중치를 GPU에 분산(attention은 복제 유지) → 거대 MoE가 들어가고 expert locality↑; <b>TP+EP</b>가 저지연/낮은 동시성에 최적. <b>· vLLM:</b> <code class="inl">--enable-expert-parallel</code> (<code class="inl">-tp</code>/<code class="inl">-dp</code>와 함께); EP 크기 = TP × DP. all-to-all 경로는 <code class="inl">dp_size &gt; 1</code>일 때만(TP 단독 EP는 all-reduce 사용).</span></p>
   </div>
   <div class="pdetail" data-p="DP" hidden>
     <h4><span class="en">DP — data parallel: replicate the model</span><span class="ko">DP — 데이터 병렬: 모델을 복제</span></h4>
@@ -557,6 +564,7 @@
       <li><span class="en">At inference each GPU holds the <b>full model</b> and runs a <b>different request batch</b> → <b>no per-layer collective</b> (unlike DP-<i>training</i>, which all-reduces gradients). The <b>mirror image of TP</b>: shapes stay <code class="inl">[b/4,s,h]</code> throughout.</span><span class="ko">추론에선 각 GPU가 <b>모델 전체</b>를 갖고 <b>다른 요청 배치</b>를 처리 → <b>레이어당 collective 없음</b>(gradient를 all-reduce하는 DP-<i>학습</i>과 다름). <b>TP의 거울상</b>: shape가 내내 <code class="inl">[b/4,s,h]</code>.</span></li>
       <li><span class="en">Exception — vLLM <b>DP-attention</b> (MoE/MLA): attention runs DP (avoids duplicating the KV cache), experts run EP/TP, so ranks step in <b>lockstep</b> — vLLM inserts dummy forward passes + a tiny coordination all-reduce every N steps <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span><span class="ko">예외 — vLLM <b>DP-attention</b>(MoE/MLA): attention은 DP(KV cache 중복 회피), expert는 EP/TP → 전 rank가 <b>lockstep</b>; vLLM은 dummy forward + N스텝마다 작은 조정 all-reduce 삽입 <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span></li>
     </ul>
+    <p class="usage"><span class="en"><b>When:</b> the model already fits on one GPU and you want more <b>throughput</b> — more replicas = more concurrent requests. <b>· Inference win:</b> near-linear throughput with <b>no per-layer collective</b>; for MoE/MLA, <b>DP-attention</b> avoids duplicating the KV cache across ranks. <b>· vLLM:</b> <code class="inl">--data-parallel-size N</code> (<code class="inl">-dp N</code>); multi-node adds <code class="inl">--data-parallel-size-local</code>, <code class="inl">--data-parallel-address</code>, <code class="inl">--data-parallel-backend mp|ray</code>.</span><span class="ko"><b>언제:</b> 모델이 이미 GPU 하나에 들어가고 <b>처리량</b>을 더 원할 때 — replica 늘리면 동시 요청↑. <b>· 추론 이득:</b> <b>레이어당 collective 없이</b> 거의 선형 처리량; MoE/MLA에선 <b>DP-attention</b>이 rank 간 KV 캐시 중복을 피함. <b>· vLLM:</b> <code class="inl">--data-parallel-size N</code> (<code class="inl">-dp N</code>); 멀티노드 시 <code class="inl">--data-parallel-size-local</code>, <code class="inl">--data-parallel-address</code>, <code class="inl">--data-parallel-backend mp|ray</code> 추가.</span></p>
   </div>
   <div class="pdetail" data-p="DPEP" hidden>
     <h4><span class="en">DP-attention + EP (vLLM MoE) — DP for attention, EP for experts</span><span class="ko">DP-attention + EP (vLLM MoE) — attention은 DP, expert는 EP</span></h4>
@@ -564,6 +572,7 @@
       <li><span class="en"><b>Attention runs data-parallel</b> (full weights, each rank its own <code class="inl">b/4</code> batch) — so the KV cache is <b>not duplicated</b> across ranks. The experts run <b>expert-parallel</b> (all-to-all dispatch/combine).</span><span class="ko"><b>attention은 데이터 병렬</b>(full 가중치, rank마다 자기 <code class="inl">b/4</code> 배치) — KV 캐시가 rank 간 <b>중복되지 않음</b>. expert는 <b>expert 병렬</b>(all-to-all dispatch/combine).</span></li>
       <li><span class="en">Because the two halves use different parallelism, the ranks must run in <b>lockstep</b> — vLLM inserts dummy forward passes and a tiny coordination all-reduce every N steps to keep them aligned <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span><span class="ko">두 절반이 서로 다른 병렬화를 써서 rank들이 <b>lockstep</b>으로 돌아야 함 — vLLM이 dummy forward와 N스텝마다 작은 조정 all-reduce를 넣어 정렬 유지 <a class="src" href="https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html">[15]</a>.</span></li>
     </ul>
+    <p class="usage"><span class="en"><b>When:</b> a large MoE at <b>high concurrency</b> — vLLM's recommended large-scale MoE serving (DeepSeek-V3 style). <b>· Inference win:</b> DP attention (no KV duplication) + EP experts (split) scales to high request volume; benchmarks show <b>DP+EP beats TP+EP at high concurrency</b> (TP+EP wins at low). <b>· vLLM:</b> <code class="inl">--data-parallel-size N --enable-expert-parallel</code> — e.g. DeepSeek-V3: <code class="inl">-tp 1 -dp 8 --enable-expert-parallel</code>.</span><span class="ko"><b>언제:</b> 큰 MoE를 <b>높은 동시성</b>으로 — vLLM 권장 대규모 MoE 서빙(DeepSeek-V3 식). <b>· 추론 이득:</b> DP attention(KV 중복 없음) + EP expert(분산)가 높은 요청량으로 확장; 벤치마크상 <b>높은 동시성에선 DP+EP가 TP+EP보다 유리</b>(낮은 동시성은 TP+EP). <b>· vLLM:</b> <code class="inl">--data-parallel-size N --enable-expert-parallel</code> — 예: DeepSeek-V3 <code class="inl">-tp 1 -dp 8 --enable-expert-parallel</code>.</span></p>
   </div>
   <div class="pdetail" data-p="PP" hidden>
     <h4><span class="en">PP — pipeline parallel: split by depth</span><span class="ko">PP — 파이프라인 병렬: 깊이로 쪼갬</span></h4>
@@ -571,6 +580,7 @@
       <li><span class="en">Each GPU holds a <b>contiguous block of whole layers</b> at full size (faint cells = stages not on that GPU). A microbatch <code class="inl">[b_micro,s,h]</code> flows G0→G1→…→Gn with only a <b>p2p send/recv</b> of the activation at each boundary — no shape change, just a hand-off.</span><span class="ko">각 GPU가 <b>연속된 레이어 묶음</b>을 full 크기로 보유(흐린 셀 = 그 GPU엔 없는 stage). 마이크로배치 <code class="inl">[b_micro,s,h]</code>가 G0→G1→…→Gn으로 흐르며 경계마다 activation의 <b>p2p send/recv</b>만 — shape 변화 없이 넘겨주기.</span></li>
       <li><span class="en">Unlike TP/EP/CP (which shard <i>within</i> a layer), PP shards <i>across</i> layers. Communication is cheap (point-to-point, can cross nodes); the real cost is the pipeline <b>bubble</b>. Usually combined with TP inside each stage for big models.</span><span class="ko">TP/EP/CP가 레이어 <i>안</i>을 쪼개는 것과 달리 PP는 레이어 <i>사이</i>를 쪼갬. 통신은 쌈(p2p, 노드 가능); 진짜 비용은 pipeline <b>bubble</b>. 큰 모델에선 보통 각 stage 안에 TP와 결합.</span></li>
     </ul>
+    <p class="usage"><span class="en"><b>When:</b> the model is too big for a single node, <b>or</b> the GPUs lack NVLink (e.g. L40S) where TP's all-reduce would be too costly. <b>· Inference win:</b> only a cheap <b>p2p</b> hand-off crosses each stage boundary, so it scales across nodes / slow interconnects with low comm overhead, and serves models one node can't hold (the cost is the pipeline <i>bubble</i>). <b>· vLLM:</b> <code class="inl">--pipeline-parallel-size N</code> (<code class="inl">-pp N</code>) — set to #nodes, usually paired with <code class="inl">-tp</code> = #GPUs/node.</span><span class="ko"><b>언제:</b> 모델이 노드 하나엔 안 들어가거나, GPU에 NVLink가 없어(예: L40S) TP의 all-reduce가 너무 비쌀 때. <b>· 추론 이득:</b> 경계마다 싼 <b>p2p</b> 넘겨주기만 오가 노드/느린 인터커넥트를 넘어 통신 오버헤드 낮게 확장하고, 노드 하나로 못 담는 모델을 서빙(비용은 pipeline <i>bubble</i>). <b>· vLLM:</b> <code class="inl">--pipeline-parallel-size N</code> (<code class="inl">-pp N</code>) — 노드 수로 설정, 보통 <code class="inl">-tp</code>=노드당 GPU 수와 함께.</span></p>
   </div>
   <div class="pdetail" data-p="CP" hidden>
     <h4><span class="en">CP — context (sequence) parallel: for long context</span><span class="ko">CP — context(시퀀스) 병렬: 롱컨텍스트용</span></h4>
@@ -580,6 +590,7 @@
       <li><span class="en"><b>DeepSpeed-Ulysses</b>: <b>2 all-to-all per attention</b> to transpose sequence↔heads — very efficient intra-node, but the parallel degree is <b>capped by head count</b> (poor for GQA/MQA) <a class="src" href="https://arxiv.org/abs/2309.14509">[17C]</a>; USP fuses the two.</span><span class="ko"><b>DeepSpeed-Ulysses</b>: <b>attention당 all-to-all 2회</b>로 sequence↔heads transpose — 노드 내 매우 효율적이나 병렬도가 <b>head 수에 묶임</b>(GQA/MQA 불리) <a class="src" href="https://arxiv.org/abs/2309.14509">[17C]</a>; USP가 둘을 결합.</span></li>
       <li><span class="en"><b>vLLM main</b>: <b>Decode Context Parallel</b> <code class="inl">-dcp &lt;size&gt;</code> shards the <b>KV cache</b> along tokens to cut KV duplication once TP exceeds the KV-head count (MLA/GQA); MLA chunked-prefill runs a <b>Context-KV all-gather</b>. <b>Prefill CP (PCP)</b> is an open RFC for TTFT <a class="src" href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">[18C]</a>.</span><span class="ko"><b>vLLM main</b>: <b>Decode Context Parallel</b> <code class="inl">-dcp &lt;size&gt;</code>가 TP가 KV-head 수를 넘으면(MLA/GQA) <b>KV 캐시</b>를 토큰축으로 샤딩; MLA chunked-prefill은 <b>Context-KV all-gather</b> 수행. <b>Prefill CP(PCP)</b>는 TTFT용 RFC <a class="src" href="https://docs.vllm.ai/en/latest/serving/context_parallel_deployment.html">[18C]</a>.</span></li>
     </ul>
+    <p class="usage"><span class="en"><b>When:</b> very long context — especially MLA/GQA — where the KV cache won't fit, or TP exceeds the KV-head count so heads can't be split further. <b>· Inference win:</b> shards the <b>KV cache along tokens</b> → serve a context far longer than one GPU holds, and cut KV duplication on the decode side. <b>· vLLM:</b> <code class="inl">--decode-context-parallel-size N</code> (<code class="inl">-dcp N</code>) — reuses the TP group's GPUs, so <code class="inl">tp_size</code> must be divisible by <code class="inl">dcp_size</code>.</span><span class="ko"><b>언제:</b> 아주 긴 컨텍스트 — 특히 MLA/GQA — 에서 KV 캐시가 안 들어가거나, TP가 KV-head 수를 넘어 head를 더 못 쪼갤 때. <b>· 추론 이득:</b> <b>KV 캐시를 토큰축으로 샤딩</b> → GPU 하나로 못 담는 길이의 컨텍스트 서빙 + 디코드 측 KV 중복↓. <b>· vLLM:</b> <code class="inl">--decode-context-parallel-size N</code> (<code class="inl">-dcp N</code>) — TP 그룹 GPU를 재사용하므로 <code class="inl">tp_size</code>가 <code class="inl">dcp_size</code>로 나눠떨어져야 함.</span></p>
     <svg class="fig" viewBox="0 0 760 210" role="img" aria-label="context parallel ring attention">
     <style>
     .t4{font:700 12px -apple-system,sans-serif;fill:var(--ink)}
@@ -863,11 +874,112 @@
 </script>
 <p class="figcap"><span class="en">Fig 3 — every strategy, module by module, with real shapes &amp; communication. For one transformer layer (top→bottom) each cell shows the <b>shape</b> a GPU holds (W = weights, a = activation); when a collective fires, a band shows the per-GPU inputs being <b>summed / gathered / routed</b> into the tensor that feeds the next module. Colour = sharded, grey = replicated/full, faint = absent on that GPU. <b>TP shards attention AND MLP (2 all-reduce); DP replicates all; CP communicates only at attention; PP splits by depth.</b> Sources: Megatron [5], seq-parallel [6], Switch/DeepSeek MoE [7][8], vLLM DP/CP docs [15][18C].</span><span class="ko">그림 3 — 모든 전략을 모듈 단위로, 실제 shape와 통신까지. 트랜스포머 레이어 하나(위→아래)에서 각 셀은 GPU가 든 <b>shape</b>(W=weight, a=activation); 통신이 fire되면 GPU별 입력이 <b>합쳐지거나·모이거나·라우팅되어</b> 다음 모듈 input으로 들어가는 밴드를 그린다. 색=샤딩, 회색=복제/full, 흐림=그 GPU엔 없음. <b>TP는 attention과 MLP 둘 다 쪼갬(all-reduce 2회); DP는 전부 복제; CP는 attention에서만 통신; PP는 depth로 분할.</b> 출처: Megatron [5], seq-parallel [6], Switch/DeepSeek MoE [7][8], vLLM DP/CP 문서 [15][18C].</span></p>
 
+<div class="callout c-purple" style="margin-top:18px">
+  <span class="tag">SP vs CP</span>
+  <p style="margin:6px 0"><span class="en"><b>Both shard the same axis — the sequence (s).</b> The difference is <b>how far the split reaches into the layer</b>:</span><span class="ko"><b>둘 다 같은 축 — 시퀀스(s) — 를 쪼갠다.</b> 차이는 <b>그 분할이 레이어 안 어디까지 미치느냐</b>다:</span></p>
+  <ul style="margin:6px 0 2px;padding-left:20px">
+    <li><span class="en"><b>SP (Megatron sequence-parallel)</b> shards only the activations <b>outside</b> the GEMMs — LayerNorm / dropout / residual. Inside attention &amp; MLP it reverts to TP (full hidden). It rides on TP's existing communication (the all-reduce becomes all-gather + reduce-scatter, <b>same bytes</b>), adds <b>zero</b> extra comm, and <b>does not shard the KV cache</b>. Purpose: shrink activation memory, for free, inside a TP group.</span><span class="ko"><b>SP (Megatron 시퀀스 병렬)</b>는 GEMM <b>바깥</b> 활성값만 쪼갬 — LayerNorm / dropout / residual. attention·MLP 안에선 TP로 되돌아감(full hidden). TP의 기존 통신에 얹힘(all-reduce가 all-gather + reduce-scatter로, <b>바이트 동일</b>), <b>추가 통신 0</b>, <b>KV 캐시는 안 쪼갬</b>. 목적: TP 그룹 안에서 공짜로 활성값 메모리 절감.</span></li>
+    <li><span class="en"><b>CP (context parallel)</b> keeps the sequence split <b>through attention</b> — the expensive, token-coupling part. Each GPU owns its tokens <i>and their KV</i>, so attention needs a real cross-GPU exchange (ring-p2p of K/V, or Ulysses all-to-all). Purpose: serve a context longer than one GPU can hold, and scale it across GPUs/nodes.</span><span class="ko"><b>CP (context 병렬)</b>는 시퀀스 분할을 <b>attention까지</b> 유지 — 비싸고 토큰이 서로 얽히는 부분. 각 GPU가 자기 토큰 <i>과 그 KV</i>를 가지므로 attention에서 진짜 GPU 간 교환 필요(K/V ring-p2p, 또는 Ulysses all-to-all). 목적: GPU 하나로 못 담는 길이의 컨텍스트 서빙 + GPU/노드 간 확장.</span></li>
+    <li><span class="en"><b>One-liner:</b> SP = a free activation-memory cut <i>inside</i> a node; CP = shard the KV/sequence so long context fits and scales out. <b>Terminology trap:</b> "sequence parallelism" is overloaded — Megatron-SP (LayerNorm/dropout only, this box) vs DeepSpeed-<b>Ulysses</b> "sequence parallelism", which is actually a <b>CP</b> method (it shards attention). In vLLM, CP is exposed as <code class="inl">-dcp</code>; Megatron-SP is the internal <code class="inl">torch.compile</code> pass.</span><span class="ko"><b>한 줄:</b> SP = 노드 <i>안</i>에서 공짜 활성값 메모리 절감; CP = KV/시퀀스를 쪼개 롱컨텍스트를 담고 확장. <b>용어 함정:</b> "sequence parallelism"은 중의적 — Megatron-SP(LayerNorm/dropout만, 이 박스) vs DeepSpeed-<b>Ulysses</b> "sequence parallelism"은 사실 <b>CP</b> 계열(attention을 쪼갬). vLLM에선 CP가 <code class="inl">-dcp</code>로 노출; Megatron-SP는 내부 <code class="inl">torch.compile</code> 패스.</span></li>
+  </ul>
+</div>
 </section>
 
 
 <section id="s3">
-<h2><span class="num">3</span><span class="en">vLLM code path (permalinks @ 6607a80)</span><span class="ko">vLLM 코드 경로 (permalink @ 6607a80)</span></h2>
+<h2><span class="num">3</span><span class="en">Each strategy on the metal — comm stack, ceiling, how to check</span><span class="ko">각 전략을 하드웨어 위에서 — 통신 스택·성능 상한·확인법</span></h2>
+<p><span class="en">Every strategy's communication runs through the <b>same library</b> — <b>NCCL</b> on NVIDIA, <b>RCCL</b> on AMD (a drop-in, NCCL-API-compatible port; PyTorch's <code class="inl">nccl</code> backend maps to RCCL on ROCm, same op names). What changes per strategy is <b>(a)</b> which collective fires, <b>(b)</b> which physical link it lands on, and therefore <b>(c)</b> what caps its speed. This table maps each §2 strategy onto that stack; for <i>how</i> NCCL picks the link and the peak-bandwidth numbers, see §5.</span><span class="ko">모든 전략의 통신은 <b>같은 라이브러리</b>를 탄다 — NVIDIA는 <b>NCCL</b>, AMD는 <b>RCCL</b>(NCCL API 호환 포팅; ROCm에선 PyTorch <code class="inl">nccl</code> 백엔드가 RCCL로 매핑, op 이름 동일). 전략별로 달라지는 건 <b>(a)</b> 어떤 collective가 도는지, <b>(b)</b> 어떤 물리 링크를 타는지, 그래서 <b>(c)</b> 무엇이 속도를 묶는지다. 아래 표는 §2의 각 전략을 그 스택에 대응시킨 것 — NCCL이 링크를 <i>어떻게</i> 고르는지와 피크 대역폭 수치는 §5 참고.</span></p>
+
+<div style="overflow-x:auto">
+<table>
+<tr>
+  <th><span class="en">Strategy</span><span class="ko">전략</span></th>
+  <th><span class="en">Collective · op (per layer)</span><span class="ko">Collective · op (레이어당)</span></th>
+  <th><span class="en">Link it rides — NVIDIA · AMD</span><span class="ko">타는 링크 — NVIDIA · AMD</span></th>
+  <th><span class="en">Ceiling — bound by</span><span class="ko">성능 상한 — 묶이는 것</span></th>
+  <th><span class="en">How to check (cmd · busbw factor)</span><span class="ko">확인 (명령 · busbw 계수)</span></th>
+</tr>
+<tr>
+  <td><b>TP</b></td>
+  <td><span class="en"><b>2× all-reduce</b> · <code class="inl">ncclAllReduce</code> (Ring/Tree, or <b>NVLS</b> on NVSwitch)</span><span class="ko"><b>all-reduce 2회</b> · <code class="inl">ncclAllReduce</code> (Ring/Tree, NVSwitch면 <b>NVLS</b>)</span></td>
+  <td><span class="en"><b>Intra-node:</b> NVLink/NVSwitch · xGMI/Infinity Fabric. <b>Keep in one node.</b></span><span class="ko"><b>노드 내:</b> NVLink/NVSwitch · xGMI/Infinity Fabric. <b>한 노드 안에 유지.</b></span></td>
+  <td><span class="en">Intra-node link BW (NVLink 900 GB/s H100 / xGMI). Cross-node → NIC-bound (25–100 GB/s), ~10× slower → don't span nodes.</span><span class="ko">노드 내 링크 BW(NVLink 900 GB/s H100 / xGMI). 노드 넘으면 → NIC 묶임(25–100 GB/s), ~10× 느림 → 노드 넘기지 말 것.</span></td>
+  <td><code class="inl">all_reduce_perf -b 8 -e 4G -f 2 -g &lt;n&gt;</code> → busbw <span class="muted">×2(n−1)/n</span></td>
+</tr>
+<tr>
+  <td><b>TP+SP</b></td>
+  <td><span class="en"><b>all-gather + reduce-scatter</b> · <code class="inl">ncclAllGather</code> + <code class="inl">ncclReduceScatter</code> (= same bytes as TP's all-reduce)</span><span class="ko"><b>all-gather + reduce-scatter</b> · <code class="inl">ncclAllGather</code> + <code class="inl">ncclReduceScatter</code> (= TP all-reduce와 같은 바이트)</span></td>
+  <td><span class="en">Same as TP — intra-node NVLink · xGMI.</span><span class="ko">TP와 동일 — 노드 내 NVLink · xGMI.</span></td>
+  <td><span class="en">Same intra-node link BW as TP; <b>no extra bytes</b> (it's a memory win, not a comm cost).</span><span class="ko">TP와 같은 노드 내 링크 BW; <b>추가 바이트 없음</b>(통신 비용이 아니라 메모리 이득).</span></td>
+  <td><code class="inl">all_gather_perf</code> / <code class="inl">reduce_scatter_perf</code> → busbw <span class="muted">×(n−1)/n</span></td>
+</tr>
+<tr>
+  <td><b>EP</b><br><span class="muted">(MoE)</span></td>
+  <td><span class="en"><b>2× all-to-all</b> /MoE layer (dispatch+combine) · grouped <code class="inl">ncclSend</code>/<code class="inl">ncclRecv</code> (or <b>DeepEP</b> kernels)</span><span class="ko"><b>all-to-all 2회</b> /MoE 레이어(dispatch+combine) · grouped <code class="inl">ncclSend</code>/<code class="inl">ncclRecv</code> (또는 <b>DeepEP</b> 커널)</span></td>
+  <td><span class="en"><b>Cross-node:</b> InfiniBand/RoCE (GPUDirect RDMA) · IB/RoCE. NVLink/xGMI when experts fit in-node.</span><span class="ko"><b>노드 간:</b> InfiniBand/RoCE(GPUDirect RDMA) · IB/RoCE. expert가 노드 내면 NVLink/xGMI.</span></td>
+  <td><span class="en"><b>Cross-node NIC / bisection BW — the bottleneck.</b> DeepSeek-V3 measured ≈1:1 compute:comm.</span><span class="ko"><b>노드 간 NIC / bisection BW — 핵심 병목.</b> DeepSeek-V3 측정 연산:통신 ≈1:1.</span></td>
+  <td><code class="inl">alltoall_perf -b 8 -e 4G -f 2 -g &lt;n&gt;</code> → busbw <span class="muted">×(n−1)/n</span> · <code class="inl">NCCL_DEBUG=INFO</code>→<code class="inl">via NET/IB</code></td>
+</tr>
+<tr>
+  <td><b>DP</b></td>
+  <td><span class="en"><b>none at inference</b> (replicas independent). DP-attention adds a tiny periodic all-reduce.</span><span class="ko"><b>추론 땐 없음</b>(replica 독립). DP-attention은 작은 주기적 all-reduce 추가.</span></td>
+  <td><span class="en">n/a — no cross-GPU collective on the hot path.</span><span class="ko">해당 없음 — 핫패스에 GPU 간 collective 없음.</span></td>
+  <td><span class="en">Not network — <b>per-GPU compute / HBM bandwidth</b>. Throughput scales with replicas.</span><span class="ko">네트워크가 아님 — <b>GPU별 연산 / HBM 대역폭</b>. 처리량은 replica 수에 비례.</span></td>
+  <td><span class="en">Nothing to measure comm-wise — <code class="inl">nvidia-smi dmon</code> / <code class="inl">rocm-smi</code> for utilization.</span><span class="ko">통신은 잴 게 없음 — <code class="inl">nvidia-smi dmon</code> / <code class="inl">rocm-smi</code>로 사용률 확인.</span></td>
+</tr>
+<tr>
+  <td><b>DP+EP</b></td>
+  <td><span class="en">EP <b>all-to-all</b> (experts) + small coordination all-reduce + lockstep dummy passes</span><span class="ko">EP <b>all-to-all</b>(expert) + 작은 조정 all-reduce + lockstep dummy pass</span></td>
+  <td><span class="en">Experts cross-node IB/RoCE (EP); attention local (DP, no comm).</span><span class="ko">expert는 노드 간 IB/RoCE(EP); attention은 로컬(DP, 통신 없음).</span></td>
+  <td><span class="en">The <b>EP all-to-all (NIC)</b> dominates; attention is free. Scales best at high concurrency.</span><span class="ko"><b>EP all-to-all(NIC)</b>가 지배; attention은 공짜. 높은 동시성에 최적 확장.</span></td>
+  <td><code class="inl">alltoall_perf</code> → busbw <span class="muted">×(n−1)/n</span> · <code class="inl">NCCL_DEBUG=INFO</code>→<code class="inl">via NET/IB</code></td>
+</tr>
+<tr>
+  <td><b>PP</b></td>
+  <td><span class="en"><b>p2p send/recv</b> at each stage boundary · <code class="inl">ncclSend</code>/<code class="inl">ncclRecv</code></span><span class="ko">stage 경계마다 <b>p2p send/recv</b> · <code class="inl">ncclSend</code>/<code class="inl">ncclRecv</code></span></td>
+  <td><span class="en"><b>Any link</b> — NVLink/xGMI intra, IB/RoCE cross-node. p2p tolerates slow links.</span><span class="ko"><b>아무 링크나</b> — 노드 내 NVLink/xGMI, 노드 간 IB/RoCE. p2p는 느린 링크도 견딤.</span></td>
+  <td><span class="en"><b>Not bandwidth</b> (tiny volume) — the pipeline <b>bubble</b> (scheduling) is the real cap.</span><span class="ko"><b>대역폭이 아님</b>(전송량 작음) — 진짜 상한은 pipeline <b>bubble</b>(스케줄링).</span></td>
+  <td><code class="inl">sendrecv_perf</code> → busbw <span class="muted">×1</span> · bubble via <code class="inl">nsys</code>/<code class="inl">rocprof</code></td>
+</tr>
+<tr>
+  <td><b>CP</b><br><span class="muted">(long ctx)</span></td>
+  <td><span class="en"><b>ring</b> → p2p K/V (<code class="inl">ncclSend</code>/<code class="inl">Recv</code>); <b>Ulysses</b> → 2× all-to-all; vLLM <code class="inl">-dcp</code> → all-gather (ag_rs) or all-to-all (a2a)</span><span class="ko"><b>ring</b> → K/V p2p(<code class="inl">ncclSend</code>/<code class="inl">Recv</code>); <b>Ulysses</b> → all-to-all 2회; vLLM <code class="inl">-dcp</code> → all-gather(ag_rs) 또는 all-to-all(a2a)</span></td>
+  <td><span class="en">Ring = neighbor NVLink/xGMI (overlapped); cross-node IB/RoCE.</span><span class="ko">Ring = 이웃 NVLink/xGMI(겹침); 노드 간 IB/RoCE.</span></td>
+  <td><span class="en">Ring = neighbor link BW <b>overlapped</b> with attention compute; Ulysses = capped by head count.</span><span class="ko">Ring = 이웃 링크 BW를 attention 연산과 <b>겹침</b>; Ulysses = head 수에 묶임.</span></td>
+  <td><code class="inl">sendrecv_perf</code> (ring) / <code class="inl">alltoall_perf</code> (Ulysses) → busbw · <code class="inl">NCCL_DEBUG=INFO</code></td>
+</tr>
+</table>
+</div>
+<p class="figcap"><span class="en">Each §2 strategy → its NCCL/RCCL collective, the link it lands on, and the command that measures it. Op names are identical on RCCL (AMD). busbw factors per <a class="src" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">nccl-tests PERFORMANCE.md</a>; peak-BW table in §5.</span><span class="ko">§2 각 전략 → 그 NCCL/RCCL collective, 타는 링크, 측정 명령. op 이름은 RCCL(AMD)에서 동일. busbw 계수는 <a class="src" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">nccl-tests PERFORMANCE.md</a>; 피크 BW 표는 §5.</span></p>
+
+<h3><span class="en">Reading the ceiling</span><span class="ko">성능 상한 읽는 법</span></h3>
+<p><span class="en">The ceiling of any strategy = <b>the peak BW of the link its collective lands on</b> (§5 table) × the busbw factor. Two bands dominate: <b>intra-node</b> NVLink/xGMI ≈ 450–900 GB/s, and <b>cross-node</b> NIC ≈ 25–100 GB/s — roughly a <b>10× cliff</b>. So the practical rule:</span><span class="ko">어떤 전략이든 상한 = <b>그 collective가 타는 링크의 피크 BW</b>(§5 표) × busbw 계수. 두 대역이 지배적: <b>노드 내</b> NVLink/xGMI ≈ 450–900 GB/s, <b>노드 간</b> NIC ≈ 25–100 GB/s — 대략 <b>10× 절벽</b>. 그래서 실전 규칙:</span></p>
+<ul>
+  <li><span class="en"><b>TP / TP+SP</b> move the activation every layer with all-reduce — BW-heavy, so they must stay <b>intra-node</b>.</span><span class="ko"><b>TP / TP+SP</b>는 레이어마다 all-reduce로 activation을 옮김 — BW 부담이 커서 <b>노드 내</b>에 머물러야 함.</span></li>
+  <li><span class="en"><b>EP</b>'s all-to-all is the <b>cross-node pain point</b> (the 1:1 comp:comm) — it lives or dies on NIC bandwidth.</span><span class="ko"><b>EP</b>의 all-to-all이 <b>노드 간 고통 지점</b>(1:1 연산:통신) — NIC 대역폭에 생사가 걸림.</span></li>
+  <li><span class="en"><b>PP / ring-CP</b> send little (p2p), so they <b>tolerate slow links</b> and cross nodes happily; <b>DP</b> sends ~nothing.</span><span class="ko"><b>PP / ring-CP</b>는 전송량이 작아(p2p) <b>느린 링크도 견디고</b> 노드를 잘 넘음; <b>DP</b>는 거의 전송 없음.</span></li>
+</ul>
+
+<h3><span class="en">Verify it on the box — cheat-sheet</span><span class="ko">실기에서 확인 — 치트시트</span></h3>
+<pre><code># 1) WHICH collective is slow? Measure busbw per op (nccl-tests / rccl-tests):
+all_reduce_perf      -b 8 -e 4G -f 2 -g 8     # TP  (and TP+SP all-reduce-equivalent)
+all_gather_perf  /  reduce_scatter_perf       # TP+SP halves
+alltoall_perf        -b 8 -e 4G -f 2 -g 8     # EP, DP+EP, Ulysses-CP
+sendrecv_perf                                 # PP, ring-CP
+#   → read the 'busbw' column, compare to the link's peak (§5)
+
+# 2) WHICH physical link + algorithm did NCCL/RCCL pick?
+NCCL_DEBUG=INFO ...   # grep: via P2P/IPC (NVLink|PCIe) · via SHM · via NET/IB/GDRDMA
+                      #       and the algo: Ring / Tree / NVLS (NVLink-SHARP)
+
+# 3) Topology / link rate  (AMD: same flags, RCCL honors NCCL_DEBUG):
+nvidia-smi topo -m         rocm-smi --showtopotype --shownodesbw         ibstat</code></pre>
+<p class="muted"><span class="en">RCCL is API-compatible: the binaries are <code class="inl">rccl-tests</code> with the same names, and <code class="inl">NCCL_DEBUG</code> works unchanged. The full peak-BW table, the P2P→SHM→NET selection walk, and a live MI250 capture are in §5.</span><span class="ko">RCCL은 API 호환: 바이너리는 같은 이름의 <code class="inl">rccl-tests</code>, <code class="inl">NCCL_DEBUG</code>도 그대로 동작. 전체 피크 BW 표, P2P→SHM→NET 선택 과정, MI250 실측은 §5에 있음.</span></p>
+</section>
+
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">vLLM code path (permalinks @ 6607a80)</span><span class="ko">vLLM 코드 경로 (permalink @ 6607a80)</span></h2>
 <h3><span class="en">TP all-reduce — layer → ncclAllReduce</span><span class="ko">TP all-reduce — layer → ncclAllReduce</span></h3>
 <ol class="flow">
 <li><span class="en"><code class="inl">RowParallelLinear.forward</code> runs the partial GEMM, then all-reduces.</span><span class="ko"><code class="inl">RowParallelLinear.forward</code>가 부분 GEMM 후 all-reduce.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/model_executor/layers/linear.py#L1644-L1649">linear.py#L1644-L1649</a></li>
@@ -891,8 +1003,8 @@
 </section>
 
 
-<section id="s4">
-<h2><span class="num">4</span><span class="en">The hardware underneath + how to check</span><span class="ko">그 아래 하드웨어 + 확인법</span></h2>
+<section id="s5">
+<h2><span class="num">5</span><span class="en">The hardware underneath + how to check</span><span class="ko">그 아래 하드웨어 + 확인법</span></h2>
 <p><span class="en">When <code class="inl">ncclAllReduce</code> runs, NCCL/RCCL has <b>already</b> (at init) chosen the physical link per GPU pair — a first-match walk <b>P2P → SHM → NET</b> ranked by a distance hierarchy <code class="inl">PATH_NVL(NVLink) &lt; PATH_PIX/PXB(PCIe) &lt; PATH_SYS(cross-NUMA) &lt; PATH_NET</code> <a class="src" href="https://github.com/NVIDIA/nccl/blob/master/src/include/graph.h">[NCCL graph.h]</a>. Note: <b>NVLink and PCIe-P2P are the same "P2P transport"</b> (not a code branch); NVSwitch is subsumed as <code class="inl">PATH_NVL</code>. Cross-node uses GPUDirect RDMA over InfiniBand/RoCE (or host-staged TCP fallback) <a class="src" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html">[7H]</a>.</span>
   <span class="ko"><code class="inl">ncclAllReduce</code>가 돌 때 NCCL/RCCL은 <b>이미</b>(init 때) GPU 쌍별 물리 링크를 선택해 둠 — <b>P2P → SHM → NET</b> 첫-매치 순회, 거리 계층 <code class="inl">PATH_NVL(NVLink) &lt; PATH_PIX/PXB(PCIe) &lt; PATH_SYS(NUMA간) &lt; PATH_NET</code>로 랭킹 <a class="src" href="https://github.com/NVIDIA/nccl/blob/master/src/include/graph.h">[NCCL graph.h]</a>. <b>NVLink와 PCIe-P2P는 같은 "P2P transport"</b>(코드 분기 아님); NVSwitch는 <code class="inl">PATH_NVL</code>로 포함. 노드 간은 InfiniBand/RoCE 위 GPUDirect RDMA(또는 host-staged TCP 폴백) <a class="src" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html">[7H]</a>.</span></p>
 
@@ -937,8 +1049,8 @@ $ rocm-smi --showbus             # GPU0-3 on PCIe root 0000:29-32, GPU4-7 on 000
 </section>
 
 
-<section id="s5">
-<h2><span class="num">5</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Sources</span><span class="ko">출처</span></h2>
 <ul class="srcs">
 <li>[1] Collective operation (cost model, definitions) — <a href="https://en.wikipedia.org/wiki/Collective_operation">en.wikipedia.org/wiki/Collective_operation</a></li>
 <li>[2] NCCL Collectives (all-reduce = RS+AG) — <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">docs.nvidia.com/…/collectives</a> · p2p — <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/p2p.html">/p2p</a> · env vars — <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html">/env</a></li>
