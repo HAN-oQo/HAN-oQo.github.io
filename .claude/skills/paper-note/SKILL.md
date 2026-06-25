@@ -63,6 +63,11 @@ Base template to copy: `study/llm-serving-software-aging.html` (hero + TOC + glo
      → the 5 body sections → Sources section → footer.
    - All visible prose in `<span class="en">…</span><span class="ko">…</span>` pairs; code/flags
      and verbatim quotes stay language-neutral. `<script src="../assets/i18n.js">` at the end.
+   - **Keep the paper's TITLE in English in BOTH the en/ko spans.** In the hero `<h1>` and the
+     index card `<h2>`, the `<span class="ko">` must show the English title verbatim — do NOT
+     translate the paper title to Korean. Only a trailing label localizes ("paper note" →
+     "논문 정리"); the lede and body prose still localize normally. (User preference: a paper's
+     proper title is its identity; flipping the EN/KO toggle should leave the title English.)
    - Tag classes come from theme.css only; do not inline `.t-*`.
 3. **Index card.** Add a card to `study/index.html` (newest first) — tag **`t-blue` "Paper note /
    논문 정리"**, `post-meta` = today's date (created; add `updated` only when later edited per
