@@ -81,6 +81,11 @@
   .usage li{margin:3px 0}
   .usage b{color:var(--green-ink)}
   .usage code.inl{background:var(--card);color:var(--ink)}
+  .psum{font-size:11.5px;line-height:1.8;margin:6px 0 2px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+  .psum[hidden]{display:none}
+  .psum .pk{display:inline-block;margin-right:16px;white-space:nowrap}
+  .psum .pk b{color:var(--muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-right:5px}
+  .psum code.inl{font-size:11px}
 </style>
 </head>
 <body>
@@ -596,6 +601,7 @@
 <li style="margin:8px 0"><span class="en"><b>MoE.</b> The dense MLP (<code class="inl">16 b s h²</code> = one MLP) becomes experts: each token runs <b>k</b> of <b>e</b> experts, so FFN FLOPs = <b>k × one MLP = <code class="inl">16 b s k h²</code></b> (the <b>e cancels</b> — each expert sees ~k/e of tokens, × e = k; e lives in <i>memory</i> only). <b>Yes, this can exceed <code class="inl">F_layer</code></b> for k ≥ 2 — and that's fine: a MoE is a <i>bigger model</i> (e× the FFN params). It's cheap only relative to a dense model of the <b>same total params</b> (all e active = <code class="inl">16 b s e h²</code>), of which MoE pays just <b><code class="inl">k/e</code></b>. So <b>compute ∝ k, memory ∝ e</b>. <span class="muted">(Assumes each expert ≈ a standard 4h MLP; fine-grained MoE uses smaller experts — swap 16h² for the real per-expert FLOPs.)</span></span><span class="ko"><b>MoE.</b> dense MLP(<code class="inl">16 b s h²</code> = MLP 한 개)이 expert로 바뀜: 토큰당 <b>e</b>개 중 <b>k</b>개 expert를 돌리니 FFN FLOPs = <b>k × MLP 한 개 = <code class="inl">16 b s k h²</code></b> (<b>e는 상쇄</b> — 각 expert가 토큰의 ~k/e를 보고 × e = k; e는 <i>메모리</i>에만). <b>그래서 k ≥ 2면 <code class="inl">F_layer</code>보다 커질 수 있다</b> — 당연함: MoE는 <i>더 큰 모델</i>(e× FFN 파라미터). 이득은 <b>같은 총 파라미터</b>의 dense 모델(전체 e개 활성 = <code class="inl">16 b s e h²</code>) 대비 — MoE는 그 중 <b><code class="inl">k/e</code></b>만 계산. 그래서 <b>연산 ∝ k, 메모리 ∝ e</b>. <span class="muted">(각 expert ≈ 표준 4h MLP 가정; fine-grained MoE는 더 작은 expert — 16h²를 실제 per-expert FLOPs로 치환.)</span></span></li>
 <li style="margin:8px 0"><span class="en"><b>Weights <code class="inl">W</code></b> (params, × 2 B for bf16). Per layer: attention Q, K, V, O are each <code class="inl">h×h</code> → <b>4h²</b>; MLP up <code class="inl">h×4h</code> + down <code class="inl">4h×h</code> → <b>8h²</b>; sum = <b>12h²</b> params → over L layers <b><code class="inl">W = 12 h² L</code></b>. For MoE: attention-only <b><code class="inl">W_attn = 4 h² L</code></b>, and each expert is one MLP (8h²) so <b><code class="inl">W_exp = 8 h² e L</code></b> (∝ total <b>e</b>).</span><span class="ko"><b>가중치 <code class="inl">W</code></b> (params, × 2 B bf16). 레이어당: attention Q, K, V, O 각 <code class="inl">h×h</code> → <b>4h²</b>; MLP up <code class="inl">h×4h</code> + down <code class="inl">4h×h</code> → <b>8h²</b>; 합 = <b>12h²</b> params → L개 레이어 <b><code class="inl">W = 12 h² L</code></b>. MoE: attention만 <b><code class="inl">W_attn = 4 h² L</code></b>, expert 1개 = MLP 1개(8h²)라 <b><code class="inl">W_exp = 8 h² e L</code></b>(∝ 전체 <b>e</b>).</span></li>
 <li style="margin:8px 0"><span class="en"><b>KV cache <code class="inl">M_kv</code></b> = <b><code class="inl">2 b s h_kv L</code></b> elements — K and V, each <code class="inl">b·s·h_kv</code> per layer (2 tensors → the leading 2), × L layers, × 2 B. Since <code class="inl">h_kv</code> ≪ h for GQA/MLA, <code class="inl">M_kv</code> is usually small — until long context makes s dominate (that’s where CP earns its keep).</span><span class="ko"><b>KV 캐시 <code class="inl">M_kv</code></b> = <b><code class="inl">2 b s h_kv L</code></b> elements — K·V 각 레이어당 <code class="inl">b·s·h_kv</code>(텐서 2개 → 앞의 2), × L 레이어, × 2 B. GQA/MLA에선 <code class="inl">h_kv</code> ≪ h라 <code class="inl">M_kv</code>는 보통 작음 — 단, 롱컨텍스트로 s가 커지면 지배적(그때 CP가 빛을 발함).</span></li>
+<li style="margin:8px 0"><span class="en"><b>TP shards <code class="inl">M_kv</code> by heads — but only down to #KV-heads.</b> For MHA it's a clean ÷n, giving the <b>same per-GPU KV as DP-attention</b> (just head-sliced instead of split by request). But <b>GQA with n &gt; #KV-heads</b> must replicate the shared KV heads, and <b>MLA</b> (one latent per token, not per-head) replicates the KV on <i>every</i> TP rank → no ÷n. That replication is exactly what <b>DP-attention</b> (each rank owns different requests) and <b>CP / DCP</b> (shard KV by tokens) remove — the reason they're the KV fix for MLA / large MoE.</span><span class="ko"><b>TP는 <code class="inl">M_kv</code>를 head로 샤딩 — 단 #KV-head까지만.</b> MHA면 깔끔한 ÷n이라 <b>DP-attention과 per-GPU KV가 동일</b>(요청별이 아니라 head로 쪼갤 뿐). 하지만 <b>n &gt; #KV-head인 GQA</b>는 공유 KV head를 복제해야 하고, <b>MLA</b>(토큰당 latent 1개, head별 아님)는 <i>모든</i> TP rank에 KV를 복제 → ÷n 안 됨. 이 복제를 없애는 게 바로 <b>DP-attention</b>(각 rank가 다른 요청 담당)과 <b>CP / DCP</b>(KV를 토큰으로 샤딩) — MLA / 대형 MoE의 KV 해법인 이유.</span></li>
 <li style="margin:8px 0"><span class="en"><b>Activations <code class="inl">A</code></b> ≈ <code class="inl">b s h</code> — the live working set (the residual stream <code class="inl">[b,s,h]</code> + a transient MLP-inner <code class="inl">[b,s,4h]</code> ~ a few × b s h). <b>Crucially NOT × L</b>: inference has no backward pass, so only the current layer's activations + the residual are resident → <b>A ≪ W</b>, and ≪ <code class="inl">M_kv</code> at long context. TP keeps A full; SP and CP shard it ÷n; PP holds ~A × in-flight microbatches.</span><span class="ko"><b>활성값 <code class="inl">A</code></b> ≈ <code class="inl">b s h</code> — 살아있는 작업셋(residual stream <code class="inl">[b,s,h]</code> + 일시적 MLP-inner <code class="inl">[b,s,4h]</code> ~ 수 배 × b s h). <b>중요: × L 아님</b>: 추론은 backward가 없어 현재 레이어 활성값 + residual만 상주 → <b>A ≪ W</b>, 롱컨텍스트에선 ≪ <code class="inl">M_kv</code>. TP는 A를 full 유지; SP·CP는 ÷n 샤딩; PP는 ~A × in-flight 마이크로배치.</span></li>
 <li style="margin:8px 0"><span class="en"><b>Units.</b> Compute is per-GPU <i>per layer</i> (× L for the whole model); memory is per-GPU <i>whole model</i>. Each strategy then divides or replicates these by <code class="inl">n</code> as the table shows.</span><span class="ko"><b>단위.</b> 연산은 GPU당 <i>레이어당</i>(전체 모델은 × L); 메모리는 GPU당 <i>전체 모델</i>. 각 전략이 이를 표대로 <code class="inl">n</code>으로 나누거나 복제.</span></li>
 <li style="margin:8px 0"><span class="en"><b>Comm moves activations, never weights.</b> Weights stay put (sharded / replicated on each GPU); only the activation <b><code class="inl">V = b s h</code></b> (or <b><code class="inl">V_kv = b s h_kv</code></b> for CP's K/V) crosses GPUs — that's why comm ∝ <code class="inl">b s h</code>, not <code class="inl">h²</code>. Per-GPU bytes = busbw factor × V (§5): all-reduce × 2(n−1)/n, all-gather / reduce-scatter / all-to-all × (n−1)/n, p2p × 1. So TP's 2 all-reduce/layer = 2 × 2(n−1)/n·V = <b>4(n−1)/n·V</b>; EP's 2 all-to-all of k token-copies = <b>2(n−1)/n·k·V</b>; PP hands off one V by p2p.</span><span class="ko"><b>통신은 활성값을 옮기지 가중치는 안 옮긴다.</b> 가중치는 각 GPU에 샤딩/복제된 채 그대로 있고, 활성값 <b><code class="inl">V = b s h</code></b>(CP의 K/V는 <b><code class="inl">V_kv = b s h_kv</code></b>)만 GPU 사이를 건넌다 — 그래서 통신량 ∝ <code class="inl">b s h</code>이지 <code class="inl">h²</code>가 아니다. GPU당 바이트 = busbw 계수 × V(§5): all-reduce × 2(n−1)/n, all-gather / reduce-scatter / all-to-all × (n−1)/n, p2p × 1. 그래서 TP의 레이어당 all-reduce 2회 = 2 × 2(n−1)/n·V = <b>4(n−1)/n·V</b>; EP의 all-to-all 2회(k개 토큰 복사) = <b>2(n−1)/n·k·V</b>; PP는 V 하나를 p2p로 넘김.</span></li>
@@ -614,7 +620,56 @@
     <button type="button" role="tab" data-p="PP">PP</button>
     <button type="button" role="tab" data-p="CP">CP</button>
   </div>
-  <p style="font-size:11.5px;color:var(--muted);margin:10px 0 2px"><span class="en">Each tab renders that strategy's transformer layer below — colour = sharded (per-GPU) · grey = replicated / full · faint = not on this GPU. The detailed explanation follows the diagram.</span><span class="ko">각 탭은 그 전략의 트랜스포머 레이어를 아래에 그린다 — 색 = 샤딩(GPU별) · 회색 = 복제 / full · 흐림 = 이 GPU엔 없음. 다이어그램 아래에 자세한 설명.</span></p>
+  <p style="font-size:11.5px;color:var(--muted);margin:10px 0 2px"><span class="en">Each tab renders that strategy's transformer layer below — colour = sharded (per-GPU) · grey = replicated / full · faint = not on this GPU. The detailed explanation follows the diagram.</span><span class="ko">각 탭은 그 전략의 트랜스포머 레이어를 아래에 그린다 — 색 = 샤딩(GPU별) · 회색 = 복제 / full · 흐림 = 이 GPU엔 없음. 다이어그램 아래에 자세한 설명. 그림 위 요약은 이 표 행을 한 번 더 보여준다.</span></p>
+  <div class="psum" data-p="TP">
+    <span class="pk"><b><span class="en">Split</span><span class="ko">방향</span></b> h</span>
+    <span class="pk"><b><span class="en">Layer</span><span class="ko">레이어</span></b> attention + MLP</span>
+    <span class="pk"><b><span class="en">Comm</span><span class="ko">통신</span></b> 2× all-reduce = <code class="inl">4(n−1)/n·V</code></span>
+    <span class="pk"><b><span class="en">Compute</span><span class="ko">연산</span></b> <code class="inl">F_layer/n</code></span>
+    <span class="pk"><b><span class="en">Mem</span><span class="ko">메모리</span></b> <code class="inl">W/n · M_kv/n · A</code></span>
+  </div>
+  <div class="psum" data-p="TPSP" hidden>
+    <span class="pk"><b><span class="en">Split</span><span class="ko">방향</span></b> h + s <span class="muted">(s: LN/dropout)</span></span>
+    <span class="pk"><b><span class="en">Layer</span><span class="ko">레이어</span></b> + LayerNorm / Dropout</span>
+    <span class="pk"><b><span class="en">Comm</span><span class="ko">통신</span></b> all-gather + reduce-scatter = <code class="inl">4(n−1)/n·V</code></span>
+    <span class="pk"><b><span class="en">Compute</span><span class="ko">연산</span></b> <code class="inl">F_layer/n</code></span>
+    <span class="pk"><b><span class="en">Mem</span><span class="ko">메모리</span></b> <code class="inl">W/n · M_kv/n · A/n</code></span>
+  </div>
+  <div class="psum" data-p="EP" hidden>
+    <span class="pk"><b><span class="en">Split</span><span class="ko">방향</span></b> experts <span class="muted">(model dim)</span></span>
+    <span class="pk"><b><span class="en">Layer</span><span class="ko">레이어</span></b> MoE FFN only</span>
+    <span class="pk"><b><span class="en">Comm</span><span class="ko">통신</span></b> 2× all-to-all = <code class="inl">2(n−1)/n·k·V</code></span>
+    <span class="pk"><b><span class="en">Compute</span><span class="ko">연산</span></b> <code class="inl">(8bsh² + F_attn + 16bskh²)/n</code></span>
+    <span class="pk"><b><span class="en">Mem</span><span class="ko">메모리</span></b> <code class="inl">W_exp/n + W_attn · M_kv/n · A</code></span>
+  </div>
+  <div class="psum" data-p="DP" hidden>
+    <span class="pk"><b><span class="en">Split</span><span class="ko">방향</span></b> b <span class="muted">(requests)</span></span>
+    <span class="pk"><b><span class="en">Layer</span><span class="ko">레이어</span></b> none — replicated</span>
+    <span class="pk"><b><span class="en">Comm</span><span class="ko">통신</span></b> <code class="inl">0</code></span>
+    <span class="pk"><b><span class="en">Compute</span><span class="ko">연산</span></b> <code class="inl">F_layer</code> (own batch)</span>
+    <span class="pk"><b><span class="en">Mem</span><span class="ko">메모리</span></b> <code class="inl">W (×1) · M_kv · A</code></span>
+  </div>
+  <div class="psum" data-p="DPEP" hidden>
+    <span class="pk"><b><span class="en">Split</span><span class="ko">방향</span></b> attn = b, experts</span>
+    <span class="pk"><b><span class="en">Layer</span><span class="ko">레이어</span></b> attn = DP / expert = EP</span>
+    <span class="pk"><b><span class="en">Comm</span><span class="ko">통신</span></b> EP all-to-all = <code class="inl">2(n−1)/n·k·V</code></span>
+    <span class="pk"><b><span class="en">Compute</span><span class="ko">연산</span></b> <code class="inl">8bsh² + F_attn + 16bskh²/n</code></span>
+    <span class="pk"><b><span class="en">Mem</span><span class="ko">메모리</span></b> <code class="inl">W_attn(×1) + W_exp/n · M_kv · A</code></span>
+  </div>
+  <div class="psum" data-p="PP" hidden>
+    <span class="pk"><b><span class="en">Split</span><span class="ko">방향</span></b> layers <span class="muted">(depth)</span></span>
+    <span class="pk"><b><span class="en">Layer</span><span class="ko">레이어</span></b> whole-layer groups</span>
+    <span class="pk"><b><span class="en">Comm</span><span class="ko">통신</span></b> <code class="inl">V</code> / boundary (p2p)</span>
+    <span class="pk"><b><span class="en">Compute</span><span class="ko">연산</span></b> <code class="inl">F_layer</code> (owns L/n)</span>
+    <span class="pk"><b><span class="en">Mem</span><span class="ko">메모리</span></b> <code class="inl">W/n · M_kv/n · ~A</code></span>
+  </div>
+  <div class="psum" data-p="CP" hidden>
+    <span class="pk"><b><span class="en">Split</span><span class="ko">방향</span></b> s <span class="muted">(sequence / KV)</span></span>
+    <span class="pk"><b><span class="en">Layer</span><span class="ko">레이어</span></b> attention only</span>
+    <span class="pk"><b><span class="en">Comm</span><span class="ko">통신</span></b> ring <code class="inl">2(n−1)/n·V_kv</code> / Ulysses <code class="inl">2(n−1)/n·V</code></span>
+    <span class="pk"><b><span class="en">Compute</span><span class="ko">연산</span></b> <code class="inl">F_layer/n</code></span>
+    <span class="pk"><b><span class="en">Mem</span><span class="ko">메모리</span></b> <code class="inl">W (×1) · M_kv/n · A/n</code></span>
+  </div>
   <svg id="fig3svg" viewBox="0 0 760 720" role="img" aria-label="per-module per-GPU shapes and communication" style="display:block;max-width:100%;height:auto;margin:6px 0 2px" font-family="-apple-system,system-ui,sans-serif">
     <text x="6" y="16" font-size="10.5" font-weight="700" fill="var(--ink)">One transformer layer, top → bottom — each cell = SHAPE held per GPU (G0 G1 G2 G3)</text>
     <text x="752" y="16" text-anchor="end" font-size="9.5" fill="var(--faint)">W = weights · a = activation</text>
@@ -681,6 +736,45 @@
       <li><span class="en">Attention is still TP-sharded by heads; only the FFN is replaced by experts split across GPUs, so the all-to-all fires on MoE layers only.</span><span class="ko">attention은 여전히 TP가 head로 샤딩; FFN만 GPU에 분산된 expert로 대체돼 all-to-all은 MoE 레이어에서만 발생.</span></li>
       <li><span class="en">Cross-node all-to-all dominates — DeepSeek-V3 measures a "computation-to-communication ratio of approximately 1:1" <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>.</span><span class="ko">노드 간 all-to-all이 지배적 — DeepSeek-V3는 "연산-통신 비 ≈1:1" 측정 <a class="src" href="https://arxiv.org/abs/2412.19437">[8]</a>.</span></li>
     </ul>
+    <svg class="fig" viewBox="0 0 760 262" role="img" aria-label="MoE expert load imbalance: uneven routing, fixed capacity, dropped tokens, idle expert">
+    <text x="6" y="15" font-size="12.5" font-weight="700" fill="var(--ink)">EP — routing is data-dependent, so token counts per expert are uneven</text>
+    <rect x="110" y="26" width="620" height="22" rx="6" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+    <text x="420" y="41" text-anchor="middle" font-size="11" font-weight="600" fill="var(--purple-ink)">router · top-k gate (per token, learned — no balance guarantee)</text>
+    <line x1="150" y1="50" x2="150" y2="68" stroke="var(--purple-bd)" stroke-width="4.5"/>
+    <line x1="330" y1="50" x2="330" y2="68" stroke="var(--purple-bd)" stroke-width="2"/>
+    <line x1="510" y1="50" x2="510" y2="68" stroke="var(--purple-bd)" stroke-width="2.8"/>
+    <line x1="690" y1="50" x2="690" y2="68" stroke="var(--faint)" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="164" y="63" font-size="10" font-weight="700" fill="var(--purple-ink)">×6</text>
+    <text x="344" y="63" font-size="10" font-weight="700" fill="var(--purple-ink)">×2</text>
+    <text x="524" y="63" font-size="10" font-weight="700" fill="var(--purple-ink)">×3</text>
+    <text x="704" y="63" font-size="10" font-weight="700" fill="var(--faint)">×0</text>
+    <line x1="92" y1="128" x2="742" y2="128" stroke="var(--red-bd)" stroke-width="1.3" stroke-dasharray="5 4"/>
+    <text x="742" y="124" text-anchor="end" font-size="9.5" fill="var(--red-ink)">capacity (fixed buffer)</text>
+    <rect x="110" y="70" width="80" height="156" fill="none" stroke="var(--line)"/>
+    <rect x="290" y="70" width="80" height="156" fill="none" stroke="var(--line)"/>
+    <rect x="470" y="70" width="80" height="156" fill="none" stroke="var(--line)"/>
+    <rect x="650" y="70" width="80" height="156" fill="none" stroke="var(--line)"/>
+    <rect x="116" y="202" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <rect x="116" y="178" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <rect x="116" y="154" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <rect x="116" y="130" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <rect x="116" y="106" width="68" height="20" rx="3" fill="var(--red-bg)" stroke="var(--red-bd)" stroke-dasharray="4 3"/>
+    <rect x="116" y="82" width="68" height="20" rx="3" fill="var(--red-bg)" stroke="var(--red-bd)" stroke-dasharray="4 3"/>
+    <text x="150" y="96" text-anchor="middle" font-size="9.5" font-weight="700" fill="var(--red-ink)">dropped</text>
+    <rect x="296" y="202" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <rect x="296" y="178" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <rect x="476" y="202" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <rect x="476" y="178" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <rect x="476" y="154" width="68" height="20" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <text x="690" y="152" text-anchor="middle" font-size="11" font-style="italic" fill="var(--faint)">idle</text>
+    <text x="150" y="242" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">E0 · 6 → drops 2</text>
+    <text x="330" y="242" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">E1 · 2</text>
+    <text x="510" y="242" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">E2 · 3</text>
+    <text x="690" y="242" text-anchor="middle" font-size="11" font-weight="700" fill="var(--muted)">E3 · 0</text>
+    <text x="150" y="256" text-anchor="middle" font-size="9" fill="var(--red-ink)">overflow → residual</text>
+    <text x="690" y="256" text-anchor="middle" font-size="9" fill="var(--faint)">wasted compute</text>
+    </svg>
+    <p class="figcap"><span class="en">Fig — <b>expert load imbalance</b>. The gate routes each token to its top-k experts by content, with <b>no guarantee of balance</b>: here E0 is overloaded while E3 sits idle. Each expert has a <b>fixed capacity</b> (buffer); tokens beyond it are <b>dropped</b> — they skip the FFN and pass through via the residual. Imbalance wastes idle experts' compute and hurts quality (dropped tokens), which is why MoE adds <b>load-balancing losses</b> in training and uses larger capacity factors / drop-free routing at inference. Sources: Switch Transformer [7], DeepSeek-V3 [8].</span><span class="ko">그림 — <b>expert 부하 불균형</b>. 게이트가 각 토큰을 내용에 따라 top-k expert로 보내며 <b>균형을 보장하지 않는다</b>: 여기선 E0이 과부하, E3은 놀고 있다. 각 expert는 <b>고정 capacity</b>(버퍼)를 갖고 초과분은 <b>드롭</b>돼 FFN을 건너뛰고 residual로 통과한다. 불균형은 노는 expert의 연산을 낭비하고 품질을 해쳐(드롭된 토큰), 그래서 MoE는 학습에서 <b>load-balancing loss</b>를 더하고 추론에선 더 큰 capacity factor / drop-free 라우팅을 쓴다. 출처: Switch Transformer [7], DeepSeek-V3 [8].</span></p>
     <div class="usage">
       <p class="ulab"><span class="en">When to use</span><span class="ko">언제 쓰나</span></p>
       <ul>
@@ -1064,7 +1158,7 @@
     for(var i=0;i<d.items.length;i++){ var it=d.items[i], g=mk('g',{}); rows.appendChild(g); y += (it.t==='c')?(it.grid?drawCommGrid(g,y,it):drawComm(g,y,it)):drawModule(g,y,it); }
     el('fig3svg').setAttribute('viewBox','0 0 760 '+(y+6));
     el('commline').textContent=d.commline;
-    var dd=document.querySelectorAll('.pdetail'); for(var di=0;di<dd.length;di++){ dd[di].hidden=(dd[di].getAttribute('data-p')!==p); }
+    var dd=document.querySelectorAll('.pdetail,.psum'); for(var di=0;di<dd.length;di++){ dd[di].hidden=(dd[di].getAttribute('data-p')!==p); }
   }
   var seg=el('pseg');
   function pick(b){var bs=seg.querySelectorAll('button'); for(var i=0;i<bs.length;i++){var on=bs[i]===b; bs[i].classList.toggle('on',on); bs[i].setAttribute('aria-selected',on?'true':'false'); bs[i].tabIndex=on?0:-1;} set(b.getAttribute('data-p'));}
@@ -1082,6 +1176,15 @@
     <li><span class="en"><b>SP (Megatron sequence-parallel)</b> shards only the activations <b>outside</b> the GEMMs — LayerNorm / dropout / residual. Inside attention &amp; MLP it reverts to TP (full hidden). It rides on TP's existing communication (the all-reduce becomes all-gather + reduce-scatter, <b>same bytes</b>), adds <b>zero</b> extra comm, and <b>does not shard the KV cache</b>. Purpose: shrink activation memory, for free, inside a TP group.</span><span class="ko"><b>SP (Megatron 시퀀스 병렬)</b>는 GEMM <b>바깥</b> 활성값만 쪼갬 — LayerNorm / dropout / residual. attention·MLP 안에선 TP로 되돌아감(full hidden). TP의 기존 통신에 얹힘(all-reduce가 all-gather + reduce-scatter로, <b>바이트 동일</b>), <b>추가 통신 0</b>, <b>KV 캐시는 안 쪼갬</b>. 목적: TP 그룹 안에서 공짜로 활성값 메모리 절감.</span></li>
     <li><span class="en"><b>CP (context parallel)</b> keeps the sequence split <b>through attention</b> — the expensive, token-coupling part. Each GPU owns its tokens <i>and their KV</i>, so attention needs a real cross-GPU exchange (ring-p2p of K/V, or Ulysses all-to-all). Purpose: serve a context longer than one GPU can hold, and scale it across GPUs/nodes.</span><span class="ko"><b>CP (context 병렬)</b>는 시퀀스 분할을 <b>attention까지</b> 유지 — 비싸고 토큰이 서로 얽히는 부분. 각 GPU가 자기 토큰 <i>과 그 KV</i>를 가지므로 attention에서 진짜 GPU 간 교환 필요(K/V ring-p2p, 또는 Ulysses all-to-all). 목적: GPU 하나로 못 담는 길이의 컨텍스트 서빙 + GPU/노드 간 확장.</span></li>
     <li><span class="en"><b>One-liner:</b> SP = a free activation-memory cut <i>inside</i> a node; CP = shard the KV/sequence so long context fits and scales out. <b>Terminology trap:</b> "sequence parallelism" is overloaded — Megatron-SP (LayerNorm/dropout only, this box) vs DeepSpeed-<b>Ulysses</b> "sequence parallelism", which is actually a <b>CP</b> method (it shards attention). In vLLM, CP is exposed as <code class="inl">-dcp</code>; Megatron-SP is the internal <code class="inl">torch.compile</code> pass.</span><span class="ko"><b>한 줄:</b> SP = 노드 <i>안</i>에서 공짜 활성값 메모리 절감; CP = KV/시퀀스를 쪼개 롱컨텍스트를 담고 확장. <b>용어 함정:</b> "sequence parallelism"은 중의적 — Megatron-SP(LayerNorm/dropout만, 이 박스) vs DeepSpeed-<b>Ulysses</b> "sequence parallelism"은 사실 <b>CP</b> 계열(attention을 쪼갬). vLLM에선 CP가 <code class="inl">-dcp</code>로 노출; Megatron-SP는 내부 <code class="inl">torch.compile</code> 패스.</span></li>
+  </ul>
+</div>
+
+<div class="callout c-purple" style="margin-top:14px">
+  <span class="tag"><span class="en">Does TP's KV split = DP-attention?</span><span class="ko">TP의 KV 분할 = DP-attention?</span></span>
+  <p style="margin:6px 0"><span class="en"><b>Q.</b> TP shards the KV cache by rank — isn't that the same memory saving as DP-attention removing duplication?</span><span class="ko"><b>Q.</b> TP는 KV 캐시를 rank만큼 쪼개잖아 — 그럼 DP-attention이 중복을 없앤 것과 같은 메모리 절약 아니야?</span></p>
+  <ul style="margin:6px 0 2px;padding-left:20px">
+    <li><span class="en"><b>For MHA, yes — same amount.</b> TP head-slices the KV to <code class="inl">M_kv/n</code>; DP-attention gives each rank the full KV of its own <code class="inl">1/n</code> of requests — also <code class="inl">M_kv/n</code> per GPU. Different mechanism (head-slice + all-reduce vs whole-KV-of-own-requests + no collective), same per-GPU memory.</span><span class="ko"><b>MHA면 그렇다 — 양은 같다.</b> TP는 KV를 head로 잘라 <code class="inl">M_kv/n</code>; DP-attention은 각 rank가 자기 몫 <code class="inl">1/n</code> 요청의 full KV를 가져 역시 GPU당 <code class="inl">M_kv/n</code>. 메커니즘만 다르고(head 분할 + all-reduce vs 자기 요청 full KV + collective 없음) per-GPU 메모리는 동일.</span></li>
+    <li><span class="en"><b>They diverge when TP can't head-shard the KV.</b> <b>GQA with n &gt; #KV-heads</b> replicates the shared KV heads; <b>MLA</b> (one latent per token, not per-head) replicates the KV on <i>every</i> TP rank → no ÷n. <b>That</b> replication is the "duplication" — exactly what <b>DP-attention</b> (own requests) and <b>CP / DCP</b> (shard KV by tokens) remove. So they're equal only when TP head-shards cleanly; for MLA / large MoE, DP-attention / CP is the real KV fix.</span><span class="ko"><b>TP가 KV를 head로 못 쪼갤 때 갈린다.</b> <b>n &gt; #KV-head인 GQA</b>는 공유 KV head를 복제; <b>MLA</b>(토큰당 latent 1개, head별 아님)는 <i>모든</i> TP rank에 KV를 복제 → ÷n 안 됨. <b>그</b> 복제가 "중복"이고, 바로 <b>DP-attention</b>(자기 요청)과 <b>CP / DCP</b>(KV를 토큰으로 샤딩)가 없애는 것. 그래서 TP가 깔끔히 head-shard할 때만 같고, MLA / 대형 MoE에선 DP-attention / CP가 진짜 KV 해법.</span></li>
   </ul>
 </div>
 </section>
