@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tropical reimpl — Phase 2: the prefill-budget knob is not the lever (negative)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<script defer src="../assets/i18n.js"></script>
+<style>
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 80px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+  .crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .crumb a:hover { color: var(--ink); }
+  h1 { font-size: 1.74rem; margin-bottom: 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.26rem; margin-top: 44px; padding-bottom: 8px; border-bottom: 2px solid var(--blue); }
+  h3 { font-size: 1.03rem; margin-top: 24px; }
+  .sub { color: var(--muted); margin-top: 0; font-size: 0.93rem; }
+  p { margin: 12px 0; }
+  ul, ol { margin: 12px 0; padding-left: 22px; } li { margin: 6px 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  p > code, li > code, td > code { background: var(--blue-bg); color: var(--blue-ink); padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.85rem; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .note { border-left: 4px solid var(--amber-bd); background: var(--amber-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--amber-ink); }
+  .note strong { color: var(--amber-ink); }
+  .danger { border-left: 4px solid var(--coral-bd); background: var(--coral-bg); padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; color: var(--coral-ink); }
+  .danger strong { color: var(--coral-ink); }
+  .key { border-left: 4px solid var(--purple-bd); background: var(--purple-bg); padding: 12px 18px; border-radius: 0 10px 10px 0; margin: 16px 0; color: var(--purple-ink); }
+  .key strong { color: var(--purple-ink); }
+  .cap { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 18px; }
+  .fig { width: 100%; height: auto; background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin: 14px 0 2px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  .pchip { display:inline-flex; align-items:center; justify-content:center; min-width:1.7em; height:1.7em; padding:0 .5em; border-radius:999px; background:var(--blue); color:#fff; font-size:0.8rem; font-weight:700; margin-right:6px; }
+  .verdict { font-size:0.82rem; font-weight:700; padding:2px 9px; border-radius:999px; background:var(--coral-bg); color:var(--coral-ink); border:1px solid var(--coral-bd); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <span class="en">Tropical Phase 2 — slack lever (negative)</span><span class="ko">Tropical Phase 2 — slack 레버 (네거티브)</span></p>
+
+<h1><span class="en">Tropical reimpl — Phase 2: the prefill-budget knob is <em>not</em> the lever</span><span class="ko">Tropical 재구현 — Phase 2: prefill 예산 knob은 레버가 <em>아니다</em></span></h1>
+<p class="sub"><span class="en">2026-06-26 · node mi250-052 · 4 × Qwen2.5-7B-Instruct TP=2 · <span class="verdict">honest negative result</span> · continues <a href="tropical-phase05-pool-scaleout.html">Phase 0.5</a></span><span class="ko">2026-06-26 · 노드 mi250-052 · 4 × Qwen2.5-7B-Instruct TP=2 · <span class="verdict">정직한 네거티브 결과</span> · <a href="tropical-phase05-pool-scaleout.html">Phase 0.5</a> 후속</span></p>
+
+<div class="note"><strong><span class="en">The hypothesis under test</span><span class="ko">검증하려던 가설</span></strong><br>
+<span class="en"><a href="tropical-phase05-pool-scaleout.html">Phase 0.5</a> showed the pool is queuing/TTFT-bound with <b>4.4× idle TPOT slack</b>. Tropical's Path ② says: spend that decode slack on the prefill backlog. On ROCm we can't build the full toggle (Path ① needs cross-worker KV transfer — NIXL is NVIDIA-only), so we tested the <b>cheapest config-level proxy</b>: raise each worker's per-step prefill budget (<code>--max-num-batched-tokens</code>) so more of the queue drains per step. If the slack story holds, TTFT should recover while TPOT stays under SLO.</span>
+<span class="ko"><a href="tropical-phase05-pool-scaleout.html">Phase 0.5</a>에서 풀은 큐잉/TTFT-bound이고 <b>TPOT slack 4.4×가 유휴</b>였다. Tropical Path ②는 그 decode slack을 prefill 적체에 쓰라고 한다. ROCm에선 풀 토글을 못 만든다(Path ①은 워커 간 KV 전송 필요 — NIXL은 NVIDIA 전용). 그래서 <b>가장 싼 config-레벨 대용물</b>을 테스트: 워커별 step당 prefill 예산(<code>--max-num-batched-tokens</code>)을 키워 step마다 큐를 더 빼낸다. slack 스토리가 맞다면 TTFT가 회복되고 TPOT는 SLO 아래 머물러야.</span></div>
+
+<h2><span class="pchip">1</span><span class="en">Method</span><span class="ko">방법</span></h2>
+<p><span class="en">Same 4-worker chunked pool + InFaaS dispatcher from Phase 0.5, but the prefill budget swept <b>2048 → 8192 → 16384</b>, at the two overloaded rates <b>24 and 32 rps</b> (where TTFT had exploded). 500-request ShareGPT workload, SLO fixed at the chunked light-load baseline (TTFT ≤ 244 ms, TPOT ≤ 72 ms).</span>
+<span class="ko">Phase 0.5의 4-워커 chunked 풀 + InFaaS 디스패처 그대로, 단 prefill 예산을 <b>2048 → 8192 → 16384</b>로 스윕, 과부하 rate <b>24·32 rps</b>(TTFT가 폭발했던 지점)에서. 500-요청 ShareGPT, SLO는 chunked 경부하 기준(TTFT ≤ 244 ms, TPOT ≤ 72 ms) 고정.</span></p>
+
+<h2><span class="pchip">2</span><span class="en">Result — the knob does nothing good</span><span class="ko">결과 — knob은 좋은 일을 안 한다</span></h2>
+
+<svg class="fig" viewBox="0 0 820 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SLO attainment vs prefill budget. At 24 rps it drops from 75% at budget 2048 to 55% at 8192 and 16384. At 32 rps it is flat near 60%. Bigger budget never helps.">
+  <text x="20" y="22" font-size="12" font-weight="700" fill="#1f1e1b">SLO attainment vs prefill budget (overloaded pool)</text>
+  <line x1="64" y1="40" x2="64" y2="180" stroke="#c2c0b6"/>
+  <line x1="64" y1="180" x2="360" y2="180" stroke="#c2c0b6"/>
+  <g font-size="9" fill="#6b6a63" text-anchor="end">
+    <text x="58" y="44">80%</text>
+    <text x="58" y="91">70%</text><line x1="64" y1="86.7" x2="360" y2="86.7" stroke="#efefe9"/>
+    <text x="58" y="138">60%</text><line x1="64" y1="133.4" x2="360" y2="133.4" stroke="#efefe9"/>
+    <text x="58" y="184">50%</text>
+  </g>
+  <g font-size="9" fill="#6b6a63" text-anchor="middle">
+    <text x="64" y="194">2048</text><text x="212" y="194">8192</text><text x="360" y="194">16384</text>
+    <text x="212" y="212" font-weight="700" fill="#1f1e1b">--max-num-batched-tokens (prefill budget / step)</text>
+  </g>
+  <!-- rate 24: 75,55,55 -> y 63.3,156.7,156.7 -->
+  <polyline points="64,63 212,157 360,157" fill="none" stroke="#6f2a12" stroke-width="2.4"/>
+  <g fill="#6f2a12"><circle cx="64" cy="63" r="3.5"/><circle cx="212" cy="157" r="3.5"/><circle cx="360" cy="157" r="3.5"/></g>
+  <text x="120" y="52" font-size="10" fill="#6f2a12" font-weight="700">24 rps: 75% → 55% (worse!)</text>
+  <!-- rate 32: 60,59,59 -> y 133.4,138,138 -->
+  <polyline points="64,133 212,138 360,138" fill="none" stroke="#0c447c" stroke-width="2.4" stroke-dasharray="5 3"/>
+  <g fill="#0c447c"><circle cx="64" cy="133" r="3.5"/><circle cx="212" cy="138" r="3.5"/><circle cx="360" cy="138" r="3.5"/></g>
+  <text x="470" y="120" font-size="10" fill="#0c447c" font-weight="700">32 rps: ~60% flat</text>
+  <text x="470" y="150" font-size="10.5" fill="#3f1f72" font-weight="700">TPOT stayed ≤ SLO throughout</text>
+  <text x="470" y="164" font-size="10.5" fill="#3f1f72">(p90 17→18ms). The slack was</text>
+  <text x="470" y="178" font-size="10.5" fill="#3f1f72">never the constraint to relax.</text>
+</svg>
+<p class="cap"><span class="en">Bigger prefill budget never improves SLO; at 24 rps it hurts. Generated by <code>analyze_slo.py</code> over <code>results_p2/</code>.</span><span class="ko">예산을 키워도 SLO 개선 0; 24 rps에선 악화. <code>results_p2/</code>에 <code>analyze_slo.py</code>로 산출.</span></p>
+
+<table>
+  <tr><th class="num"><span class="en">budget</span><span class="ko">예산</span></th><th class="num">rate</th><th class="num">TTFT p90</th><th class="num">TPOT p90</th><th class="num">TTFT%</th><th class="num">SLO%</th></tr>
+  <tr><td class="num">2048</td><td class="num">24</td><td class="num">8047</td><td class="num">17.0</td><td class="num">75</td><td class="num">75</td></tr>
+  <tr><td class="num">8192</td><td class="num">24</td><td class="num">13734</td><td class="num">18.3</td><td class="num">55</td><td class="num">55</td></tr>
+  <tr><td class="num">16384</td><td class="num">24</td><td class="num">13546</td><td class="num">18.3</td><td class="num">55</td><td class="num">55</td></tr>
+  <tr><td class="num">2048</td><td class="num">32</td><td class="num">11582</td><td class="num">16.7</td><td class="num">60</td><td class="num">60</td></tr>
+  <tr><td class="num">8192</td><td class="num">32</td><td class="num">11636</td><td class="num">17.4</td><td class="num">59</td><td class="num">59</td></tr>
+  <tr><td class="num">16384</td><td class="num">32</td><td class="num">12312</td><td class="num">17.8</td><td class="num">59</td><td class="num">59</td></tr>
+</table>
+<p class="cap"><span class="en">Latencies in ms. Monotonic: more budget → flat-to-worse TTFT, TPOT creeps up slightly but stays far under its 72 ms SLO.</span><span class="ko">레이턴시 ms. 단조적: 예산↑ → TTFT 평탄~악화, TPOT는 약간 오르나 72 ms SLO 한참 아래.</span></p>
+
+<h2><span class="pchip">3</span><span class="en">Why it failed — and the lesson</span><span class="ko">왜 실패했나 — 그리고 교훈</span></h2>
+<div class="danger"><strong><span class="en">Reshuffling a step ≠ adding capacity</span><span class="ko">step 재배치 ≠ 용량 추가</span></strong><br>
+<span class="en">A bigger <code>max-num-batched-tokens</code> just makes each scheduler step process more tokens — so each step takes <i>longer</i>, without raising aggregate throughput. Under genuine overload (arrival &gt; service rate), the queue grows regardless; a slower-but-bigger step can even make TTFT worse (24 rps: 75% → 55%). The decode TPOT slack was real, but a single homogeneous engine has no way to convert "spare decode budget" into "more prefill capacity" — within one step, prefill and decode draw from the <i>same</i> compute, so spending more on prefill doesn't create a second worker.</span>
+<span class="ko"><code>max-num-batched-tokens</code>를 키우면 step당 처리 토큰만 늘어 — 각 step이 <i>더 길어지고</i> aggregate throughput은 안 오른다. 진짜 과부하(도착 &gt; 처리율)에선 큐가 어쨌든 자라고, 느리지만 큰 step은 TTFT를 오히려 악화(24 rps: 75% → 55%)시킬 수 있다. decode TPOT slack은 실재했지만, <b>단일 동질 엔진</b>은 "남는 decode 예산"을 "더 많은 prefill 용량"으로 바꿀 길이 없다 — 한 step 안에서 prefill과 decode가 <i>같은</i> 연산을 나눠 쓰니, prefill에 더 쓴다고 두 번째 워커가 생기진 않는다.</span></div>
+
+<div class="key"><strong><span class="en">What this confirms about Tropical</span><span class="ko">이게 Tropical에 대해 확인해 주는 것</span></strong><br>
+<span class="en">Tropical's gain is <b>architectural, not a tuning trick</b>. Its value comes from <b>dedicated prefill workers acting as "interference inhibitors"</b> — separate hardware that absorbs the heavy prefill so decode workers stay clean — plus slack-guarded routing across those <i>heterogeneous</i> workers. That genuinely requires the prefill→decode <b>KV handoff</b> (Path ①). Our negative result is the proof: the part you <i>can</i> do cheaply on a homogeneous ROCm pool (a config knob) captures none of the benefit. The contribution is the multiplexing structure, and you can't shortcut it.</span>
+<span class="ko">Tropical의 이득은 <b>튜닝 트릭이 아니라 아키텍처</b>다. 그 가치는 <b>전용 prefill 워커가 "간섭 억제기"</b>로 동작(무거운 prefill을 흡수해 decode 워커를 깨끗이 유지)하는 것 + 그 <i>이종</i> 워커들에 걸친 slack-가드 라우팅에서 온다. 이건 prefill→decode <b>KV 핸드오프</b>(Path ①)가 실제로 필요하다. 우리 네거티브 결과가 그 증거다: 동질 ROCm 풀에서 <i>싸게</i> 할 수 있는 부분(config knob)은 이득을 전혀 못 잡는다. 기여는 멀티플렉싱 <b>구조</b>이고, 지름길이 없다.</span></div>
+
+<h3><span class="en">Where the project goes next</span><span class="ko">프로젝트의 다음 행선지</span></h3>
+<ul>
+  <li><span class="en"><b>Heterogeneous pool on ROCm</b>: split the 4 workers into dedicated prefill vs decode, and get a <i>working</i> ROCm KV connector for the handoff (the open question from the <a href="mi250-pd-bidirectional-tp4.html">MI250 PDD</a> log). Then the dispatcher's slack guard finally has two worker classes to route between — the real toggle.</span>
+  <span class="ko"><b>ROCm 이종 풀</b>: 4 워커를 전용 prefill vs decode로 나누고, 핸드오프용 <i>동작하는</i> ROCm KV 커넥터 확보(<a href="mi250-pd-bidirectional-tp4.html">MI250 PDD</a> 로그의 미해결 질문). 그러면 디스패처의 slack 가드가 드디어 두 워커 클래스를 라우팅 — 진짜 토글.</span></li>
+  <li><span class="en"><b>Or move Path ① to NVIDIA</b> (NIXL/Mooncake KV transfer work there) and keep ROCm for the homogeneous baselines.</span>
+  <span class="ko"><b>또는 Path ①을 NVIDIA로</b>(NIXL/Mooncake KV 전송이 동작) 옮기고 ROCm은 동질 베이스라인용으로.</span></li>
+  <li><span class="en"><b>Reach the interference regime first</b>: a heavier model / much longer outputs so decode batches actually pressure TPOT — otherwise even a correct toggle has little interference to arbitrate.</span>
+  <span class="ko"><b>먼저 간섭 체제 도달</b>: 더 무거운 모델 / 훨씬 긴 출력으로 decode 배치가 실제로 TPOT를 누르게 — 아니면 올바른 토글이라도 중재할 간섭이 거의 없다.</span></li>
+</ul>
+
+<footer><span class="en">Tropical reimpl · Phase 2 (negative) · 2026-06-26 · mi250-052 · harness ~/tropical-bench · prev: <a href="tropical-phase05-pool-scaleout.html">Phase 0.5</a> · <a href="tropical-phase0-baseline-bench.html">Phase 0</a> · paper note: <a href="../study/tropical-slo-aware-multiplexing.html">study/tropical-slo-aware-multiplexing</a></span><span class="ko">Tropical 재구현 · Phase 2 (네거티브) · 2026-06-26 · mi250-052 · 하네스 ~/tropical-bench · 이전: <a href="tropical-phase05-pool-scaleout.html">Phase 0.5</a> · <a href="tropical-phase0-baseline-bench.html">Phase 0</a> · 논문 노트: <a href="../study/tropical-slo-aware-multiplexing.html">study/tropical-slo-aware-multiplexing</a></span></footer>
+
+</div>
+</body>
+</html>
