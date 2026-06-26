@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Parallelism × communication — DP/TP/EP, collectives, vLLM code, and the hardware path</title>
+<title>Parallelism in LLM inference — Deep dive</title>
 <link rel="stylesheet" href="../assets/theme.css">
 <link rel="stylesheet" href="../assets/i18n.css">
 <style>
@@ -91,26 +91,23 @@
 <body>
 <div class="wrap">
 
-<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Inference</span><span class="ko">추론</span></a></p>
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Inference</span><span class="ko">추론</span></a> · <span class="en">Parallelism deep dive</span><span class="ko">병렬화 딥다이브</span></p>
 
 <header class="hero">
   <h1>
-    <span class="en">Parallelism × communication — DP/TP/EP/CP, the collectives, vLLM's code path, and the hardware underneath</span>
-    <span class="ko">병렬화 × 통신 — DP/TP/EP/CP, 통신 primitive, vLLM 코드 경로, 그 아래 하드웨어</span>
+    <span class="en">Parallelism in LLM inference — Deep dive</span>
+    <span class="ko">Parallelism in LLM inference — Deep dive</span>
   </h1>
   <p class="lede">
-    <span class="en">A full path from theory to silicon, with <b>animated</b> diagrams: (1) the communication primitives (all-reduce, all-gather, reduce-scatter, all-to-all, p2p…) and their cost; (2) what DP/TP/EP/CP each split, compute, and which collective they need where; (3) how vLLM's main branch wires that down to the actual <code>ncclAllReduce</code> call (with permalinks); (4) which physical link the call hits, the max bandwidth, and how to check the wiring on a real machine (with a live MI250 example). Concise, diagram-first, every claim sourced.</span>
-    <span class="ko">이론에서 실리콘까지 한 줄로, <b>애니메이션</b> 그림과 함께: (1) 통신 primitive(all-reduce·all-gather·reduce-scatter·all-to-all·p2p…)와 비용; (2) DP/TP/EP/CP가 각각 무엇을 쪼개고 어떤 연산·통신을 하는지; (3) vLLM main이 그걸 실제 <code>ncclAllReduce</code> 호출까지 어떻게 잇는지(permalink); (4) 그 호출이 어떤 물리 링크를 타고 최대 대역폭은 얼마이며 실제 장비에서 배선을 어떻게 확인하는지(MI250 실측 포함). 간결·그림 중심·전부 출처.</span>
+    <span class="en">A diagram-first walk through inference parallelism: (1) the communication primitives (all-reduce, all-gather, reduce-scatter, all-to-all, p2p) and their cost; (2) what DP / TP / EP / CP each split, compute, and communicate — with an interactive per-strategy diagram and a per-GPU cost model; (3) each strategy on the metal — its NCCL/RCCL collective, the link it rides, its ceiling, and how to check it. Presentation extract (§1–3) of the full note, which also covers vLLM's code path and the hardware deep-dive.</span>
+    <span class="ko">그림 중심으로 보는 추론 병렬화: (1) 통신 primitive(all-reduce·all-gather·reduce-scatter·all-to-all·p2p)와 비용; (2) DP / TP / EP / CP가 각각 무엇을 쪼개고·계산하고·통신하는지 — 전략별 인터랙티브 다이어그램 + GPU당 비용 모델; (3) 각 전략을 하드웨어 위에서 — NCCL/RCCL collective, 타는 링크, 성능 상한, 확인법. 풀 노트의 §1–3 발표용 발췌(풀 노트는 vLLM 코드 경로와 하드웨어 딥다이브까지 포함).</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">NCCL collectives</a></span>
-    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/6607a80dabfa03932515808895b016d2666b0a55">vLLM code @ 6607a80</a></span>
-    <span class="badge"><span class="en">Deep dive · code-walk</span><span class="ko">딥다이브 · 코드 분석</span></span>
+    <span class="badge"><a href="parallelism-collective-communication.html"><span class="en">full note (+ code path, hardware)</span><span class="ko">풀 노트 (코드 경로·하드웨어 포함)</span></a></span>
+    <span class="badge"><span class="en">Deep dive · presentation</span><span class="ko">딥다이브 · 발표</span></span>
   </div>
   <p class="post-meta">
-    <time datetime="2026-06-16">2026-06-16</time>
-    <span class="sep">·</span>
-    <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
     <time datetime="2026-06-26">2026-06-26</time>
   </p>
 </header>
@@ -121,9 +118,7 @@
     <li><a href="#s1"><span class="en">1. Communication primitives &amp; their cost</span><span class="ko">1. 통신 primitive와 비용</span></a></li>
     <li><a href="#s2"><span class="en">2. DP / TP / EP / CP — what each splits &amp; which collective</span><span class="ko">2. DP / TP / EP / CP — 무엇을 쪼개고 어떤 통신</span></a></li>
     <li><a href="#s3"><span class="en">3. Each strategy on the metal — comm stack, ceiling, how to check</span><span class="ko">3. 각 전략을 하드웨어 위에서 — 통신 스택·성능 상한·확인법</span></a></li>
-    <li><a href="#s4"><span class="en">4. vLLM code path (permalinks)</span><span class="ko">4. vLLM 코드 경로 (permalink)</span></a></li>
-    <li><a href="#s5"><span class="en">5. The hardware underneath + how to check</span><span class="ko">5. 그 아래 하드웨어 + 확인법</span></a></li>
-    <li><a href="#s6"><span class="en">6. Sources</span><span class="ko">6. 출처</span></a></li>
+    <li><a href="#s4"><span class="en">4. Sources</span><span class="ko">4. 출처</span></a></li>
   </ol>
 </nav>
 
@@ -134,12 +129,10 @@
     <li><span class="en"><b>EP</b> (MoE) — <b>2 all-to-all / MoE layer</b> (dispatch + combine); the cross-node bottleneck.</span><span class="ko"><b>EP</b>(MoE) — <b>MoE 레이어당 all-to-all 2회</b>(dispatch+combine); 노드 간 핵심 병목.</span></li>
     <li><span class="en"><b>DP</b> — <b>~no collective</b> (replicas independent); vLLM DP-attention adds a tiny coordination all-reduce + lockstep dummy passes.</span><span class="ko"><b>DP</b> — <b>collective 거의 없음</b>(replica 독립); vLLM DP-attention은 작은 조정 all-reduce + lockstep dummy pass 추가.</span></li>
     <li><span class="en"><b>CP</b> (long context) — shards the sequence; attention swaps K/V via <b>ring p2p</b> or <b>all-to-all</b> (Ulysses); in vLLM = <code>-dcp</code>.</span><span class="ko"><b>CP</b>(롱컨텍스트) — 시퀀스를 쪼갬; attention이 K/V를 <b>ring p2p</b> 또는 <b>all-to-all</b>(Ulysses)로 교환; vLLM에선 <code>-dcp</code>.</span></li>
-    <li><span class="en"><b>Code path:</b> layer → <code>tensor_model_parallel_all_reduce</code> → <code>GroupCoordinator.all_reduce</code> → custom-AR / pynccl → <code>ncclAllReduce</code> (RCCL same on AMD).</span><span class="ko"><b>코드 경로:</b> layer → <code>tensor_model_parallel_all_reduce</code> → <code>GroupCoordinator.all_reduce</code> → custom-AR / pynccl → <code>ncclAllReduce</code> (AMD는 RCCL 동일).</span></li>
     <li><span class="en"><b>Hardware:</b> NCCL picks the link per GPU-pair at init (P2P→SHM→NET); check with <code>nvidia-smi topo -m</code> / <code>rocm-smi --shownodesbw</code> / <code>ibstat</code>, measure with nccl-tests <b>busbw</b>.</span><span class="ko"><b>하드웨어:</b> NCCL이 init 때 GPU 쌍별 링크 선택(P2P→SHM→NET); <code>nvidia-smi topo -m</code> / <code>rocm-smi --shownodesbw</code> / <code>ibstat</code>로 확인, nccl-tests <b>busbw</b>로 측정.</span></li>
   </ul>
 
 </div>
-
 
 <section id="s1">
 <h2><span class="num">1</span><span class="en">Communication primitives &amp; their cost</span><span class="ko">통신 primitive와 비용</span></h2>
@@ -453,7 +446,7 @@
 <ul style="margin:12px 0;padding-left:22px;line-height:1.65">
 <li><span class="en"><b>Is tree always better than ring? No.</b> A tree has fewer hops (O(log N) vs O(N)) → it wins for <b>small</b> messages (α-term, blue). But a simple tree ships the <b>full S</b> every hop, so for <b>large</b> messages it moves ≈ log₂N × more bytes than a ring (β-term, green) and <b>ring wins</b>. (Slide S above ~2 MiB to watch the flip.)</span><span class="ko"><b>tree가 항상 ring보다 좋은가? 아니다.</b> tree는 홉이 적어(O(log N) vs O(N)) <b>작은</b> 메시지에서 유리(α 항, 파랑). 그러나 단순 tree는 매 홉 <b>전체 S</b>를 보내므로 <b>큰</b> 메시지에선 ring보다 ≈ log₂N배 많은 바이트를 옮겨(β 항, 초록) <b>ring이 이긴다</b>. (S를 ~2 MiB 위로 끌면 역전.)</span></li>
 <li><span class="en"><b>Bottom line:</b> small S / many GPUs → <b>tree</b> (latency); large S → <b>ring</b> (bandwidth). The big tensors TP &amp; EP move every layer are large, so a ring — or NCCL’s bandwidth-optimal double-tree — carries them. NCCL auto-picks per size &amp; N.</span><span class="ko"><b>요점:</b> 작은 S / 많은 GPU → <b>tree</b>(지연); 큰 S → <b>ring</b>(대역폭). TP·EP가 매 레이어 옮기는 텐서는 크므로 ring(또는 NCCL의 대역폭 최적 double-tree)이 담당. NCCL이 크기·N로 자동 선택.</span></li>
-<li><span class="en">(α and B are illustrative; real values vary by hardware — measure with nccl-tests <b>busbw</b>, §5.)</span><span class="ko">(α·B는 예시값; 실제는 하드웨어마다 다름 — §5의 nccl-tests <b>busbw</b>로 측정.)</span></li>
+<li><span class="en">(α and B are illustrative; real values vary by hardware — measure with nccl-tests <b>busbw</b>, <a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>.)</span><span class="ko">(α·B는 예시값; 실제는 하드웨어마다 다름 — <a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>의 nccl-tests <b>busbw</b>로 측정.)</span></li>
 </ul>
 </section>
 
@@ -604,7 +597,7 @@
 <li style="margin:8px 0"><span class="en"><b>TP shards <code class="inl">M_kv</code> by heads — but only down to #KV-heads.</b> For MHA it's a clean ÷n, giving the <b>same per-GPU KV as DP-attention</b> (just head-sliced instead of split by request). But <b>GQA with n &gt; #KV-heads</b> must replicate the shared KV heads, and <b>MLA</b> (one latent per token, not per-head) replicates the KV on <i>every</i> TP rank → no ÷n. That replication is exactly what <b>DP-attention</b> (each rank owns different requests) and <b>CP / DCP</b> (shard KV by tokens) remove — the reason they're the KV fix for MLA / large MoE.</span><span class="ko"><b>TP는 <code class="inl">M_kv</code>를 head로 샤딩 — 단 #KV-head까지만.</b> MHA면 깔끔한 ÷n이라 <b>DP-attention과 per-GPU KV가 동일</b>(요청별이 아니라 head로 쪼갤 뿐). 하지만 <b>n &gt; #KV-head인 GQA</b>는 공유 KV head를 복제해야 하고, <b>MLA</b>(토큰당 latent 1개, head별 아님)는 <i>모든</i> TP rank에 KV를 복제 → ÷n 안 됨. 이 복제를 없애는 게 바로 <b>DP-attention</b>(각 rank가 다른 요청 담당)과 <b>CP / DCP</b>(KV를 토큰으로 샤딩) — MLA / 대형 MoE의 KV 해법인 이유.</span></li>
 <li style="margin:8px 0"><span class="en"><b>Activations <code class="inl">A</code></b> ≈ <code class="inl">b s h</code> — the live working set (the residual stream <code class="inl">[b,s,h]</code> + a transient MLP-inner <code class="inl">[b,s,4h]</code> ~ a few × b s h). <b>Crucially NOT × L</b>: inference has no backward pass, so only the current layer's activations + the residual are resident → <b>A ≪ W</b>, and ≪ <code class="inl">M_kv</code> at long context. TP keeps A full; SP and CP shard it ÷n; PP holds ~A × in-flight microbatches.</span><span class="ko"><b>활성값 <code class="inl">A</code></b> ≈ <code class="inl">b s h</code> — 살아있는 작업셋(residual stream <code class="inl">[b,s,h]</code> + 일시적 MLP-inner <code class="inl">[b,s,4h]</code> ~ 수 배 × b s h). <b>중요: × L 아님</b>: 추론은 backward가 없어 현재 레이어 활성값 + residual만 상주 → <b>A ≪ W</b>, 롱컨텍스트에선 ≪ <code class="inl">M_kv</code>. TP는 A를 full 유지; SP·CP는 ÷n 샤딩; PP는 ~A × in-flight 마이크로배치.</span></li>
 <li style="margin:8px 0"><span class="en"><b>Units.</b> Compute is per-GPU <i>per layer</i> (× L for the whole model); memory is per-GPU <i>whole model</i>. Each strategy then divides or replicates these by <code class="inl">n</code> as the table shows.</span><span class="ko"><b>단위.</b> 연산은 GPU당 <i>레이어당</i>(전체 모델은 × L); 메모리는 GPU당 <i>전체 모델</i>. 각 전략이 이를 표대로 <code class="inl">n</code>으로 나누거나 복제.</span></li>
-<li style="margin:8px 0"><span class="en"><b>Comm moves activations, never weights.</b> Weights stay put (sharded / replicated on each GPU); only the activation <b><code class="inl">V = b s h</code></b> (or <b><code class="inl">V_kv = b s h_kv</code></b> for CP's K/V) crosses GPUs — that's why comm ∝ <code class="inl">b s h</code>, not <code class="inl">h²</code>. Per-GPU bytes = busbw factor × V (§5): all-reduce × 2(n−1)/n, all-gather / reduce-scatter / all-to-all × (n−1)/n, p2p × 1. So TP's 2 all-reduce/layer = 2 × 2(n−1)/n·V = <b>4(n−1)/n·V</b>; EP's 2 all-to-all of k token-copies = <b>2(n−1)/n·k·V</b>; PP hands off one V by p2p.</span><span class="ko"><b>통신은 활성값을 옮기지 가중치는 안 옮긴다.</b> 가중치는 각 GPU에 샤딩/복제된 채 그대로 있고, 활성값 <b><code class="inl">V = b s h</code></b>(CP의 K/V는 <b><code class="inl">V_kv = b s h_kv</code></b>)만 GPU 사이를 건넌다 — 그래서 통신량 ∝ <code class="inl">b s h</code>이지 <code class="inl">h²</code>가 아니다. GPU당 바이트 = busbw 계수 × V(§5): all-reduce × 2(n−1)/n, all-gather / reduce-scatter / all-to-all × (n−1)/n, p2p × 1. 그래서 TP의 레이어당 all-reduce 2회 = 2 × 2(n−1)/n·V = <b>4(n−1)/n·V</b>; EP의 all-to-all 2회(k개 토큰 복사) = <b>2(n−1)/n·k·V</b>; PP는 V 하나를 p2p로 넘김.</span></li>
+<li style="margin:8px 0"><span class="en"><b>Comm moves activations, never weights.</b> Weights stay put (sharded / replicated on each GPU); only the activation <b><code class="inl">V = b s h</code></b> (or <b><code class="inl">V_kv = b s h_kv</code></b> for CP's K/V) crosses GPUs — that's why comm ∝ <code class="inl">b s h</code>, not <code class="inl">h²</code>. Per-GPU bytes = busbw factor × V (<a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>): all-reduce × 2(n−1)/n, all-gather / reduce-scatter / all-to-all × (n−1)/n, p2p × 1. So TP's 2 all-reduce/layer = 2 × 2(n−1)/n·V = <b>4(n−1)/n·V</b>; EP's 2 all-to-all of k token-copies = <b>2(n−1)/n·k·V</b>; PP hands off one V by p2p.</span><span class="ko"><b>통신은 활성값을 옮기지 가중치는 안 옮긴다.</b> 가중치는 각 GPU에 샤딩/복제된 채 그대로 있고, 활성값 <b><code class="inl">V = b s h</code></b>(CP의 K/V는 <b><code class="inl">V_kv = b s h_kv</code></b>)만 GPU 사이를 건넌다 — 그래서 통신량 ∝ <code class="inl">b s h</code>이지 <code class="inl">h²</code>가 아니다. GPU당 바이트 = busbw 계수 × V(<a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>): all-reduce × 2(n−1)/n, all-gather / reduce-scatter / all-to-all × (n−1)/n, p2p × 1. 그래서 TP의 레이어당 all-reduce 2회 = 2 × 2(n−1)/n·V = <b>4(n−1)/n·V</b>; EP의 all-to-all 2회(k개 토큰 복사) = <b>2(n−1)/n·k·V</b>; PP는 V 하나를 p2p로 넘김.</span></li>
 <li style="margin:8px 0"><span class="en"><b>The trade-offs jump out.</b> TP divides compute, weights <b>and</b> KV by n · DP replicates weights (×1) and runs full compute on its own batch — pure throughput · EP compute ∝ active <b>k</b> but memory ∝ total <b>e</b> · PP divides weights by depth (L/n) · CP replicates weights but divides the <b>KV</b> by n — its whole reason for existing.</span><span class="ko"><b>트레이드오프가 드러난다.</b> TP는 연산·가중치·KV를 모두 n으로 나눔 · DP는 가중치를 복제(×1)하고 자기 배치로 full 연산 — 순수 처리량 · EP는 연산이 활성 <b>k</b>·메모리가 전체 <b>e</b>에 비례 · PP는 가중치를 깊이(L/n)로 나눔 · CP는 가중치는 복제하되 <b>KV</b>를 n으로 나눔 — 존재 이유.</span></li>
 </ul>
 </div>
@@ -1199,7 +1192,7 @@
 
 <section id="s3">
 <h2><span class="num">3</span><span class="en">Each strategy on the metal — comm stack, ceiling, how to check</span><span class="ko">각 전략을 하드웨어 위에서 — 통신 스택·성능 상한·확인법</span></h2>
-<p><span class="en">Every strategy's communication runs through the <b>same library</b> — <b>NCCL</b> on NVIDIA, <b>RCCL</b> on AMD (a drop-in, NCCL-API-compatible port; PyTorch's <code class="inl">nccl</code> backend maps to RCCL on ROCm, same op names). What changes per strategy is <b>(a)</b> which collective fires, <b>(b)</b> which physical link it lands on, and therefore <b>(c)</b> what caps its speed. This table maps each §2 strategy onto that stack; for <i>how</i> NCCL picks the link and the peak-bandwidth numbers, see §5.</span><span class="ko">모든 전략의 통신은 <b>같은 라이브러리</b>를 탄다 — NVIDIA는 <b>NCCL</b>, AMD는 <b>RCCL</b>(NCCL API 호환 포팅; ROCm에선 PyTorch <code class="inl">nccl</code> 백엔드가 RCCL로 매핑, op 이름 동일). 전략별로 달라지는 건 <b>(a)</b> 어떤 collective가 도는지, <b>(b)</b> 어떤 물리 링크를 타는지, 그래서 <b>(c)</b> 무엇이 속도를 묶는지다. 아래 표는 §2의 각 전략을 그 스택에 대응시킨 것 — NCCL이 링크를 <i>어떻게</i> 고르는지와 피크 대역폭 수치는 §5 참고.</span></p>
+<p><span class="en">Every strategy's communication runs through the <b>same library</b> — <b>NCCL</b> on NVIDIA, <b>RCCL</b> on AMD (a drop-in, NCCL-API-compatible port; PyTorch's <code class="inl">nccl</code> backend maps to RCCL on ROCm, same op names). What changes per strategy is <b>(a)</b> which collective fires, <b>(b)</b> which physical link it lands on, and therefore <b>(c)</b> what caps its speed. This table maps each §2 strategy onto that stack; for <i>how</i> NCCL picks the link and the peak-bandwidth numbers, see <a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>.</span><span class="ko">모든 전략의 통신은 <b>같은 라이브러리</b>를 탄다 — NVIDIA는 <b>NCCL</b>, AMD는 <b>RCCL</b>(NCCL API 호환 포팅; ROCm에선 PyTorch <code class="inl">nccl</code> 백엔드가 RCCL로 매핑, op 이름 동일). 전략별로 달라지는 건 <b>(a)</b> 어떤 collective가 도는지, <b>(b)</b> 어떤 물리 링크를 타는지, 그래서 <b>(c)</b> 무엇이 속도를 묶는지다. 아래 표는 §2의 각 전략을 그 스택에 대응시킨 것 — NCCL이 링크를 <i>어떻게</i> 고르는지와 피크 대역폭 수치는 <a class="src" href="parallelism-collective-communication.html#s5">full note §5</a> 참고.</span></p>
 
 <div style="overflow-x:auto">
 <table>
@@ -1261,10 +1254,10 @@
 </tr>
 </table>
 </div>
-<p class="figcap"><span class="en">Each §2 strategy → its NCCL/RCCL collective, the link it lands on, and the command that measures it. Op names are identical on RCCL (AMD). busbw factors per <a class="src" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">nccl-tests PERFORMANCE.md</a>; peak-BW table in §5.</span><span class="ko">§2 각 전략 → 그 NCCL/RCCL collective, 타는 링크, 측정 명령. op 이름은 RCCL(AMD)에서 동일. busbw 계수는 <a class="src" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">nccl-tests PERFORMANCE.md</a>; 피크 BW 표는 §5.</span></p>
+<p class="figcap"><span class="en">Each §2 strategy → its NCCL/RCCL collective, the link it lands on, and the command that measures it. Op names are identical on RCCL (AMD). busbw factors per <a class="src" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">nccl-tests PERFORMANCE.md</a>; peak-BW table in <a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>.</span><span class="ko">§2 각 전략 → 그 NCCL/RCCL collective, 타는 링크, 측정 명령. op 이름은 RCCL(AMD)에서 동일. busbw 계수는 <a class="src" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">nccl-tests PERFORMANCE.md</a>; 피크 BW 표는 <a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>.</span></p>
 
 <h3><span class="en">Reading the ceiling</span><span class="ko">성능 상한 읽는 법</span></h3>
-<p><span class="en">The ceiling of any strategy = <b>the peak BW of the link its collective lands on</b> (§5 table) × the busbw factor. Two bands dominate: <b>intra-node</b> NVLink/xGMI ≈ 450–900 GB/s, and <b>cross-node</b> NIC ≈ 25–100 GB/s — roughly a <b>10× cliff</b>. So the practical rule:</span><span class="ko">어떤 전략이든 상한 = <b>그 collective가 타는 링크의 피크 BW</b>(§5 표) × busbw 계수. 두 대역이 지배적: <b>노드 내</b> NVLink/xGMI ≈ 450–900 GB/s, <b>노드 간</b> NIC ≈ 25–100 GB/s — 대략 <b>10× 절벽</b>. 그래서 실전 규칙:</span></p>
+<p><span class="en">The ceiling of any strategy = <b>the peak BW of the link its collective lands on</b> (<a class="src" href="parallelism-collective-communication.html#s5">full note §5</a> table) × the busbw factor. Two bands dominate: <b>intra-node</b> NVLink/xGMI ≈ 450–900 GB/s, and <b>cross-node</b> NIC ≈ 25–100 GB/s — roughly a <b>10× cliff</b>. So the practical rule:</span><span class="ko">어떤 전략이든 상한 = <b>그 collective가 타는 링크의 피크 BW</b>(<a class="src" href="parallelism-collective-communication.html#s5">full note §5</a> 표) × busbw 계수. 두 대역이 지배적: <b>노드 내</b> NVLink/xGMI ≈ 450–900 GB/s, <b>노드 간</b> NIC ≈ 25–100 GB/s — 대략 <b>10× 절벽</b>. 그래서 실전 규칙:</span></p>
 <ul>
   <li><span class="en"><b>TP / TP+SP</b> move the activation every layer with all-reduce — BW-heavy, so they must stay <b>intra-node</b>.</span><span class="ko"><b>TP / TP+SP</b>는 레이어마다 all-reduce로 activation을 옮김 — BW 부담이 커서 <b>노드 내</b>에 머물러야 함.</span></li>
   <li><span class="en"><b>EP</b>'s all-to-all is the <b>cross-node pain point</b> (the 1:1 comp:comm) — it lives or dies on NIC bandwidth.</span><span class="ko"><b>EP</b>의 all-to-all이 <b>노드 간 고통 지점</b>(1:1 연산:통신) — NIC 대역폭에 생사가 걸림.</span></li>
@@ -1277,7 +1270,7 @@ all_reduce_perf      -b 8 -e 4G -f 2 -g 8     # TP  (and TP+SP all-reduce-equiva
 all_gather_perf  /  reduce_scatter_perf       # TP+SP halves
 alltoall_perf        -b 8 -e 4G -f 2 -g 8     # EP, DP+EP, Ulysses-CP
 sendrecv_perf                                 # PP, ring-CP
-#   → read the 'busbw' column, compare to the link's peak (§5)
+#   → read the 'busbw' column, compare to the link's peak (<a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>)
 
 # 2) WHICH physical link + algorithm did NCCL/RCCL pick?
 NCCL_DEBUG=INFO ...   # grep: via P2P/IPC (NVLink|PCIe) · via SHM · via NET/IB/GDRDMA
@@ -1285,83 +1278,12 @@ NCCL_DEBUG=INFO ...   # grep: via P2P/IPC (NVLink|PCIe) · via SHM · via NET/IB
 
 # 3) Topology / link rate  (AMD: same flags, RCCL honors NCCL_DEBUG):
 nvidia-smi topo -m         rocm-smi --showtopotype --shownodesbw         ibstat</code></pre>
-<p class="muted"><span class="en">RCCL is API-compatible: the binaries are <code class="inl">rccl-tests</code> with the same names, and <code class="inl">NCCL_DEBUG</code> works unchanged. The full peak-BW table, the P2P→SHM→NET selection walk, and a live MI250 capture are in §5.</span><span class="ko">RCCL은 API 호환: 바이너리는 같은 이름의 <code class="inl">rccl-tests</code>, <code class="inl">NCCL_DEBUG</code>도 그대로 동작. 전체 피크 BW 표, P2P→SHM→NET 선택 과정, MI250 실측은 §5에 있음.</span></p>
+<p class="muted"><span class="en">RCCL is API-compatible: the binaries are <code class="inl">rccl-tests</code> with the same names, and <code class="inl">NCCL_DEBUG</code> works unchanged. The full peak-BW table, the P2P→SHM→NET selection walk, and a live MI250 capture are in <a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>.</span><span class="ko">RCCL은 API 호환: 바이너리는 같은 이름의 <code class="inl">rccl-tests</code>, <code class="inl">NCCL_DEBUG</code>도 그대로 동작. 전체 피크 BW 표, P2P→SHM→NET 선택 과정, MI250 실측은 <a class="src" href="parallelism-collective-communication.html#s5">full note §5</a>에 있음.</span></p>
 </section>
 
 
 <section id="s4">
-<h2><span class="num">4</span><span class="en">vLLM code path (permalinks @ 6607a80)</span><span class="ko">vLLM 코드 경로 (permalink @ 6607a80)</span></h2>
-<h3><span class="en">TP all-reduce — layer → ncclAllReduce</span><span class="ko">TP all-reduce — layer → ncclAllReduce</span></h3>
-<ol class="flow">
-<li><span class="en"><code class="inl">RowParallelLinear.forward</code> runs the partial GEMM, then all-reduces.</span><span class="ko"><code class="inl">RowParallelLinear.forward</code>가 부분 GEMM 후 all-reduce.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/model_executor/layers/linear.py#L1644-L1649">linear.py#L1644-L1649</a></li>
-<li><code class="inl">tensor_model_parallel_all_reduce(x)</code> → <code class="inl">get_tp_group().all_reduce(x)</code><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/communication_op.py#L12-L14">communication_op.py#L12-L14</a></li>
-<li><span class="en"><code class="inl">GroupCoordinator.all_reduce</code> → custom op (for torch.compile) or <code class="inl">_all_reduce_out_place</code> → <code class="inl">device_communicator.all_reduce</code>.</span><span class="ko"><code class="inl">GroupCoordinator.all_reduce</code> → custom op(torch.compile용) 또는 <code class="inl">_all_reduce_out_place</code> → <code class="inl">device_communicator.all_reduce</code>.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/parallel_state.py#L622-L634">parallel_state.py#L622-L634</a></li>
-<li><span class="en"><b>Backend pick</b>: NCCL-symm-mem → quick-reduce(ROCm) → FlashInfer → <b>custom all-reduce</b> → symm-mem → <b>pynccl</b> → torch fallback.</span><span class="ko"><b>백엔드 선택</b>: NCCL-symm-mem → quick-reduce(ROCm) → FlashInfer → <b>custom all-reduce</b> → symm-mem → <b>pynccl</b> → torch.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/device_communicators/cuda_communicator.py#L283-L303">cuda_communicator.py#L283-L303</a></li>
-<li><span class="en">pynccl path → the NCCL call: <code class="inl">self.nccl.ncclAllReduce(...)</code></span><span class="ko">pynccl 경로 → NCCL 호출: <code class="inl">self.nccl.ncclAllReduce(...)</code></span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/device_communicators/pynccl.py#L188-L196">pynccl.py#L188-L196</a></li>
-<li><span class="en">ctypes binding into <code class="inl">libnccl.so</code> / <code class="inl">librccl.so</code> — <b>ROCm uses RCCL through this exact path</b>.</span><span class="ko"><code class="inl">libnccl.so</code>/<code class="inl">librccl.so</code> ctypes 바인딩 — <b>ROCm은 RCCL이 이 경로 그대로</b>.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/device_communicators/pynccl_wrapper.py#L444-L448">pynccl_wrapper.py#L444-L448</a></li>
-</ol>
-<p class="muted"><span class="en"><b>Custom all-reduce</b> (one-shot IPC) is used only for small tensors when <code class="inl">world_size==2</code> or all GPUs are fully NVLink-connected; otherwise pynccl/NCCL. Gate: <a class="src" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/device_communicators/custom_all_reduce.py#L228-L241">should_custom_ar (custom_all_reduce.py#L228-L241)</a>.</span>
-  <span class="ko"><b>Custom all-reduce</b>(one-shot IPC)는 <code class="inl">world_size==2</code> 또는 전부 NVLink 직결일 때 작은 텐서에만; 아니면 pynccl/NCCL. 게이트: <a class="src" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/device_communicators/custom_all_reduce.py#L228-L241">should_custom_ar</a>.</span></p>
-
-<h3><span class="en">EP all-to-all &amp; DP coordination</span><span class="ko">EP all-to-all &amp; DP 조정</span></h3>
-<ul class="srcs">
-<li><b>EP</b>: <span class="en">MoE modular kernel <code class="inl">_prepare</code>(dispatch)/<code class="inl">_finalize</code>(combine)</span><span class="ko">MoE modular kernel <code class="inl">_prepare</code>(dispatch)/<code class="inl">_finalize</code>(combine)</span> — <a class="src" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/model_executor/layers/fused_moe/modular_kernel.py#L1401-L1436">modular_kernel.py#L1401-L1436</a> → <span class="en">backend selected by <code class="inl">--all2all-backend</code></span><span class="ko"><code class="inl">--all2all-backend</code>로 백엔드 선택</span> (<a class="src" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/device_communicators/cuda_communicator.py#L121-L183">cuda_communicator.py#L121-L183</a>): DeepEP <a class="src" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/model_executor/layers/fused_moe/prepare_finalize/deepep_ll.py#L292-L314">buffer.low_latency_dispatch</a>, or <code class="inl">allgather_reducescatter</code> = <a class="src" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/distributed/device_communicators/all2all.py#L110-L114">all_gatherv + reduce_scatterv</a>.</li>
-<li><b>DP</b>: <span class="en">coordination-only int all-reduce of a <code class="inl">(4, dp_size)</code> token-count tensor (no model data) so ranks pad to the same shape</span><span class="ko">토큰수 <code class="inl">(4, dp_size)</code> 정수 텐서만 all-reduce(모델 데이터 X)해 같은 shape로 패딩</span> — <a class="src" href="https://github.com/vllm-project/vllm/blob/6607a80dabfa03932515808895b016d2666b0a55/vllm/v1/worker/dp_utils.py#L47-L53">dp_utils.py#L47-L53</a>.</li>
-</ul>
-<div class="callout c-amber"><span class="tag"><span class="en">correction (verified in source @ 6607a80)</span><span class="ko">정정 (소스 @6607a80 확인)</span></span>
-<span class="en">There is <b>no <code class="inl">ncclAllToAll</code> binding</b> in vLLM's pynccl wrapper and <b>no <code class="inl">VLLM_ALL2ALL_BACKEND</code> env var</b> (it's the <code class="inl">--all2all-backend</code> flag); <code class="inl">pplx</code> is deprecated → aliased to <code class="inl">allgather_reducescatter</code>. Real all-to-all happens inside the external DeepEP C++/CUDA buffer — the Python trace ends at <code class="inl">buffer.dispatch()/combine()</code>. The bound NCCL symbols are all-reduce, all-gather, reduce-scatter, send/recv.</span>
-<span class="ko">vLLM pynccl 래퍼에 <b><code class="inl">ncclAllToAll</code> 바인딩 없음</b>, <b><code class="inl">VLLM_ALL2ALL_BACKEND</code> env 없음</b>(<code class="inl">--all2all-backend</code> 플래그); <code class="inl">pplx</code>는 폐기→<code class="inl">allgather_reducescatter</code>로 alias. 진짜 all-to-all은 외부 DeepEP C++/CUDA 버퍼 안 — Python 추적은 <code class="inl">buffer.dispatch()/combine()</code>에서 끝. 바인딩된 NCCL 심볼은 all-reduce·all-gather·reduce-scatter·send/recv.</span></div>
-</section>
-
-
-<section id="s5">
-<h2><span class="num">5</span><span class="en">The hardware underneath + how to check</span><span class="ko">그 아래 하드웨어 + 확인법</span></h2>
-<p><span class="en">When <code class="inl">ncclAllReduce</code> runs, NCCL/RCCL has <b>already</b> (at init) chosen the physical link per GPU pair — a first-match walk <b>P2P → SHM → NET</b> ranked by a distance hierarchy <code class="inl">PATH_NVL(NVLink) &lt; PATH_PIX/PXB(PCIe) &lt; PATH_SYS(cross-NUMA) &lt; PATH_NET</code> <a class="src" href="https://github.com/NVIDIA/nccl/blob/master/src/include/graph.h">[NCCL graph.h]</a>. Note: <b>NVLink and PCIe-P2P are the same "P2P transport"</b> (not a code branch); NVSwitch is subsumed as <code class="inl">PATH_NVL</code>. Cross-node uses GPUDirect RDMA over InfiniBand/RoCE (or host-staged TCP fallback) <a class="src" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html">[7H]</a>.</span>
-  <span class="ko"><code class="inl">ncclAllReduce</code>가 돌 때 NCCL/RCCL은 <b>이미</b>(init 때) GPU 쌍별 물리 링크를 선택해 둠 — <b>P2P → SHM → NET</b> 첫-매치 순회, 거리 계층 <code class="inl">PATH_NVL(NVLink) &lt; PATH_PIX/PXB(PCIe) &lt; PATH_SYS(NUMA간) &lt; PATH_NET</code>로 랭킹 <a class="src" href="https://github.com/NVIDIA/nccl/blob/master/src/include/graph.h">[NCCL graph.h]</a>. <b>NVLink와 PCIe-P2P는 같은 "P2P transport"</b>(코드 분기 아님); NVSwitch는 <code class="inl">PATH_NVL</code>로 포함. 노드 간은 InfiniBand/RoCE 위 GPUDirect RDMA(또는 host-staged TCP 폴백) <a class="src" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html">[7H]</a>.</span></p>
-
-<h3><span class="en">Max bandwidth (vendor-spec peak)</span><span class="ko">최대 대역폭 (벤더 스펙 피크)</span></h3>
-<table>
-<tr><th><span class="en">Link</span><span class="ko">링크</span></th><th><span class="en">Peak (note unit/direction)</span><span class="ko">피크 (단위/방향 주의)</span></th></tr>
-<tr><td>NVLink 3 / 4 / 5 (A100/H100/GB200)</td><td>600 / 900 / 1,800 GB/s <span class="muted">per-GPU, <b>bidirectional</b></span> <a class="src" href="https://hc34.hotchips.org/assets/program/conference/day2/Network%20and%20Switches/NVSwitch%20HotChips%202022%20r5.pdf">[13]</a></td></tr>
-<tr><td>PCIe Gen4 / Gen5 x16</td><td>~32 / ~64 GB/s <span class="muted">unidirectional (~64/128 bidir)</span> <a class="src" href="https://www.rambus.com/blogs/pci-express-5-vs-4/">[16]</a></td></tr>
-<tr><td>InfiniBand HDR / NDR / XDR (4x)</td><td>200 / 400 / 800 Gb/s = 25 / 50 / 100 GB/s <span class="muted">per direction</span> <a class="src" href="https://docs.nvidia.com/networking/display/xdrswitchesum/interfaces">[17]</a></td></tr>
-<tr><td>AMD xGMI — MI250 / MI300X</td><td>50 GB/s per link (uni) · MI300X 896 GB/s <span class="muted">per-GPU bidir aggregate</span> <a class="src" href="https://rocm.docs.amd.com/en/latest/conceptual/gpu-arch/mi250.html">[19]</a> <a class="src" href="https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf">[20]</a></td></tr>
-</table>
-
-<h3><span class="en">How to check the wiring &amp; bandwidth</span><span class="ko">배선 &amp; 대역폭 확인법</span></h3>
-<table>
-<tr><th></th><th>NVIDIA</th><th>AMD / ROCm</th><th>InfiniBand</th></tr>
-<tr><td><span class="en">topology</span><span class="ko">토폴로지</span></td><td><code class="inl">nvidia-smi topo -m</code> (NV#/PIX/PXB/PHB/SYS)</td><td><code class="inl">rocm-smi --showtopotype</code> (XGMI/PCIE)</td><td><code class="inl">ibstat</code>, <code class="inl">ibnetdiscover</code></td></tr>
-<tr><td><span class="en">link rate</span><span class="ko">링크 속도</span></td><td><code class="inl">nvidia-smi nvlink --status</code></td><td><code class="inl">rocm-smi --shownodesbw</code></td><td><code class="inl">ibstatus</code>, <code class="inl">ibv_devinfo -v</code></td></tr>
-<tr><td><span class="en">measured BW</span><span class="ko">실측 BW</span></td><td><code class="inl">p2pBandwidthLatencyTest</code>, nccl-tests</td><td><code class="inl">rocm-bandwidth-test</code>, rccl-tests</td><td>nccl-tests cross-node</td></tr>
-<tr><td><span class="en">path used</span><span class="ko">실제 경로</span></td><td colspan="3"><code class="inl">NCCL_DEBUG=INFO</code> → grep <code class="inl">via P2P/</code> (NVLink/PCIe), <code class="inl">via SHM/</code>, <code class="inl">via NET/IB/…/GDRDMA</code></td></tr>
-</table>
-<div class="callout c-amber"><span class="tag"><span class="en">three gotchas (adversarially verified)</span><span class="ko">함정 셋 (검증됨)</span></span>
-<span class="en">① NCCL does <b>not</b> print "via NVLink" — the real tokens are <code class="inl">via P2P/IPC</code> (NVLink <i>and</i> PCIe both show as P2P; cross-ref <code class="inl">topo -m</code> to tell them apart), <code class="inl">via SHM/</code>, <code class="inl">via NET/IB</code>. ② <code class="inl">rocm-smi -P</code> is <b>power</b>, not topology — use <code class="inl">--showtopo</code>/<code class="inl">--shownodesbw</code>. ③ NVLink "900 GB/s" / "1.8 TB/s" and PCIe "64 GB/s" are <b>bidirectional</b> in NVIDIA/AMD datasheets — halve for one-way.</span>
-<span class="ko">① NCCL은 "via NVLink"를 <b>안</b> 찍음 — 실제 토큰은 <code class="inl">via P2P/IPC</code>(NVLink·PCIe 둘 다 P2P로 표시; <code class="inl">topo -m</code>로 구분), <code class="inl">via SHM/</code>, <code class="inl">via NET/IB</code>. ② <code class="inl">rocm-smi -P</code>는 토폴로지가 아니라 <b>전력</b> — <code class="inl">--showtopo</code>/<code class="inl">--shownodesbw</code> 사용. ③ NVLink "900 GB/s"·"1.8 TB/s"와 PCIe "64 GB/s"는 데이터시트상 <b>양방향</b> — 단방향은 절반.</span></div>
-
-<h3><span class="en">busbw vs algbw — the number to trust</span><span class="ko">busbw vs algbw —믿을 수치</span></h3>
-<p><span class="en">nccl-tests prints two bandwidths. <code class="inl">algbw = size/time</code> scales with rank count (don't compare to peak). <b><code class="inl">busbw</code></b> = algbw × a per-collective factor → rank-independent, so it maps onto the hardware peak <a class="src" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">[25]</a>: all-reduce ×<code class="inl">2(n−1)/n</code>; reduce-scatter / all-gather / all-to-all ×<code class="inl">(n−1)/n</code>; broadcast/reduce ×1. <b>Workflow:</b> run the collective → read <code class="inl">busbw</code> → compare to the peak for the link <code class="inl">NCCL_DEBUG</code> says you're on. busbw ≪ peak = you're on a slower path than you think.</span>
-  <span class="ko">nccl-tests는 대역폭 둘을 찍음. <code class="inl">algbw = size/time</code>은 rank 수에 비례(피크와 비교 X). <b><code class="inl">busbw</code></b> = algbw × collective별 계수 → rank 무관, HW 피크에 대응 <a class="src" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">[25]</a>: all-reduce ×<code class="inl">2(n−1)/n</code>; reduce-scatter/all-gather/all-to-all ×<code class="inl">(n−1)/n</code>; broadcast/reduce ×1. <b>흐름:</b> collective 실행 → <code class="inl">busbw</code> 읽기 → <code class="inl">NCCL_DEBUG</code>가 알려준 링크의 피크와 비교. busbw ≪ 피크 = 생각보다 느린 경로.</span></p>
-
-<h3><span class="en">Live example — MI250 node (mi250-052)</span><span class="ko">실측 예시 — MI250 노드 (mi250-052)</span></h3>
-<pre><code>$ rocm-smi --showtopotype        # all 8 GCDs report XGMI fabric
-        GPU0  GPU1  GPU2 ...      (XGMI between every pair)
-
-$ rocm-smi --shownodesbw         # but actual DIRECT links are a partial mesh (min-max, MB/s)
-        GPU0          GPU1          GPU4          GPU6          GPU2/3/5/7
-GPU0    N/A           50000-200000  50000-100000  50000-50000   0-0   ← "0-0" = NOT directly connected
-                      (≈200 GB/s)   (≈100 GB/s)   (≈50 GB/s)         (routed multi-hop)
-
-$ rocm-smi --showbus             # GPU0-3 on PCIe root 0000:29-32, GPU4-7 on 0000:AD-B6 (two domains)</code></pre>
-<p class="muted"><span class="en">Reading it: every pair is XGMI <i>fabric</i>, but only some pairs have a <b>direct</b> link (200/100/50 GB/s by link count); <code class="inl">0-0</code> pairs hop through an intermediate GCD (<code class="inl">PATH_NVB</code>-style). So RCCL routes GPU0↔GPU3 multi-hop. Same idea as <code class="inl">nvidia-smi topo -m</code> showing NV12 vs NV1 vs SYS. (Captured live on mi250-052, 2026-06-16.)</span>
-  <span class="ko">읽는 법: 모든 쌍이 XGMI <i>패브릭</i>이지만 일부 쌍만 <b>직결</b>(링크 수에 따라 200/100/50 GB/s); <code class="inl">0-0</code> 쌍은 중간 GCD를 거침(<code class="inl">PATH_NVB</code> 식). 그래서 RCCL은 GPU0↔GPU3을 다홉 라우팅. <code class="inl">nvidia-smi topo -m</code>의 NV12 vs NV1 vs SYS와 같은 개념. (mi250-052 실측, 2026-06-16.)</span></p>
-<p class="muted"><span class="en">See also the lighter cheat-sheet in the <a class="src" href="vllm-dual-batch-overlap.html#s8">DBO note §8</a>; this note is the full version.</span><span class="ko">가벼운 치트시트는 <a class="src" href="vllm-dual-batch-overlap.html#s8">DBO 노트 §8</a> 참고; 이 노트가 풀버전.</span></p>
-</section>
-
-
-<section id="s6">
-<h2><span class="num">6</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<h2><span class="num">4</span><span class="en">Sources</span><span class="ko">출처</span></h2>
 <ul class="srcs">
 <li>[1] Collective operation (cost model, definitions) — <a href="https://en.wikipedia.org/wiki/Collective_operation">en.wikipedia.org/wiki/Collective_operation</a></li>
 <li>[2] NCCL Collectives (all-reduce = RS+AG) — <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html">docs.nvidia.com/…/collectives</a> · p2p — <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/p2p.html">/p2p</a> · env vars — <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html">/env</a></li>
@@ -1379,8 +1301,8 @@ $ rocm-smi --showbus             # GPU0-3 on PCIe root 0000:29-32, GPU4-7 on 000
 </section>
 
 <footer>
-  <span class="en">Inference study note · 2026-06-16 · theory (NCCL/Megatron/DeepSeek) + vLLM code @ 6607a80 + hardware (NVLink/xGMI/IB) with a live MI250 example · code line numbers commit-pinned, everything else cited inline.</span>
-  <span class="ko">추론 스터디 노트 · 2026-06-16 · 이론(NCCL/Megatron/DeepSeek) + vLLM 코드 @6607a80 + 하드웨어(NVLink/xGMI/IB) + MI250 실측 · 코드 줄 번호 커밋 핀, 나머지 본문 인용.</span>
+  <span class="en">Parallelism in LLM inference — Deep dive · presentation extract (§1–3) of the <a href="parallelism-collective-communication.html">full note</a> · figures &amp; animations unchanged; the full note adds vLLM's code path and the hardware deep-dive · everything cited inline.</span>
+  <span class="ko">Parallelism in LLM inference — Deep dive · <a href="parallelism-collective-communication.html">풀 노트</a>의 §1–3 발표용 발췌 · 그림·애니메이션 그대로; 풀 노트는 vLLM 코드 경로와 하드웨어 딥다이브 포함 · 본문 인용.</span>
 </footer>
 
 </div>
