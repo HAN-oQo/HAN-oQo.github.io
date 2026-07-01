@@ -97,7 +97,7 @@
     <span class="badge">cs.LG · 2026-06-19 (v2 06-23)</span>
     <span class="badge">Fugu Team, Sakana AI</span>
   </div>
-  <p class="post-meta"><time datetime="2026-06-29">2026-06-29</time></p>
+  <p class="post-meta"><time datetime="2026-06-29">2026-06-29</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-07-01">2026-07-01</time></p>
 </header>
 
 <nav class="toc">
@@ -239,6 +239,13 @@
     <span class="ko">해결 방법 — selection head(Fugu)와 Conductor(Fugu-Ultra)</span>
   </h2>
 
+  <h3><span class="en">2.0 — How inference actually runs: two layers</span>
+      <span class="ko">2.0 — 추론이 실제로 어떻게 도나: 두 겹</span></h3>
+  <p class="en">Keep one picture in mind: <b>Fugu never writes your answer.</b> A query runs one (partial) forward pass through the Fugu backbone to produce a hidden state; the selection head turns that into a <i>choice of worker</i>; then the chosen frontier model (Opus / GPT / Gemini) is called over its API and <i>it</i> generates the answer. So the system's inference is two layers — a cheap decision inside Fugu, and the real heavy generation inside an external black-box worker. Fugu's own latency is ≈ the decision only, which is why it lands near a single frontier call. The GPU-heavy compute lives in the workers, not in Fugu.</p>
+  <p class="ko">그림 하나만 붙들면 됩니다: <b>Fugu는 당신의 답을 직접 쓰지 않습니다.</b> 쿼리가 Fugu 백본을 (부분) forward pass 한 번 지나 hidden state를 만들고, selection head가 그걸 <i>워커 선택</i>으로 바꾸고, 그다음 선택된 프론티어 모델(Opus / GPT / Gemini)을 API로 불러 <i>그쪽이</i> 답을 생성합니다. 그래서 시스템의 추론은 두 겹입니다 — Fugu 안의 값싼 결정, 그리고 외부 블랙박스 워커 안의 진짜 무거운 생성. Fugu 자신의 레이턴시는 ≈ 결정 부분뿐이라 프론티어 단일 호출 근처에 떨어집니다. GPU 무거운 연산은 Fugu가 아니라 워커에 있습니다.</p>
+  <p class="en">Fugu-Ultra is the same two-layer idea, but the "decision" is a whole plan: the Conductor <i>generates</i> a natural-language workflow (this part <i>is</i> real text generation), and an execution engine then runs each step by calling the assigned worker with its subtask and access-listed inputs — possibly in parallel, possibly recursively — then synthesizes the result. More calls = more latency and cost, which is exactly why Ultra is the quality-first, hardest-problems variant.</p>
+  <p class="ko">Fugu-Ultra도 같은 두 겹 구조인데, "결정"이 계획 전체입니다: Conductor가 자연어 워크플로를 <i>생성</i>하고(이 부분은 <i>실제</i> 텍스트 생성), 실행 엔진이 각 단계를 지정 워커에게 서브태스크 + access 입력과 함께 호출해 — 병렬로도, 재귀로도 — 돌린 뒤 결과를 종합합니다. 호출이 많을수록 레이턴시·비용이 커지므로, Ultra가 품질 우선·최난도 전용인 이유가 바로 이것입니다.</p>
+
   <h3><span class="en">2.1 — Fugu: decide with a head, not with words</span>
       <span class="ko">2.1 — Fugu: 말이 아니라 head로 결정</span></h3>
   <p class="en">Fugu attaches a <b>lightweight selection head</b> after the backbone's final hidden layer, running in parallel to the normal LM head. For a hidden state h ∈ ℝ<sup>d</sup> it emits <b>L logits</b>, one per worker model; argmax (or a sample) picks the worker, and the query is dispatched there. The head's mapping can be parametrized several ways — Figure 2 labels them <i>Linear · Low-rank · Sparse · Block-diagonal</i> — but the point is that it's tiny.</p>
@@ -298,6 +305,11 @@
     <span class="ko">구현 방법 — SFT → 진화 → GRPO</span>
   </h2>
 
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">what is trained — and what is NOT</span><span class="ko">무엇이 학습되고, 무엇이 안 되나</span></span>
+    <span class="en">The confusing part, cleared up: <b>the frontier workers (Opus / GPT / Gemini) are never trained</b> — they stay frozen black-box APIs. Training only touches <b>the orchestrator</b>. And for Fugu it touches only a <i>tiny</i> slice of the orchestrator: the small selection head + the singular-value scales of a few backbone matrices — the rest of the backbone is frozen too. For Fugu-Ultra, the trained object is the Conductor (the LM that writes the workflow), tuned by GRPO. In both cases you are learning <b>how to route / compose</b>, never learning to answer.</span>
+    <span class="ko">헷갈리던 부분 정리: <b>프론티어 워커(Opus / GPT / Gemini)는 절대 학습되지 않습니다</b> — 고정된 블랙박스 API 그대로입니다. 학습은 <b>오케스트레이터</b>만 건드립니다. 그리고 Fugu의 경우 오케스트레이터의 <i>아주 작은</i> 부분만 건드립니다: 작은 selection head + 백본 몇몇 행렬의 특이값 스케일 — 백본 나머지도 고정입니다. Fugu-Ultra는 학습 대상이 Conductor(워크플로를 쓰는 LM)이고 GRPO로 튜닝됩니다. 두 경우 모두 배우는 것은 <b>라우팅 / 합성하는 법</b>이지, 답하는 법을 배우는 게 결코 아닙니다.</span>
+  </div>
   <p class="en">Both variants start from a pretrained backbone LM (base unspecified) and adapt only a small part of it. Fugu's backbone is tuned via <b>singular-value fine-tuning</b> (decompose selected weight matrices; train only the singular-value scales, keep the orthogonal parts fixed) → a tiny trainable set. The two variants then take different training paths:</p>
   <p class="ko">두 변형 모두 사전학습 백본 LM(베이스 미명시)에서 출발해 그 일부만 적응시킨다. Fugu의 백본은 <b>특이값 파인튜닝</b>(선택한 weight 행렬을 분해해 특이값 스케일만 학습, 직교 성분은 고정)으로 튜닝 → 아주 작은 학습 파라미터. 이후 두 변형은 서로 다른 학습 경로를 탄다:</p>
 
@@ -407,6 +419,12 @@
     <p>"dynamic adaptation of an aggregator role is precisely the kind of adaptation unavailable to existing multi-agent systems, which necessitate a fixed model to always act as a final synthesizer, regardless of whether that model is suitable for the task or not."</p>
     <cite>— §4.4 (Debate and aggregation) · <a href="https://arxiv.org/html/2606.21228v2#S4.SS4">원문 보기 (§4.4)</a></cite>
   </blockquote>
+
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">so how can it beat the models it calls?</span><span class="ko">그럼 어떻게 자기가 부르는 모델을 이기나?</span></span>
+    <span class="en">Three paper-grounded reasons, not magic. (1) <b>Per-task best differs</b> — routing each query to whichever worker is strongest for it beats fixing any single model (the distribution above tracks known strengths). (2) <b>Collaboration within one problem</b> — Fugu-Ultra mixes models mid-task (GPT builds, Opus debugs); even fast Fugu beats GPT-5.5 on Terminal Bench by calling Opus in at critical debug points (§4.1.2). (3) <b>Scaffold gains</b> — best-of-N, verification, and synthesis over multiple attempts beat a single shot. Kept honest: Table 1's win is over the <i>public</i> models Fugu routes to — an oracle-ish router over strong models <i>should</i> win, so this isn't a claim to beat every model; Figure 1 shows the unreleased Fable 5 topping Fugu on some benchmarks, and every worker call is still paid in full (Ultra pays it several times over).</span>
+    <span class="ko">마법이 아니라 논문에 근거한 세 가지. (1) <b>과제별 최강자가 다르다</b> — 쿼리마다 그 과제에 가장 센 워커로 보내면 어떤 단일 모델을 고정하는 것보다 낫다(위 분포가 알려진 강점을 따라감). (2) <b>한 문제 안 협업</b> — Fugu-Ultra는 과제 중간에 모델을 섞고(GPT가 짓고 Opus가 디버깅), 빠른 Fugu조차 결정적 디버깅 지점에 Opus를 불러 Terminal Bench에서 GPT-5.5를 이긴다(§4.1.2). (3) <b>스캐폴드 이득</b> — best-of-N·검증·종합이 단일 시도를 이긴다. 정직하게: Table 1의 승리는 Fugu가 <i>부리는 공개 모델</i> 상대이며 — 강한 모델들 위의 오라클급 라우터라면 이겨야 정상이라 모든 모델을 이긴다는 주장이 아니다; Figure 1에선 미공개 Fable 5가 일부 벤치마크에서 Fugu를 앞서고, 워커 호출 비용은 매번 그대로 치른다(Ultra는 여러 번).</span>
+  </div>
 </section>
 
 <section id="s4b">
