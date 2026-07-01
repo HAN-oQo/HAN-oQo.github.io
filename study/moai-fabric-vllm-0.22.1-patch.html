@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MoAI-Fabric — the vLLM 0.22.1 cross-vendor P/D patch (line-by-line)</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  .wrap{max-width:940px;margin:0 auto;padding:48px 22px 96px}
+  .hero h1{line-height:1.25;margin:.2em 0}
+  .lede{font-size:16px;color:var(--muted);line-height:1.6}
+  .meta{margin:12px 0 2px;display:flex;flex-wrap:wrap;gap:6px}
+  .badge{font-size:12px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+  .badge a{text-decoration:none}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:22px 0}
+  .toc h4{margin:0 0 6px;font-size:13px;color:var(--muted)}
+  .toc ol{margin:0;padding-left:22px} .toc li{margin:3px 0}
+  h2 .num{display:inline-block;min-width:1.7em;height:1.7em;line-height:1.7em;text-align:center;background:var(--ink);color:var(--bg);border-radius:8px;font-size:.7em;margin-right:.5em;vertical-align:middle}
+  h2{margin-top:38px;border-top:1px solid var(--line);padding-top:22px}
+  h3{margin-top:26px}
+  code.inl{background:var(--code-bg);color:var(--code-ink);padding:1px 6px;border-radius:5px;font-size:12.5px;font-family:"SF Mono",Menlo,Consolas,monospace}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;font-size:12px;line-height:1.5}
+  pre code{font-family:"SF Mono",Menlo,Consolas,monospace}
+  .add{color:var(--green-ink)} .del{color:var(--red-ink)}
+  .callout{border-radius:10px;padding:14px 16px;margin:16px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-green{background:var(--green-bg);color:var(--green-ink)} .c-green .tag{color:var(--green-ink)}
+  .figcap{font-size:12px;color:var(--muted);margin:6px 0 20px;line-height:1.5}
+  .fig{display:block;max-width:100%;height:auto;margin:14px 0 2px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  table{border-collapse:collapse;width:100%;font-size:13px;margin:12px 0}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:var(--card);font-weight:700}
+  .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:14px 0}
+  .mini{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px}
+  .mini b{color:var(--ink)}
+  .src{font-size:12px;color:var(--blue-ink)}
+  .srcs{font-size:12.5px;line-height:1.7}
+  footer{margin-top:40px;border-top:1px solid var(--line);padding-top:16px;font-size:12px;color:var(--faint);line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Inference</span><span class="ko">추론</span></a> · <span class="en">MoAI-Fabric vLLM 0.22.1 patch</span><span class="ko">MoAI-Fabric vLLM 0.22.1 패치</span></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">MoAI-Fabric — the vLLM 0.22.1 cross-vendor P/D patch, line by line</span>
+    <span class="ko">MoAI-Fabric — vLLM 0.22.1 크로스벤더 P/D 패치, 라인 바이 라인</span>
+  </h1>
+  <p class="lede">
+    <span class="en"><b>MoAI-Fabric</b> runs prefill↔decode disaggregated (P/D) inference <b>across mixed-vendor GPUs</b> — an NVIDIA H100 (CUDA) prefill node feeding an AMD MI300X/MI250 (ROCm) decode node over InfiniBand RDMA. Three small patches on top of stock <b>vLLM 0.22.1</b> make the KV cache actually transferable across the vendor gap. This note walks each patch line by line: what it changes, why, what broke before it, and the principle behind the fix. All snippets are from the repo at commit <code class="inl">4917a08</code>.</span>
+    <span class="ko"><b>MoAI-Fabric</b>는 prefill↔decode 분리(P/D) 추론을 <b>서로 다른 벤더 GPU 사이</b>에서 돌린다 — NVIDIA H100(CUDA) prefill 노드가 AMD MI300X/MI250(ROCm) decode 노드에 InfiniBand RDMA로 KV를 넘긴다. 스톡 <b>vLLM 0.22.1</b> 위 작은 패치 3개가 그 벤더 간극을 넘어 KV 캐시를 실제로 전송 가능하게 만든다. 이 노트는 각 패치를 라인 바이 라인으로 — 무엇을 바꾸고, 왜, 그 전엔 뭐가 깨졌고, 고치는 원리가 무엇인지 — 짚는다. 스니펫은 전부 커밋 <code class="inl">4917a08</code> 기준.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://github.com/moreh-dev/MoAI-Fabric">moreh-dev/MoAI-Fabric</a></span>
+    <span class="badge"><a href="https://github.com/moreh-dev/MoAI-Fabric/tree/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches">patches @ 4917a08</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/v0.22.1">vLLM v0.22.1</a></span>
+    <span class="badge"><span class="en">Deep dive · code-walk</span><span class="ko">딥다이브 · 코드 분석</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-07-01">2026-07-01</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. The problem — one KV cache, two vendors</span><span class="ko">1. 문제 — 하나의 KV 캐시, 두 벤더</span></a></li>
+    <li><a href="#s2"><span class="en">2. Patch 01 — signed <code>block_size_ratio</code></span><span class="ko">2. 패치 01 — 부호 있는 <code>block_size_ratio</code></span></a></li>
+    <li><a href="#s3"><span class="en">3. Patch 02 — the NIXL connector (caps, fp8 LUT, permute)</span><span class="ko">3. 패치 02 — NIXL 커넥터 (caps·fp8 LUT·permute)</span></a></li>
+    <li><a href="#s4"><span class="en">4. Patch 03 — force GDR-direct RDMA</span><span class="ko">4. 패치 03 — GDR-direct RDMA 강제</span></a></li>
+    <li><a href="#s5"><span class="en">5. Known gap (PR2) &amp; gotchas</span><span class="ko">5. 미완성(PR2)과 함정</span></a></li>
+    <li><a href="#s6"><span class="en">6. Sources</span><span class="ko">6. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <ul style="margin:10px 0 2px;padding-left:20px">
+    <li><span class="en"><b>Patch 01</b> — makes <code class="inl">TransferTopology.block_size_ratio()</code> <b>signed</b> (negative when the remote/P block is bigger), so a FLASHMLA block=64 → AITER_MLA block=1 direction can be expressed. (Consumer PR2 not yet ported → negative path is inert; MHA/equal-block unaffected.)</span><span class="ko"><b>패치 01</b> — <code class="inl">TransferTopology.block_size_ratio()</code>를 <b>부호 있게</b> 만든다(원격/P 블록이 더 크면 음수). FLASHMLA block=64 → AITER_MLA block=1 방향을 표현하기 위함. (소비자 PR2 미이식 → 음수 경로는 비활성; MHA/동일 블록은 영향 없음.)</span></li>
+    <li><span class="en"><b>Patch 02</b> — the big one: a handshake-exchanged <b>capability dataclass</b> (fail loud on fatal mismatch), a per-peer <b>fp8 e4m3 <code>fn↔fnuz</code> byte LUT</b> (CUDA and ROCm encode fp8 differently), and <b>bidirectional HND↔NHD layout permute</b>.</span><span class="ko"><b>패치 02</b> — 핵심: 핸드셰이크로 교환하는 <b>capability 데이터클래스</b>(치명적 불일치는 즉시 실패), peer별 <b>fp8 e4m3 <code>fn↔fnuz</code> 바이트 LUT</b>(CUDA와 ROCm은 fp8 인코딩이 다름), <b>양방향 HND↔NHD 레이아웃 permute</b>.</span></li>
+    <li><span class="en"><b>Patch 03</b> — injects <code class="inl">UCX_IB_GPU_DIRECT_RDMA=yes</code> at module import, because 0.22.1 scrubs <code class="inl">UCX_*</code> from the worker env; GDR-direct is the only rndv GET that composes cross-vendor.</span><span class="ko"><b>패치 03</b> — 모듈 import 시 <code class="inl">UCX_IB_GPU_DIRECT_RDMA=yes</code>를 주입. 0.22.1이 worker env에서 <code class="inl">UCX_*</code>를 지워버리기 때문; GDR-direct만이 크로스벤더로 성립하는 rndv GET.</span></li>
+  </ul>
+</div>
+
+<div class="grid3">
+  <div class="mini"><b>P/D disaggregation</b><br><span class="en">Prefill (compute the prompt's KV) and decode (generate tokens) run on <i>separate</i> nodes; the KV cache is shipped P→D.</span><span class="ko">prefill(프롬프트 KV 계산)과 decode(토큰 생성)를 <i>다른</i> 노드에서; KV 캐시를 P→D로 전송.</span></div>
+  <div class="mini"><b>NIXL / UCX / RDMA</b><br><span class="en">NIXL is vLLM's KV-transfer connector; it drives UCX, which does the actual RDMA over InfiniBand. ROCm uses RIXL (a NIXL fork).</span><span class="ko">NIXL은 vLLM의 KV 전송 커넥터; UCX를 구동하고 UCX가 InfiniBand RDMA를 실제 수행. ROCm은 RIXL(NIXL 포크).</span></div>
+  <div class="mini"><b>fp8 <code>e4m3fn</code> vs <code>e4m3fnuz</code></b><br><span class="en">Two fp8 encodings: CUDA's <code>fn</code> (has ±inf/NaN) vs ROCm's <code>fnuz</code> (no inf, one NaN, different bias). Same 8 bits, <b>different meaning</b>.</span><span class="ko">두 fp8 인코딩: CUDA의 <code>fn</code>(±inf/NaN 있음) vs ROCm의 <code>fnuz</code>(inf 없음, NaN 하나, bias 다름). 같은 8비트, <b>다른 의미</b>.</span></div>
+  <div class="mini"><b>NHD / HND</b><br><span class="en">KV block memory layout — axis order <code>[N tokens, H heads, D]</code> (CUDA FA) vs <code>[H, N, D]</code> (ROCm AITER). A permute reconciles them.</span><span class="ko">KV 블록 메모리 레이아웃 — 축 순서 <code>[N 토큰, H 헤드, D]</code>(CUDA FA) vs <code>[H, N, D]</code>(ROCm AITER). permute로 맞춤.</span></div>
+  <div class="mini"><b>MLA / MHA</b><br><span class="en">MHA = multi-head attention (per-head KV). MLA = DeepSeek's latent KV. They shard KV differently (block sizes, dims).</span><span class="ko">MHA = 멀티헤드 attention(헤드별 KV). MLA = DeepSeek의 latent KV. KV 샤딩 방식(블록 크기·차원)이 다름.</span></div>
+  <div class="mini"><b>GDR-direct</b><br><span class="en">GPUDirect RDMA: the NIC reads/writes GPU VRAM directly (via dmabuf), no host-memory staging. Zero-copy.</span><span class="ko">GPUDirect RDMA: NIC이 GPU VRAM을 직접(dmabuf) 읽고 씀, 호스트 메모리 staging 없음. 제로카피.</span></div>
+</div>
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">The problem — one KV cache, two vendors</span><span class="ko">문제 — 하나의 KV 캐시, 두 벤더</span></h2>
+<p><span class="en">In P/D disaggregation, the prefill node computes the prompt's KV cache and RDMA-copies it into the decode node's cache, which then generates tokens. Within one vendor this "just works" — both sides agree on dtype, memory layout, and block size. <b>Across vendors it does not.</b> An H100/CUDA prefill and an MI300/ROCm decode disagree on four axes at once, and every one of them silently corrupts the KV bytes or aborts the transfer:</span>
+<span class="ko">P/D 분리에서 prefill 노드가 프롬프트 KV 캐시를 계산해 RDMA로 decode 노드 캐시에 복사하면, decode가 토큰을 생성한다. 같은 벤더 안에선 "그냥 된다" — dtype·메모리 레이아웃·블록 크기가 서로 같으니까. <b>벤더가 다르면 안 된다.</b> H100/CUDA prefill과 MI300/ROCm decode는 네 축에서 동시에 어긋나고, 각각이 KV 바이트를 조용히 오염시키거나 전송을 중단시킨다:</span></p>
+
+<svg class="fig" viewBox="0 0 900 360" role="img" aria-label="cross-vendor 1P1D data path and the four mismatches">
+  <text x="16" y="26" font-size="14" font-weight="700" fill="var(--ink)">Cross-vendor 1P1D — the KV must survive four mismatches on the way P → D</text>
+  <!-- Prefill box -->
+  <rect x="24" y="60" width="240" height="150" rx="10" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="144" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="var(--blue-ink)">PREFILL · H100 / CUDA</text>
+  <text x="40" y="110" font-size="12" fill="var(--blue-ink)">dtype: fp8 e4m3<b>fn</b></text>
+  <text x="40" y="132" font-size="12" fill="var(--blue-ink)">layout: <b>NHD</b></text>
+  <text x="40" y="154" font-size="12" fill="var(--blue-ink)">block: 16 (or FLASHMLA 64)</text>
+  <text x="40" y="176" font-size="12" fill="var(--blue-ink)">attn: FLASH_ATTN / FLASHMLA</text>
+  <text x="40" y="198" font-size="11.5" fill="var(--muted)">computes prompt KV →</text>
+  <!-- Decode box -->
+  <rect x="636" y="60" width="240" height="150" rx="10" fill="var(--coral-bg)" stroke="var(--coral-bd)"/>
+  <text x="756" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="var(--coral-ink)">DECODE · MI300 / ROCm</text>
+  <text x="652" y="110" font-size="12" fill="var(--coral-ink)">dtype: fp8 e4m3<b>fnuz</b></text>
+  <text x="652" y="132" font-size="12" fill="var(--coral-ink)">layout: <b>HND</b></text>
+  <text x="652" y="154" font-size="12" fill="var(--coral-ink)">block: 16 (or AITER_MLA 1)</text>
+  <text x="652" y="176" font-size="12" fill="var(--coral-ink)">attn: ROCM_AITER_MLA</text>
+  <text x="652" y="198" font-size="11.5" fill="var(--muted)">→ generates tokens</text>
+  <!-- middle: RDMA + transforms -->
+  <line x1="264" y1="135" x2="636" y2="135" stroke="var(--ink)" stroke-width="2" stroke-dasharray="2 0"/>
+  <polygon points="636,135 624,129 624,141" fill="var(--ink)"/>
+  <text x="450" y="126" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">NIXL/UCX RDMA · InfiniBand</text>
+  <text x="450" y="150" text-anchor="middle" font-size="11" fill="var(--purple-ink)">GDR-direct zero-copy — patch 03</text>
+  <!-- handshake -->
+  <line x1="264" y1="96" x2="636" y2="96" stroke="var(--purple-bd)" stroke-width="1.3" stroke-dasharray="5 4"/>
+  <text x="450" y="90" text-anchor="middle" font-size="10.5" fill="var(--purple-ink)">handshake: exchange KVTransferCapabilities — patch 02 (PR3)</text>
+  <!-- transform chain applied on receive -->
+  <rect x="300" y="238" width="300" height="104" rx="9" fill="var(--card)" stroke="var(--green-bd)"/>
+  <text x="450" y="260" text-anchor="middle" font-size="12" font-weight="700" fill="var(--green-ink)">transform chain (applied on the D side, on receive)</text>
+  <text x="316" y="282" font-size="11.5" fill="var(--ink)">① fp8 <b>fn→fnuz</b> byte LUT — patch 02 (PR4)</text>
+  <text x="316" y="302" font-size="11.5" fill="var(--ink)">② <b>NHD→HND</b> permute (swap axes) — patch 02</text>
+  <text x="316" y="322" font-size="11.5" fill="var(--ink)">③ <b>block-size</b> ratio align — patch 01 (+PR2*)</text>
+  <line x1="450" y1="210" x2="450" y2="238" stroke="var(--green-bd)" stroke-width="1.3"/>
+  <polygon points="450,238 444,226 456,226" fill="var(--green-bd)"/>
+</svg>
+<p class="figcap"><span class="en">The four mismatches: fp8 encoding (fn vs fnuz), KV layout (NHD vs HND), block size (16↔16, or 64↔1 for MLA), and attention backend. The three patches make the transfer <b>compose</b> — a capability handshake to agree/fail (PR3), a byte LUT + layout permute applied on receive (PR4 + permute), block-size ratio (PR1), and GDR-direct so the RDMA path exists at all (patch 03).</span><span class="ko">네 불일치: fp8 인코딩(fn vs fnuz), KV 레이아웃(NHD vs HND), 블록 크기(16↔16, MLA는 64↔1), attention 백엔드. 세 패치가 전송을 <b>성립</b>시킨다 — 합의/실패용 capability 핸드셰이크(PR3), 수신 시 적용하는 바이트 LUT + 레이아웃 permute(PR4+permute), 블록 크기 비율(PR1), 그리고 RDMA 경로 자체가 존재하게 하는 GDR-direct(패치 03).</span></p>
+
+<p><span class="en">All three patches are <b>byte-identical for the CUDA and ROCm builds</b> — the same diff is applied to both official images (<code class="inl">vllm/vllm-openai:v0.22.1</code> and <code class="inl">vllm/vllm-openai-rocm:v0.22.1</code>). They were re-based from the production-validated <b>vLLM 0.17.0</b> tree onto 0.22.1's heavily-refactored NIXL connector (single file → a <code class="inl">v1/nixl/</code> package).</span>
+<span class="ko">세 패치는 <b>CUDA·ROCm 빌드에서 바이트 동일</b> — 같은 diff를 두 공식 이미지(<code class="inl">vllm/vllm-openai:v0.22.1</code>, <code class="inl">vllm/vllm-openai-rocm:v0.22.1</code>)에 적용한다. 프로덕션 검증된 <b>vLLM 0.17.0</b> 트리에서 0.22.1의 대폭 리팩터된 NIXL 커넥터(단일 파일 → <code class="inl">v1/nixl/</code> 패키지)로 재베이스했다.</span></p>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">Patch 01 — signed <code>block_size_ratio</code></span><span class="ko">패치 01 — 부호 있는 <code>block_size_ratio</code></span></h2>
+<p><span class="en"><b>File:</b> <code class="inl">distributed/kv_transfer/kv_connector/utils.py</code> · <b>method:</b> <code class="inl">TransferTopology.block_size_ratio()</code>. <b>Purpose:</b> P and D can use different KV block sizes; the connector needs the ratio to map remote blocks onto local ones. For MLA the P side (FLASHMLA, block 64) can be <i>bigger</i> than the D side (ROCM_AITER_MLA, block 1) — the "remote bigger" direction.</span>
+<span class="ko"><b>파일:</b> <code class="inl">distributed/kv_transfer/kv_connector/utils.py</code> · <b>메서드:</b> <code class="inl">TransferTopology.block_size_ratio()</code>. <b>목적:</b> P와 D는 서로 다른 KV 블록 크기를 쓸 수 있고, 커넥터는 원격 블록을 로컬 블록에 매핑하려면 그 비율이 필요하다. MLA에선 P 쪽(FLASHMLA, block 64)이 D 쪽(ROCM_AITER_MLA, block 1)보다 <i>클</i> 수 있다 — "원격이 더 큰" 방향.</span></p>
+
+<h3><span class="en">Before — a hard assert that crashed if remote was bigger</span><span class="ko">이전 — 원격이 크면 죽어버리는 하드 assert</span></h3>
+<pre><code>def block_size_ratio(self, remote_block_size: int) -> int:
+    assert self.block_size % remote_block_size == 0, (   <span class="del"># dies if remote &gt; local</span>
+        f"Local block size ... is not divisible by remote block size or vice versa."
+    )
+    return self.block_size // remote_block_size          <span class="del"># always positive</span></code></pre>
+<p><span class="en">Stock 0.22.1 assumes <code class="inl">local % remote == 0</code>. If the remote block is <i>larger</i> (64 vs 1), the modulo is non-zero and the assert fires — the transfer can't even be described.</span>
+<span class="ko">스톡 0.22.1은 <code class="inl">local % remote == 0</code>을 가정한다. 원격 블록이 <i>더 크면</i>(64 vs 1) 나머지가 0이 아니라 assert가 터진다 — 전송을 표현조차 못 한다.</span></p>
+
+<h3><span class="en">After — signed ratio (sign = direction)</span><span class="ko">이후 — 부호 있는 비율(부호 = 방향)</span></h3>
+<pre><code>def block_size_ratio(self, remote_block_size: int) -> int:
+    <span class="add"># positive when local &gt;= remote (D aggregates P blocks)</span>
+    if self.block_size &gt;= remote_block_size:
+        assert self.block_size % remote_block_size == 0, (...)
+        return self.block_size // remote_block_size
+    <span class="add"># negative when remote block is larger (FLASHMLA 64 -&gt; AITER_MLA 1)</span>
+    assert remote_block_size % self.block_size == 0, (...)
+    return -(remote_block_size // self.block_size)</code></pre>
+<p><span class="en"><b>Principle:</b> encode <i>direction</i> in the sign, mirroring the file's existing <code class="inl">tp_ratio()</code> convention (which already returns a negative value when the remote TP size is bigger). <b>Positive</b> = D block ≥ P block (D aggregates several P blocks). <b>Negative</b> = P block bigger (one P block scatters into several D blocks). Callers take <code class="inl">abs()</code> for magnitude and read the sign for which way to map.</span>
+<span class="ko"><b>원리:</b> <i>방향</i>을 부호로 인코딩 — 이 파일에 이미 있는 <code class="inl">tp_ratio()</code> 관례를 그대로 따른다(원격 TP 크기가 크면 음수 반환). <b>양수</b> = D 블록 ≥ P 블록(D가 여러 P 블록을 합침). <b>음수</b> = P 블록이 더 큼(하나의 P 블록이 여러 D 블록으로 흩어짐). 호출부는 크기엔 <code class="inl">abs()</code>, 매핑 방향엔 부호를 읽는다.</span></p>
+<p><a class="src" href="https://github.com/moreh-dev/MoAI-Fabric/blob/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches/vllm-cuda/01-block-size-ratio.diff">01-block-size-ratio.diff</a></p>
+<div class="callout c-amber"><span class="tag"><span class="en">caveat — the negative path is currently inert</span><span class="ko">주의 — 음수 경로는 지금은 비활성</span></span>
+<span class="en">The <b>consumer</b> of the negative ratio (0.17.0's "PR2" MLA cross-block scatter) was <b>not</b> ported to 0.22.1 (§5). So the positive path is byte-identical to upstream (MHA and equal-block MLA unaffected), but the negative path is <b>inert</b> until PR2 is redesigned — see §5.</span>
+<span class="ko">음수 비율의 <b>소비자</b>(0.17.0의 "PR2" MLA 교차 블록 scatter)는 0.22.1로 <b>미이식</b>(§5). 그래서 양수 경로는 업스트림과 바이트 동일(MHA·동일 블록 MLA 무영향), 음수 경로는 PR2 재설계 전까지 <b>비활성</b> — §5 참고.</span></div>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">Patch 02 — the NIXL connector (caps, fp8 LUT, permute)</span><span class="ko">패치 02 — NIXL 커넥터 (caps·fp8 LUT·permute)</span></h2>
+<p><span class="en">The heart of the port (459-line diff), split across <code class="inl">v1/nixl/metadata.py</code> and <code class="inl">v1/nixl/worker.py</code>. Three independent mechanisms, all keyed on the <b>connection-level NIXL handshake</b>.</span>
+<span class="ko">이식의 핵심(459줄 diff), <code class="inl">v1/nixl/metadata.py</code>와 <code class="inl">v1/nixl/worker.py</code>에 걸쳐 있다. 독립적 메커니즘 셋, 모두 <b>연결 단위 NIXL 핸드셰이크</b>에 물려 있다.</span></p>
+
+<h3><span class="en">PR3 — a capability dataclass, exchanged &amp; validated at handshake</span><span class="ko">PR3 — 핸드셰이크에서 교환·검증하는 capability 데이터클래스</span></h3>
+<p><span class="en"><b>Purpose:</b> before shipping bytes, each side advertises <i>what its KV cache actually is</i> — vendor, fp8 scheme, layout, block size, attention backend, MLA/MHA and its dims. The receiver uses the <code class="inl">(self, peer)</code> pair to (a) compute the transform chain and (b) fail loud on irreconcilable configs (e.g. MHA↔MLA, different models).</span>
+<span class="ko"><b>목적:</b> 바이트를 보내기 전에 각 쪽이 <i>자기 KV 캐시가 실제로 무엇인지</i>를 광고 — 벤더·fp8 방식·레이아웃·블록 크기·attention 백엔드·MLA/MHA와 차원. 수신자는 <code class="inl">(self, peer)</code> 쌍으로 (a) 변환 체인을 계산하고 (b) 화해 불가한 설정(MHA↔MLA, 다른 모델 등)엔 즉시 실패한다.</span></p>
+<pre><code>@dataclass
+class KVTransferCapabilities:            <span class="add"># NEW in metadata.py</span>
+    vendor: str            # "cuda" | "rocm"
+    kv_cache_dtype: str    # "fp8_e4m3fn" | "fp8_e4m3fnuz" | "bfloat16" ...
+    block_size: int
+    kv_layout: str         # "NHD" | "HND"
+    attn_backend: str      # "FLASH_ATTN" | "FLASHMLA" | "ROCM_AITER_MLA" ...
+    is_mla: bool
+    num_layers: int
+    num_kv_heads / head_dim (MHA)   |   kv_lora_rank / qk_rope_head_dim (MLA)
+
+@dataclass
+class NixlAgentMetadata:
+    ...
+    capabilities: "KVTransferCapabilities | None" = None   <span class="add"># PR3: trailing optional</span></code></pre>
+<p><span class="en">The field is appended as a <b>trailing optional</b> so the msgspec wire format stays compatible — an unpatched peer that doesn't send it just yields <code class="inl">None</code> (handled with a warning, not a crash).</span>
+<span class="ko">이 필드는 <b>말미 optional</b>로 추가돼 msgspec 와이어 포맷 호환이 유지된다 — 안 보내는 미패치 peer는 <code class="inl">None</code>이 되고(크래시 아니라 경고로 처리) 넘어간다.</span></p>
+
+<svg class="fig" viewBox="0 0 900 250" role="img" aria-label="capability handshake and validation">
+  <text x="16" y="24" font-size="13" font-weight="700" fill="var(--ink)">PR3 handshake — advertise, then validate-or-transform</text>
+  <rect x="30" y="46" width="200" height="66" rx="9" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="130" y="70" text-anchor="middle" font-size="12" font-weight="700" fill="var(--blue-ink)">P (CUDA) caps</text>
+  <text x="130" y="90" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">fn · NHD · block16 · MHA</text>
+  <rect x="670" y="46" width="200" height="66" rx="9" fill="var(--coral-bg)" stroke="var(--coral-bd)"/>
+  <text x="770" y="70" text-anchor="middle" font-size="12" font-weight="700" fill="var(--coral-ink)">D (ROCm) caps</text>
+  <text x="770" y="90" text-anchor="middle" font-size="10.5" fill="var(--coral-ink)">fnuz · HND · block16 · MHA</text>
+  <line x1="230" y1="79" x2="670" y2="79" stroke="var(--purple-bd)" stroke-width="1.4" stroke-dasharray="5 4"/>
+  <text x="450" y="72" text-anchor="middle" font-size="11" fill="var(--purple-ink)">attach caps to NixlAgentMetadata · exchange</text>
+  <!-- validator -->
+  <rect x="250" y="140" width="400" height="90" rx="9" fill="var(--card)" stroke="var(--line)"/>
+  <text x="450" y="162" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">_validate_kv_caps(self, peer)</text>
+  <text x="266" y="184" font-size="11" fill="var(--red-ink)">FATAL → raise: is_mla differ · num_layers differ ·</text>
+  <text x="276" y="200" font-size="11" fill="var(--red-ink)">fp8-vs-non-fp8 · MLA/MHA dims differ</text>
+  <text x="266" y="220" font-size="11" fill="var(--green-ink)">RECONCILABLE → transform: dtype fn↔fnuz · layout · block</text>
+  <line x1="450" y1="112" x2="450" y2="140" stroke="var(--line)"/><polygon points="450,140 444,128 456,128" fill="var(--line)"/>
+</svg>
+<p class="figcap"><span class="en"><code class="inl">_validate_kv_caps</code> only raises on <b>irreconcilable</b> mismatches; dtype/layout/block differences are deliberately <i>not</i> errors — they're handed to the transform chain. With <code class="inl">strict_kv_compat=false</code> even fatal ones become warnings.</span><span class="ko"><code class="inl">_validate_kv_caps</code>는 <b>화해 불가</b> 불일치에만 raise; dtype/layout/block 차이는 일부러 오류가 <i>아니고</i> 변환 체인에 넘긴다. <code class="inl">strict_kv_compat=false</code>면 치명적 항목도 경고로 완화.</span></p>
+<pre><code># worker.register_kv_caches(): build local caps once, attach to outgoing metadata
+self._local_caps = _build_local_kv_caps(self)          <span class="add"># PR3</span>
+agent_metadata = NixlAgentMetadata(..., capabilities=self._local_caps)
+
+# worker._validate_remote_agent_handshake(): on each peer
+peer_caps = getattr(nixl_agent_meta, "capabilities", None)
+if peer_caps is not None:
+    _validate_kv_caps(self._local_caps, peer_caps, remote_engine_id, self._strict_kv_compat)
+    dtype_lut, _ = _make_peer_dtype_lut(self._local_caps.kv_cache_dtype,
+                                        peer_caps.kv_cache_dtype)   <span class="add"># PR4 install</span>
+    if dtype_lut is not None:
+        self._peer_dtype_luts[remote_engine_id] = dtype_lut</code></pre>
+
+<h3><span class="en">PR4 — the fp8 <code>fn↔fnuz</code> byte LUT</span><span class="ko">PR4 — fp8 <code>fn↔fnuz</code> 바이트 LUT</span></h3>
+<p><span class="en"><b>The core cross-vendor bug.</b> CUDA stores the fp8 KV cache as <code class="inl">e4m3fn</code>; ROCm as <code class="inl">e4m3fnuz</code>. Same 8 bits, but the two formats assign them to <b>different real values</b> (fnuz has no ±inf, a single NaN at <code class="inl">0x80</code>, and an exponent bias of 8 vs fn's 7). RDMA-copy the raw bytes and reinterpret them in the other format and every KV value is subtly wrong. Since fp8 is a tiny finite alphabet (256 codes), the exact conversion is a <b>precomputed 256-entry byte lookup table</b>.</span>
+<span class="ko"><b>핵심 크로스벤더 버그.</b> CUDA는 fp8 KV 캐시를 <code class="inl">e4m3fn</code>으로, ROCm은 <code class="inl">e4m3fnuz</code>로 저장한다. 같은 8비트지만 두 포맷은 이를 <b>다른 실수값</b>에 배정한다(fnuz는 ±inf 없음, NaN 하나 <code class="inl">0x80</code>, exponent bias 8 vs fn의 7). 원시 바이트를 RDMA로 복사해 다른 포맷으로 재해석하면 모든 KV 값이 미묘하게 틀린다. fp8은 유한한 256개 코드뿐이라, 정확한 변환은 <b>미리 계산한 256-엔트리 바이트 룩업 테이블</b>이다.</span></p>
+
+<svg class="fig" viewBox="0 0 900 210" role="img" aria-label="fp8 fn to fnuz byte lookup table">
+  <text x="16" y="24" font-size="13" font-weight="700" fill="var(--ink)">PR4 — reinterpret every KV byte through a 256-entry LUT (exact, lossless within the encoding)</text>
+  <rect x="40" y="50" width="180" height="120" rx="9" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="130" y="74" text-anchor="middle" font-size="12" font-weight="700" fill="var(--blue-ink)">CUDA bytes (e4m3fn)</text>
+  <text x="130" y="100" text-anchor="middle" font-size="11" fill="var(--blue-ink)">byte 0x07 = value v</text>
+  <text x="130" y="120" text-anchor="middle" font-size="11" fill="var(--blue-ink)">byte 0x80 = -0 / NaN</text>
+  <text x="130" y="150" text-anchor="middle" font-size="10.5" fill="var(--muted)">bias 7 · ±inf · 2 NaN</text>
+  <rect x="360" y="70" width="180" height="80" rx="9" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+  <text x="450" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="var(--purple-ink)">_FN_TO_FNUZ_LUT</text>
+  <text x="450" y="118" text-anchor="middle" font-size="10.5" fill="var(--purple-ink)">uint8[256], on device</text>
+  <text x="450" y="136" text-anchor="middle" font-size="10.5" fill="var(--purple-ink)">out = LUT[in]</text>
+  <rect x="680" y="50" width="180" height="120" rx="9" fill="var(--coral-bg)" stroke="var(--coral-bd)"/>
+  <text x="770" y="74" text-anchor="middle" font-size="12" font-weight="700" fill="var(--coral-ink)">ROCm bytes (e4m3fnuz)</text>
+  <text x="770" y="100" text-anchor="middle" font-size="11" fill="var(--coral-ink)">byte encoding value v</text>
+  <text x="770" y="120" text-anchor="middle" font-size="11" fill="var(--coral-ink)">no inf · 1 NaN</text>
+  <text x="770" y="150" text-anchor="middle" font-size="10.5" fill="var(--muted)">bias 8 · 0x80 = NaN</text>
+  <line x1="220" y1="110" x2="360" y2="110" stroke="var(--ink)"/><polygon points="360,110 348,104 348,116" fill="var(--ink)"/>
+  <line x1="540" y1="110" x2="680" y2="110" stroke="var(--ink)"/><polygon points="680,110 668,104 668,116" fill="var(--ink)"/>
+</svg>
+<pre><code># metadata.py — two 256-entry tables (byte-for-byte identical to the 0.17.0 tree)
+_FN_TO_FNUZ_LUT = [0, 2, 4, 6, 8, ... 127, 126, 126, ..., 128, 0, 130, ...]   # 256 uint8
+_FNUZ_TO_FN_LUT = [0, 0, 1, 2, 2, 2, 3, 4, ...]                                # 256 uint8
+
+def _make_peer_dtype_lut(self_dtype, peer_dtype):
+    if self_dtype == peer_dtype: return None, "same dtype"
+    if peer_dtype=="fp8_e4m3fn"   and self_dtype=="fp8_e4m3fnuz":  # CUDA-&gt;ROCm
+        return torch.tensor(_FN_TO_FNUZ_LUT, dtype=torch.uint8), "fn -&gt; fnuz"
+    if peer_dtype=="fp8_e4m3fnuz" and self_dtype=="fp8_e4m3fn":    # ROCm-&gt;CUDA
+        return torch.tensor(_FNUZ_TO_FN_LUT, dtype=torch.uint8), "fnuz -&gt; fn"
+    return None, "unsupported pair"</code></pre>
+<p><span class="en">The table is <b>installed at handshake</b> (keyed by peer engine id) and <b>applied on receive</b> in <code class="inl">get_finished()</code>, right after the RDMA GET completes:</span>
+<span class="ko">테이블은 <b>핸드셰이크에서 설치</b>(peer 엔진 id 키)되고, RDMA GET 완료 직후 <code class="inl">get_finished()</code>에서 <b>수신 시 적용</b>된다:</span></p>
+<pre><code>def _apply_peer_dtype_lut(self, peer_engine_id, grouped_block_ids):
+    lut_host = self._peer_dtype_luts.get(peer_engine_id)
+    if lut_host is None: return                       # no-op if no LUT for peer
+    lut = self._peer_dtype_luts_device.get(peer_engine_id) or lut_host.to(self.device_type)
+    for group_block_ids in grouped_block_ids:         # 0.22.1: grouped list[list[int]]
+        indices = torch.tensor(group_block_ids, device=..., dtype=torch.long)
+        for cache in ...device_kv_caches (split K and V):
+            blocks = cache[indices]
+            flat = blocks.reshape(-1).view(torch.uint8)   <span class="add"># reinterpret as raw bytes</span>
+            converted = lut[flat.long()]                  <span class="add"># out = LUT[in], vectorized</span>
+            cache[indices] = converted.view(orig_shape).view(orig_dtype)
+
+# get_finished(): ... after transfer done
+self._apply_peer_dtype_lut(meta.remote.engine_id, meta.local_physical_block_ids)  <span class="add"># PR4</span></code></pre>
+<p><span class="en"><b>Principle:</b> view the received fp8 block as raw <code class="inl">uint8</code>, index the 256-entry table (a single vectorized gather on the GPU), and write it back in place. Exact and cheap — no float round-trip, one kernel over the just-received blocks. <b>Before this:</b> raw fp8 bytes crossed the vendor gap unmodified → the decode node read garbage KV → wrong tokens.</span>
+<span class="ko"><b>원리:</b> 수신한 fp8 블록을 원시 <code class="inl">uint8</code>로 보고 256-엔트리 테이블을 인덱싱(GPU에서 벡터화 gather 한 번), 제자리에 다시 쓴다. 정확하고 싸다 — float 왕복 없음, 방금 받은 블록에 커널 한 번. <b>이전엔:</b> 원시 fp8 바이트가 벤더 간극을 그대로 건너가 decode 노드가 쓰레기 KV를 읽음 → 틀린 토큰.</span></p>
+
+<h3><span class="en">Bidirectional HND↔NHD permute</span><span class="ko">양방향 HND↔NHD permute</span></h3>
+<p><span class="en">CUDA FlashAttention lays a KV block out as <code class="inl">NHD</code> (tokens, heads, dim); ROCm AITER as <code class="inl">HND</code> (heads, tokens, dim). Reconciling them is a single axis swap (1↔2). Stock 0.22.1's experimental support only accepted <b>one</b> direction — remote HND → local NHD:</span>
+<span class="ko">CUDA FlashAttention은 KV 블록을 <code class="inl">NHD</code>(토큰·헤드·차원)로, ROCm AITER는 <code class="inl">HND</code>(헤드·토큰·차원)로 둔다. 맞추는 건 축 하나 스왑(1↔2). 스톡 0.22.1의 실험 지원은 <b>한</b> 방향만 받았다 — 원격 HND → 로컬 NHD:</span></p>
+<pre><code>- if (self.kv_transfer_config.enable_permute_local_kv         <span class="del"># before: only HND-&gt;NHD</span>
+-         and nixl_agent_meta.kv_cache_layout == "HND"):
++ if self.kv_transfer_config.enable_permute_local_kv:         <span class="add"># after: either direction</span>
++     # permute swaps axes 1 and 2 — involutive, so one impl handles both ways
+      assert not self._is_hma_required
+      ... enable permute on local device KV ...</code></pre>
+<p><span class="en"><b>Principle:</b> the permute (<code class="inl">swapaxes(1,2)</code>) is its own inverse — the same op turns NHD→HND and HND→NHD. So dropping the <code class="inl">== "HND"</code> guard safely enables both directions (H100-NHD prefill → MI300-HND decode <i>and</i> the reverse). The old code needlessly special-cased one direction.</span>
+<span class="ko"><b>원리:</b> permute(<code class="inl">swapaxes(1,2)</code>)는 자기 자신이 역함수 — 같은 연산이 NHD→HND와 HND→NHD를 모두 한다. 그래서 <code class="inl">== "HND"</code> 가드를 없애면 양방향(H100-NHD prefill → MI300-HND decode <i>와</i> 그 반대)이 안전하게 열린다. 기존 코드는 한 방향만 불필요하게 특수 처리했다.</span></p>
+<p><a class="src" href="https://github.com/moreh-dev/MoAI-Fabric/blob/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches/vllm-cuda/02-nixl-connector.diff">02-nixl-connector.diff</a> · <a class="src" href="https://github.com/moreh-dev/MoAI-Fabric/blob/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches/PORTING_NOTES.md">PORTING_NOTES.md</a></p>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">Patch 03 — force GDR-direct RDMA</span><span class="ko">패치 03 — GDR-direct RDMA 강제</span></h2>
+<p><span class="en"><b>File:</b> <code class="inl">distributed/nixl_utils.py</code>. <b>New in 0.22.1</b> — no 0.17.0 origin. This is a one-liner with a big story.</span>
+<span class="ko"><b>파일:</b> <code class="inl">distributed/nixl_utils.py</code>. <b>0.22.1에서 신규</b> — 0.17.0 원본 없음. 사연 많은 한 줄이다.</span></p>
+<pre><code>from vllm.platforms import current_platform
+logger = init_logger(__name__)
+<span class="add">+ # vLLM 0.22.1 scrubs UCX_* from the EngineCore worker env, so a launch-time</span>
+<span class="add">+ # `export UCX_IB_GPU_DIRECT_RDMA=yes` never reaches the transfer process.</span>
+<span class="add">+ # Inject here — this module is imported before rixl/nixl (before ucp_init),</span>
+<span class="add">+ # so UCX reads it at context init. GDR-direct is the only rndv GET that</span>
+<span class="add">+ # composes cuda&lt;-&gt;rocm; host-staging fails: "cannot find remote protocol</span>
+<span class="add">+ # ... get(multi) into rocm/GPU0 from cuda" -&gt; NIXL_ERR_CANCELED.</span>
+<span class="add">+ os.environ.setdefault("UCX_IB_GPU_DIRECT_RDMA", "yes")</span></code></pre>
+<p><span class="en"><b>Before:</b> operators set the flag at launch (<code class="inl">export UCX_IB_GPU_DIRECT_RDMA=yes</code>). But 0.22.1 hardened the EngineCore: the multiprocessing transfer worker inherits only an <b>allowlisted</b> env, and <code class="inl">UCX_*</code> is scrubbed. So the flag reached the API server but <b>not the process doing the RDMA</b>. UCX then fell back to a <b>host-staged rndv GET</b>, and UCX protov2 <b>cannot compose that path cross-vendor</b> — it errors <code class="inl">cannot find remote protocol … get(multi) into rocm/GPU0 from cuda</code> → <code class="inl">NIXL_ERR_CANCELED</code>. The transfer simply never happened.</span>
+<span class="ko"><b>이전:</b> 운영자가 실행 시 플래그를 걸었다(<code class="inl">export UCX_IB_GPU_DIRECT_RDMA=yes</code>). 하지만 0.22.1은 EngineCore를 강화 — 멀티프로세싱 전송 worker는 <b>allowlist</b> env만 상속하고 <code class="inl">UCX_*</code>는 지워진다. 그래서 플래그는 API 서버엔 닿아도 <b>RDMA를 실제 하는 프로세스엔 안 닿았다</b>. UCX는 <b>host-staged rndv GET</b>으로 폴백했고, UCX protov2는 <b>그 경로를 크로스벤더로 구성하지 못한다</b> — <code class="inl">cannot find remote protocol … get(multi) into rocm/GPU0 from cuda</code> → <code class="inl">NIXL_ERR_CANCELED</code>. 전송이 아예 안 일어났다.</span></p>
+<p><span class="en"><b>Principle:</b> set the knob from <i>inside</i> the process that will do the RDMA, at <b>module import — before <code class="inl">rixl</code>/<code class="inl">ucp_init</code></b> reads its env. <code class="inl">setdefault</code> (not <code class="inl">=</code>) so an explicit operator override still wins. This forces GDR-direct zero-copy — the one rndv path UCX can compose across CUDA↔ROCm. <b>Requires GDR-capable nodes</b> (register GPU memory via dmabuf); no-GDR SR-IOV nodes must use host-staging (<code class="inl">kv_buffer_device=cpu</code>) instead.</span>
+<span class="ko"><b>원리:</b> RDMA를 할 <i>그 프로세스 안</i>에서, <b>모듈 import 시 — <code class="inl">rixl</code>/<code class="inl">ucp_init</code>가 env를 읽기 전에</b> 노브를 건다. <code class="inl">=</code>가 아니라 <code class="inl">setdefault</code>라 운영자의 명시적 override는 여전히 이긴다. 이게 GDR-direct 제로카피를 강제 — UCX가 CUDA↔ROCm로 구성 가능한 유일한 rndv 경로. <b>GDR 가능 노드 필요</b>(dmabuf로 GPU 메모리 등록); GDR 없는 SR-IOV 노드는 host-staging(<code class="inl">kv_buffer_device=cpu</code>)을 써야 한다.</span></p>
+<p><a class="src" href="https://github.com/moreh-dev/MoAI-Fabric/blob/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches/vllm-cuda/03-het-ucx-env.diff">03-het-ucx-env.diff</a></p>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Known gap (PR2) &amp; gotchas</span><span class="ko">미완성(PR2)과 함정</span></h2>
+<p><span class="en"><b>PR2 — MLA cross-block-size scatter — is deliberately NOT ported.</b> In 0.17.0 a negative <code class="inl">block_size_ratio</code> drove a "scatter <code class="inl">|ratio|</code> sub-descriptors per remote block" path (for FLASHMLA block=64 → AITER_MLA block=1). In 0.22.1 <code class="inl">TransferTopology</code> is <b>unsigned by construction</b> and the "remote bigger" case is routed through a different axis (<code class="inl">tp_ratio&lt;0</code> + the new <code class="inl">_compute_desc_ids</code> / <code class="inl">_apply_prefix_caching</code> / <code class="inl">get_mapped_blocks</code> machinery that didn't exist before). A textual transplant is impossible — PR2 needs a fresh redesign on 0.22.1's path (or a check that upstream <code class="inl">select_common_block_size</code> already covers it).</span>
+<span class="ko"><b>PR2 — MLA 교차 블록 크기 scatter — 는 일부러 미이식.</b> 0.17.0에선 음수 <code class="inl">block_size_ratio</code>가 "원격 블록당 <code class="inl">|ratio|</code>개 서브 디스크립터로 흩뿌리는" 경로를 몰았다(FLASHMLA 64 → AITER_MLA 1). 0.22.1의 <code class="inl">TransferTopology</code>는 <b>구조상 부호 없음</b>이고 "원격이 큰" 경우는 다른 축(<code class="inl">tp_ratio&lt;0</code> + 예전엔 없던 <code class="inl">_compute_desc_ids</code>/<code class="inl">_apply_prefix_caching</code>/<code class="inl">get_mapped_blocks</code>)으로 라우팅된다. 텍스트 이식 불가 — PR2는 0.22.1 경로 위 재설계 필요(또는 업스트림 <code class="inl">select_common_block_size</code>가 이미 커버하는지 확인).</span></p>
+<table>
+<tr><th><span class="en">Path</span><span class="ko">경로</span></th><th><span class="en">0.22.1 status</span><span class="ko">0.22.1 상태</span></th></tr>
+<tr><td><b>MHA cross-vendor</b> (Llama-3.1-8B, GPT-OSS; block 16↔16, ratio +1)</td><td><span class="en">✅ supported</span><span class="ko">✅ 지원</span></td></tr>
+<tr><td><span class="en">Same-block MLA</span><span class="ko">동일 블록 MLA</span></td><td><span class="en">✅ supported</span><span class="ko">✅ 지원</span></td></tr>
+<tr><td><b>MLA cross-block-size</b> (DeepSeek FLASHMLA 64 ↔ AITER_MLA 1)</td><td><span class="en">❌ not yet — needs PR2 redesign</span><span class="ko">❌ 아직 — PR2 재설계 필요</span></td></tr>
+</table>
+<div class="callout c-purple"><span class="tag"><span class="en">two gotchas carried from review</span><span class="ko">리뷰에서 넘어온 함정 둘</span></span>
+<ul style="margin:8px 0 2px;padding-left:20px">
+<li><span class="en"><b><code class="inl">enforce_handshake_compat</code></b> — 0.22.1 added a SHA-256 handshake gate over model/<code class="inl">cache_dtype</code>/<code class="inl">attn_backend</code>. With the default <code class="inl">True</code>, a genuine CUDA↔ROCm <code class="inl">fn</code>-vs-<code class="inl">fnuz</code> pair is <b>rejected at the hash gate before PR3/PR4 ever run</b>. Cross-vendor runs must set <code class="inl">enforce_handshake_compat: false</code> in <code class="inl">kv_connector_extra_config</code> (then <code class="inl">strict_kv_compat</code> governs).</span><span class="ko"><b><code class="inl">enforce_handshake_compat</code></b> — 0.22.1은 model/<code class="inl">cache_dtype</code>/<code class="inl">attn_backend</code>에 대한 SHA-256 핸드셰이크 게이트를 추가했다. 기본값 <code class="inl">True</code>면 진짜 CUDA↔ROCm <code class="inl">fn</code>-vs-<code class="inl">fnuz</code> 쌍이 <b>PR3/PR4가 돌기도 전에 해시 게이트에서 거부</b>된다. 크로스벤더 런은 <code class="inl">kv_connector_extra_config</code>에 <code class="inl">enforce_handshake_compat: false</code>를 넣어야 한다(그러면 <code class="inl">strict_kv_compat</code>가 관장).</span></li>
+<li><span class="en"><b><code class="inl">use_host_buffer</code> ordering</b> — with host buffers on, <code class="inl">_apply_peer_dtype_lut</code> runs in <code class="inl">get_finished</code> <i>before</i> the host→device copy, so the conversion would be overwritten. This ordering is verbatim from 0.17.0 and is a non-issue for the direct-VRAM path (<code class="inl">use_host_buffer=False</code>) actually used. Flagged for anyone enabling host buffers.</span><span class="ko"><b><code class="inl">use_host_buffer</code> 순서</b> — host buffer를 켜면 <code class="inl">_apply_peer_dtype_lut</code>가 <code class="inl">get_finished</code>에서 host→device 복사 <i>전에</i> 돌아 변환이 덮어써진다. 이 순서는 0.17.0 그대로이며 실제 쓰는 직접 VRAM 경로(<code class="inl">use_host_buffer=False</code>)에선 문제없다. host buffer를 켜는 사람을 위해 표시.</span></li>
+</ul></div>
+<div class="callout c-green"><span class="tag"><span class="en">editor's note — why this shape of fix</span><span class="ko">편집자 주 — 왜 이런 형태의 수정인가</span></span>
+<span class="en">All three patches share one philosophy: <b>keep stock vLLM untouched on the hot path, and reconcile vendor differences at the transfer boundary</b>. The fp8 LUT and layout permute run <i>only</i> on received blocks; the capability handshake adds a trailing optional field (no wire break); the UCX knob is a <code class="inl">setdefault</code>. This is what lets the same diff apply to both official images and keeps same-vendor performance byte-identical to upstream — the mismatch handling is pure overlay, invisible unless a cross-vendor peer connects.</span>
+<span class="ko">세 패치는 한 철학을 공유한다: <b>hot path의 스톡 vLLM은 건드리지 않고, 벤더 차이는 전송 경계에서 화해</b>. fp8 LUT와 레이아웃 permute는 수신 블록에만 돌고; capability 핸드셰이크는 말미 optional 필드만 추가(와이어 안 깨짐); UCX 노브는 <code class="inl">setdefault</code>. 덕분에 같은 diff가 두 공식 이미지에 적용되고 동일 벤더 성능은 업스트림과 바이트 동일 — 불일치 처리는 순수 오버레이라, 크로스벤더 peer가 붙기 전엔 보이지 않는다.</span></div>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<ul class="srcs">
+<li>MoAI-Fabric @ <code>4917a08</code> — <a href="https://github.com/moreh-dev/MoAI-Fabric/tree/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches">vllm-0.22.1/nixl/patches</a>: <a href="https://github.com/moreh-dev/MoAI-Fabric/blob/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches/vllm-cuda/01-block-size-ratio.diff">01</a> · <a href="https://github.com/moreh-dev/MoAI-Fabric/blob/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches/vllm-cuda/02-nixl-connector.diff">02</a> · <a href="https://github.com/moreh-dev/MoAI-Fabric/blob/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches/vllm-cuda/03-het-ucx-env.diff">03</a> · <a href="https://github.com/moreh-dev/MoAI-Fabric/blob/4917a08d22985b904a977379ac81a79605b91e9a/vllm-0.22.1/nixl/patches/PORTING_NOTES.md">PORTING_NOTES.md</a></li>
+<li>vLLM <a href="https://github.com/vllm-project/vllm/tree/v0.22.1">v0.22.1</a> — the NIXL connector <code>v1/nixl/</code> package (<code>metadata.py</code>, <code>worker.py</code>) and <code>kv_transfer/kv_connector/utils.py</code> (<code>TransferTopology</code>).</li>
+<li>vLLM PR <a href="https://github.com/vllm-project/vllm/pull/27743">#27743</a> — <code>enable_cross_layers_blocks</code> (the reason the stack moved to ≥0.22).</li>
+<li>fp8 formats — OCP <code>e4m3fn</code> vs ROCm/AMD <code>e4m3fnuz</code> (no ±inf, single NaN, bias 8); the <code>fn↔fnuz</code> LUTs are byte-for-byte from the production-validated 0.17.0 tree.</li>
+<li>UCX — <code>UCX_IB_GPU_DIRECT_RDMA</code>, protov2 rndv composition; NIXL / RIXL (ROCm fork) over InfiniBand.</li>
+</ul>
+</section>
+
+<footer>
+  <span class="en">Code-walk of the MoAI-Fabric vLLM 0.22.1 cross-vendor P/D patches (moreh-dev/MoAI-Fabric @ 4917a08) · snippets trimmed from the repo diffs; line references pinned to that commit · 2026-07-01.</span>
+  <span class="ko">MoAI-Fabric vLLM 0.22.1 크로스벤더 P/D 패치 코드 분석(moreh-dev/MoAI-Fabric @ 4917a08) · 스니펫은 레포 diff에서 발췌; 줄 참조는 해당 커밋 핀 · 2026-07-01.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
