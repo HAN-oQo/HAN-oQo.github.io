@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TileRT — the tile-based ultra-low-latency LLM runtime, and what's open vs binary</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  .wrap{max-width:940px;margin:0 auto;padding:48px 22px 96px}
+  .hero h1{line-height:1.25;margin:.2em 0}
+  .lede{font-size:16px;color:var(--muted);line-height:1.6}
+  .meta{margin:12px 0 2px;display:flex;flex-wrap:wrap;gap:6px}
+  .badge{font-size:12px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+  .badge a{text-decoration:none}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:22px 0}
+  .toc h4{margin:0 0 6px;font-size:13px;color:var(--muted)}
+  .toc ol{margin:0;padding-left:22px} .toc li{margin:3px 0}
+  h2 .num{display:inline-block;min-width:1.7em;height:1.7em;line-height:1.7em;text-align:center;background:var(--ink);color:var(--bg);border-radius:8px;font-size:.7em;margin-right:.5em;vertical-align:middle}
+  h2{margin-top:38px;border-top:1px solid var(--line);padding-top:22px}
+  h3{margin-top:26px}
+  code.inl{background:var(--code-bg);color:var(--code-ink);padding:1px 6px;border-radius:5px;font-size:12.5px;font-family:"SF Mono",Menlo,Consolas,monospace}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;font-size:12px;line-height:1.5}
+  pre code{font-family:"SF Mono",Menlo,Consolas,monospace}
+  .add{color:var(--green-ink)} .del{color:var(--red-ink)}
+  .callout{border-radius:10px;padding:14px 16px;margin:16px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-green{background:var(--green-bg);color:var(--green-ink)} .c-green .tag{color:var(--green-ink)}
+  blockquote.q{margin:14px 0;padding:10px 16px;border-left:3px solid var(--blue-bd);background:var(--blue-bg);border-radius:0 8px 8px 0}
+  blockquote.q p{margin:0;font-style:italic} blockquote.q cite{font-size:12px;color:var(--muted);font-style:normal}
+  .figcap{font-size:12px;color:var(--muted);margin:6px 0 20px;line-height:1.5}
+  .fig{display:block;max-width:100%;height:auto;margin:14px 0 2px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  table{border-collapse:collapse;width:100%;font-size:13px;margin:12px 0}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:var(--card);font-weight:700}
+  .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin:14px 0}
+  .mini{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px}
+  .mini b{color:var(--ink)}
+  .src{font-size:12px;color:var(--blue-ink)}
+  .srcs{font-size:12.5px;line-height:1.7}
+  footer{margin-top:40px;border-top:1px solid var(--line);padding-top:16px;font-size:12px;color:var(--faint);line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Inference</span><span class="ko">추론</span></a> · <span class="en">TileRT</span><span class="ko">TileRT</span></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">TileRT — the tile-based ultra-low-latency LLM runtime (and what's open vs binary)</span>
+    <span class="ko">TileRT — 타일 기반 초저지연 LLM 런타임 (그리고 오픈 vs 바이너리)</span>
+  </h1>
+  <p class="lede">
+    <span class="en"><b>TileRT</b> (from the TileLang team) serves LLMs for <b>ultra-low latency</b> — millisecond time-per-output-token, 1000+ tokens/s on a 1-trillion-param model — by treating the whole model as fine-grained <b>tile-level tasks</b> that a runtime overlaps and schedules across 8 GPUs. This note starts from scratch — <b>what a "tile" even is</b> — then walks what TileRT is, how it works, how to run it, and a code-walk of the repo (pinned to <code class="inl">242f7b3</code>). Honesty up front: the shipped repo is a thin Python <b>orchestration</b> layer; the runtime and every kernel live in a <b>closed binary</b>, and every speed number is vendor-reported.</span>
+    <span class="ko"><b>TileRT</b>(TileLang 팀)는 LLM을 <b>초저지연</b>으로 서빙한다 — 밀리초 단위 토큰당 시간, 1조 파라미터 모델에서 1000+ 토큰/s — 모델 전체를 잘게 쪼갠 <b>타일 단위 태스크</b>로 보고 런타임이 8-GPU에 겹치며 스케줄한다. 이 노트는 <b>"타일"이 뭔지</b>부터 시작해 TileRT가 무엇이고, 어떻게 동작하고, 어떻게 돌리고, 레포 코드까지(<code class="inl">242f7b3</code> 핀) 짚는다. 먼저 솔직히: 공개 레포는 얇은 Python <b>오케스트레이션</b> 층이고, 런타임과 모든 커널은 <b>닫힌 바이너리</b>에 있으며, 모든 속도 수치는 벤더 발표다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://www.tilert.ai/">tilert.ai</a></span>
+    <span class="badge"><a href="https://github.com/tile-ai/tilert/tree/242f7b30e46226bae1d9709d10d03c445167aef6">code @ 242f7b3</a></span>
+    <span class="badge"><a href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS (blog)</a></span>
+    <span class="badge"><a href="https://github.com/tile-ai/tilelang">TileLang</a></span>
+    <span class="badge"><span class="en">Deep dive · code-walk</span><span class="ko">딥다이브 · 코드 분석</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-07-01">2026-07-01</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. What is a "tile"? (from scratch)</span><span class="ko">1. "타일"이 뭔가? (기초부터)</span></a></li>
+    <li><a href="#s2"><span class="en">2. What TileRT is &amp; why — speed as the goal</span><span class="ko">2. TileRT란 &amp; 왜 — 속도가 목표</span></a></li>
+    <li><a href="#s3"><span class="en">3. How it works — the tile runtime (vendor's telling)</span><span class="ko">3. 어떻게 동작하나 — 타일 런타임 (벤더 설명)</span></a></li>
+    <li><a href="#s4"><span class="en">4. Usage — install, convert weights, generate</span><span class="ko">4. 사용법 — 설치·가중치 변환·생성</span></a></li>
+    <li><a href="#s5"><span class="en">5. Code flow — the open Python &amp; the binary wall</span><span class="ko">5. 코드 흐름 — 공개 Python과 바이너리 벽</span></a></li>
+    <li><a href="#s6"><span class="en">6. Reported effects (vendor numbers, flagged)</span><span class="ko">6. 보고된 효과 (벤더 수치, 표시)</span></a></li>
+    <li><a href="#s7"><span class="en">7. Status &amp; our take</span><span class="ko">7. 상태 &amp; 우리 관점</span></a></li>
+    <li><a href="#s8"><span class="en">8. Sources</span><span class="ko">8. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="grid3">
+  <div class="mini"><b>Tile</b><br><span class="en">A small rectangular sub-block of a big tensor op that fits in fast on-chip memory — the unit of compute (and, in TileRT, of scheduling). §1.</span><span class="ko">큰 텐서 연산의 작은 직사각형 하위 블록으로 빠른 온칩 메모리에 들어가는 것 — 연산의 단위(TileRT에선 스케줄링 단위). §1.</span></div>
+  <div class="mini"><b>TileLang / TileScale</b><br><span class="en">TileLang = an open DSL (on Apache TVM) to write GPU kernels at the tile level. TileScale = its distributed extension. TileRT is the closed runtime built on these ideas.</span><span class="ko">TileLang = 타일 수준으로 GPU 커널을 쓰는 오픈 DSL(Apache TVM 위). TileScale = 그 분산 확장. TileRT는 이 아이디어 위 닫힌 런타임.</span></div>
+  <div class="mini"><b>TPOT</b><br><span class="en">Time-Per-Output-Token — the per-token decode latency a single user feels. TileRT optimizes <i>this</i>, not aggregate throughput.</span><span class="ko">토큰당 시간 — 한 사용자가 느끼는 토큰별 디코드 지연. TileRT는 처리량이 아니라 <i>이걸</i> 최적화한다.</span></div>
+  <div class="mini"><b>Persistent engine kernel</b><br><span class="en">TileRT's design (per its blog): compile the whole forward AOT into <i>one</i> resident GPU kernel; the host launches it once, then it runs continuously. §3.</span><span class="ko">TileRT 설계(블로그 기준): forward 전체를 AOT로 <i>하나의</i> 상주 GPU 커널로 컴파일; host는 한 번만 실행, 이후 계속 돈다. §3.</span></div>
+  <div class="mini"><b>MTP / DFlash</b><br><span class="en">Multi-Token Prediction: draft several tokens per step, verify against the model. TileRT's variant is DFlash (block-level masked parallel prediction).</span><span class="ko">Multi-Token Prediction: 스텝당 여러 토큰을 초안 생성해 모델로 검증. TileRT판은 DFlash(블록 단위 마스크 병렬 예측).</span></div>
+  <div class="mini"><b>DSA / MLA</b><br><span class="en">DeepSeek-V3.2's Sparse Attention (top-k KV selection) over Multi-head Latent Attention (compressed KV). The two models TileRT ships are DSA-V3.2 and GLM-5.</span><span class="ko">DeepSeek-V3.2의 Sparse Attention(top-k KV 선택) + MLA(압축 KV). TileRT가 내놓는 두 모델이 DSA-V3.2와 GLM-5.</span></div>
+</div>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <ul style="margin:10px 0 2px;padding-left:20px">
+    <li><span class="en"><b>Goal:</b> ultra-low single-user latency (millisecond TPOT), not throughput — for agents, coding, voice, real-time. TileRT's thesis: <i>"speed is the next scaling law."</i></span><span class="ko"><b>목표:</b> 처리량이 아니라 초저 단일 사용자 지연(밀리초 TPOT) — 에이전트·코딩·음성·실시간용. TileRT의 주장: <i>"속도가 다음 스케일링 법칙"</i>.</span></li>
+    <li><span class="en"><b>How (vendor's telling):</b> compile the whole model into one <b>persistent engine kernel</b>, decompose ops into fine-grained <b>tiles</b>, and <b>overlap</b> compute / I/O / communication so no GPU sits idle at op boundaries; specialize warps→blocks→whole-GPUs to roles.</span><span class="ko"><b>방법(벤더 설명):</b> 모델 전체를 하나의 <b>persistent engine 커널</b>로 컴파일, 연산을 잘게 <b>타일</b>로 쪼개고, 연산 경계에서 GPU가 놀지 않도록 compute / I/O / 통신을 <b>겹친다</b>; warp→block→GPU를 역할별로 특화.</span></li>
+    <li><span class="en"><b>What's actually open:</b> the repo is a <b>thin orchestration layer</b> — model = a graph of fused op <i>wrappers</i>, weight sharding, and a generate loop. The whole forward is <b>one binary op</b> (<code class="inl">dsa_show_hands</code>); the runtime + every kernel are a closed <code class="inl">.so</code>. No TileLang in the shipping path.</span><span class="ko"><b>실제 공개된 것:</b> 레포는 <b>얇은 오케스트레이션 층</b> — 모델 = 융합 op <i>래퍼</i> 그래프 + 가중치 샤딩 + 생성 루프. forward 전체는 <b>바이너리 op 하나</b>(<code class="inl">dsa_show_hands</code>); 런타임과 모든 커널은 닫힌 <code class="inl">.so</code>. 배포 경로엔 TileLang 없음.</span></li>
+    <li><span class="en"><b>Numbers:</b> 1000+ TPS on a 1T model (8-GPU node), 500–600 TPS GLM-5/DSV3.2 on 8× B200 — <b>all vendor-reported, none independently verified</b>, reproducibility metadata undisclosed. B200-only pinned binary wheel.</span><span class="ko"><b>수치:</b> 1T 모델 1000+ TPS(8-GPU 노드), 8× B200에서 GLM-5/DSV3.2 500–600 TPS — <b>전부 벤더 발표, 독립 검증 없음</b>, 재현 메타데이터 비공개. B200 전용 핀 바이너리 휠.</span></li>
+  </ul>
+</div>
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">What is a "tile"? (from scratch)</span><span class="ko">"타일"이 뭔가? (기초부터)</span></h2>
+<p><span class="en">Start with the one hardware fact everything follows from: a GPU has <b>enormous compute but is starved for memory bandwidth</b>. Reading a number from HBM (the GPU's main memory) is ~100× slower than doing arithmetic on it. So the whole game of fast GPU code is: <b>read a chunk of data from HBM once, then reuse it many times</b> out of the tiny fast on-chip memory (registers + shared memory / SRAM) before touching HBM again.</span>
+<span class="ko">모든 것이 따라나오는 하드웨어 사실 하나부터: GPU는 <b>연산은 엄청나지만 메모리 대역폭이 굶주려</b> 있다. HBM(GPU 주메모리)에서 숫자 하나 읽는 게 그 위에서 산술하는 것보다 ~100배 느리다. 그래서 빠른 GPU 코드의 핵심은: <b>HBM에서 데이터 덩어리를 한 번 읽어, 다시 HBM을 건드리기 전에 작은 빠른 온칩 메모리(레지스터 + shared memory / SRAM)에서 여러 번 재사용</b>하는 것이다.</span></p>
+<p><span class="en"><b>A tile is that chunk.</b> Take a matrix multiply <code class="inl">C = A × B</code> (the core of every LLM layer). Instead of computing all of <code class="inl">C</code> at once, you cut it into small rectangular <b>tiles</b> — say 128×128. To compute one output tile of <code class="inl">C</code>, you load the matching tiles of <code class="inl">A</code> and <code class="inl">B</code> into fast memory, multiply-accumulate, and only then write the tile out. Each GPU thread-block owns one output tile. Loading a tile costs one slow HBM read but feeds thousands of fast multiply-adds — <b>that reuse is where the speed comes from</b>. Attention (QKᵀ, softmax·V) tiles the same way. This "tiling" is the single most important trick in high-performance GPU kernels.</span>
+<span class="ko"><b>타일이 바로 그 덩어리다.</b> 행렬곱 <code class="inl">C = A × B</code>(모든 LLM 레이어의 핵심)를 보자. <code class="inl">C</code> 전체를 한 번에 계산하는 대신, 작은 직사각형 <b>타일</b> — 예: 128×128 — 로 쪼갠다. <code class="inl">C</code>의 출력 타일 하나를 계산하려면 <code class="inl">A</code>·<code class="inl">B</code>의 대응 타일을 빠른 메모리에 올려 곱셈-누적하고, 그 다음에야 타일을 내보낸다. 각 GPU 스레드블록이 출력 타일 하나를 맡는다. 타일 하나 로드는 느린 HBM 읽기 한 번이지만 수천 번의 빠른 곱셈-덧셈을 먹인다 — <b>그 재사용에서 속도가 나온다</b>. 어텐션(QKᵀ, softmax·V)도 같은 식으로 타일링한다. 이 "타일링"이 고성능 GPU 커널의 가장 중요한 트릭이다.</span></p>
+
+<svg class="fig" viewBox="0 0 900 300" role="img" aria-label="matrix multiply tiling into fast on-chip memory">
+  <text x="16" y="24" font-size="14" font-weight="700" fill="var(--ink)">A tile = a sub-block loaded into fast memory once, reused for many multiply-adds</text>
+  <!-- HBM -->
+  <rect x="24" y="52" width="180" height="210" rx="9" fill="var(--card)" stroke="var(--line)"/>
+  <text x="114" y="74" text-anchor="middle" font-size="12" font-weight="700" fill="var(--muted)">HBM (slow, ~TB/s)</text>
+  <!-- A -->
+  <text x="60" y="98" font-size="11" fill="var(--ink)">A</text>
+  <rect x="40" y="104" width="60" height="120" fill="none" stroke="var(--line)"/>
+  <rect x="40" y="104" width="60" height="30" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <!-- B -->
+  <text x="150" y="98" font-size="11" fill="var(--ink)">B</text>
+  <rect x="120" y="104" width="70" height="60" fill="none" stroke="var(--line)"/>
+  <rect x="120" y="104" width="30" height="60" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <!-- arrow to SRAM -->
+  <line x1="204" y1="150" x2="300" y2="150" stroke="var(--ink)" stroke-width="2"/><polygon points="300,150 288,144 288,156" fill="var(--ink)"/>
+  <text x="252" y="142" text-anchor="middle" font-size="10.5" fill="var(--muted)">load tiles</text>
+  <!-- SRAM box -->
+  <rect x="312" y="70" width="260" height="180" rx="9" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="442" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--amber-ink)">fast on-chip (SRAM/registers, ~10× faster)</text>
+  <rect x="336" y="110" width="52" height="52" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="362" y="141" text-anchor="middle" font-size="11" fill="var(--blue-ink)">A-tile</text>
+  <text x="400" y="141" text-anchor="middle" font-size="16" fill="var(--amber-ink)">×</text>
+  <rect x="414" y="110" width="52" height="52" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="440" y="141" text-anchor="middle" font-size="11" fill="var(--green-ink)">B-tile</text>
+  <text x="480" y="141" text-anchor="middle" font-size="16" fill="var(--amber-ink)">→</text>
+  <rect x="494" y="110" width="52" height="52" fill="var(--purple-bg)" stroke="var(--purple-bd)"/><text x="520" y="141" text-anchor="middle" font-size="11" fill="var(--purple-ink)">C-tile</text>
+  <text x="442" y="196" text-anchor="middle" font-size="11" fill="var(--amber-ink)">thousands of multiply-adds, no HBM traffic</text>
+  <text x="442" y="216" text-anchor="middle" font-size="10.5" fill="var(--muted)">one thread-block = one output tile</text>
+  <!-- arrow out -->
+  <line x1="572" y1="150" x2="668" y2="150" stroke="var(--ink)" stroke-width="2"/><polygon points="668,150 656,144 656,156" fill="var(--ink)"/>
+  <text x="620" y="142" text-anchor="middle" font-size="10.5" fill="var(--muted)">write tile</text>
+  <rect x="680" y="70" width="196" height="180" rx="9" fill="var(--card)" stroke="var(--line)"/>
+  <text x="778" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="var(--muted)">C (in HBM)</text>
+  <rect x="720" y="110" width="120" height="120" fill="none" stroke="var(--line)"/>
+  <rect x="720" y="110" width="40" height="40" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+</svg>
+<p class="figcap"><span class="en">Classic GPU tiling of a matmul. TileLang lets you write kernels at exactly this level of abstraction (tile shapes + the HBM↔SRAM↔register moves), and the compiler emits the CUDA. TileRT takes the idea up a level: it treats <b>each tile of work as a schedulable task</b>.</span><span class="ko">행렬곱의 고전적 GPU 타일링. TileLang은 바로 이 추상 수준(타일 모양 + HBM↔SRAM↔레지스터 이동)으로 커널을 쓰게 하고 컴파일러가 CUDA를 낸다. TileRT는 이를 한 단계 올려 <b>각 타일 작업을 스케줄 가능한 태스크</b>로 다룬다.</span></p>
+
+<p><span class="en">Two levels build on this:
+<b>(1) TileLang</b> — an open domain-specific language (built on Apache TVM) for writing GPU kernels <i>at the tile level</i>: you describe the tiles and the data movement, the compiler generates the kernel, instead of hand-writing threads. <b>(2) TileRT</b> — treats a whole LLM layer as many fine-grained <b>tile-level tasks</b> (a chunk of a matmul, an attention tile, a comm chunk) and its runtime <b>dynamically schedules those tasks across 8 GPUs</b>, overlapping compute with I/O and communication. So in TileRT "tile" is both the unit of <i>computation</i> and the unit of <i>scheduling</i>.</span>
+<span class="ko">여기서 두 층이 올라간다:
+<b>(1) TileLang</b> — GPU 커널을 <i>타일 수준</i>으로 쓰는 오픈 DSL(Apache TVM 위): 스레드를 손으로 짜는 대신 타일과 데이터 이동을 기술하면 컴파일러가 커널을 낸다. <b>(2) TileRT</b> — LLM 레이어 전체를 잘게 쪼갠 <b>타일 단위 태스크</b>(행렬곱 조각·어텐션 타일·통신 조각)로 보고, 런타임이 <b>그 태스크들을 8-GPU에 동적으로 스케줄</b>하며 compute를 I/O·통신과 겹친다. 그래서 TileRT에서 "타일"은 <i>연산</i>의 단위이자 <i>스케줄링</i>의 단위다.</span></p>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">What TileRT is &amp; why — speed as the goal</span><span class="ko">TileRT란 &amp; 왜 — 속도가 목표</span></h2>
+<p><span class="en">Almost every serving stack (vLLM, SGLang, TRT-LLM) optimizes <b>throughput</b> — tokens/sec across a big batch of concurrent users. TileRT optimizes the opposite corner: <b>the latency of a single request</b>, the millisecond time-per-output-token one user waits between tokens. That matters when the individual request's speed is the product — agents, coding assistants, voice, real-time decisions.</span>
+<span class="ko">거의 모든 서빙 스택(vLLM·SGLang·TRT-LLM)은 <b>처리량</b>을 최적화한다 — 많은 동시 사용자 배치에 대한 토큰/초. TileRT는 반대 코너를 최적화한다: <b>단일 요청의 지연</b>, 한 사용자가 토큰 사이에 기다리는 밀리초 단위 토큰당 시간. 개별 요청의 속도 자체가 제품일 때 — 에이전트·코딩 보조·음성·실시간 결정 — 이게 중요하다.</span></p>
+<blockquote class="q"><p>"push the latency limits of LLMs without compromising model size or quality — enabling models with hundreds of billions of parameters to achieve millisecond-level time per output token (TPOT)."</p><cite>— TileRT README · <a href="https://github.com/tile-ai/tilert">github.com/tile-ai/tilert</a> (vendor)</cite></blockquote>
+<p><span class="en">TileRT's public thesis ("Speed as the next scaling law") frames three eras — Chat (quality) → Agentic (throughput) → Autonomous (<b>speed</b>) — and argues test-time scaling makes latency load-bearing: <i>faster inference means more rollouts and deeper reasoning paths per unit time</i>. The blog's slogan is literally "Speed is all you need." Treat this as a vendor's positioning argument, not a proven law.</span>
+<span class="ko">TileRT의 공개 주장("속도가 다음 스케일링 법칙")은 세 시대를 그린다 — Chat(품질) → Agentic(처리량) → Autonomous(<b>속도</b>) — 그리고 test-time scaling이 지연을 결정적으로 만든다고 본다: <i>더 빠른 추론 = 단위 시간당 더 많은 rollout과 더 깊은 추론 경로</i>. 블로그 슬로건은 그대로 "Speed is all you need". 이는 벤더의 포지셔닝 주장이지 증명된 법칙이 아니다.</span></p>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">How it works — the tile runtime (vendor's telling)</span><span class="ko">어떻게 동작하나 — 타일 런타임 (벤더 설명)</span></h2>
+<div class="callout c-amber"><span class="tag"><span class="en">source note</span><span class="ko">출처 주의</span></span><span class="en">This section is TileRT's <b>own description</b> from its blogs. The actual implementation is inside the closed binary (§5), so none of it is verifiable from the source code.</span><span class="ko">이 절은 블로그의 TileRT <b>자체 설명</b>이다. 실제 구현은 닫힌 바이너리(§5) 안이라 소스에서 검증 불가.</span></div>
+<p><span class="en">TileRT's stated diagnosis: the bottleneck isn't raw kernel speed, it's <i>"when the next computation can even begin"</i> — the idle gaps at operator/kernel boundaries, compute↔communication stalls, and host↔device syncs. Their fixes:</span>
+<span class="ko">TileRT의 진단: 병목은 커널 자체 속도가 아니라 <i>"다음 계산이 언제 시작될 수 있는가"</i> — 연산자/커널 경계의 유휴 틈, compute↔통신 정체, host↔device 동기화다. 그 해법:</span></p>
+<ul>
+<li><span class="en"><b>Persistent engine kernel.</b> The whole forward pipeline is compiled AOT into <i>one</i> resident GPU kernel; the host launches it <b>once</b> and it runs continuously, enabling end-to-end prefetch and killing per-op launch/sync overhead.</span><span class="ko"><b>Persistent engine 커널.</b> forward 파이프라인 전체를 AOT로 <i>하나의</i> 상주 GPU 커널로 컴파일; host가 <b>한 번</b> 실행하면 계속 돌아, end-to-end 프리페치가 가능해지고 op별 실행/동기화 오버헤드가 사라진다.</span></li>
+<li><span class="en"><b>Tile-level overlap.</b> Ops are decomposed into fine-grained tiles; the runtime overlaps <b>compute, I/O, and communication</b> so a GPU never waits at a boundary.</span><span class="ko"><b>타일 단위 겹침.</b> 연산을 잘게 타일로 쪼개고, 런타임이 <b>compute·I/O·통신</b>을 겹쳐 GPU가 경계에서 기다리지 않게 한다.</span></li>
+<li><span class="en"><b>Specialization hierarchy.</b> <i>warp → block → GPU specialization</i>: dedicated warp groups / blocks / whole GPUs take distinct roles (compute vs data-movement vs communication). Concretely for GLM-5.1: "GPU 0 runs sparse-index worker; GPU 1–7 run MLA workers."</span><span class="ko"><b>특화 계층.</b> <i>warp → block → GPU 특화</i>: 전용 warp 그룹/블록/GPU가 서로 다른 역할(연산 vs 데이터 이동 vs 통신)을 맡는다. GLM-5.1 구체 예: "GPU 0 = sparse-index 워커; GPU 1–7 = MLA 워커".</span></li>
+<li><span class="en"><b>DFlash (their MTP).</b> Instead of a naive extra LM-head per step, DFlash does <b>block-level masked parallel prediction</b> — a small draft (sliding-window attention, block size 8, trained with the Muon optimizer + self-distillation) fills a whole masked block in one pass, keeping acceptance high while bounding the head's compute.</span><span class="ko"><b>DFlash (그들의 MTP).</b> 스텝마다 순진하게 LM-head를 하나 더 붙이는 대신, DFlash는 <b>블록 단위 마스크 병렬 예측</b> — 작은 draft(sliding-window attention, 블록 크기 8, Muon 옵티마이저 + self-distillation 학습)가 마스크된 블록 전체를 한 번에 채워, acceptance는 높게 유지하며 head 연산을 묶는다.</span></li>
+</ul>
+
+<svg class="fig" viewBox="0 0 900 260" role="img" aria-label="idle-gap execution versus TileRT overlapped persistent engine">
+  <text x="16" y="24" font-size="14" font-weight="700" fill="var(--ink)">The idea: kill the idle gaps between ops by overlapping compute / comm / I/O</text>
+  <!-- naive timeline -->
+  <text x="16" y="58" font-size="12" font-weight="700" fill="var(--red-ink)">Naive: launch op → wait → launch op → wait …</text>
+  <rect x="16" y="70" width="90" height="26" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="61" y="88" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">compute</text>
+  <rect x="106" y="70" width="70" height="26" fill="var(--card)" stroke="var(--line)" stroke-dasharray="4 3"/><text x="141" y="88" text-anchor="middle" font-size="10" fill="var(--muted)">idle</text>
+  <rect x="176" y="70" width="70" height="26" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="211" y="88" text-anchor="middle" font-size="10" fill="var(--green-ink)">comm</text>
+  <rect x="246" y="70" width="70" height="26" fill="var(--card)" stroke="var(--line)" stroke-dasharray="4 3"/><text x="281" y="88" text-anchor="middle" font-size="10" fill="var(--muted)">idle</text>
+  <rect x="316" y="70" width="90" height="26" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="361" y="88" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">compute</text>
+  <rect x="406" y="70" width="70" height="26" fill="var(--card)" stroke="var(--line)" stroke-dasharray="4 3"/><text x="441" y="88" text-anchor="middle" font-size="10" fill="var(--muted)">idle</text>
+  <text x="500" y="88" font-size="11" fill="var(--red-ink)">← wall-clock dominated by gaps + launches</text>
+  <!-- tilert timeline -->
+  <text x="16" y="140" font-size="12" font-weight="700" fill="var(--green-ink)">TileRT: one persistent kernel, tiles overlapped across specialized workers</text>
+  <rect x="16" y="152" width="360" height="20" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="196" y="167" text-anchor="middle" font-size="10.5" fill="var(--blue-ink)">compute tiles (GPU 1–7 MLA workers)</text>
+  <rect x="16" y="174" width="360" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="196" y="189" text-anchor="middle" font-size="10.5" fill="var(--green-ink)">communication (overlapped)</text>
+  <rect x="16" y="196" width="360" height="20" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="196" y="211" text-anchor="middle" font-size="10.5" fill="var(--amber-ink)">I/O · sparse-index (GPU 0 worker) · prefetch</text>
+  <text x="392" y="185" font-size="11" fill="var(--green-ink)">← same work, no gaps → lower TPOT</text>
+  <text x="16" y="240" font-size="10.5" fill="var(--muted)">Schematic of TileRT's described behavior (blog); not measured or read from the binary.</text>
+</svg>
+<p class="figcap"><span class="en">The mechanism as TileRT describes it: a resident kernel that overlaps tile-level compute, communication and I/O across role-specialized GPUs, removing the idle "execution gap." Sources: <a href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS</a>, <a href="https://www.tilert.ai/blog/speed-as-the-next-scaling-law-zh.html">Speed as the next scaling law</a> (both vendor).</span><span class="ko">TileRT가 설명하는 메커니즘: 역할 특화된 GPU들에 걸쳐 타일 단위 연산·통신·I/O를 겹치는 상주 커널로 유휴 "실행 틈"을 제거. 출처: <a href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS</a>, <a href="https://www.tilert.ai/blog/speed-as-the-next-scaling-law-zh.html">Speed as the next scaling law</a>(둘 다 벤더).</span></p>
+<p><span class="en"><b>TileLang → TileScale → TileRT.</b> TileLang is the open tile-level DSL; TileScale is its distributed extension (a "mega-device" abstraction with tile-level comm on NVSHMEM); TileRT is the closed runtime that packages these ideas. The README says the compiler techniques <i>"will be gradually shared with the community as they are integrated into TileLang and TileScale"</i> — i.e. TileRT ships as a binary now, the open pieces trail behind.</span>
+<span class="ko"><b>TileLang → TileScale → TileRT.</b> TileLang은 오픈 타일 DSL; TileScale은 그 분산 확장("mega-device" 추상 + NVSHMEM 위 타일 단위 통신); TileRT는 이 아이디어들을 담은 닫힌 런타임. README는 컴파일러 기법을 <i>"TileLang·TileScale에 통합되며 점진적으로 공개"</i>한다고 한다 — 즉 TileRT는 지금은 바이너리, 오픈 조각은 뒤따른다.</span></p>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">Usage — install, convert weights, generate</span><span class="ko">사용법 — 설치·가중치 변환·생성</span></h2>
+<p><span class="en"><b>v0.1.4 is a pre-built binary wheel</b> linked against an exact ABI — treat the build env as a <b>hard requirement</b>: 8× NVIDIA B200, CUDA 13.2 runtime, Linux x86_64 (glibc ≥ 2.28), Python 3.12, <code class="inl">torch==2.11.0+cu130</code>, <code class="inl">transformers==4.46.3</code>. Other combos are untested. The official Docker image is the recommended path.</span>
+<span class="ko"><b>v0.1.4는 사전 빌드 바이너리 휠</b>로 정확한 ABI에 링크됨 — 빌드 환경을 <b>하드 요구사항</b>으로: 8× NVIDIA B200, CUDA 13.2 런타임, Linux x86_64(glibc ≥ 2.28), Python 3.12, <code class="inl">torch==2.11.0+cu130</code>, <code class="inl">transformers==4.46.3</code>. 다른 조합은 미검증. 공식 Docker 이미지가 권장 경로.</span></p>
+<pre><code># install (or use the official docker image tileai/tilert:cu132-v0.1.4)
+pip install tilert==0.1.4
+python -c "import tilert, torch; print(tilert.__version__, torch.__version__)"
+
+# 1) shard the HF checkpoint into TileRT's per-device (8-shard) layout
+python -m tilert.models.preprocess.weight_converter \
+  --model_type deepseek-v32 --model_dir /path/DeepSeek-V3.2 --save_dir /path/DSV3.2-TileRT
+
+# 2) register the weights path once (~/.tilert/config.toml)
+# [weights]
+# deepseek_v3_2 = "/path/DSV3.2-TileRT"
+
+# 3) generate (CLI)
+python -m tilert.generate --model deepseek_v3_2 --max-new-tokens 1000 [--with-mtp]</code></pre>
+<pre><code># programmatic — load the backend FIRST, then build the matching generator
+import tilert
+from tilert.models.deepseek_v3_2.generator import DSAv32Generator
+from tilert.models.deepseek_v3_2.model_args import ModelArgs
+
+tilert.load_backend("deepseek_v3_2")          # dlopens libtilert_dsv32.so
+gen = DSAv32Generator(ModelArgs(), max_new_tokens=1000,
+                      model_weights_dir="/path/DSV3.2-TileRT", with_mtp=False)
+gen.from_pretrained()
+print(gen.generate("Tell me three jokes ..."))</code></pre>
+<p><span class="en"><b>Key constraints:</b> exactly <b>one backend per process</b> (<code class="inl">libtilert_dsv32.so</code> and <code class="inl">libtilert_glm5.so</code> both define the same op namespace, so DSV3.2 and GLM-5 can't coexist in one interpreter — run separate processes); <code class="inl">num_devices = 8</code> is hardwired; supported models are <code class="inl">deepseek_v3_2</code> and <code class="inl">glm5</code>.</span>
+<span class="ko"><b>핵심 제약:</b> <b>프로세스당 백엔드 하나</b>(<code class="inl">libtilert_dsv32.so</code>와 <code class="inl">libtilert_glm5.so</code>가 같은 op 네임스페이스를 정의해 DSV3.2와 GLM-5가 한 인터프리터에 공존 불가 — 별도 프로세스); <code class="inl">num_devices = 8</code> 하드코딩; 지원 모델은 <code class="inl">deepseek_v3_2</code>·<code class="inl">glm5</code>.</span></p>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Code flow — the open Python &amp; the binary wall</span><span class="ko">코드 흐름 — 공개 Python과 바이너리 벽</span></h2>
+<p><span class="en">This is the honest core. The repo's Python is a <b>thin orchestration + weight-layout layer</b>; the entire model forward is a <b>single binary op</b>. There are <b>86</b> <code class="inl">torch.ops.tilert.*</code> call sites and <b>zero</b> TileLang/TVM kernels in the shipping path (TileLang appears only in an import-gated <code class="inl">refs/kernel.py</code>, never called). All permalinks pinned to <code class="inl">242f7b3</code>.</span>
+<span class="ko">여기가 솔직한 핵심이다. 레포의 Python은 <b>얇은 오케스트레이션 + 가중치 배치 층</b>이고, 모델 forward 전체가 <b>바이너리 op 하나</b>다. 배포 경로에 <code class="inl">torch.ops.tilert.*</code> 호출 지점 <b>86개</b>, TileLang/TVM 커널은 <b>0개</b>(TileLang은 import-gated <code class="inl">refs/kernel.py</code>에만, 호출 안 됨). 모든 permalink는 <code class="inl">242f7b3</code> 핀.</span></p>
+
+<svg class="fig" viewBox="0 0 900 300" role="img" aria-label="the Python orchestration layer over the closed binary runtime">
+  <text x="16" y="24" font-size="14" font-weight="700" fill="var(--ink)">A thin Python layer registers tensors, then fires ONE binary op that is the whole model</text>
+  <!-- python side -->
+  <rect x="20" y="46" width="560" height="150" rx="10" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="300" y="68" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--green-ink)">OPEN Python (this repo)</text>
+  <rect x="40" y="80" width="150" height="40" rx="7" fill="var(--card)" stroke="var(--line)"/><text x="115" y="98" text-anchor="middle" font-size="10.5" fill="var(--ink)">generate.py (CLI)</text><text x="115" y="112" text-anchor="middle" font-size="9.5" fill="var(--muted)">load_backend + args</text>
+  <rect x="205" y="80" width="160" height="40" rx="7" fill="var(--card)" stroke="var(--line)"/><text x="285" y="98" text-anchor="middle" font-size="10.5" fill="var(--ink)">generator.py</text><text x="285" y="112" text-anchor="middle" font-size="9.5" fill="var(--muted)">decode / MTP loop</text>
+  <rect x="380" y="80" width="180" height="40" rx="7" fill="var(--card)" stroke="var(--line)"/><text x="470" y="98" text-anchor="middle" font-size="10.5" fill="var(--ink)">end2end.py + modules/ops</text><text x="470" y="112" text-anchor="middle" font-size="9.5" fill="var(--muted)">register op graph (wrappers)</text>
+  <rect x="120" y="140" width="360" height="38" rx="7" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="300" y="163" text-anchor="middle" font-size="11" fill="var(--amber-ink)">prepare_money(params, caches, …) — hand all tensor pointers to runtime, once</text>
+  <!-- boundary -->
+  <line x1="20" y1="212" x2="880" y2="212" stroke="var(--red-bd)" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="880" y="208" text-anchor="end" font-size="11" font-weight="700" fill="var(--red-ink)">torch.ops.tilert.* (86 sites) — the wall</text>
+  <!-- binary side -->
+  <rect x="20" y="224" width="860" height="60" rx="10" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+  <text x="450" y="248" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--purple-ink)">CLOSED binary — libtilert_dsv32.so / libtilert_glm5.so</text>
+  <text x="450" y="270" text-anchor="middle" font-size="11" fill="var(--purple-ink)">dsa_show_hands(token_id) = the ENTIRE forward · all kernels · tile scheduling · overlap · MTP verify · sampling</text>
+</svg>
+<p class="figcap"><span class="en">The Python↔binary boundary. Everything TileRT is <i>famous</i> for — tile scheduling, the persistent kernel, compute/comm overlap — is inside the <code class="inl">.so</code> and not readable in the repo.</span><span class="ko">Python↔바이너리 경계. TileRT가 <i>유명한</i> 모든 것 — 타일 스케줄링·persistent 커널·compute/통신 겹침 — 은 <code class="inl">.so</code> 안이라 레포에서 읽을 수 없다.</span></p>
+
+<h3><span class="en">The trace, step by step</span><span class="ko">단계별 추적</span></h3>
+<p><span class="en"><b>① Backend loader</b> — <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/__init__.py#L43-L81"><code class="inl">__init__.py:43-81</code></a>. Two <code class="inl">.so</code>s, dlopened lazily; loading a second one in a process raises.</span>
+<span class="ko"><b>① 백엔드 로더</b> — <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/__init__.py#L43-L81"><code class="inl">__init__.py:43-81</code></a>. <code class="inl">.so</code> 둘을 지연 dlopen; 한 프로세스에서 둘째 로드는 예외.</span></p>
+<pre><code>_BACKENDS = {"deepseek_v3_2": "libtilert_dsv32.so", "glm5": "libtilert_glm5.so"}
+# load_backend():
+ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL | os.RTLD_LAZY)
+torch.ops.load_library(str(lib_path))     # registers the whole torch.ops.tilert.* namespace</code></pre>
+
+<p><span class="en"><b>② Generate loop</b> — <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/generator.py#L187-L265"><code class="inl">generator.py:187-265</code></a> (non-MTP) / <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/generator.py#L267-L417"><code class="inl">:267-417</code></a> (MTP draft/verify). One binary forward per position:</span>
+<span class="ko"><b>② 생성 루프</b> — <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/generator.py#L187-L265"><code class="inl">generator.py:187-265</code></a>(non-MTP) / <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/generator.py#L267-L417"><code class="inl">:267-417</code></a>(MTP 초안/검증). 위치당 바이너리 forward 한 번:</span></p>
+<pre><code>multi_devices_results = self.decode_layer.forward(tokens[0, prev_pos], with_mtp=with_mtp)
+# MTP path: get_next_draft_tokens → forward(draft, with_mtp=True) → get_num_accepted / get_predicted_tokens
+#   (draft/verify orchestration is Python; the verify kernel is in the .so)</code></pre>
+
+<p><span class="en"><b>③ The op graph is registered, not walked</b> — <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/modules/end2end.py#L505-L557"><code class="inl">end2end.py:505-557</code></a>. Python builds the layer stack (<code class="inl">dsa</code>/<code class="inl">mla_v2</code>/<code class="inl">moe</code>/<code class="inl">mlp</code>/<code class="inl">mtp</code> each <code class="inl">register_op(...)</code>), hands all tensor pointers to the runtime <b>once</b>, then triggers the whole model with a <b>single</b> op — name-mangled to pick the binary entry point:</span>
+<span class="ko"><b>③ op 그래프는 등록될 뿐 순회되지 않는다</b> — <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/modules/end2end.py#L505-L557"><code class="inl">end2end.py:505-557</code></a>. Python이 레이어 스택(<code class="inl">dsa</code>/<code class="inl">mla_v2</code>/<code class="inl">moe</code>/<code class="inl">mlp</code>/<code class="inl">mtp</code>이 각각 <code class="inl">register_op(...)</code>)을 만들고, 모든 텐서 포인터를 런타임에 <b>한 번</b> 넘긴 뒤, 모델 전체를 <b>단일</b> op으로 발화 — 이름 맹글링으로 바이너리 진입점 선택:</span></p>
+<pre><code># name mangling selects a DIFFERENT binary entry per (MTP, model):
+func_name = f"dsa{mtp_flag}_show_hands{glm5_flag}"   # dsa_show_hands / dsa_mtp_e2e_show_hands / ..._glm5
+# handoff (once): register every weight/cache/scratch tensor with the runtime
+dsa_show_hands_prepare_money(params, intermediates, caches, profile_logs, max_seq_len, with_mtp, is_glm5)
+# forward: the ENTIRE model in one call
+dsa_show_hands(token_id.cpu(), active_mtp, is_glm5)
+return [self._get_device_result(d) for d in range(self.num_devices)]   # 8 devices</code></pre>
+
+<p><span class="en"><b>④ Every op is a thin <code class="inl">.so</code> dispatch.</b> Each file in <code class="inl">ops/</code> is a docstring + input validation + weight-layout converter + <b>one</b> <code class="inl">torch.ops.tilert.&lt;name&gt;_op(...)</code> call. The fusion / tiling / comm-overlap is compiled into the binary — the Python only marshals tensors. Examples:</span>
+<span class="ko"><b>④ 모든 op은 얇은 <code class="inl">.so</code> 디스패치.</b> <code class="inl">ops/</code>의 각 파일은 docstring + 입력 검증 + 가중치 배치 컨버터 + <code class="inl">torch.ops.tilert.&lt;name&gt;_op(...)</code> 호출 <b>하나</b>. 융합/타일링/통신 겹침은 바이너리에 컴파일돼 있고 Python은 텐서만 넘긴다. 예:</span></p>
+<pre><code># ops/expert_sel_up_gate_silu.py:23-48 — fused expert-select + up + gate + SiLU (default fp8mma)
+torch.ops.tilert.expert_select_up_gate_silu_op(hidden_in, scores_in, bias_in, experts_weights_in,
+                                               hidden_out, ..., model_arch, algorithm)   # body → .so
+# ops/down_allreduce.py:23-59 — "Fused operation of down and allreduce"  (compute + comm overlap)
+torch.ops.tilert.down_allreduce_op(vec_in, mat_in, mat_scale, x_in, flag, vec_out, ...)
+# ops/flash_sparse_mla.py + ops/sparse_index.py — DeepSeek Sparse Attention (top-k KV select) → .so</code></pre>
+<p><span class="en">Op files cited: <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/ops/expert_sel_up_gate_silu.py#L23-L48">expert_sel_up_gate_silu</a> · <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/ops/down_allreduce.py#L23-L59">down_allreduce</a> · <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/ops/flash_sparse_mla.py#L17-L93">flash_sparse_mla</a> · <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/ops/sparse_index.py#L11-L70">sparse_index</a>. The <b>one thing that is fully open Python</b> is the weight converter (dequant + 8-way per-device sharding, <code class="inl">*_dev_{0..7}</code>) — <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/preprocess/weight_converter.py#L405-L436"><code class="inl">weight_converter.py:405-436</code></a>.</span>
+<span class="ko">인용 op 파일: <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/ops/expert_sel_up_gate_silu.py#L23-L48">expert_sel_up_gate_silu</a> · <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/ops/down_allreduce.py#L23-L59">down_allreduce</a> · <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/ops/flash_sparse_mla.py#L17-L93">flash_sparse_mla</a> · <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/deepseek_v3_2/ops/sparse_index.py#L11-L70">sparse_index</a>. <b>완전 공개 Python인 유일한 것</b>은 가중치 컨버터(dequant + 8-way 디바이스 샤딩, <code class="inl">*_dev_{0..7}</code>) — <a class="src" href="https://github.com/tile-ai/tilert/blob/242f7b30e46226bae1d9709d10d03c445167aef6/tilert/models/preprocess/weight_converter.py#L405-L436"><code class="inl">weight_converter.py:405-436</code></a>.</span></p>
+<div class="callout c-amber"><span class="tag"><span class="en">what you can &amp; cannot learn from the repo</span><span class="ko">레포에서 알 수 있는 것과 없는 것</span></span>
+<span class="en"><b>Can:</b> the model's op decomposition (which fused ops make up MLA/MoE/MLP/DSA/MTP and in what order), the 8-way sharding scheme, the generate/MTP orchestration, all flags. <b>Cannot:</b> any kernel body, the tile scheduling, the overlap logic, the persistent-engine mechanism — all closed in the <code class="inl">.so</code>. Reference TileLang kernels (<code class="inl">act_quant</code>, <code class="inl">fp8_gemm</code>, <code class="inl">weight_dequant</code>) exist in <code class="inl">refs/kernel.py</code> but are import-gated and <b>not on the runtime path</b>.</span>
+<span class="ko"><b>가능:</b> 모델의 op 분해(어떤 융합 op들이 MLA/MoE/MLP/DSA/MTP를 어떤 순서로 구성하는지), 8-way 샤딩, 생성/MTP 오케스트레이션, 모든 플래그. <b>불가:</b> 커널 본문, 타일 스케줄링, 겹침 로직, persistent-engine 메커니즘 — 전부 <code class="inl">.so</code>에 닫힘. 참조 TileLang 커널(<code class="inl">act_quant</code>·<code class="inl">fp8_gemm</code>·<code class="inl">weight_dequant</code>)은 <code class="inl">refs/kernel.py</code>에 있으나 import-gated이고 <b>런타임 경로가 아니다</b>.</span></div>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Reported effects (vendor numbers, flagged)</span><span class="ko">보고된 효과 (벤더 수치, 표시)</span></h2>
+<div class="callout c-amber"><span class="tag"><span class="en">honesty</span><span class="ko">정직</span></span><span class="en">Every figure below is <b>vendor/blog-reported</b> (tile-ai, Xiaomi, Z.ai). <b>None is independently verified</b>; batch size, sequence lengths, baseline identity, and peak-vs-average are largely undisclosed. Treat as marketing until reproduced.</span><span class="ko">아래 모든 수치는 <b>벤더/블로그 발표</b>(tile-ai·Xiaomi·Z.ai)다. <b>독립 검증 없음</b>; 배치 크기·시퀀스 길이·베이스라인 정체·peak vs 평균 대부분 비공개. 재현 전까진 마케팅으로 취급.</span></div>
+<table>
+<tr><th><span class="en">Claim</span><span class="ko">주장</span></th><th>Model / HW</th><th><span class="en">Caveat</span><span class="ko">주의</span></th></tr>
+<tr><td><b>1000+ TPS</b> (caption "~1200")</td><td>MiMo-V2.5-Pro (1T MoE), "8-GPU node" — <b>GPU SKU not stated</b></td><td><span class="en">demo/GIF; MoE experts quantized to FP4 (rest FP8); peak-vs-avg unstated</span><span class="ko">데모/GIF; MoE expert만 FP4 양자화(나머지 FP8); peak/평균 불명</span></td></tr>
+<tr><td><b>500+ TPS</b></td><td>GLM-5-FP8 · 8× B200</td><td><span class="en">single-user decode; lengths unstated</span><span class="ko">단일 사용자 디코드; 길이 불명</span></td></tr>
+<tr><td><b>600+ TPS</b> (MTP on)</td><td>DeepSeek-V3.2 · 8× B200</td><td><span class="en">MTP enabled; workload unstated</span><span class="ko">MTP 켬; 워크로드 불명</span></td></tr>
+<tr><td><b>3–4× over baseline</b></td><td>DeepSeek-V3.2-Exp · 8× B200 (v0.1.1)</td><td><span class="en"><b>baseline never named</b>; the "35% further reduction" is v0.1.1, not v0.1.4</span><span class="ko"><b>베이스라인 미명시</b>; "35% 추가 감소"는 v0.1.1(≠ v0.1.4)</span></td></tr>
+<tr><td><b>~590 TPS</b> synthetic / ~440 real (mtp=3)</td><td>DeepSeek-V3.2-Exp · 8× B200 (v0.1.2)</td><td><span class="en">explicit synthetic-vs-real split; acceptance lengths 4.29–7.14 by task (not "3.2")</span><span class="ko">synthetic vs 실제 명시; 작업별 acceptance 4.29–7.14(“3.2” 아님)</span></td></tr>
+</table>
+<p><span class="en"><b>Production footprint (real, though still vendor-stated):</b> GLM-5.1 production traffic on Z.ai's high-speed MaaS is served by TileRT; a hosted demo runs GLM-5 and DeepSeek-V3.2; HuggingFace hosts <code class="inl">Tile-AI/DeepSeek-V3.2-Exp-TileRT</code> (weights preprocessed for the runtime, no architecture change).</span>
+<span class="ko"><b>프로덕션 흔적(실재하나 여전히 벤더 발표):</b> Z.ai 고속 MaaS의 GLM-5.1 프로덕션 트래픽을 TileRT가 서빙; 호스팅 데모가 GLM-5·DeepSeek-V3.2 구동; HuggingFace에 <code class="inl">Tile-AI/DeepSeek-V3.2-Exp-TileRT</code>(런타임용 전처리 가중치, 아키텍처 변경 없음).</span></p>
+</section>
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">Status &amp; our take</span><span class="ko">상태 &amp; 우리 관점</span></h2>
+<p><span class="en"><b>Maturity:</b> self-described "experimental preview." Distribution is a <b>closed binary wheel</b>, B200-only pinned ABI, two models (DeepSeek-V3.2 ≤160K ctx, GLM-5 ≤200K ctx), one backend per process, ~monthly releases (v0.1.0 → v0.1.4). MIT license covers the <i>wrapper/repo</i>, not the compiler internals (which aren't distributed as source). The open pieces are meant to land in TileLang/TileScale over time.</span>
+<span class="ko"><b>성숙도:</b> 스스로 "experimental preview". 배포는 <b>닫힌 바이너리 휠</b>, B200 전용 핀 ABI, 두 모델(DeepSeek-V3.2 ≤160K, GLM-5 ≤200K), 프로세스당 백엔드 하나, ~월간 릴리스(v0.1.0 → v0.1.4). MIT는 <i>래퍼/레포</i>에만 적용, 컴파일러 내부(소스 미배포)엔 아님. 오픈 조각은 시간이 지나며 TileLang/TileScale로 들어갈 예정.</span></p>
+<div class="callout c-purple"><span class="tag"><span class="en">editor's note — our take (not tile-ai's claim)</span><span class="ko">편집자 주 — 우리 관점(tile-ai 주장 아님)</span></span>
+<span class="en">For our stack this is <b>read-only inspiration, not a tool we can run</b>: it's a B200/CUDA-only closed binary, and we serve on <b>MI250/ROCm</b> — TileRT won't load. But its <i>ideas</i> are exactly the ones we care about — a <b>persistent kernel that overlaps compute with communication</b> to kill the idle gap is the same instinct behind dual-batch-overlap and our SLO-aware P/D muxing (Tropical) work; and its diagnosis ("the bottleneck is when the next op can start") matches what we see profiling MI250 all-reduce/expert-dispatch. The transferable, verifiable part is the <b>open path</b>: TileLang / TileScale (tile-level kernels + NVSHMEM comm) — those we <i>can</i> read and adapt. The unverifiable part is every speed number and the runtime itself. Net: worth tracking TileLang/TileScale closely; treat TileRT's TPS claims as a vendor demo, not a benchmark.</span>
+<span class="ko">우리 스택 관점에선 <b>읽어볼 영감이지 돌릴 수 있는 도구가 아니다</b>: B200/CUDA 전용 닫힌 바이너리이고 우리는 <b>MI250/ROCm</b>에서 서빙 — TileRT는 로드되지 않는다. 하지만 그 <i>아이디어</i>는 정확히 우리가 관심 있는 것 — <b>compute를 통신과 겹치는 persistent 커널</b>로 유휴 틈을 없애는 것은 dual-batch-overlap과 우리 SLO 인식 P/D 먹싱(Tropical) 작업과 같은 직관; 그 진단("병목은 다음 op이 언제 시작하느냐")도 MI250 all-reduce/expert-dispatch 프로파일에서 보는 것과 일치. 이전·검증 가능한 부분은 <b>오픈 경로</b>: TileLang / TileScale(타일 커널 + NVSHMEM 통신) — 이건 우리가 <i>읽고</i> 적용할 수 있다. 검증 불가한 부분은 모든 속도 수치와 런타임 자체. 결론: TileLang/TileScale은 가까이 추적할 가치가 있고, TileRT의 TPS 주장은 벤치마크가 아니라 벤더 데모로 취급.</span></div>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<ul class="srcs">
+<li>TileRT repo @ <code>242f7b3</code> — <a href="https://github.com/tile-ai/tilert/tree/242f7b30e46226bae1d9709d10d03c445167aef6">github.com/tile-ai/tilert</a> (README, <code>__init__.py</code>, <code>generate.py</code>, <code>models/deepseek_v3_2/{generator,modules,ops}</code>, <code>models/preprocess/weight_converter.py</code>). Line refs pinned to that SHA.</li>
+<li><b>Vendor blogs:</b> <a href="https://www.tilert.ai/">tilert.ai</a> · <a href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS on a 1T Model</a> · <a href="https://www.tilert.ai/blog/speed-as-the-next-scaling-law-zh.html">Speed as the next scaling law</a> · <a href="https://mimo.xiaomi.com/blog/mimo-tilert-1000tps">Xiaomi MiMo × TileRT</a> — all marketing sources; numbers not independently verified.</li>
+<li><b>Related open projects:</b> <a href="https://github.com/tile-ai/tilelang">TileLang</a> (tile-level DSL on Apache TVM) · <a href="https://github.com/tile-ai/tilescale">TileScale</a> (distributed / NVSHMEM).</li>
+<li><b>Distribution / models:</b> <a href="https://pypi.org/project/tilert/">PyPI tilert</a> · <a href="https://github.com/tile-ai/tilert/releases">releases v0.1.0→v0.1.4</a> · <a href="https://huggingface.co/Tile-AI/DeepSeek-V3.2-Exp-TileRT">HF Tile-AI/DeepSeek-V3.2-Exp-TileRT</a>.</li>
+<li>DFlash speculative decoding is cited by the vendor to an arXiv preprint (id unverified here); MTP background is DeepSeek-V3's multi-token prediction.</li>
+</ul>
+</section>
+
+<footer>
+  <span class="en">Code-walk + docs synthesis of TileRT (tile-ai/tilert @ 242f7b3) · open Python line refs pinned to that commit; all performance claims are vendor-reported and unverified; the runtime/compiler is a closed B200-only binary · 2026-07-01.</span>
+  <span class="ko">TileRT(tile-ai/tilert @ 242f7b3) 코드 분석 + 문서 종합 · 공개 Python 줄 참조는 해당 커밋 핀; 모든 성능 주장은 벤더 발표·미검증; 런타임/컴파일러는 B200 전용 닫힌 바이너리 · 2026-07-01.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
