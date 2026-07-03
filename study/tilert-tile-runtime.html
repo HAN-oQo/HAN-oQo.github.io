@@ -105,7 +105,7 @@
 
 <section id="s0">
 <h2><span class="num">0</span><span class="en">GPU computation basics — the data flow &amp; vocabulary everything below uses</span><span class="ko">GPU 연산 기초 — 아래 모든 내용이 쓰는 데이터 흐름과 어휘</span></h2>
-<p><span class="en">Before "tiles", the ground floor: how a GPU actually runs a computation and the words for its parts — <b>memory hierarchy, thread / warp / block / grid, kernel launch, and cross-GPU communication</b>. Where a canonical diagram exists, the original is linked in the caption and redrawn here in the site palette.</span><span class="ko">"타일" 이전에 바닥부터: GPU가 실제로 연산을 어떻게 돌리는지, 그 부분들의 이름 — <b>메모리 계층, thread / warp / block / grid, 커널 launch, GPU 간 통신</b>. 정본 그림이 있으면 캡션에 원본을 링크하고 사이트 팔레트로 다시 그렸다.</span></p>
+<p><span class="en">Before "tiles", the ground floor: how a GPU actually runs a computation and the words for its parts — <b>memory hierarchy, thread / warp / block / grid, and kernel launch</b>. Where a canonical diagram exists, the original is linked in the caption and redrawn here in the site palette.</span><span class="ko">"타일" 이전에 바닥부터: GPU가 실제로 연산을 어떻게 돌리는지, 그 부분들의 이름 — <b>메모리 계층, thread / warp / block / grid, 커널 launch</b>. 정본 그림이 있으면 캡션에 원본을 링크하고 사이트 팔레트로 다시 그렸다.</span></p>
 
 <h3><span class="en">(a) Memory hierarchy — small = fast, big = slow</span><span class="ko">(a) 메모리 계층 — 작을수록 빠르고, 클수록 느리다</span></h3>
 <p><span class="en">The one fact everything follows from: GPU compute has outrun memory bandwidth, so speed comes from <b>reusing data in the tiny fast on-chip memory (SRAM / registers) instead of re-reading slow HBM</b>. FlashAttention's Fig. 1 puts numbers on it (A100): SRAM ~20 MB at <b>19 TB/s</b>, HBM 40 GB at <b>1.5 TB/s</b> (~13× slower), host DRAM &gt;1 TB at 12.8 GB/s.</span><span class="ko">모든 것이 따라나오는 사실 하나: GPU 연산이 메모리 대역폭을 앞질러서, 속도는 <b>느린 HBM을 다시 읽는 대신 작고 빠른 온칩 메모리(SRAM/레지스터)에서 데이터를 재사용</b>하는 데서 나온다. FlashAttention 그림 1이 수치를 준다(A100): SRAM ~20 MB @ <b>19 TB/s</b>, HBM 40 GB @ <b>1.5 TB/s</b>(~13× 느림), 호스트 DRAM &gt;1 TB @ 12.8 GB/s.</span></p>
@@ -152,12 +152,128 @@
 </svg>
 <p class="figcap"><span class="en">The CUDA execution hierarchy (software ↔ hardware). Redrawn after the <b>NVIDIA CUDA C++ Programming Guide</b> "Thread Hierarchy". Original: <a class="src" href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#thread-hierarchy">docs.nvidia.com/cuda</a>.</span><span class="ko">CUDA 실행 계층(소프트웨어 ↔ 하드웨어). <b>NVIDIA CUDA C++ Programming Guide</b> "Thread Hierarchy" 재현. 원본: <a class="src" href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#thread-hierarchy">docs.nvidia.com/cuda</a>.</span></p>
 
-<h3><span class="en">(c) A kernel's life &amp; the "execution gap"</span><span class="ko">(c) 커널의 생애와 "execution gap"</span></h3>
-<p><span class="en">The host (CPU) <b>launches</b> a kernel → each block <b>loads</b> its inputs HBM→SRAM/registers, <b>computes</b> (multiply-accumulate) in those fast levels, <b>writes</b> the result back to HBM, and the host usually <b>syncs</b>. A launch costs ~microseconds. When a model is a chain of ops, you pay launch + sync <i>between every op</i> — and at 1000 tokens/s each op is only microseconds, so those idle boundaries dominate. TileRT names this the <b>"execution gap"</b> and its whole design targets it (§3).</span><span class="ko">호스트(CPU)가 커널을 <b>launch</b> → 각 블록이 입력을 HBM→SRAM/레지스터로 <b>로드</b>, 그 빠른 층에서 <b>연산</b>(곱셈-누적), 결과를 HBM에 <b>쓰고</b>, 호스트는 보통 <b>동기화</b>. launch는 ~마이크로초. 모델이 op 체인이면 <i>op마다</i> launch + sync를 낸다 — 1000토큰/s에선 op가 마이크로초라 그 유휴 경계가 지배한다. TileRT는 이를 <b>"execution gap"</b>이라 부르고 설계 전체가 이를 겨냥한다(§3).</span></p>
-<p class="figcap"><span class="en">TileRT's own <b>"Execution Gap"</b> and <b>"Microsecond War"</b> figures illustrate exactly this op-boundary problem — see them in the vendor blog: <a class="src" href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS</a>.</span><span class="ko">TileRT 자신의 <b>"Execution Gap"</b>·<b>"Microsecond War"</b> 그림이 바로 이 op 경계 문제를 보여준다 — 벤더 블로그 참고: <a class="src" href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS</a>.</span></p>
+<p><span class="en"><b>Zoom into one SM.</b> "each thread is one lane of a core" means literally this — a <b>warp</b> feeds the <b>same instruction</b> to 32 lanes at once (SIMT); the block's threads share the SM's register file and shared SRAM, and the warp scheduler swaps warps every cycle to hide memory latency.</span><span class="ko"><b>SM 하나를 확대.</b> "각 thread는 코어의 한 레인"이 문자 그대로 이 뜻이다 — <b>warp</b>이 <b>같은 명령</b>을 32개 레인에 한 번에 흘린다(SIMT); 블록의 스레드들은 SM의 레지스터 파일과 shared SRAM을 공유하고, warp 스케줄러가 매 사이클 warp을 갈아끼워 메모리 지연을 숨긴다.</span></p>
+<svg class="fig" viewBox="0 0 900 400" role="img" aria-label="inside one SM: warp scheduler broadcasting one instruction to 32 lanes, register file and shared SRAM">
+  <defs><marker id="smZoomArr" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--blue-ink)"/></marker></defs>
+  <text x="16" y="26" font-size="12" font-weight="700" fill="var(--ink)">Zoom: inside one SM — one block runs here, in warps of 32</text>
+  <rect x="14" y="40" width="872" height="348" rx="12" fill="var(--purple-bg)" stroke="var(--purple-bd)" stroke-width="1.5"/>
+  <!-- warp scheduler -->
+  <rect x="34" y="60" width="300" height="52" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="184" y="82" text-anchor="middle" font-size="11" font-weight="700" fill="var(--blue-ink)">warp scheduler + dispatch</text>
+  <text x="184" y="100" text-anchor="middle" font-size="9.5" fill="var(--blue-ink)">picks a ready warp → issues 1 instruction / cycle</text>
+  <text x="34" y="130" font-size="9" fill="var(--muted)">up to ~64 warps resident per SM · scheduler swaps warps each cycle to hide HBM latency</text>
+  <line x1="184" y1="114" x2="184" y2="138" stroke="var(--blue-ink)" stroke-width="1.3" marker-end="url(#smZoomArr)"/>
+  <!-- instruction bar -->
+  <rect x="34" y="140" width="476" height="26" rx="4" fill="var(--card)" stroke="var(--line)"/>
+  <text x="272" y="157" text-anchor="middle" font-size="9.5" fill="var(--ink)">1 instruction (SIMT):  c = a·b + c   →  broadcast to ALL 32 lanes</text>
+  <!-- broadcast arrows to each column -->
+  <line x1="62"  y1="168" x2="62"  y2="194" stroke="var(--blue-ink)" stroke-width="1.1" marker-end="url(#smZoomArr)"/>
+  <line x1="121" y1="168" x2="121" y2="194" stroke="var(--blue-ink)" stroke-width="1.1" marker-end="url(#smZoomArr)"/>
+  <line x1="180" y1="168" x2="180" y2="194" stroke="var(--blue-ink)" stroke-width="1.1" marker-end="url(#smZoomArr)"/>
+  <line x1="239" y1="168" x2="239" y2="194" stroke="var(--blue-ink)" stroke-width="1.1" marker-end="url(#smZoomArr)"/>
+  <line x1="298" y1="168" x2="298" y2="194" stroke="var(--blue-ink)" stroke-width="1.1" marker-end="url(#smZoomArr)"/>
+  <line x1="357" y1="168" x2="357" y2="194" stroke="var(--blue-ink)" stroke-width="1.1" marker-end="url(#smZoomArr)"/>
+  <line x1="416" y1="168" x2="416" y2="194" stroke="var(--blue-ink)" stroke-width="1.1" marker-end="url(#smZoomArr)"/>
+  <line x1="475" y1="168" x2="475" y2="194" stroke="var(--blue-ink)" stroke-width="1.1" marker-end="url(#smZoomArr)"/>
+  <!-- 32 lanes = 32 cores, 4 rows x 8 -->
+  <rect x="36"  y="198" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="62"  y="215" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 0</text>
+  <rect x="95"  y="198" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="121" y="215" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 1</text>
+  <rect x="154" y="198" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="180" y="215" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 2</text>
+  <rect x="213" y="198" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="239" y="215" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 3</text>
+  <rect x="272" y="198" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="298" y="215" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 4</text>
+  <rect x="331" y="198" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="357" y="215" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 5</text>
+  <rect x="390" y="198" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="416" y="215" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 6</text>
+  <rect x="449" y="198" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="475" y="215" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 7</text>
+  <rect x="36"  y="230" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="62"  y="247" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 8</text>
+  <rect x="95"  y="230" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="121" y="247" text-anchor="middle" font-size="8" fill="var(--green-ink)">core 9</text>
+  <rect x="154" y="230" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="180" y="247" text-anchor="middle" font-size="8" fill="var(--green-ink)">10</text>
+  <rect x="213" y="230" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="239" y="247" text-anchor="middle" font-size="8" fill="var(--green-ink)">11</text>
+  <rect x="272" y="230" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="298" y="247" text-anchor="middle" font-size="8" fill="var(--green-ink)">12</text>
+  <rect x="331" y="230" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="357" y="247" text-anchor="middle" font-size="8" fill="var(--green-ink)">13</text>
+  <rect x="390" y="230" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="416" y="247" text-anchor="middle" font-size="8" fill="var(--green-ink)">14</text>
+  <rect x="449" y="230" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="475" y="247" text-anchor="middle" font-size="8" fill="var(--green-ink)">15</text>
+  <rect x="36"  y="262" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="62"  y="279" text-anchor="middle" font-size="8" fill="var(--green-ink)">16</text>
+  <rect x="95"  y="262" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="121" y="279" text-anchor="middle" font-size="8" fill="var(--green-ink)">17</text>
+  <rect x="154" y="262" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="180" y="279" text-anchor="middle" font-size="8" fill="var(--green-ink)">18</text>
+  <rect x="213" y="262" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="239" y="279" text-anchor="middle" font-size="8" fill="var(--green-ink)">19</text>
+  <rect x="272" y="262" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="298" y="279" text-anchor="middle" font-size="8" fill="var(--green-ink)">20</text>
+  <rect x="331" y="262" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="357" y="279" text-anchor="middle" font-size="8" fill="var(--green-ink)">21</text>
+  <rect x="390" y="262" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="416" y="279" text-anchor="middle" font-size="8" fill="var(--green-ink)">22</text>
+  <rect x="449" y="262" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="475" y="279" text-anchor="middle" font-size="8" fill="var(--green-ink)">23</text>
+  <rect x="36"  y="294" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="62"  y="311" text-anchor="middle" font-size="8" fill="var(--green-ink)">24</text>
+  <rect x="95"  y="294" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="121" y="311" text-anchor="middle" font-size="8" fill="var(--green-ink)">25</text>
+  <rect x="154" y="294" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="180" y="311" text-anchor="middle" font-size="8" fill="var(--green-ink)">26</text>
+  <rect x="213" y="294" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="239" y="311" text-anchor="middle" font-size="8" fill="var(--green-ink)">27</text>
+  <rect x="272" y="294" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="298" y="311" text-anchor="middle" font-size="8" fill="var(--green-ink)">28</text>
+  <rect x="331" y="294" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="357" y="311" text-anchor="middle" font-size="8" fill="var(--green-ink)">29</text>
+  <rect x="390" y="294" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="416" y="311" text-anchor="middle" font-size="8" fill="var(--green-ink)">30</text>
+  <rect x="449" y="294" width="52" height="26" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="475" y="311" text-anchor="middle" font-size="8" fill="var(--green-ink)">31</text>
+  <text x="36" y="338" font-size="10" font-weight="700" fill="var(--green-ink)">warp = 32 threads = 32 lanes (1 per core), all in lockstep</text>
+  <!-- right column: memories -->
+  <rect x="540" y="60" width="328" height="60" rx="6" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  <text x="704" y="84" text-anchor="middle" font-size="11" font-weight="700" fill="var(--gray-ink)">register file</text>
+  <text x="704" y="103" text-anchor="middle" font-size="9.5" fill="var(--gray-ink)">per-thread private registers — fastest</text>
+  <rect x="540" y="140" width="328" height="82" rx="6" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="704" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="var(--amber-ink)">shared memory / SRAM (~192 KB)</text>
+  <text x="704" y="185" text-anchor="middle" font-size="9.5" fill="var(--amber-ink)">shared by ALL threads in the block — the tile lives here</text>
+  <text x="704" y="202" text-anchor="middle" font-size="9.5" fill="var(--amber-ink)">≈ the "REUSE HERE" tier from (a)</text>
+  <rect x="540" y="242" width="328" height="60" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="704" y="266" text-anchor="middle" font-size="11" font-weight="700" fill="var(--blue-ink)">L1 / texture cache</text>
+  <text x="704" y="285" text-anchor="middle" font-size="9.5" fill="var(--blue-ink)">backs shared mem; miss → HBM (slow)</text>
+  <text x="524" y="176" text-anchor="middle" font-size="9" fill="var(--muted)">tiles</text>
+  <line x1="506" y1="182" x2="537" y2="182" stroke="var(--blue-ink)" stroke-width="1.2" marker-end="url(#smZoomArr)"/>
+  <text x="450" y="366" text-anchor="middle" font-size="9.5" fill="var(--muted)">warp = the unit the hardware actually schedules · block ≤ 1024 threads, lives on ONE SM, shares its register file + SRAM</text>
+</svg>
+<p class="figcap"><span class="en">Inside one SM — redrawn after <b>NVIDIA</b> GPU-architecture material (the SM / SIMT model). See the CUDA C++ Programming Guide, <a class="src" href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#hardware-implementation">"Hardware Implementation / SIMT Architecture"</a>. Lane count per warp = 32 on all NVIDIA GPUs; core / SRAM counts vary by generation.</span><span class="ko">SM 하나 내부 — <b>NVIDIA</b> GPU 아키텍처 자료(SM/SIMT 모델) 재현. CUDA C++ Programming Guide <a class="src" href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#hardware-implementation">"Hardware Implementation / SIMT Architecture"</a> 참고. warp당 레인 수 = 모든 NVIDIA GPU에서 32; 코어/SRAM 수는 세대별로 다름.</span></p>
 
-<h3><span class="en">(d) Communication — splitting across GPUs</span><span class="ko">(d) 통신 — GPU 여러 장으로 쪼갤 때</span></h3>
-<p><span class="en">A model too big for one GPU is split across several; they exchange partials with <b>collectives</b> over NVLink — <b>all-reduce</b> (sum partials into a shared full tensor), <b>all-to-all</b> (route tokens to their expert's GPU, for MoE), <b>p2p</b> (one→one). Communication is itself timed work; overlapping it with compute (compute one tile while sending another) is a central optimization. Full treatment of collectives &amp; their cost: <a class="src" href="parallelism-collective-communication.html">our Parallelism × communication note</a>.</span><span class="ko">GPU 하나에 안 들어가는 모델은 여러 장으로 쪼개고, NVLink 위 <b>collective</b>로 부분을 교환한다 — <b>all-reduce</b>(부분을 합쳐 공유 full 텐서로), <b>all-to-all</b>(토큰을 해당 expert의 GPU로 — MoE), <b>p2p</b>(1→1). 통신은 그 자체가 시간 드는 작업이고, compute와 겹치는 것(한 타일을 계산하며 다른 타일 전송)이 핵심 최적화다. collective와 비용의 전체 설명: <a class="src" href="parallelism-collective-communication.html">병렬화 × 통신 노트</a>.</span></p>
+<h3><span class="en">(c) A kernel's life &amp; the "execution gap"</span><span class="ko">(c) 커널의 생애와 "execution gap"</span></h3>
+<p><span class="en">The host (CPU) <b>launches</b> the kernel — i.e. loads the <b>op itself</b> (its compiled code + grid/block config) onto the GPU and schedules it; this is <i>separate</i> from the data. Then each block <b>loads its inputs</b> HBM→SRAM/registers, <b>computes</b> (multiply-accumulate) in those fast levels, <b>writes</b> the result back to HBM, and the host usually <b>syncs</b>. A launch costs ~microseconds. When a model is a chain of ops, you pay launch + sync <i>between every op</i> — and at 1000 tokens/s each op is only microseconds, so those idle boundaries dominate. TileRT names this the <b>"execution gap"</b> and its whole design targets it (§3).</span><span class="ko">호스트(CPU)가 커널을 <b>launch</b> — 즉 <b>연산(op) 자체</b>(컴파일된 코드 + grid/block 설정)를 GPU에 올려 스케줄한다; 데이터와는 <i>별개</i>다. 그다음 각 블록이 <b>입력을 로드</b>(HBM→SRAM/레지스터), 그 빠른 층에서 <b>연산</b>(곱셈-누적), 결과를 HBM에 <b>쓰고</b>, 호스트는 보통 <b>동기화</b>. launch는 ~마이크로초. 모델이 op 체인이면 <i>op마다</i> launch + sync를 낸다 — 1000토큰/s에선 op가 마이크로초라 그 유휴 경계가 지배한다. TileRT는 이를 <b>"execution gap"</b>이라 부르고 설계 전체가 이를 겨냥한다(§3).</span></p>
+<svg class="fig" viewBox="0 0 900 300" role="img" aria-label="one kernel lifecycle: launch loads the op, load inputs loads the data, compute, store, sync; a chain of kernels leaves execution gaps">
+  <text x="16" y="22" font-size="13" font-weight="700" fill="var(--ink)">One kernel's life — the two "loads", and why a chain of kernels leaves gaps</text>
+  <rect x="20" y="48" width="150" height="78" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="95" y="70" text-anchor="middle" font-size="11" font-weight="700" fill="var(--blue-ink)">① launch</text>
+  <text x="95" y="88" text-anchor="middle" font-size="8.5" fill="var(--blue-ink)">CPU → GPU: load the OP</text>
+  <text x="95" y="101" text-anchor="middle" font-size="8.5" fill="var(--blue-ink)">(kernel code + config)</text>
+  <text x="95" y="117" text-anchor="middle" font-size="8.5" fill="var(--blue-ink)">~µs · fixed cost</text>
+  <line x1="172" y1="87" x2="185" y2="87" stroke="var(--ink)" stroke-width="1.4"/><polygon points="186,87 179,84 179,90" fill="var(--ink)"/>
+  <rect x="188" y="48" width="150" height="78" rx="7" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="263" y="70" text-anchor="middle" font-size="11" font-weight="700" fill="var(--amber-ink)">② load inputs</text>
+  <text x="263" y="88" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">HBM → SRAM / regs</text>
+  <text x="263" y="101" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">(the DATA)</text>
+  <line x1="340" y1="87" x2="353" y2="87" stroke="var(--ink)" stroke-width="1.4"/><polygon points="354,87 347,84 347,90" fill="var(--ink)"/>
+  <rect x="356" y="48" width="150" height="78" rx="7" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="431" y="70" text-anchor="middle" font-size="11" font-weight="700" fill="var(--green-ink)">③ compute</text>
+  <text x="431" y="88" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">SIMT multiply-accumulate</text>
+  <text x="431" y="101" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">in fast memory</text>
+  <line x1="508" y1="87" x2="521" y2="87" stroke="var(--ink)" stroke-width="1.4"/><polygon points="522,87 515,84 515,90" fill="var(--ink)"/>
+  <rect x="524" y="48" width="150" height="78" rx="7" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="599" y="70" text-anchor="middle" font-size="11" font-weight="700" fill="var(--amber-ink)">④ store</text>
+  <text x="599" y="88" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">SRAM → HBM</text>
+  <text x="599" y="101" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">(the result)</text>
+  <line x1="676" y1="87" x2="689" y2="87" stroke="var(--ink)" stroke-width="1.4"/><polygon points="690,87 683,84 683,90" fill="var(--ink)"/>
+  <rect x="692" y="48" width="150" height="78" rx="7" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  <text x="767" y="70" text-anchor="middle" font-size="11" font-weight="700" fill="var(--gray-ink)">⑤ sync / exit</text>
+  <text x="767" y="88" text-anchor="middle" font-size="8.5" fill="var(--gray-ink)">host waits;</text>
+  <text x="767" y="101" text-anchor="middle" font-size="8.5" fill="var(--gray-ink)">kernel ends</text>
+  <text x="20" y="152" font-size="10.5" fill="var(--ink)">① loads the OP (the computation itself — its code + launch config) onto the GPU.  ② loads the DATA.  Two different "loads."</text>
+  <text x="20" y="182" font-size="10.5" font-weight="700" fill="var(--ink)">A model = thousands of ops back-to-back — each pays ① + ⑤ again:</text>
+  <rect x="20"  y="196" width="58" height="40" rx="4" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="49"  y="221" text-anchor="middle" font-size="9" fill="var(--green-ink)">op</text>
+  <rect x="80"  y="196" width="40" height="40" rx="4" fill="var(--red-bg)" stroke="var(--red-bd)"/><text x="100" y="221" text-anchor="middle" font-size="8" fill="var(--red-ink)">gap</text>
+  <rect x="122" y="196" width="58" height="40" rx="4" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="151" y="221" text-anchor="middle" font-size="9" fill="var(--green-ink)">op</text>
+  <rect x="182" y="196" width="40" height="40" rx="4" fill="var(--red-bg)" stroke="var(--red-bd)"/><text x="202" y="221" text-anchor="middle" font-size="8" fill="var(--red-ink)">gap</text>
+  <rect x="224" y="196" width="58" height="40" rx="4" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="253" y="221" text-anchor="middle" font-size="9" fill="var(--green-ink)">op</text>
+  <rect x="284" y="196" width="40" height="40" rx="4" fill="var(--red-bg)" stroke="var(--red-bd)"/><text x="304" y="221" text-anchor="middle" font-size="8" fill="var(--red-ink)">gap</text>
+  <rect x="326" y="196" width="58" height="40" rx="4" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="355" y="221" text-anchor="middle" font-size="9" fill="var(--green-ink)">op</text>
+  <rect x="386" y="196" width="40" height="40" rx="4" fill="var(--red-bg)" stroke="var(--red-bd)"/><text x="406" y="221" text-anchor="middle" font-size="8" fill="var(--red-ink)">gap</text>
+  <rect x="428" y="196" width="58" height="40" rx="4" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="457" y="221" text-anchor="middle" font-size="9" fill="var(--green-ink)">op</text>
+  <text x="500" y="222" font-size="14" fill="var(--muted)">…</text>
+  <text x="524" y="210" font-size="10" fill="var(--red-ink)">at ~1000 tok/s each op ≈ µs →</text>
+  <text x="524" y="226" font-size="10" fill="var(--red-ink)">the launch / sync GAPS dominate</text>
+  <text x="20" y="270" font-size="10.5" font-weight="700" fill="var(--purple-ink)">TileRT's fix: compile the whole model into ONE persistent kernel — pay launch once, no inter-op gaps (§3).</text>
+</svg>
+<p class="figcap"><span class="en">A single kernel's lifecycle and the inter-op "execution gap" (ours). TileRT's own <b>"Execution Gap"</b> / <b>"Microsecond War"</b> figures show the same op-boundary problem — vendor blog: <a class="src" href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS</a>.</span><span class="ko">커널 하나의 생애와 op 사이 "execution gap"(우리 그림). TileRT 자신의 <b>"Execution Gap"</b>·<b>"Microsecond War"</b> 그림이 같은 op 경계 문제를 보여준다 — 벤더 블로그: <a class="src" href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS</a>.</span></p>
+
+<p class="figcap"><span class="en"><b>Splitting a model across GPUs</b> (collectives — all-reduce / all-to-all / p2p) is its own topic: see our <a class="src" href="parallelism-collective-communication.html">Parallelism × communication note</a>. This §0 stays on single-GPU basics.</span><span class="ko"><b>모델을 여러 GPU로 쪼개기</b>(collective — all-reduce / all-to-all / p2p)는 별도 주제다: <a class="src" href="parallelism-collective-communication.html">병렬화 × 통신 노트</a> 참고. 여기 §0은 단일 GPU 기초에 집중.</span></p>
 </section>
 
 <section id="s1">
@@ -211,6 +327,13 @@
 <h3><span class="en">TileLang — the open language (and why it's not the runtime)</span><span class="ko">TileLang — 오픈 언어 (그리고 왜 런타임이 아닌지)</span></h3>
 <p><span class="en"><b>Language vs runtime.</b> TileLang is a <b>kernel language + compiler</b>: you write <i>one</i> kernel (a matmul, an attention) in Python tile primitives and it emits the GPU kernel. TileRT is a <b>runtime</b>: it takes a whole model's worth of kernels and schedules + overlaps them, persistently, across 8 GPUs. Language = how you <i>author</i> one kernel; runtime = how you <i>run</i> a model built from many. TileLang is fully open; the shipping TileRT kernels are the closed <code class="inl">.so</code> (§4–5).</span><span class="ko"><b>언어 vs 런타임.</b> TileLang은 <b>커널 언어 + 컴파일러</b>다: 커널 <i>하나</i>(행렬곱·어텐션)를 Python 타일 프리미티브로 쓰면 GPU 커널을 내준다. TileRT는 <b>런타임</b>이다: 모델 전체 분량의 커널을 받아 8-GPU에 persistent하게 스케줄·겹친다. 언어 = 커널 하나를 <i>작성</i>하는 법; 런타임 = 그 커널들로 만든 모델을 <i>실행</i>하는 법. TileLang은 완전 공개, 배포되는 TileRT 커널은 닫힌 <code class="inl">.so</code>(§4–5).</span></p>
 <p><span class="en"><b>vs other kernel languages.</b> Against <b>raw CUDA/HIP</b> the win is concrete: no hand-written thread indexing, shared-memory staging, double-buffering, or warp-level MMA intrinsics — <code class="inl">alloc_shared</code> / <code class="inl">copy</code> / <code class="inl">gemm</code> / <code class="inl">Pipelined</code> are <b>tile-level primitives</b> and the compiler does layout inference + software pipelining, so a FlashMLA-class kernel is ~80 lines of Python. Relative to other tile DSLs (e.g. Triton) it exposes the memory hierarchy more explicitly (separate <code class="inl">alloc_shared</code> vs <code class="inl">alloc_fragment</code>, explicit <code class="inl">num_stages</code> pipelining, <code class="inl">use_swizzle</code> for L2) and targets many backends — CUDA, AMD/HIP, Metal, WebGPU, Huawei AscendC, and a CuTeDSL/CUTLASS backend. <span class="muted">(The README states these capabilities and claims parity with hand-tuned AITER FlashMLA on MI300X / FlashMLA on H100; it does <i>not</i> make head-to-head "better than Triton/CUTLASS" claims — the Triton framing is ours.)</span></span><span class="ko"><b>다른 커널 언어 대비.</b> <b>raw CUDA/HIP</b> 대비 이득은 구체적이다: 스레드 인덱싱·shared-memory staging·더블버퍼링·warp MMA intrinsic을 손으로 안 짜도 된다 — <code class="inl">alloc_shared</code>/<code class="inl">copy</code>/<code class="inl">gemm</code>/<code class="inl">Pipelined</code>이 <b>타일 수준 프리미티브</b>고 컴파일러가 layout 추론 + 소프트웨어 파이프라이닝을 해서, FlashMLA급 커널이 Python ~80줄이다. 다른 타일 DSL(예: Triton) 대비 메모리 계층을 더 명시적으로 드러내고(<code class="inl">alloc_shared</code> vs <code class="inl">alloc_fragment</code> 구분, 명시적 <code class="inl">num_stages</code>, L2용 <code class="inl">use_swizzle</code>) 백엔드가 많다 — CUDA·AMD/HIP·Metal·WebGPU·Huawei AscendC·CuTeDSL/CUTLASS. <span class="muted">(README는 이 기능들과 hand-tuned AITER FlashMLA(MI300X)/FlashMLA(H100) 동급 성능을 주장; Triton/CUTLASS 대비 "더 낫다"는 head-to-head 주장은 <i>없다</i> — Triton 대조는 우리 프레이밍.)</span></span></p>
+<ul>
+<li><span class="en"><b>thread indexing</b> — in raw CUDA <i>you</i> compute which thread handles which element (<code class="inl">row = blockIdx.y*blockDim.y + threadIdx.y</code>, plus bounds checks). TileLang: you write over tile shapes (<code class="inl">T.Parallel</code>, <code class="inl">T.copy</code>) and the compiler assigns threads.</span><span class="ko"><b>스레드 인덱싱</b> — raw CUDA에선 어느 스레드가 어느 원소를 맡는지 <i>직접</i> 계산한다(<code class="inl">row = blockIdx.y*blockDim.y + threadIdx.y</code> + 경계 검사). TileLang: 타일 모양 위로 쓰면(<code class="inl">T.Parallel</code>·<code class="inl">T.copy</code>) 컴파일러가 스레드를 배정.</span></li>
+<li><span class="en"><b>shared-memory staging</b> — by hand: declare <code class="inl">__shared__</code> buffers, copy HBM→shared, call <code class="inl">__syncthreads()</code>, and dodge bank conflicts. TileLang: <code class="inl">T.alloc_shared</code> + <code class="inl">T.copy</code>; the sync &amp; layout are handled for you.</span><span class="ko"><b>shared-memory에 올려두기(staging)</b> — 수동: <code class="inl">__shared__</code> 버퍼 선언 → HBM→shared 복사 → <code class="inl">__syncthreads()</code> → bank conflict 회피. TileLang: <code class="inl">T.alloc_shared</code> + <code class="inl">T.copy</code>; 동기화·레이아웃은 알아서.</span></li>
+<li><span class="en"><b>double-buffering</b> (software pipelining) — keep 2+ buffers so you load the <i>next</i> tile while computing the <i>current</i> one, hiding HBM latency. By hand it's fiddly index bookkeeping; TileLang: <code class="inl">T.Pipelined(…, num_stages=3)</code>.</span><span class="ko"><b>더블버퍼링</b>(소프트웨어 파이프라이닝) — 버퍼를 2개+ 둬서 <i>현재</i> 타일을 계산하는 동안 <i>다음</i> 타일을 로드해 HBM 지연을 숨긴다. 손으로 하면 인덱스 관리가 번거롭다; TileLang: <code class="inl">T.Pipelined(…, num_stages=3)</code>.</span></li>
+<li><span class="en"><b>warp-level MMA intrinsics</b> — to drive the Tensor Cores you emit <code class="inl">wmma</code> / <code class="inl">mma.sync</code> PTX with exact fragment layouts. TileLang: <code class="inl">T.gemm</code> lowers to those (cute/hip) for you.</span><span class="ko"><b>warp 단위 MMA intrinsic</b> — Tensor Core를 굴리려면 <code class="inl">wmma</code>/<code class="inl">mma.sync</code> PTX를 정확한 fragment 레이아웃으로 짜야 한다. TileLang: <code class="inl">T.gemm</code>이 그걸(cute/hip로) 대신 내려준다.</span></li>
+<li><span class="en"><b>layout inference</b> — how a tile's elements map to registers / shared-memory banks / Tensor-Core fragments. The compiler works it out instead of you hand-tuning it.</span><span class="ko"><b>layout 추론</b> — 타일의 원소가 레지스터/shared-memory bank/Tensor-Core fragment에 어떻게 대응되는지. 직접 튜닝하는 대신 컴파일러가 알아내 준다.</span></li>
+</ul>
 <p><span class="en">The Quick-Start GEMM+ReLU kernel maps cleanly onto the §0 vocabulary — here's which piece is which:</span><span class="ko">Quick-Start의 GEMM+ReLU 커널은 §0 어휘에 그대로 대응한다 — 어느 조각이 무엇인지:</span></p>
 <pre><code>@tilelang.jit                                     # compile to ONE GPU kernel
 def matmul_relu(A, B, block_M=64, block_N=64, block_K=64, ...):
