@@ -524,6 +524,41 @@ def matmul_relu(A, B, block_M=64, block_N=64, block_K=64, ...):
   <text x="470" y="318" font-size="8.5" fill="var(--muted)">③ alloc_shared reserves A/B in SRAM · ④ copy tiles HBM→SRAM · ⑤ multiply-accumulate on Tensor Cores → C-tile</text>
 </svg>
 <p class="figcap"><span class="en">Left: the Quick-Start code with badges ①–⑤. Right: the same badges on the picture — ① <code class="inl">T.Kernel</code> = the grid of blocks (and <code class="inl">threads=128</code> = 4 warps); ② <code class="inl">(bx,by)</code> = one 64×64 tile; ③ <code class="inl">T.alloc_shared</code> = A/B tiles in SRAM; ④ <code class="inl">T.copy</code> = HBM→SRAM; ⑤ <code class="inl">T.gemm</code> = Tensor-Core matmul → C-tile. Ours, following §0–§1.</span><span class="ko">왼쪽: Quick-Start 코드에 배지 ①–⑤. 오른쪽: 같은 배지를 그림에 — ① <code class="inl">T.Kernel</code> = 블록 그리드(그리고 <code class="inl">threads=128</code> = 4 warps); ② <code class="inl">(bx,by)</code> = 64×64 타일 하나; ③ <code class="inl">T.alloc_shared</code> = SRAM의 A/B 타일; ④ <code class="inl">T.copy</code> = HBM→SRAM; ⑤ <code class="inl">T.gemm</code> = Tensor-Core 행렬곱 → C-타일. §0–§1을 따른 우리 그림.</span></p>
+
+<h3><span class="en">What <code class="inl">T.Pipelined(num_stages=3)</code> does — software pipelining</span><span class="ko"><code class="inl">T.Pipelined(num_stages=3)</code>이 하는 일 — 소프트웨어 파이프라이닝</span></h3>
+<p><span class="en">Each K-loop iteration does two things: <b>load</b> the next A/B tiles (HBM→SRAM, slow) and <b>compute</b> (gemm, fast). Done naively they alternate, so compute waits on every load. <code class="inl">T.Pipelined(num_stages=3)</code> tells the compiler to <b>run the loads ahead</b>: it allocates 3 rotating SRAM buffers, prefetches a few iterations, then in steady state loads tile <i>k+3</i> while computing tile <i>k</i> — so compute streams without stalling.</span><span class="ko">K-루프 각 반복은 두 가지: 다음 A/B 타일 <b>로드</b>(HBM→SRAM, 느림)와 <b>연산</b>(gemm, 빠름). 순진하게 하면 번갈아 하니 연산이 매 로드를 기다린다. <code class="inl">T.Pipelined(num_stages=3)</code>은 컴파일러에게 <b>로드를 앞서 돌리라</b>고 지시한다: SRAM 버퍼 3개를 돌려쓰며 몇 반복을 미리 당겨오고, 정상 상태에선 타일 <i>k</i>를 계산하는 동안 타일 <i>k+3</i>을 로드 — 연산이 멈춤 없이 흐른다.</span></p>
+<svg class="fig" viewBox="0 0 900 250" role="img" aria-label="software pipelining of the K-loop with num_stages=3">
+  <text x="16" y="20" font-size="13" font-weight="700" fill="var(--ink)">T.Pipelined(num_stages=3): loads run ahead so compute never waits</text>
+  <rect x="16" y="30" width="12" height="12" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="32" y="40" font-size="9" fill="var(--muted)">load tile (HBM→SRAM, slow)</text>
+  <rect x="230" y="30" width="12" height="12" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="246" y="40" font-size="9" fill="var(--muted)">compute tile (gemm, fast)</text>
+  <text x="16" y="66" font-size="10" font-weight="700" fill="var(--red-ink)">num_stages=1 (naive): load → compute → load → compute … serial</text>
+  <rect x="16" y="74" width="70" height="22" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="51" y="89" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">load 0</text>
+  <rect x="86" y="74" width="46" height="22" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="109" y="89" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">mma 0</text>
+  <rect x="132" y="74" width="70" height="22" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="167" y="89" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">load 1</text>
+  <rect x="202" y="74" width="46" height="22" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="225" y="89" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">mma 1</text>
+  <rect x="248" y="74" width="70" height="22" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="283" y="89" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">load 2</text>
+  <rect x="318" y="74" width="46" height="22" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="341" y="89" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">mma 2</text>
+  <text x="374" y="89" font-size="9" fill="var(--red-ink)">← compute idles during every load</text>
+  <text x="16" y="132" font-size="10" font-weight="700" fill="var(--green-ink)">num_stages=3 (pipelined): 3 buffers rotate; load k+3 while computing k</text>
+  <text x="16" y="154" font-size="9" fill="var(--muted)">loads →</text>
+  <rect x="70" y="144" width="52" height="20" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="96" y="158" text-anchor="middle" font-size="8" fill="var(--amber-ink)">load0</text>
+  <rect x="124" y="144" width="52" height="20" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="150" y="158" text-anchor="middle" font-size="8" fill="var(--amber-ink)">load1</text>
+  <rect x="178" y="144" width="52" height="20" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="204" y="158" text-anchor="middle" font-size="8" fill="var(--amber-ink)">load2</text>
+  <rect x="232" y="144" width="52" height="20" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="258" y="158" text-anchor="middle" font-size="8" fill="var(--amber-ink)">load3</text>
+  <rect x="286" y="144" width="52" height="20" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="312" y="158" text-anchor="middle" font-size="8" fill="var(--amber-ink)">load4</text>
+  <rect x="340" y="144" width="52" height="20" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="366" y="158" text-anchor="middle" font-size="8" fill="var(--amber-ink)">load5</text>
+  <text x="16" y="188" font-size="9" fill="var(--muted)">compute →</text>
+  <rect x="232" y="178" width="52" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="258" y="192" text-anchor="middle" font-size="8" fill="var(--green-ink)">mma0</text>
+  <rect x="286" y="178" width="52" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="312" y="192" text-anchor="middle" font-size="8" fill="var(--green-ink)">mma1</text>
+  <rect x="340" y="178" width="52" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="366" y="192" text-anchor="middle" font-size="8" fill="var(--green-ink)">mma2</text>
+  <rect x="394" y="178" width="52" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="420" y="192" text-anchor="middle" font-size="8" fill="var(--green-ink)">mma3</text>
+  <line x1="70" y1="140" x2="230" y2="140" stroke="var(--muted)" stroke-width="1"/>
+  <text x="150" y="134" text-anchor="middle" font-size="8" fill="var(--muted)">prologue: fill 3 stages</text>
+  <text x="470" y="180" font-size="9" fill="var(--ink)">mma k runs while load k+3 is in flight</text>
+  <text x="470" y="194" font-size="9" fill="var(--green-ink)">→ compute lane is gap-free = faster</text>
+  <text x="16" y="226" font-size="8.5" fill="var(--muted)">num_stages = how many tiles are "in flight" = how many rotating SRAM buffers the compiler allocates. Bigger = more latency hidden, more SRAM used.</text>
+</svg>
+<p class="figcap"><span class="en">Software pipelining (schematic, ours). <code class="inl">num_stages=3</code> keeps three loop iterations in flight, so the compute lane runs without waiting on HBM. It's the loop-level cousin of double-buffering / warp specialization.</span><span class="ko">소프트웨어 파이프라이닝(개념도, 우리 그림). <code class="inl">num_stages=3</code>은 루프 반복 3개를 동시 진행시켜 compute 레인이 HBM을 안 기다리게 한다. 더블버퍼링/warp specialization의 루프 레벨 사촌.</span></p>
 </section>
 
 <section id="s2">
@@ -538,6 +573,7 @@ def matmul_relu(A, B, block_M=64, block_N=64, block_K=64, ...):
 <section id="s3">
 <h2><span class="num">3</span><span class="en">How it works — the tile runtime (vendor's telling)</span><span class="ko">어떻게 동작하나 — 타일 런타임 (벤더 설명)</span></h2>
 <div class="callout c-amber"><span class="tag"><span class="en">source note</span><span class="ko">출처 주의</span></span><span class="en">This section is TileRT's <b>own description</b> from its blogs. The actual implementation is inside the closed binary (§5), so none of it is verifiable from the source code.</span><span class="ko">이 절은 블로그의 TileRT <b>자체 설명</b>이다. 실제 구현은 닫힌 바이너리(§5) 안이라 소스에서 검증 불가.</span></div>
+<div class="callout c-blue"><span class="tag"><span class="en">in one line</span><span class="ko">한 줄로</span></span><span class="en"><b>TileRT = a model's entire forward pass, pre-compiled ahead-of-time into ONE persistent binary kernel</b> (per model, per GPU count) — <i>not</i> a general "bring any model, get a binary" compiler. The shipping artifact is a model-specific, B200-only <code class="inl">.so</code> that already exists (DeepSeek-V3.2, GLM-5); you don't build it, you download it and feed it weights.</span><span class="ko"><b>TileRT = 모델의 forward 전체를 AOT로 <i>미리</i> 컴파일해 만든 하나의 상주(persistent) 바이너리 커널</b>(모델별·GPU 수별) — "아무 모델이나 넣으면 바이너리가 나오는" 범용 컴파일러가 <i>아니다</i>. 배송물은 모델 특정·B200 전용 <code class="inl">.so</code>로 <i>이미 존재</i>(DeepSeek-V3.2, GLM-5); 사용자는 빌드하지 않고 <i>내려받아 가중치만 먹인다</i>.</span></div>
 
 <h3><span class="en">The blog's framing: two leaps</span><span class="ko">블로그의 구도: 두 번의 도약(leap)</span></h3>
 <p><span class="en">TileRT's blog frames the speedup as <b>two distinct leaps</b> (its section headings "The First Leap" / "The Second Leap"):</span><span class="ko">TileRT 블로그는 속도 향상을 <b>두 번의 뚜렷한 도약</b>으로 구성한다(블로그 소제목 "The First Leap" / "The Second Leap"):</span></p>
@@ -550,6 +586,48 @@ def matmul_relu(A, B, block_M=64, block_N=64, block_K=64, ...):
 </tbody>
 </table>
 <p class="figcap"><span class="en">Source: the "The First Leap" / "The Second Leap" sections of <a class="src" href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS on a 1T Model</a> (vendor; the leap labels and TPS figures are theirs, not independently verified).</span><span class="ko">출처: <a class="src" href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS on a 1T Model</a>의 "The First Leap" / "The Second Leap" 절(벤더; leap 라벨과 TPS 수치는 그들 주장, 독립 검증 안 됨).</span></p>
+
+<h3><span class="en">First Leap, in more detail — warp specialization &amp; heterogeneous workers</span><span class="ko">First Leap 더 자세히 — warp specialization &amp; heterogeneous workers</span></h3>
+<p><span class="en"><b>Warp specialization</b> breaks the usual "all warps in a block do the same thing" (SIMT-uniform) model. Instead, different warp groups take <i>different roles</i> and run concurrently, handing data off through shared memory:</span><span class="ko"><b>Warp specialization</b>은 "블록 안 모든 warp이 같은 일을 한다"(SIMT-균일)는 통상 모델을 깬다. 대신 warp 그룹마다 <i>다른 역할</i>을 맡아 동시에 돌고, shared memory로 데이터를 넘긴다:</span></p>
+<ul>
+<li><span class="en"><b>Producer (DMA) warps</b> do nothing but stream the next tiles HBM→SRAM (async copy / TMA on Hopper+).</span><span class="ko"><b>Producer(DMA) warp</b>은 다음 타일을 HBM→SRAM로 실어나르기만 한다(Hopper+의 async copy/TMA).</span></li>
+<li><span class="en"><b>Consumer (compute) warps</b> do the matmul on tiles already in SRAM (Tensor-Core MMA).</span><span class="ko"><b>Consumer(compute) warp</b>은 이미 SRAM에 온 타일로 행렬곱(Tensor-Core MMA)을 한다.</span></li>
+<li><span class="en">They run <i>at the same time</i>, so loading the next tile overlaps computing the current one <b>inside one kernel</b> — no op boundary, no host sync. (The pattern behind Hopper CUTLASS "warp-specialized / ping-pong" GEMMs and FlashAttention-3.)</span><span class="ko">둘이 <i>동시에</i> 돌아, 다음 타일 로드가 현재 타일 연산과 <b>한 커널 안에서</b> 겹친다 — op 경계도 host sync도 없다. (Hopper CUTLASS "warp-specialized/ping-pong" GEMM과 FlashAttention-3의 패턴.)</span></li>
+</ul>
+<svg class="fig" viewBox="0 0 900 210" role="img" aria-label="warp specialization: producer warps load while consumer warps compute, overlapped">
+  <text x="16" y="20" font-size="13" font-weight="700" fill="var(--ink)">Warp specialization — producer warps LOAD while consumer warps COMPUTE (at once)</text>
+  <text x="16" y="46" font-size="10" font-weight="700" fill="var(--red-ink)">Naive (no specialization): serial</text>
+  <rect x="16" y="54" width="80" height="24" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="56" y="70" text-anchor="middle" font-size="9" fill="var(--amber-ink)">load T1</text>
+  <rect x="96" y="54" width="80" height="24" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="136" y="70" text-anchor="middle" font-size="9" fill="var(--green-ink)">compute T1</text>
+  <rect x="176" y="54" width="80" height="24" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="216" y="70" text-anchor="middle" font-size="9" fill="var(--amber-ink)">load T2</text>
+  <rect x="256" y="54" width="80" height="24" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="296" y="70" text-anchor="middle" font-size="9" fill="var(--green-ink)">compute T2</text>
+  <text x="344" y="70" font-size="9" fill="var(--muted)">→ load and compute never overlap</text>
+  <text x="16" y="112" font-size="10" font-weight="700" fill="var(--green-ink)">Warp-specialized: producer &amp; consumer run concurrently</text>
+  <text x="16" y="132" font-size="9" fill="var(--muted)">producer warps →</text>
+  <rect x="120" y="120" width="70" height="22" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="155" y="135" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">load T1</text>
+  <rect x="192" y="120" width="70" height="22" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="227" y="135" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">load T2</text>
+  <rect x="264" y="120" width="70" height="22" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="299" y="135" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">load T3</text>
+  <rect x="336" y="120" width="70" height="22" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="371" y="135" text-anchor="middle" font-size="8.5" fill="var(--amber-ink)">load T4</text>
+  <text x="16" y="166" font-size="9" fill="var(--muted)">consumer warps →</text>
+  <rect x="192" y="154" width="70" height="22" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="227" y="169" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">compute T1</text>
+  <rect x="264" y="154" width="70" height="22" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="299" y="169" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">compute T2</text>
+  <rect x="336" y="154" width="70" height="22" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="371" y="169" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">compute T3</text>
+  <text x="422" y="150" font-size="9" fill="var(--ink)">consumer T(n) runs while</text>
+  <text x="422" y="164" font-size="9" fill="var(--ink)">producer already fetches T(n+1)</text>
+  <text x="422" y="178" font-size="9" fill="var(--green-ink)">→ memory hidden under compute, in ONE kernel</text>
+  <text x="16" y="200" font-size="8.5" fill="var(--muted)">Handoff via shared memory (double-buffered). CUTLASS "warp-specialized / ping-pong" &amp; FlashAttention-3 pattern; TileRT applies it inside its persistent kernel (vendor-described).</text>
+</svg>
+<p class="figcap"><span class="en">Warp specialization (schematic, ours). Dedicating some warps to loading and others to computing lets the two overlap within a single kernel — the producer/consumer idea applied warp-group-wide. After Hopper CUTLASS / FlashAttention-3.</span><span class="ko">Warp specialization(개념도, 우리 그림). 일부 warp은 로드, 일부는 연산 전담 → 한 커널 안에서 둘을 겹친다 — producer/consumer 발상을 warp 그룹 단위로. Hopper CUTLASS / FlashAttention-3 기반.</span></p>
+<p><span class="en"><b>Heterogeneous workers</b> push the same idea up the hierarchy: past the single SM, whole <i>blocks</i> and whole <i>GPUs</i> take dedicated roles. TileRT's concrete example: on 8 GPUs, <b>GPU 0 runs the sparse-index worker</b> (DeepSeek Sparse Attention's top-k selection) while <b>GPUs 1–7 run the MLA compute workers</b> — the weight converter literally shards it that way (§4). So "specialization" spans <i>warp → block → GPU</i>, each level overlapping a different kind of work (compute vs data-movement vs communication). <span class="muted">(Warp specialization is a standard, verifiable GPU technique; TileRT's exact in-kernel scheduling is closed — vendor-described.)</span></span><span class="ko"><b>Heterogeneous workers</b>는 같은 발상을 계층 위로 민다: 단일 SM을 넘어 <i>블록</i>·<i>GPU</i> 전체가 전용 역할을 맡는다. TileRT 구체 예: 8-GPU에서 <b>GPU 0 = sparse-index 워커</b>(DeepSeek Sparse Attention의 top-k 선택), <b>GPU 1–7 = MLA compute 워커</b> — weight converter가 실제로 그렇게 샤딩한다(§4). 즉 특화가 <i>warp → block → GPU</i>로 뻗어 각 레벨이 서로 다른 종류의 일(연산 vs 데이터이동 vs 통신)을 겹친다. <span class="muted">(warp specialization은 표준·검증 가능한 기법; TileRT의 정확한 커널 내부 스케줄은 닫혀 있음 — 벤더 설명.)</span></span></p>
+
+<h3><span class="en">Second Leap, in more detail — hardware–software co-design</span><span class="ko">Second Leap 더 자세히 — 하드웨어–소프트웨어 co-design</span></h3>
+<p><span class="en">Once the runtime already sits near the hardware ceiling, you can't win more from the runtime alone — so TileRT co-tuned the <i>model itself</i> together with the runtime (with Xiaomi's MiMo team). "Co-design" here means changing the model's numerics and structure to remove microseconds, not just scheduling them better:</span><span class="ko">런타임이 이미 HW 천장 근처면 런타임만으론 더 못 짜낸다 — 그래서 TileRT는 <i>모델 자체</i>를 런타임과 함께 튜닝했다(Xiaomi MiMo 팀과). 여기서 "co-design"은 스케줄을 더 잘 짜는 게 아니라 모델의 수치·구조를 바꿔 마이크로초를 없애는 것:</span></p>
+<ul>
+<li><span class="en"><b>FP4 on the MoE experts only, FP8 elsewhere.</b> Experts are the bulk of a 1T MoE's weights but each token hits only a few, and they tolerate low precision; attention / norms / router stay FP8 where precision matters. Smaller expert weights = less HBM traffic = fewer microseconds, without wrecking quality.</span><span class="ko"><b>MoE expert만 FP4, 나머지 FP8.</b> expert는 1T MoE 가중치의 대부분이지만 토큰당 몇 개만 쓰이고 저정밀에 강하다; 정밀이 중요한 attention/norm/router는 FP8 유지. expert 가중치가 작아지면 HBM 트래픽↓ = 마이크로초↓, 품질은 크게 안 상함.</span></li>
+<li><span class="en"><b>DFlash for MTP.</b> Multi-Token Prediction speeds decode by guessing several tokens then verifying, but a naive extra LM head adds cost every step. DFlash does block-level masked parallel prediction (small draft, sliding-window attn, block size 8) so acceptance stays high while the head's compute stays bounded.</span><span class="ko"><b>MTP용 DFlash.</b> Multi-Token Prediction은 여러 토큰을 추측 후 검증해 decode를 빠르게 하지만, 순진한 추가 LM head는 스텝마다 비용을 더한다. DFlash는 블록 단위 마스크 병렬 예측(작은 draft, sliding-window attn, 블록 크기 8)으로 acceptance는 높게, head 연산은 묶어둔다.</span></li>
+<li><span class="en"><b>Tuning the knobs jointly.</b> Sliding-window sizes, attention sinks, and the speculative <i>acceptance-length vs verification-cost</i> trade-off are tuned against the actual runtime, not in isolation.</span><span class="ko"><b>손잡이 공동 튜닝.</b> sliding-window 크기, attention sink, 그리고 speculative <i>acceptance 길이 ↔ 검증 비용</i> 트레이드오프를 실제 런타임에 맞춰 함께 튜닝.</span></li>
+</ul>
+<p><span class="muted en">All of the above is from the vendor blog / Xiaomi MiMo write-up; the FP4-on-experts scheme is specific to the MiMo-1T run, and none of the numbers are independently verified.</span><span class="muted ko">위 내용은 벤더 블로그/Xiaomi MiMo 글 기준; FP4-on-experts는 MiMo-1T 런 전용이고 수치는 독립 검증 안 됨.</span></p>
 <p><span class="en">TileRT's stated diagnosis: the bottleneck isn't raw kernel speed, it's <i>"when the next computation can even begin"</i> — the idle gaps at operator/kernel boundaries, compute↔communication stalls, and host↔device syncs. Their fixes:</span>
 <span class="ko">TileRT의 진단: 병목은 커널 자체 속도가 아니라 <i>"다음 계산이 언제 시작될 수 있는가"</i> — 연산자/커널 경계의 유휴 틈, compute↔통신 정체, host↔device 동기화다. 그 해법:</span></p>
 <ul>
@@ -579,6 +657,45 @@ def matmul_relu(A, B, block_M=64, block_N=64, block_K=64, ...):
   <text x="16" y="240" font-size="10.5" fill="var(--muted)">Schematic of TileRT's described behavior (blog); not measured or read from the binary.</text>
 </svg>
 <p class="figcap"><span class="en">The mechanism as TileRT describes it: a resident kernel that overlaps tile-level compute, communication and I/O across role-specialized GPUs, removing the idle "execution gap." Sources: <a href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS</a>, <a href="https://www.tilert.ai/blog/speed-as-the-next-scaling-law-zh.html">Speed as the next scaling law</a> (both vendor).</span><span class="ko">TileRT가 설명하는 메커니즘: 역할 특화된 GPU들에 걸쳐 타일 단위 연산·통신·I/O를 겹치는 상주 커널로 유휴 "실행 틈"을 제거. 출처: <a href="https://www.tilert.ai/blog/breaking-1000-tps.html">Breaking 1000 TPS</a>, <a href="https://www.tilert.ai/blog/speed-as-the-next-scaling-law-zh.html">Speed as the next scaling law</a>(둘 다 벤더).</span></p>
+
+<p><span class="en"><b>"Isn't the top row already tile-level?"</b> The naive row above is <i>op-level</i>: each op (a matmul, an all-reduce) runs to completion — using tiles <i>internally</i> — before the next op can start, with a launch+sync gap between. The waste is that the <b>next</b> op waits for the <b>whole</b> previous op, so the compute engine sits idle during comm and vice-versa. TileRT's overlap is at <b>tile granularity across ops</b>: the moment op-A finishes tile 0, op-B can consume tile 0 while op-A still computes tiles 1, 2, 3.</span><span class="ko"><b>"위 행도 이미 tile level 아니야?"</b> 위 naive 행은 <i>op 단위</i>다: 각 op(행렬곱·all-reduce)은 <i>내부적으로</i> 타일을 쓰긴 하지만 <b>통째로 끝나야</b> 다음 op이 시작하고 그 사이 launch+sync 틈이 있다. 낭비는 <b>다음</b> op이 <b>이전 op 전체</b>를 기다린다는 것 — 그래서 통신 중엔 연산 엔진이 놀고 그 반대도 마찬가지. TileRT의 겹침은 <b>op을 가로지르는 타일 단위</b>다: op-A가 타일 0을 끝내는 순간, op-A가 타일 1, 2, 3을 계산하는 동안 op-B가 타일 0을 소비한다.</span></p>
+<svg class="fig" viewBox="0 0 900 300" role="img" aria-label="op-level serial versus tile-level pipelined overlap">
+  <text x="16" y="20" font-size="13" font-weight="700" fill="var(--ink)">Op-level (serial, with gaps)  vs  tile-level (pipelined, overlapped)</text>
+  <text x="16" y="46" font-size="10.5" font-weight="700" fill="var(--red-ink)">NAIVE — next op waits for the WHOLE previous op (+ launch/sync gap)</text>
+  <text x="16" y="72" font-size="9" fill="var(--muted)">compute →</text>
+  <text x="16" y="106" font-size="9" fill="var(--muted)">comm →</text>
+  <rect x="80" y="58" width="180" height="22" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <line x1="125" y1="58" x2="125" y2="80" stroke="var(--blue-bd)"/><line x1="170" y1="58" x2="170" y2="80" stroke="var(--blue-bd)"/><line x1="215" y1="58" x2="215" y2="80" stroke="var(--blue-bd)"/>
+  <text x="170" y="73" text-anchor="middle" font-size="8.5" fill="var(--blue-ink)">compute op: c0 c1 c2 c3</text>
+  <rect x="260" y="58" width="36" height="46" fill="var(--card)" stroke="var(--line)" stroke-dasharray="3 2"/><text x="278" y="85" text-anchor="middle" font-size="8" fill="var(--muted)">sync</text>
+  <rect x="296" y="92" width="180" height="22" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <line x1="341" y1="92" x2="341" y2="114" stroke="var(--green-bd)"/><line x1="386" y1="92" x2="386" y2="114" stroke="var(--green-bd)"/><line x1="431" y1="92" x2="431" y2="114" stroke="var(--green-bd)"/>
+  <text x="386" y="107" text-anchor="middle" font-size="8.5" fill="var(--green-ink)">comm op: m0 m1 m2 m3</text>
+  <rect x="476" y="58" width="36" height="46" fill="var(--card)" stroke="var(--line)" stroke-dasharray="3 2"/><text x="494" y="85" text-anchor="middle" font-size="8" fill="var(--muted)">sync</text>
+  <rect x="512" y="58" width="120" height="22" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="572" y="73" text-anchor="middle" font-size="8.5" fill="var(--blue-ink)">next compute op</text>
+  <rect x="296" y="58" width="180" height="22" fill="none" stroke="var(--red-bd)" stroke-dasharray="3 2"/><text x="386" y="73" text-anchor="middle" font-size="8" fill="var(--red-ink)">compute idle</text>
+  <rect x="80" y="92" width="180" height="22" fill="none" stroke="var(--red-bd)" stroke-dasharray="3 2"/><text x="170" y="107" text-anchor="middle" font-size="8" fill="var(--red-ink)">comm idle</text>
+  <text x="648" y="90" font-size="9" fill="var(--red-ink)">wall-clock =</text><text x="648" y="104" font-size="9" fill="var(--red-ink)">compute + comm + gaps</text>
+  <text x="16" y="168" font-size="10.5" font-weight="700" fill="var(--green-ink)">TileRT — tile ready → next op starts on it now (one persistent kernel)</text>
+  <text x="16" y="194" font-size="9" fill="var(--muted)">compute →</text>
+  <text x="16" y="226" font-size="9" fill="var(--muted)">comm →</text>
+  <rect x="80" y="184" width="46" height="20" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="103" y="198" text-anchor="middle" font-size="8" fill="var(--blue-ink)">c0</text>
+  <rect x="128" y="184" width="46" height="20" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="151" y="198" text-anchor="middle" font-size="8" fill="var(--blue-ink)">c1</text>
+  <rect x="176" y="184" width="46" height="20" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="199" y="198" text-anchor="middle" font-size="8" fill="var(--blue-ink)">c2</text>
+  <rect x="224" y="184" width="46" height="20" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="247" y="198" text-anchor="middle" font-size="8" fill="var(--blue-ink)">c3</text>
+  <rect x="128" y="216" width="46" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="151" y="230" text-anchor="middle" font-size="8" fill="var(--green-ink)">m0</text>
+  <rect x="176" y="216" width="46" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="199" y="230" text-anchor="middle" font-size="8" fill="var(--green-ink)">m1</text>
+  <rect x="224" y="216" width="46" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="247" y="230" text-anchor="middle" font-size="8" fill="var(--green-ink)">m2</text>
+  <rect x="272" y="216" width="46" height="20" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="295" y="230" text-anchor="middle" font-size="8" fill="var(--green-ink)">m3</text>
+  <line x1="103" y1="204" x2="149" y2="216" stroke="var(--ink)" stroke-width="0.9"/><polygon points="151,216 143,214 145,209" fill="var(--ink)"/>
+  <line x1="151" y1="204" x2="197" y2="216" stroke="var(--ink)" stroke-width="0.9"/><polygon points="199,216 191,214 193,209" fill="var(--ink)"/>
+  <line x1="199" y1="204" x2="245" y2="216" stroke="var(--ink)" stroke-width="0.9"/><polygon points="247,216 239,214 241,209" fill="var(--ink)"/>
+  <line x1="247" y1="204" x2="293" y2="216" stroke="var(--ink)" stroke-width="0.9"/><polygon points="295,216 287,214 289,209" fill="var(--ink)"/>
+  <text x="340" y="200" font-size="9" fill="var(--ink)">c0 done → m0 sends it while c1, c2, c3 compute</text>
+  <text x="340" y="228" font-size="9" fill="var(--green-ink)">overlap → wall-clock ≈ max(compute, comm), no gaps</text>
+  <text x="16" y="268" font-size="8.5" fill="var(--muted)">Both cases tile internally; the difference is whether the NEXT op waits for the whole previous op (naive) or starts per-tile (TileRT). Fused compute+comm ops (e.g. down_allreduce, §3) bake this handoff into one op.</text>
+</svg>
+<p class="figcap"><span class="en">Op-level serial vs tile-level pipelined (schematic, ours). The gap in the figure above comes from ops running whole and serially; TileRT pipelines consecutive ops at tile granularity so one engine's work hides the other's.</span><span class="ko">op 단위 직렬 vs 타일 단위 파이프라인(개념도, 우리 그림). 앞 그림의 틈은 op이 통째로·직렬로 돌아서 생긴다; TileRT는 연속 op을 타일 단위로 파이프라이닝해 한 엔진의 일이 다른 엔진의 일을 가린다.</span></p>
 <p><span class="en"><b>TileLang → TileScale → TileRT.</b> TileLang is the open tile-level DSL; TileScale is its distributed extension (a "mega-device" abstraction with tile-level comm on NVSHMEM); TileRT is the closed runtime that packages these ideas. The README says the compiler techniques <i>"will be gradually shared with the community as they are integrated into TileLang and TileScale"</i> — i.e. TileRT ships as a binary now, the open pieces trail behind.</span>
 <span class="ko"><b>TileLang → TileScale → TileRT.</b> TileLang은 오픈 타일 DSL; TileScale은 그 분산 확장("mega-device" 추상 + NVSHMEM 위 타일 단위 통신); TileRT는 이 아이디어들을 담은 닫힌 런타임. README는 컴파일러 기법을 <i>"TileLang·TileScale에 통합되며 점진적으로 공개"</i>한다고 한다 — 즉 TileRT는 지금은 바이너리, 오픈 조각은 뒤따른다.</span></p>
 
@@ -589,6 +706,7 @@ def matmul_relu(A, B, block_M=64, block_N=64, block_K=64, ...):
 
 <section id="s4">
 <h2><span class="num">4</span><span class="en">Usage — install, convert weights, generate</span><span class="ko">사용법 — 설치·가중치 변환·생성</span></h2>
+<div class="callout c-blue"><span class="tag"><span class="en">binary vs weights — why you still "convert"</span><span class="ko">바이너리 vs 가중치 — 왜 아직 "변환"하나</span></span><span class="en">The pre-built <code class="inl">.so</code> is the <b>computation</b> (the fused forward kernel), <i>not</i> the trained parameters. So you still bring the model's <b>weights</b> (an HF checkpoint) and <code class="inl">weight_converter.py</code> re-lays them into the sharded, per-device layout the binary expects. Binary = the engine; weights = the fuel. That's why usage is <i>download the wheel → convert weights → generate</i>, with <b>no compile step</b> on your side.</span><span class="ko">미리 빌드된 <code class="inl">.so</code>는 <b>연산</b>(융합 forward 커널)이지 학습된 파라미터가 <i>아니다</i>. 그래서 모델 <b>가중치</b>(HF 체크포인트)는 따로 가져오고, <code class="inl">weight_converter.py</code>가 그걸 바이너리가 기대하는 샤딩·디바이스별 레이아웃으로 다시 깐다. 바이너리 = 엔진, 가중치 = 연료. 그래서 사용법이 <i>휠 내려받기 → 가중치 변환 → 생성</i>이고 사용자 쪽 <b>컴파일 단계는 없다</b>.</span></div>
 <p><span class="en"><b>v0.1.4 is a pre-built binary wheel</b> linked against an exact ABI — treat the build env as a <b>hard requirement</b>: 8× NVIDIA B200, CUDA 13.2 runtime, Linux x86_64 (glibc ≥ 2.28), Python 3.12, <code class="inl">torch==2.11.0+cu130</code>, <code class="inl">transformers==4.46.3</code>. Other combos are untested. The official Docker image is the recommended path.</span>
 <span class="ko"><b>v0.1.4는 사전 빌드 바이너리 휠</b>로 정확한 ABI에 링크됨 — 빌드 환경을 <b>하드 요구사항</b>으로: 8× NVIDIA B200, CUDA 13.2 런타임, Linux x86_64(glibc ≥ 2.28), Python 3.12, <code class="inl">torch==2.11.0+cu130</code>, <code class="inl">transformers==4.46.3</code>. 다른 조합은 미검증. 공식 Docker 이미지가 권장 경로.</span></p>
 <pre><code># install (or use the official docker image tileai/tilert:cu132-v0.1.4)
