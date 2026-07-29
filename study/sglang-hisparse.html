@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SGLang HiSparse — hierarchical KV offloading for sparse attention: theory, mechanism, effects, code flow</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  .flow{list-style:none;padding:0;margin:14px 0;counter-reset:fl}
+  .flow>li{position:relative;padding:10px 0 12px 40px;border-bottom:1px solid var(--line)}
+  .flow>li::before{counter-increment:fl;content:counter(fl);position:absolute;left:0;top:9px;
+    width:26px;height:26px;border-radius:50%;background:var(--blue-ink);color:#fff;font-size:12px;
+    font-weight:700;display:flex;align-items:center;justify-content:center}
+  .flow code{font-size:12px}
+  .flow a.pl{font-size:11.5px;color:var(--muted);border-bottom:1px dotted var(--muted);text-decoration:none}
+  .flow a.pl:hover{color:var(--blue-ink)}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">SGLang HiSparse — hierarchical KV offloading for sparse attention: theory, mechanism, effects, code flow</span>
+    <span class="ko">SGLang HiSparse — 희소 어텐션을 위한 계층적 KV 오프로딩: 이론·동작·효과·코드 흐름</span>
+  </h1>
+  <p class="lede">
+    <span class="en">Sparse attention (top-k) cuts the compute per decode step — but the full KV cache still has to sit in GPU HBM, because which tokens matter shifts as generation goes on. So sparse serving becomes <b>capacity-bound, not compute-bound</b>, and HBM caps the batch size. <b>HiSparse</b> is SGLang's decode-side answer: keep only a small <b>hot KV buffer</b> on the GPU, push the full token history to <b>host (CPU pinned) RAM</b>, and swap each step's top-k tokens back with a custom CUDA kernel + LRU. It targets <b>DSA</b> models (DeepSeek-V3.2/V4, GLM-5.x) in PD-disaggregated decode. This note covers the theory (with the <b>HySparse</b> architecture paper as the theory backbone — a different, similarly-named work), the mechanism, the reported effects and their caveats, how to run it, the SGLang code path with commit-pinned permalinks, and status.</span>
+    <span class="ko">희소 어텐션(top-k)은 decode 스텝당 연산을 줄인다 — 그런데 어떤 토큰이 중요한지가 생성이 진행되며 바뀌므로, 전체 KV 캐시는 여전히 GPU HBM에 남아 있어야 한다. 그래서 희소 서빙은 <b>연산 바운드가 아니라 용량 바운드(capacity-bound)</b>가 되고, HBM이 배치 크기를 막는다. <b>HiSparse</b>는 SGLang의 decode 측 해법이다: GPU에는 작은 <b>hot KV 버퍼</b>만 두고, 전체 토큰 히스토리는 <b>호스트(CPU pinned) RAM</b>으로 밀어낸 뒤, 매 스텝의 top-k 토큰을 커스텀 CUDA 커널 + LRU로 다시 불러온다. 대상은 PD 분리(disaggregated) decode의 <b>DSA</b> 모델(DeepSeek-V3.2/V4, GLM-5.x)이다. 이 노트는 이론(<b>HySparse</b> 아키텍처 논문을 이론 backbone으로 — 이름만 비슷한 별개 연구), 동작 원리, 보고된 효과와 그 단서, 실행법, commit에 핀된 permalink로 짚는 SGLang 코드 경로, 그리고 구현 상태를 다룬다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://www.lmsys.org/blog/2026-04-10-sglang-hisparse/">LMSYS blog</a></span>
+    <span class="badge"><a href="https://lmsysorg.mintlify.app/docs/advanced_features/hisparse_guide">HiSparse guide</a></span>
+    <span class="badge"><a href="https://github.com/sgl-project/sglang/issues/28874">Roadmap #28874</a></span>
+    <span class="badge"><a href="https://arxiv.org/abs/2602.03560">HySparse arXiv:2602.03560</a></span>
+    <span class="badge"><a href="https://github.com/sgl-project/sglang/tree/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d">code @ fc8b328</a></span>
+    <span class="badge"><span class="en">Feature deep-dive · code-walk</span><span class="ko">기능 딥다이브 · 코드 분석</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-07-29">2026-07-29</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. Theory — sparse attention saves compute, not memory</span><span class="ko">1. 이론 — 희소 어텐션은 연산을 아끼지 메모리를 아끼지 않는다</span></a></li>
+    <li><a href="#s2"><span class="en">2. How HiSparse works — hot buffer, host pool, swap-in kernel</span><span class="ko">2. 동작 원리 — hot 버퍼·호스트 풀·swap-in 커널</span></a></li>
+    <li><a href="#s3"><span class="en">3. Effects — theory vs what's actually been reported</span><span class="ko">3. 효과 — 이론 vs 실제로 보고된 것</span></a></li>
+    <li><a href="#s4"><span class="en">4. Using it — flags, serve commands, constraints</span><span class="ko">4. 사용법 — 플래그·실행 커맨드·제약</span></a></li>
+    <li><a href="#s5"><span class="en">5. Code flow (with permalinks @ fc8b328)</span><span class="ko">5. 코드 흐름 (permalink @ fc8b328)</span></a></li>
+    <li><a href="#s6"><span class="en">6. Implementation status &amp; roadmap</span><span class="ko">6. 구현 상태 &amp; 로드맵</span></a></li>
+    <li><a href="#s7"><span class="en">7. Sources</span><span class="ko">7. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">HiSparse keeps a small hot KV working set on GPU HBM and offloads the full token history to host (CPU pinned) memory, swapping each step's top-k KV back to device via a custom CUDA kernel with LRU eviction. Because sparse attention is <b>capacity-bound</b> (the whole KV must stay resident even though only top-k is active), freeing HBM raises decode batch size — the LMSYS blog reports <b>over 3× throughput at 256 concurrent requests</b> (GLM-5.1-FP8, 32k-in/8k-out, PD-colocated 8×H200) and <b>up to 5× on long-context sweeps</b>, with modest overhead at low concurrency. It's <b>experimental</b>, decode-side only, needs PD disaggregation and a <b>DSA</b> model. Don't confuse it with the <b>HySparse</b> paper (Xiaomi) — a training-time model architecture with a similar name and theme, which we use only as the theory backbone.</span>
+  <span class="ko">HiSparse는 GPU HBM에 작은 hot KV 작업 집합만 두고 전체 토큰 히스토리는 호스트(CPU pinned) 메모리로 오프로드한 뒤, 매 스텝의 top-k KV를 LRU 축출이 있는 커스텀 CUDA 커널로 디바이스에 다시 불러온다. 희소 어텐션은 <b>용량 바운드(capacity-bound)</b>라서(top-k만 활성이어도 전체 KV가 상주해야 함), HBM을 비우면 decode 배치 크기가 커진다 — LMSYS 블로그는 <b>256 동시 요청에서 3배 이상 처리량</b>(GLM-5.1-FP8, 32k입력/8k출력, PD-colocated 8×H200), <b>롱컨텍스트 스윕에서 최대 5배</b>를 보고하며, 낮은 동시성에선 약간의 오버헤드가 있다. <b>실험적</b>이고 decode 측 전용, PD 분리와 <b>DSA</b> 모델이 필요하다. 이름이 비슷한 <b>HySparse</b> 논문(Xiaomi)과 혼동하지 말 것 — 그건 학습 시점의 모델 아키텍처이고, 여기선 이론 backbone으로만 쓴다.</span>
+</div>
+
+<div class="grid3">
+  <div class="mini"><h4>KV cache</h4><p><span class="en">Per-token Key/Value tensors cached so attention doesn't recompute the whole history each step. Its size grows with context length × batch — the thing that fills HBM.</span><span class="ko">토큰별 Key/Value 텐서를 캐시해 매 스텝 전체 히스토리를 재계산하지 않게 한다. 크기가 컨텍스트 길이 × 배치로 커진다 — HBM을 채우는 주범.</span></p></div>
+  <div class="mini"><h4><span class="en">Sparse attention (top-k)</span><span class="ko">희소 어텐션 (top-k)</span></h4><p><span class="en">Attend to only the top-k most relevant past tokens per step, not all. Cuts FLOPs — but the non-selected KV must still be kept, because importance shifts over time.</span><span class="ko">매 스텝 전체가 아니라 관련도 top-k 과거 토큰에만 어텐션. FLOPs를 줄인다 — 단, 선택 안 된 KV도 남겨야 한다(중요도가 시간에 따라 바뀌므로).</span></p></div>
+  <div class="mini"><h4>DSA</h4><p><span class="en">DeepSeek Sparse Attention — a trainable sparse-attention family (DeepSeek-V3.2, GLM-5.x, DeepSeek-V4) that <b>natively</b> selects a token subset, so keeping only top-k on GPU is lossless. HiSparse only works on DSA models.</span><span class="ko">DeepSeek Sparse Attention — 토큰 부분집합을 <b>native</b>하게 선택하는 학습형 희소 어텐션 계열(DeepSeek-V3.2, GLM-5.x, DeepSeek-V4). 그래서 GPU에 top-k만 둬도 무손실. HiSparse는 DSA 모델에서만 동작.</span></p></div>
+  <div class="mini"><h4><span class="en">capacity- vs compute-bound</span><span class="ko">용량 vs 연산 바운드</span></h4><p><span class="en">Compute-bound = limited by GPU FLOPs; capacity-bound = limited by HBM. Sparse decode is capacity-bound: the compute is small but the full KV still occupies HBM.</span><span class="ko">연산 바운드 = GPU FLOPs 한계; 용량 바운드 = HBM 한계. 희소 decode는 용량 바운드다 — 연산은 작지만 전체 KV가 HBM을 차지한다.</span></p></div>
+  <div class="mini"><h4><span class="en">hot buffer / host pool</span><span class="ko">hot 버퍼 / 호스트 풀</span></h4><p><span class="en">Hot buffer = a small fixed-size per-request KV kept on GPU (<code>device_buffer_size</code> slots). Host pool = the full KV history in CPU pinned RAM (<code>host_to_device_ratio</code>× larger).</span><span class="ko">hot 버퍼 = GPU에 두는 요청별 고정 크기 KV(<code>device_buffer_size</code> 슬롯). 호스트 풀 = CPU pinned RAM의 전체 KV 히스토리(<code>host_to_device_ratio</code>배 큼).</span></p></div>
+  <div class="mini"><h4>HiSparse vs HySparse</h4><p><span class="en">HiSparse = SGLang <b>serving</b> feature (KV offload, inference). HySparse = a Xiaomi <b>model-architecture</b> paper (KV sharing across layers, training). Similar names, different layers of the stack — see §1.</span><span class="ko">HiSparse = SGLang <b>서빙</b> 기능(KV 오프로드, 추론). HySparse = Xiaomi의 <b>모델 아키텍처</b> 논문(레이어 간 KV 공유, 학습). 이름은 비슷하나 스택의 다른 층 — §1 참고.</span></p></div>
+</div>
+
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">Theory — sparse attention saves compute, not memory</span><span class="ko">이론 — 희소 어텐션은 연산을 아끼지 메모리를 아끼지 않는다</span></h2>
+
+<p><span class="en">Sparse attention is usually sold as a <b>compute</b> win: instead of attending to all past tokens, attend to the top-k most relevant, so the per-step FLOPs stop growing with context length. For <b>serving</b>, though, the binding constraint is usually not FLOPs — it's <b>HBM capacity</b>. And here dynamic (top-k) sparse attention gives you nothing: you must still keep the <i>entire</i> KV cache resident, because the set of "important" tokens changes from step to step, so you cannot safely evict any of it.</span>
+<span class="ko">희소 어텐션은 보통 <b>연산</b> 이득으로 팔린다: 모든 과거 토큰이 아니라 관련도 top-k에만 어텐션하니 스텝당 FLOPs가 컨텍스트 길이에 따라 커지지 않는다. 그런데 <b>서빙</b>에서 병목은 대개 FLOPs가 아니라 <b>HBM 용량</b>이다. 그리고 여기선 동적(top-k) 희소 어텐션이 아무것도 해결하지 못한다: "중요한" 토큰 집합이 스텝마다 바뀌므로 어느 것도 안전하게 축출할 수 없어, <i>전체</i> KV 캐시를 그대로 상주시켜야 한다.</span></p>
+
+<blockquote class="q">
+  <p>"As a result, sparse attention is often capacity-bound rather than compute-bound, limiting the achievable batch size and overall throughput."</p>
+  <cite>— LMSYS blog, "SGLang HiSparse" · <a href="https://www.lmsys.org/blog/2026-04-10-sglang-hisparse/">lmsys.org/blog/2026-04-10-sglang-hisparse</a></cite>
+</blockquote>
+
+<p><span class="en">The <b>HySparse</b> paper states the same limitation in general form — this is the theory backbone we lean on (it is a <i>different</i> work; see the callout below). It splits the failure modes of sparse attention into two, and the second is exactly the memory problem HiSparse attacks:</span>
+<span class="ko"><b>HySparse</b> 논문은 같은 한계를 일반적인 형태로 정리한다 — 우리가 기대는 이론 backbone이다(별개 연구다; 아래 콜아웃 참고). 희소 어텐션의 실패 양상을 둘로 나누는데, 두 번째가 바로 HiSparse가 공격하는 메모리 문제다:</span></p>
+
+<blockquote class="q">
+  <p>"While dynamic sparse attention can effectively reduce computation, it provides no relief for memory consumption. Maintaining a full-sized KV cache therefore remains a dominant bottleneck for serving throughput and maximum batch size, limiting the practical benefits of sparse attention in long-context settings."</p>
+  <cite>— HySparse, §1 Introduction · <a href="https://arxiv.org/abs/2602.03560">arXiv:2602.03560</a></cite>
+</blockquote>
+
+<h3><span class="en">Two ways to make sparse attention <i>also</i> save memory</span><span class="ko">희소 어텐션이 메모리<i>도</i> 아끼게 하는 두 갈래</span></h3>
+<p><span class="en">There are two levels at which you can fix "compute drops but memory doesn't":</span>
+<span class="ko">"연산은 줄지만 메모리는 안 준다"를 고치는 층위는 둘이다:</span></p>
+
+<div class="grid2">
+  <div class="mini"><h4><span class="en">Architecture level — HySparse (the paper)</span><span class="ko">아키텍처 층위 — HySparse (논문)</span></h4><p><span class="en">Change the <b>model</b>: interleave each full-attention layer with several sparse layers, use the full layer as an <b>oracle</b> for token selection, and let the sparse layers <b>reuse the full layer's KV cache</b>. In their 80B MoE with a 1:11 ratio, only 5 of 49 layers keep full attention — "reducing KV cache storage by nearly 10×." This is a <b>training-time</b> change; it needs a new model.</span><span class="ko">모델을 바꾼다: full 어텐션 레이어마다 여러 sparse 레이어를 끼우고, full 레이어를 토큰 선택의 <b>oracle</b>로 쓰며, sparse 레이어가 <b>full 레이어의 KV 캐시를 재사용</b>하게 한다. 80B MoE 1:11 비율에선 49개 중 5개만 full 어텐션 — "KV 캐시 저장량을 거의 10× 감소". <b>학습 시점</b> 변경이라 새 모델이 필요하다.</span></p></div>
+  <div class="mini"><h4><span class="en">Serving level — HiSparse (SGLang)</span><span class="ko">서빙 층위 — HiSparse (SGLang)</span></h4><p><span class="en">Take the model as given (a DSA model) and change <b>where the KV lives</b>: keep the hot top-k on the GPU, keep the full history in host RAM, and stream the misses in on demand. No model change — an <b>inference-time</b> memory-tiering system, in the spirit of LMSYS's earlier HiCache.</span><span class="ko">모델은 그대로 두고(DSA 모델) <b>KV가 어디 사는지</b>를 바꾼다: hot top-k는 GPU, 전체 히스토리는 호스트 RAM, 미스는 필요할 때 스트리밍. 모델 변경 없음 — LMSYS의 이전 HiCache 계열인 <b>추론 시점</b> 메모리 티어링 시스템.</span></p></div>
+</div>
+
+<div class="callout c-amber">
+  <span class="tag"><span class="en">important — HiSparse ≠ HySparse (don't conflate)</span><span class="ko">중요 — HiSparse ≠ HySparse (혼동 금지)</span></span>
+  <span class="en">The names collide and both are about "sparse attention should also save memory," but they are <b>different works at different layers of the stack</b>. <b>HySparse</b> (Yizhao Gao et al., LLM-Core Xiaomi, arXiv:2602.03560, 3 Feb 2026) is a <b>model architecture</b> — a training-time change that reduces KV <i>storage</i> via cross-layer sharing. <b>HiSparse</b> (Zhiqiang Xie, Zhangheng Huang, Tingwei Huang et al., with the SGLang community + Alibaba Cloud TairKVCache + AntGroup SCT teams) is a <b>serving system</b> — an inference-time KV offload for existing DSA models. The HiSparse blog links <b>no</b> paper. We use HySparse only to frame the problem; <b>do not attribute HySparse's ~10× KV-storage figure to HiSparse</b> — that is an architecture result, not a serving-throughput result.</span>
+  <span class="ko">이름이 겹치고 둘 다 "희소 어텐션이 메모리도 아껴야 한다"를 다루지만, <b>스택의 다른 층에 있는 별개 연구</b>다. <b>HySparse</b>(Yizhao Gao 외, LLM-Core Xiaomi, arXiv:2602.03560, 2026-02-03)는 <b>모델 아키텍처</b> — 레이어 간 공유로 KV <i>저장량</i>을 줄이는 학습 시점 변경. <b>HiSparse</b>(Zhiqiang Xie·Zhangheng Huang·Tingwei Huang 외, SGLang 커뮤니티 + Alibaba Cloud TairKVCache + AntGroup SCT 팀)는 <b>서빙 시스템</b> — 기존 DSA 모델을 위한 추론 시점 KV 오프로드. HiSparse 블로그는 논문을 <b>링크하지 않는다</b>. 여기선 HySparse를 문제 정의용으로만 쓴다; <b>HySparse의 ~10× KV 저장 감소를 HiSparse의 수치로 갖다 붙이지 말 것</b> — 그건 아키텍처 결과이지 서빙 처리량 결과가 아니다.</span>
+</div>
+
+<svg class="fig" viewBox="0 0 760 250" role="img" aria-label="Capacity-bound sparse attention: full KV resident, only top-k active">
+  <style>
+    .l{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+    .s{font:11px -apple-system,sans-serif;fill:var(--muted)}
+  </style>
+  <text x="20" y="22" class="l">One decode step under sparse attention — the whole KV stays in HBM, only top-k is used</text>
+  <!-- HBM box -->
+  <rect x="30" y="42" width="470" height="150" rx="10" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="42" y="62" class="s" fill="var(--blue-ink)">GPU HBM — full KV cache resident (grows with context × batch)</text>
+  <!-- KV cells: many grey, a few highlighted -->
+  <g>
+    <rect x="42" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="72" y="74" width="26" height="26" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="102" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="132" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="162" y="74" width="26" height="26" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="192" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="222" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="252" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="282" y="74" width="26" height="26" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="312" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="342" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="372" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="402" y="74" width="26" height="26" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="432" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="462" y="74" width="26" height="26" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  </g>
+  <rect x="72" y="120" width="26" height="16" rx="3" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="104" y="133" class="s">= top-k tokens actually attended this step (a small fraction)</text>
+  <rect x="42" y="150" width="26" height="16" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  <text x="74" y="163" class="s">= inactive this step, but still resident (importance may return) → wasted HBM</text>
+  <!-- verdict -->
+  <rect x="520" y="42" width="210" height="150" rx="10" fill="var(--card)" stroke="var(--line)"/>
+  <text x="532" y="66" class="l">Result</text>
+  <text x="532" y="90" class="s">compute ↓ (only top-k)</text>
+  <text x="532" y="112" class="s" fill="var(--coral-ink)">HBM ✗ unchanged</text>
+  <text x="532" y="134" class="s">→ batch size capped by HBM</text>
+  <text x="532" y="156" class="s">→ throughput plateaus</text>
+  <text x="532" y="180" class="s" fill="var(--blue-ink)">HiSparse: move grey → host</text>
+</svg>
+<p class="figcap"><span class="en">Fig 1 — Sparse attention is capacity-bound: only the top-k (amber) is used per step, but the whole KV (grey) must stay in HBM because importance shifts across steps. HiSparse's move is to keep only the hot set on device and push the rest to host RAM. Schematic; framing per the LMSYS blog and HySparse §1.</span><span class="ko">그림 1 — 희소 어텐션은 용량 바운드다: 스텝당 top-k(amber)만 쓰지만, 중요도가 스텝마다 바뀌므로 전체 KV(회색)가 HBM에 남아야 한다. HiSparse는 hot 집합만 디바이스에 두고 나머지를 호스트 RAM으로 민다. 개략도; 출처 LMSYS 블로그·HySparse §1.</span></p>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">How HiSparse works — hot buffer, host pool, swap-in kernel</span><span class="ko">동작 원리 — hot 버퍼·호스트 풀·swap-in 커널</span></h2>
+
+<p><span class="en">HiSparse is a two-tier memory hierarchy per request. On the GPU it keeps a small, fixed-size <b>hot device buffer</b> (<code class="inl">device_buffer_size</code> token slots — e.g. 4096 or 6144). In CPU pinned RAM it keeps the <b>full KV history</b> in a <b>host pool</b> sized <code class="inl">host_to_device_ratio</code>× the on-device pool. Each decode step, a CUDA <b>swap-in kernel</b> resolves the step's top-k tokens to device slots, evicting cold slots by <b>LRU</b> and fetching any misses from host.</span>
+<span class="ko">HiSparse는 요청별 2단 메모리 계층이다. GPU엔 작고 고정 크기인 <b>hot 디바이스 버퍼</b>(<code class="inl">device_buffer_size</code> 토큰 슬롯 — 예: 4096 또는 6144)를 둔다. CPU pinned RAM엔 <b>전체 KV 히스토리</b>를 <code class="inl">host_to_device_ratio</code>배 크기의 <b>호스트 풀</b>에 둔다. 매 decode 스텝, CUDA <b>swap-in 커널</b>이 그 스텝의 top-k 토큰을 디바이스 슬롯에 매핑하고, 차가운 슬롯을 <b>LRU</b>로 축출하며, 미스는 호스트에서 가져온다.</span></p>
+
+<blockquote class="q">
+  <p>"HiSparse proactively offloads inactive KV cache entries to host memory, significantly reducing GPU memory pressure, while maintaining a hot device buffer on GPU HBM for frequently accessed KV regions to minimize data movement on the critical path. This enables much larger decoding batch sizes, improving throughput…"</p>
+  <cite>— LMSYS blog, "Design of HiSparse" · <a href="https://www.lmsys.org/blog/2026-04-10-sglang-hisparse/">lmsys.org/blog/2026-04-10-sglang-hisparse</a></cite>
+</blockquote>
+
+<h3><span class="en">The per-step decode loop</span><span class="ko">스텝별 decode 루프</span></h3>
+<p><span class="en">The in-repo guide lays out the decode flow; the code (§5) matches it step for step:</span>
+<span class="ko">레포 내 가이드가 decode 흐름을 명시하고, 코드(§5)가 스텝 단위로 일치한다:</span></p>
+<ol>
+  <li><span class="en"><b>Forward decode</b> — generate the next token.</span><span class="ko"><b>Forward decode</b> — 다음 토큰 생성.</span></li>
+  <li><span class="en"><b>Top-k selection</b> — the DSA indexer picks the most relevant token positions from attention scores.</span><span class="ko"><b>Top-k 선택</b> — DSA indexer가 어텐션 점수로 가장 관련도 높은 토큰 위치를 고른다.</span></li>
+  <li><span class="en"><b>Swap-in</b> — the CUDA kernel loads the top-k KV from host into the device buffer: <i>short sequences</i> (<code class="inl">seq_len ≤ device_buffer_size</code>) hit a fast path (all KV already resident); <i>long sequences</i> do hit-detection → LRU reordering → miss handling (host→device copy).</span><span class="ko"><b>Swap-in</b> — CUDA 커널이 top-k KV를 호스트에서 디바이스 버퍼로 로드: <i>짧은 시퀀스</i>(<code class="inl">seq_len ≤ device_buffer_size</code>)는 fast path(전부 이미 상주); <i>긴 시퀀스</i>는 히트 탐지 → LRU 재정렬 → 미스 처리(host→device 복사).</span></li>
+  <li><span class="en"><b>Decode attention</b> — compute attention over the top-k device locations.</span><span class="ko"><b>Decode 어텐션</b> — top-k 디바이스 위치로 어텐션 계산.</span></li>
+  <li><span class="en"><b>Eager backup</b> — asynchronously copy the <i>previous</i> token's KV device→host on a side stream, so the kernel can recover it later.</span><span class="ko"><b>Eager backup</b> — <i>직전</i> 토큰의 KV를 사이드 스트림에서 비동기로 device→host 복사해, 나중에 커널이 복구할 수 있게 한다.</span></li>
+</ol>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="HiSparse memory hierarchy and swap-in">
+  <style>
+    .t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+    .k{font:11px -apple-system,sans-serif;fill:var(--muted)}
+    .kw{font:600 10.5px -apple-system,sans-serif;fill:var(--ink)}
+  </style>
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--blue-bd)"/></marker>
+        <marker id="ap" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--purple-bd)"/></marker></defs>
+  <!-- GPU side -->
+  <rect x="24" y="40" width="330" height="230" rx="12" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="38" y="62" class="t" fill="var(--blue-ink)">GPU HBM</text>
+  <rect x="42" y="76" width="294" height="70" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="52" y="95" class="kw">hot device buffer — device_buffer_size slots</text>
+  <g>
+    <rect x="52" y="104" width="24" height="24" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="80" y="104" width="24" height="24" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="108" y="104" width="24" height="24" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="136" y="104" width="24" height="24" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="164" y="104" width="24" height="24" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="192" y="104" width="24" height="24" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="220" y="104" width="24" height="24" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="248" y="104" width="24" height="24" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="276" y="104" width="24" height="24" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect x="304" y="104" width="24" height="24" rx="4" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  </g>
+  <rect x="42" y="160" width="294" height="92" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="52" y="179" class="kw">swap-in kernel (per request = 1 CUDA block)</text>
+  <text x="52" y="199" class="k">1. hit-detect top-k in buffer (hash)</text>
+  <text x="52" y="216" class="k">2. LRU: keep hits, evict cold slots</text>
+  <text x="52" y="233" class="k">3. fetch misses host→device into evicted slots</text>
+  <!-- Host side -->
+  <rect x="470" y="40" width="266" height="230" rx="12" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+  <text x="484" y="62" class="t" fill="var(--purple-ink)">Host — CPU pinned RAM</text>
+  <rect x="488" y="76" width="230" height="176" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="498" y="95" class="kw">host pool — full KV history</text>
+  <text x="498" y="114" class="k">size = device pool × host_to_device_ratio</text>
+  <g>
+    <rect x="498" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="520" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="542" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="564" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="586" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="608" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="630" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="652" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="674" y="126" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="498" y="148" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="520" y="148" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="542" y="148" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="564" y="148" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <rect x="586" y="148" width="18" height="18" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+  </g>
+  <text x="498" y="200" class="k">PD: prefill RDMA-writes KV</text>
+  <text x="498" y="217" class="k">straight into this host pool,</text>
+  <text x="498" y="234" class="k">bypassing the decode GPU.</text>
+  <!-- arrows -->
+  <path d="M488,196 C 420,196 410,150 340,140" stroke="var(--purple-bd)" stroke-width="1.6" fill="none" marker-end="url(#ap)"/>
+  <text x="360" y="150" class="k" fill="var(--purple-ink)">miss fetch</text>
+  <path d="M340,120 C 410,110 420,120 486,120" stroke="var(--blue-bd)" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+  <text x="360" y="108" class="k" fill="var(--blue-ink)">eager backup</text>
+</svg>
+<p class="figcap"><span class="en">Fig 2 — HiSparse's two tiers: a small hot buffer on HBM (only top-k, amber, is live) and the full history in host RAM. The swap-in kernel maps top-k → device slots, evicts cold slots LRU, and pulls misses over PCIe; eager backup pushes the previous token back to host. In PD mode, prefill RDMA-writes KV directly into the decode host pool. Mechanism per the HiSparse guide &amp; code (§5).</span><span class="ko">그림 2 — HiSparse의 두 계층: HBM의 작은 hot 버퍼(top-k, amber만 활성)와 호스트 RAM의 전체 히스토리. swap-in 커널이 top-k→디바이스 슬롯 매핑, 차가운 슬롯 LRU 축출, 미스는 PCIe로 당김; eager backup은 직전 토큰을 호스트로 되민다. PD 모드에선 prefill이 KV를 decode 호스트 풀로 직접 RDMA 기록. 출처: HiSparse 가이드·코드(§5).</span></p>
+
+<h3><span class="en">PD direct-to-host, and why the hot buffer size matters</span><span class="ko">PD direct-to-host, 그리고 hot 버퍼 크기가 중요한 이유</span></h3>
+<p><span class="en">HiSparse is decode-side only and assumes <b>PD disaggregation</b>. In that mode the prefill node RDMA-writes the prompt's KV <b>directly into the decode instance's host pool</b>, bypassing the decode GPU entirely — so admission just allocates the small device buffer, with no transient GPU memory spike and no staging DMA. The prefill instance is unaware of HiSparse and needs no changes.</span>
+<span class="ko">HiSparse는 decode 측 전용이고 <b>PD 분리</b>를 전제한다. 그 모드에선 prefill 노드가 프롬프트 KV를 <b>decode 인스턴스의 호스트 풀로 직접</b> RDMA 기록해 decode GPU를 완전히 우회한다 — 그래서 admission은 작은 디바이스 버퍼만 할당하고, 일시적 GPU 메모리 스파이크도 staging DMA도 없다. prefill 인스턴스는 HiSparse를 모르며 변경이 필요 없다.</span></p>
+<p><span class="en">The one knob that most affects the critical path is the <b>hot buffer size</b>: a bigger buffer holds more of the working set, so fewer top-k tokens miss and have to be fetched from host each step.</span>
+<span class="ko">임계경로에 가장 크게 영향을 주는 노브는 <b>hot 버퍼 크기</b>다: 버퍼가 크면 작업 집합을 더 많이 담아, 매 스텝 호스트에서 가져와야 하는 top-k 미스가 줄어든다.</span></p>
+<blockquote class="q">
+  <p>"With a larger hot device buffer (4096 vs. 2048 slots) and LRU eviction, miss counts drop substantially, directly translating to lower swap-in latency on the critical path."</p>
+  <cite>— LMSYS blog · <a href="https://www.lmsys.org/blog/2026-04-10-sglang-hisparse/">lmsys.org/blog/2026-04-10-sglang-hisparse</a></cite>
+</blockquote>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">Effects — theory vs what's actually been reported</span><span class="ko">효과 — 이론 vs 실제로 보고된 것</span></h2>
+
+<p><span class="en">Split into (a) what the mechanism should do and (b) the numbers actually published. The honest headline: <b>every reported number is from the LMSYS/SGLang blog</b> (vendor), on DSA models, at high concurrency or long context — the regime HiSparse is built for. There is no independent third-party measurement yet, and no isolated ablation of swap-in overhead vs. plain sparse decode.</span>
+<span class="ko">(a) 메커니즘이 해야 하는 것과 (b) 실제 공개된 수치로 나눈다. 정직한 헤드라인: <b>보고된 수치는 전부 LMSYS/SGLang 블로그</b>(벤더)에서, DSA 모델·높은 동시성 또는 롱컨텍스트 — HiSparse가 노리는 영역에서 나온 것이다. 아직 독립적인 제3자 측정도, plain 희소 decode 대비 swap-in 오버헤드를 분리한 ablation도 없다.</span></p>
+
+<h3><span class="en">Theory — when it helps / hurts</span><span class="ko">이론 — 언제 이득/손해인가</span></h3>
+<table>
+<tr><th><span class="en">Helps when…</span><span class="ko">이럴 때 이득</span></th><th><span class="en">Hurts / neutral when…</span><span class="ko">이럴 때 손해/무의미</span></th></tr>
+<tr>
+<td><span class="en"><b>Memory-pressured decode</b> — the batch is capped by HBM. Freeing HBM (full KV → host) lets you run a much larger decode batch, and throughput scales with it.</span><span class="ko"><b>메모리 압박 decode</b> — 배치가 HBM에 막힘. HBM을 비우면(전체 KV→호스트) 훨씬 큰 decode 배치가 가능하고 처리량이 함께 오른다.</span></td>
+<td><span class="en"><b>Low concurrency</b> — little memory pressure, so the extra host↔device I/O for sparse KV loading outweighs the savings. The blog explicitly reports "modest overhead" here.</span><span class="ko"><b>낮은 동시성</b> — 메모리 압박이 적어, 희소 KV 로딩의 추가 host↔device I/O가 이득을 넘어선다. 블로그도 여기선 "약간의 오버헤드"라고 명시.</span></td>
+</tr>
+<tr>
+<td><span class="en"><b>Long context</b> — the full KV is huge, so offloading frees the most HBM; gains grow with sequence length.</span><span class="ko"><b>롱컨텍스트</b> — 전체 KV가 거대해 오프로딩이 HBM을 가장 많이 비운다; 시퀀스 길이에 따라 이득 증가.</span></td>
+<td><span class="en"><b>Working set &gt; hot buffer</b> — if top-k keeps missing the device buffer, swap-in latency lands on the critical path each step (mitigated by a bigger buffer + LRU).</span><span class="ko"><b>작업 집합 &gt; hot 버퍼</b> — top-k가 계속 디바이스 버퍼를 미스하면 swap-in 지연이 매 스텝 임계경로에 얹힌다(큰 버퍼 + LRU로 완화).</span></td>
+</tr>
+</table>
+
+<h3><span class="en">Reported numbers — read carefully (all vendor)</span><span class="ko">보고된 수치 — 주의해서 읽기 (전부 벤더)</span></h3>
+<blockquote class="q">
+  <p>"HiSparse achieves near-linear throughput scaling with increasing concurrency, reaching over 3× the baseline throughput at 256 concurrent requests. Note that at low concurrency, HiSparse introduces modest overhead, as the extra I/O from sparse KV loading outweighs the memory savings. The gains become pronounced as concurrency increases and memory pressure dominates."</p>
+  <cite>— LMSYS blog (GLM-5.1-FP8, 32k-input/8k-output, PD-colocated 8×H200) · <a href="https://www.lmsys.org/blog/2026-04-10-sglang-hisparse/">lmsys.org/blog/2026-04-10-sglang-hisparse</a></cite>
+</blockquote>
+
+<table>
+<tr><th><span class="en">Source</span><span class="ko">출처</span></th><th><span class="en">Number</span><span class="ko">수치</span></th><th><span class="en">What it actually means</span><span class="ko">실제 의미</span></th></tr>
+<tr><td><span class="en">LMSYS blog (throughput vs concurrency)</span><span class="ko">LMSYS 블로그 (동시성 대비 처리량)</span></td><td>&gt;3× baseline @ 256 conc</td><td><span class="en">GLM-5.1-FP8, 32k-in/8k-out, PD-colocated 8×H200. "baseline" = sparse attention <i>without</i> HiSparse, which plateaus early as KV hits the HBM cap. Near-linear scaling is the headline claim.</span><span class="ko">GLM-5.1-FP8, 32k입력/8k출력, PD-colocated 8×H200. "baseline" = HiSparse <i>없는</i> 희소 어텐션 — KV가 HBM 한계에 닿아 일찍 정체. 준선형 스케일링이 핵심 주장.</span></td></tr>
+<tr><td><span class="en">LMSYS blog (long-context sweep)</span><span class="ko">LMSYS 블로그 (롱컨텍스트 스윕)</span></td><td>up to 5× throughput</td><td><span class="en">GLM-5.1-FP8, sweeping sequence configurations. "up to" = best case in the sweep, on long context where offload frees the most HBM. Not a fixed operating point.</span><span class="ko">GLM-5.1-FP8, 시퀀스 구성 스윕. "up to" = 스윕 내 최선 케이스로, 오프로드가 HBM을 가장 많이 비우는 롱컨텍스트에서. 고정 동작점 아님.</span></td></tr>
+<tr><td><span class="en">LMSYS blog (low concurrency)</span><span class="ko">LMSYS 블로그 (낮은 동시성)</span></td><td><span class="en">modest overhead (slower)</span><span class="ko">약간의 오버헤드(느림)</span></td><td><span class="en">The honest counterpoint from the same source: when memory isn't the bottleneck, the extra I/O loses. Turn HiSparse on for the pressured regime, not everywhere.</span><span class="ko">같은 출처의 정직한 반례: 메모리가 병목이 아니면 추가 I/O가 손해. 압박 영역에서만 켜라, 아무 데나 켜지 말 것.</span></td></tr>
+<tr><td><span class="en">LMSYS blog (hot-buffer ablation)</span><span class="ko">LMSYS 블로그 (hot 버퍼 ablation)</span></td><td>4096 vs 2048 → fewer misses</td><td><span class="en">DeepSeek-V3.2, top-k=2048, LongBenchV2. A tuning insight, not an end-to-end speedup: bigger buffer + LRU lowers miss count → lower swap-in latency.</span><span class="ko">DeepSeek-V3.2, top-k=2048, LongBenchV2. end-to-end 속도가 아니라 튜닝 인사이트: 큰 버퍼 + LRU가 미스↓ → swap-in 지연↓.</span></td></tr>
+</table>
+
+<div class="callout c-amber">
+  <span class="tag"><span class="en">caveats — how far to trust these</span><span class="ko">단서 — 어디까지 믿을까</span></span>
+  <span class="en">(1) All numbers are <b>vendor-reported</b> (LMSYS/SGLang blog); no independent reproduction yet. (2) The 3×/5× are <b>best-case</b> — high concurrency and/or long context, exactly where offload pays. (3) There is <b>no isolated ablation</b> of "sparse decode + HiSparse" vs "sparse decode alone" holding batch fixed; the win is fundamentally "bigger batch fits," so it presumes you were HBM-capped. (4) It needs a lot of <b>host RAM</b> (the guide suggests <code class="inl">host_to_device_ratio</code> 5–10 for 1–2 TB). (5) DSA models only. Treat "up to 5×" as an upper bound for the regime, not a number you'll see by default.</span>
+  <span class="ko">(1) 모든 수치는 <b>벤더 보고</b>(LMSYS/SGLang 블로그); 독립 재현 아직 없음. (2) 3×/5×는 <b>최선 케이스</b> — 높은 동시성/롱컨텍스트, 오프로드가 값을 하는 바로 그 지점. (3) 배치를 고정한 채 "희소 decode + HiSparse" vs "희소 decode 단독"을 분리한 <b>ablation은 없음</b>; 이득의 본질은 "더 큰 배치가 들어간다"라서 HBM에 막혀 있었음을 전제. (4) <b>호스트 RAM</b>이 많이 필요(가이드 권장 <code class="inl">host_to_device_ratio</code> 1–2 TB에 5–10). (5) DSA 모델 전용. "최대 5×"는 그 영역의 상한이지 기본으로 보이는 값이 아니다.</span>
+</div>
+</section>
+
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">Using it — flags, serve commands, constraints</span><span class="ko">사용법 — 플래그·실행 커맨드·제약</span></h2>
+
+<p><span class="en">HiSparse is enabled on the <b>decode instance</b> of a PD-disaggregated deployment. The prefill instance needs no HiSparse flags. Example decode launch from the guide:</span>
+<span class="ko">HiSparse는 PD 분리 배포의 <b>decode 인스턴스</b>에서 켠다. prefill 인스턴스엔 HiSparse 플래그가 필요 없다. 가이드의 decode 실행 예시:</span></p>
+<pre><code>python3 -m sglang.launch_server \
+    --model-path /path/to/model \
+    --trust-remote-code \
+    --port 8000 --host 0.0.0.0 \
+    --context-length 81920 \
+    --tp-size 8 --dp-size 8 --enable-dp-attention \
+    --mem-fraction-static 0.85 \
+    --disable-radix-cache \                # required with HiSparse
+    --disaggregation-mode decode \         # decode instance
+    --disaggregation-ib-device mlx5_0,mlx5_1,mlx5_2,mlx5_3 \
+    --dist-init-addr 127.0.0.1:5757 \
+    --nnodes 1 --node-rank 0 \
+    --enable-hisparse \
+    --hisparse-config='{"top_k": 2048, "device_buffer_size": 6144, "host_to_device_ratio": 10, "swap_in_block_size": 960}'</code></pre>
+
+<table>
+<tr><th><span class="en">Flag / knob</span><span class="ko">플래그 / 노브</span></th><th><span class="en">Default</span><span class="ko">기본값</span></th><th><span class="en">Meaning</span><span class="ko">의미</span></th></tr>
+<tr><td><code class="inl">--enable-hisparse</code></td><td>off</td><td><span class="en">Master switch (decode instance).</span><span class="ko">마스터 스위치(decode 인스턴스).</span></td></tr>
+<tr><td><code class="inl">--hisparse-config</code></td><td>—</td><td><span class="en">JSON string. Alias: <code class="inl">--hierarchical-sparse-attention-extra-config</code>.</span><span class="ko">JSON 문자열. 별칭: <code class="inl">--hierarchical-sparse-attention-extra-config</code>.</span></td></tr>
+<tr><td><code class="inl">top_k</code></td><td>2048</td><td><span class="en">Number of top-k entries. Overridden by the model's <code class="inl">index_topk</code> when present.</span><span class="ko">top-k 개수. 모델에 <code class="inl">index_topk</code>가 있으면 그 값으로 덮어씀.</span></td></tr>
+<tr><td><code class="inl">device_buffer_size</code></td><td>2 × top_k</td><td><span class="en">Token slots in the per-request GPU hot buffer. Must be ≥ <code class="inl">top_k</code>.</span><span class="ko">요청별 GPU hot 버퍼 토큰 슬롯. <code class="inl">top_k</code> 이상이어야 함.</span></td></tr>
+<tr><td><code class="inl">host_to_device_ratio</code></td><td>2</td><td><span class="en">Host pool size ÷ device pool size — sets host KV capacity. Guide: <b>5</b> for ~1 TB RAM, <b>10</b> for ~2 TB.</span><span class="ko">호스트 풀 ÷ 디바이스 풀 — 호스트 KV 용량 결정. 가이드: ~1 TB RAM엔 <b>5</b>, ~2 TB엔 <b>10</b>.</span></td></tr>
+<tr><td><code class="inl">swap_in_block_size</code></td><td>960</td><td><span class="en">CUDA thread-block size for the swap-in kernel. Int in [1, 1024].</span><span class="ko">swap-in 커널의 CUDA 스레드블록 크기. [1, 1024] 정수.</span></td></tr>
+</table>
+
+<h4><span class="en">Constraints (enforced in validation)</span><span class="ko">제약 (validation에서 강제)</span></h4>
+<ul>
+<li><span class="en"><b>DSA models only</b> — DeepSeek-V3.2, GLM-5.x, and DeepSeek-V4. The guide: these "natively select a subset of tokens for attention, making it possible to keep only the top-k KV on GPU… without accuracy loss."</span><span class="ko"><b>DSA 모델 전용</b> — DeepSeek-V3.2, GLM-5.x, DeepSeek-V4. 가이드: 이들은 "어텐션할 토큰 부분집합을 native하게 선택해, top-k KV만 GPU에 두는 게 가능… 정확도 손실 없이."</span></li>
+<li><span class="en"><b>PD disaggregation, decode instance only.</b></span><span class="ko"><b>PD 분리, decode 인스턴스 전용.</b></span></li>
+<li><span class="en"><b><code class="inl">--disable-radix-cache</code> required</b> on the decode side.</span><span class="ko">decode 측에 <b><code class="inl">--disable-radix-cache</code> 필수.</b></span></li>
+<li><span class="en"><b>Backend by KV dtype:</b> <code class="inl">bfloat16</code>→<code class="inl">flashmla_sparse</code>, <code class="inl">fp8_e4m3</code>→<code class="inl">flashmla_kv</code>; ROCm → <code class="inl">tilelang</code>/<code class="inl">aiter</code>; DeepSeek-V4 uses its own <code class="inl">dsv4</code> backend (fp8_e4m3 by default). <code class="inl">--kv-cache-dtype</code> defaults to <code class="inl">auto</code> → fp8_e4m3 on SM100+ (Blackwell), bfloat16 otherwise.</span><span class="ko"><b>KV dtype별 백엔드:</b> <code class="inl">bfloat16</code>→<code class="inl">flashmla_sparse</code>, <code class="inl">fp8_e4m3</code>→<code class="inl">flashmla_kv</code>; ROCm → <code class="inl">tilelang</code>/<code class="inl">aiter</code>; DeepSeek-V4는 자체 <code class="inl">dsv4</code> 백엔드(기본 fp8_e4m3). <code class="inl">--kv-cache-dtype</code>는 <code class="inl">auto</code> → SM100+(Blackwell)에서 fp8_e4m3, 그 외 bfloat16.</span></li>
+</ul>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Code flow (with permalinks @ fc8b328)</span><span class="ko">코드 흐름 (permalink @ fc8b328)</span></h2>
+<p class="muted"><span class="en">All permalinks pinned to <code class="inl">sgl-project/sglang</code> commit <code class="inl">fc8b328</code>. The end-to-end path for one decode step with HiSparse enabled:</span>
+<span class="ko">모든 permalink은 <code class="inl">sgl-project/sglang</code> 커밋 <code class="inl">fc8b328</code>에 핀됨. HiSparse 켠 decode 한 스텝의 end-to-end 경로:</span></p>
+
+<ol class="flow">
+<li><span class="en"><b>Parse config.</b> <code class="inl">--hisparse-config</code> JSON → <code class="inl">SparseConfig(top_k, device_buffer_size, host_to_device_ratio, swap_in_block_size)</code>; <code class="inl">device_buffer_size ≥ top_k</code> enforced.</span><span class="ko"><b>설정 파싱.</b> <code class="inl">--hisparse-config</code> JSON → <code class="inl">SparseConfig(...)</code>; <code class="inl">device_buffer_size ≥ top_k</code> 강제.</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/mem_cache/sparsity/factory.py#L78-L94">factory.py#L78-L94</a> · <a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/server_args.py#L2639-L2649">flags: server_args.py#L2639-L2649</a></li>
+<li><span class="en"><b>Validate.</b> assert DSA (or V4) model; assert <code class="inl">--disable-radix-cache</code>; check backend by KV dtype.</span><span class="ko"><b>검증.</b> DSA(또는 V4) 모델 assert; <code class="inl">--disable-radix-cache</code> assert; KV dtype별 백엔드 확인.</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/arg_groups/hisparse_hook.py#L81-L101">hisparse_hook.py#L81-L101</a> · <a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/arg_groups/hisparse_hook.py#L11-L16">backends #L11-L16</a></li>
+<li><span class="en"><b>Build coordinator.</b> <code class="inl">maybe_init_hisparse_coordinator</code> constructs the <code class="inl">HiSparseCoordinator</code> (top_k overridden by model <code class="inl">index_topk</code> if present).</span><span class="ko"><b>coordinator 생성.</b> <code class="inl">maybe_init_hisparse_coordinator</code>가 <code class="inl">HiSparseCoordinator</code> 구성(모델 <code class="inl">index_topk</code>가 있으면 top_k 덮어씀).</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/model_executor/model_runner.py#L780-L803">model_runner.py#L780-L803</a></li>
+<li><span class="en"><b>Allocate tiers.</b> coordinator <code class="inl">__init__</code> allocates the per-request device buffer, LRU slots, and the host pool (<code class="inl">MLATokenToKVPoolHost</code> for DSA; <code class="inl">DeepSeekV4PagedHostPool</code> for V4).</span><span class="ko"><b>계층 할당.</b> coordinator <code class="inl">__init__</code>가 요청별 디바이스 버퍼·LRU 슬롯·호스트 풀 할당(DSA는 <code class="inl">MLATokenToKVPoolHost</code>, V4는 <code class="inl">DeepSeekV4PagedHostPool</code>).</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/managers/hisparse_coordinator.py#L45-L188">hisparse_coordinator.py#L45-L188</a></li>
+<li><span class="en"><b>Admit request (direct-to-host).</b> In PD mode, prefill RDMA-writes KV into the decode host pool; admission only allocs the device buffer.</span><span class="ko"><b>요청 admit (direct-to-host).</b> PD 모드에서 prefill이 KV를 decode 호스트 풀로 RDMA 기록; admission은 디바이스 버퍼만 할당.</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/disaggregation/decode.py#L2219-L2222">decode.py#L2219-L2222</a> · <a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/managers/hisparse_coordinator.py#L256-L288">admit_request_direct #L256-L288</a></li>
+<li><span class="en"><b>Per-step page-table update + eager backup.</b> before the forward, <code class="inl">map_last_loc_to_buffer</code> points the compressed→device mapping at the reserved latest-token slot and fires <code class="inl">_eager_backup_previous_token</code> (device→host on a side stream).</span><span class="ko"><b>스텝별 page-table 갱신 + eager backup.</b> forward 전에 <code class="inl">map_last_loc_to_buffer</code>가 compressed→device 매핑을 예약된 최신 토큰 슬롯에 맞추고 <code class="inl">_eager_backup_previous_token</code>(사이드 스트림 device→host) 발사.</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/managers/hisparse_coordinator.py#L461-L531">map_last_loc_to_buffer #L461-L531</a> · <a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/managers/hisparse_coordinator.py#L533-L620">eager_backup #L533-L620</a></li>
+<li><span class="en"><b>Top-k selection.</b> the DSA indexer produces <code class="inl">topk_indices</code> from attention/index scores (V4: <code class="inl">topk_transform_512*</code> writes <code class="inl">raw_indices</code>).</span><span class="ko"><b>Top-k 선택.</b> DSA indexer가 어텐션/인덱스 점수로 <code class="inl">topk_indices</code> 생성(V4: <code class="inl">topk_transform_512*</code>가 <code class="inl">raw_indices</code> 기록).</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/layers/attention/dsv4/indexer.py#L806-L844">dsv4/indexer.py#L806-L844</a></li>
+<li><span class="en"><b>Invoke swap-in (Python op → CUDA).</b> the DSA backend calls <code class="inl">swap_in_selected_pages(...)</code>, which dispatches to the JIT op <code class="inl">load_cache_to_device_buffer_mla</code> (or <code class="inl">…_dsv4_mla</code>).</span><span class="ko"><b>swap-in 호출 (Python op → CUDA).</b> DSA 백엔드가 <code class="inl">swap_in_selected_pages(...)</code> 호출 → JIT op <code class="inl">load_cache_to_device_buffer_mla</code>(또는 <code class="inl">…_dsv4_mla</code>)로 디스패치.</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/layers/attention/dsa_backend.py#L2210-L2216">dsa_backend.py#L2210-L2216</a> · <a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/managers/hisparse_coordinator.py#L805-L841">swap_in_selected_pages #L805-L841</a> · <a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/ops/kvcache/hisparse.py#L134-L171">op #L134-L171</a></li>
+<li><span class="en"><b>Swap-in kernel runs</b> (one CUDA block per request): fast path if resident, else hit-detect → LRU evict → host→device miss fetch (see below).</span><span class="ko"><b>swap-in 커널 실행</b>(요청당 CUDA 블록 1개): 상주면 fast path, 아니면 히트 탐지 → LRU 축출 → host→device 미스 fetch(아래 참고).</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L184-L212">hisparse.cuh#L184-L212</a></li>
+<li><span class="en"><b>Page-table = returned locations.</b> <code class="inl">swap_in_selected_pages</code> returns <code class="inl">top_k_device_locs</code>, used directly as <code class="inl">page_table_1</code> — no separate block-table write.</span><span class="ko"><b>Page-table = 반환 위치.</b> <code class="inl">swap_in_selected_pages</code>가 <code class="inl">top_k_device_locs</code> 반환 → 그대로 <code class="inl">page_table_1</code>로 사용(별도 block-table 기록 없음).</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/managers/hisparse_coordinator.py#L805-L841">#L841</a></li>
+<li><span class="en"><b>Decode attention.</b> <code class="inl">flashmla_sparse</code> or <code class="inl">flashmla_kv</code> runs over <code class="inl">page_table_1</code>.</span><span class="ko"><b>Decode 어텐션.</b> <code class="inl">flashmla_sparse</code> 또는 <code class="inl">flashmla_kv</code>가 <code class="inl">page_table_1</code> 위에서 실행.</span><br><a class="pl" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/layers/attention/dsa_backend.py#L2226-L2244">dsa_backend.py#L2226-L2244</a></li>
+</ol>
+
+<h3><span class="en">The swap-in kernel</span><span class="ko">swap-in 커널</span></h3>
+<p><span class="en">The kernel <code class="inl">load_cache_to_device_buffer_kernel</code> runs <b>one CUDA block per request</b>. Signature (<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L184-L212">hisparse.cuh#L184-L212</a>):</span>
+<span class="ko">커널 <code class="inl">load_cache_to_device_buffer_kernel</code>은 <b>요청당 CUDA 블록 1개</b>로 돈다. 시그니처(<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L184-L212">hisparse.cuh#L184-L212</a>):</span></p>
+<pre><code>template &lt;int BLOCK_SIZE, int NUM_TOP_K, int HOT_BUFFER_SIZE,
+          bool IsMLA, bool IsDsv4Layout, typename SeqLensT, typename ReqPoolIndicesT&gt;
+__global__ void load_cache_to_device_buffer_kernel(...)</code></pre>
+<p><span class="en">In order:</span><span class="ko">순서대로:</span></p>
+<ul>
+<li><span class="en"><b>Fast path</b> — if <code class="inl">seq_len ≤ HOT_BUFFER_SIZE</code>, all tokens are resident and in order; just map top-k → existing slots and return (<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L242-L251">#L242-L251</a>).</span><span class="ko"><b>Fast path</b> — <code class="inl">seq_len ≤ HOT_BUFFER_SIZE</code>면 전 토큰이 순서대로 상주; top-k → 기존 슬롯 매핑 후 반환(<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L242-L251">#L242-L251</a>).</span></li>
+<li><span class="en"><b>Hit detection</b> — a shared-memory open-addressing hash of the top-k token ids; the newest token is special-cased into a reserved extra-page slot (<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L294-L313">#L294-L313</a>).</span><span class="ko"><b>히트 탐지</b> — top-k 토큰 id의 shared-memory 오픈어드레싱 해시; 최신 토큰은 예약된 extra-page 슬롯으로 특수 처리(<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L294-L313">#L294-L313</a>).</span></li>
+<li><span class="en"><b>LRU compaction</b> — warp-ballot prefix sums pack hits to the MRU end and evictables to the LRU front; misses claim the LRU-front slots (<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L319-L461">#L319-L461</a>).</span><span class="ko"><b>LRU 압축</b> — warp-ballot prefix sum이 히트는 MRU 끝으로, 축출 대상은 LRU 앞으로 팩; 미스가 LRU 앞 슬롯을 차지(<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L319-L461">#L319-L461</a>).</span></li>
+<li><span class="en"><b>Host→device fetch</b> — each warp copies one missing token's KV from the host pool into its evicted device slot (<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L500-L543">#L500-L543</a>).</span><span class="ko"><b>Host→device fetch</b> — 각 warp이 미스 토큰 1개의 KV를 호스트 풀에서 축출된 디바이스 슬롯으로 복사(<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh#L500-L543">#L500-L543</a>).</span></li>
+</ul>
+
+<div class="grid2">
+  <div class="mini"><h4><span class="en">Key files</span><span class="ko">핵심 파일</span></h4><p>
+  <code>managers/hisparse_coordinator.py</code> — <span class="en">decode-side driver (841 lines)</span><span class="ko">decode 측 드라이버(841줄)</span><br>
+  <code>kernels/jit/csrc/hisparse.cuh</code> — <span class="en">swap-in CUDA kernel</span><span class="ko">swap-in CUDA 커널</span><br>
+  <code>kernels/ops/kvcache/hisparse.py</code> — <span class="en">Python op wrapper</span><span class="ko">Python op 래퍼</span><br>
+  <code>mem_cache/allocator/hisparse.py</code> — <span class="en">host/device pool sizing</span><span class="ko">host/device 풀 크기</span><br>
+  <code>arg_groups/hisparse_hook.py</code> — <span class="en">flag validation</span><span class="ko">플래그 검증</span></p></div>
+  <div class="mini"><h4><span class="en">Data structures</span><span class="ko">자료 구조</span></h4><p><span class="en"><code>req_to_device_buffer</code> = hot KV, shape <code>(max_reqs, device_buffer_size + page_size)</code> (one page reserved for the newest token). <code>req_to_host_pool</code> = full history in CPU pinned RAM. <code>lru_slots</code> = int16 per-slot LRU order. Host capacity = device size × <code>host_to_device_ratio</code> (<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/mem_cache/allocator/hisparse.py#L26-L28">allocator/hisparse.py#L26-L28</a>).</span><span class="ko"><code>req_to_device_buffer</code> = hot KV, shape <code>(max_reqs, device_buffer_size + page_size)</code>(최신 토큰용 페이지 1개 예약). <code>req_to_host_pool</code> = CPU pinned RAM의 전체 히스토리. <code>lru_slots</code> = 슬롯별 int16 LRU 순서. 호스트 용량 = 디바이스 크기 × <code>host_to_device_ratio</code>(<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/mem_cache/allocator/hisparse.py#L26-L28">allocator/hisparse.py#L26-L28</a>).</span></p></div>
+</div>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Implementation status &amp; roadmap</span><span class="ko">구현 상태 &amp; 로드맵</span></h2>
+<p><span class="en"><b>Experimental.</b> HiSparse is decode-side only, requires PD disaggregation + <code class="inl">--disable-radix-cache</code>, and works only on DSA/DeepSeek-V4 models. Supported today: <b>DeepSeek-V3.2</b>, <b>GLM-5.x</b> (e2e/accuracy tests exist for GLM-5.1 and GLM-5.2, incl. AMD MI30x/MI35x), and <b>DeepSeek-V4</b> via a separate <code class="inl">dsv4</code> code path (compress-ratio 4).</span>
+<span class="ko"><b>실험적.</b> decode 측 전용, PD 분리 + <code class="inl">--disable-radix-cache</code> 필요, DSA/DeepSeek-V4 모델에서만. 현재 지원: <b>DeepSeek-V3.2</b>, <b>GLM-5.x</b>(GLM-5.1·5.2 e2e/정확도 테스트 존재, AMD MI30x/MI35x 포함), 그리고 별도 <code class="inl">dsv4</code> 경로의 <b>DeepSeek-V4</b>(compress-ratio 4).</span></p>
+
+<h4><span class="en">Rough edges in the code</span><span class="ko">코드의 거친 부분</span></h4>
+<ul>
+<li><span class="en"><b>ROCm guard</b> — DSv4 HiSparse fails fast on the ROCm unified-KV path, with a "remove once unified-KV HiSparse lands" note (<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/arg_groups/hisparse_hook.py#L105-L122">hisparse_hook.py#L105-L122</a>).</span><span class="ko"><b>ROCm 가드</b> — DSv4 HiSparse가 ROCm unified-KV 경로에서 즉시 실패, "unified-KV HiSparse 들어오면 제거" 주석(<a class="src" href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/arg_groups/hisparse_hook.py#L105-L122">hisparse_hook.py#L105-L122</a>).</span></li>
+<li><span class="en"><b>Open TODOs</b> — short-sequence preload "<code class="inl">TODO: Optimize this</code>" (coordinator), "<code class="inl">todo hisparse: support page wise sparsity</code>" (kernel), and a note that the miss-copy loop "can be separated into a new kernel if parallelism is a concern."</span><span class="ko"><b>미해결 TODO</b> — 짧은 시퀀스 preload "<code class="inl">TODO: Optimize this</code>"(coordinator), "<code class="inl">todo hisparse: support page wise sparsity</code>"(커널), 그리고 miss-copy 루프 "병렬성이 문제면 별도 커널로 분리 가능" 주석.</span></li>
+</ul>
+
+<h4><span class="en">Roadmap (issue #28874)</span><span class="ko">로드맵 (issue #28874)</span></h4>
+<p><span class="en">The open roadmap issue "<a class="src" href="https://github.com/sgl-project/sglang/issues/28874">HiSparse Roadmap for Long-Context Sparse Serving</a>" (opened 2026-06-22 by hzh0425) lists four tracks: <b>(1) more sparse models</b> — MiniMax-M3, DeepSeek-V4, GLM-5.2/5.1; <b>(2) 1 MB long-context perf</b> — IO prefetch/compute overlap, MTP compatibility (with "dynamic balancing: MTP for small batches, HiSparse for large batches"), kernel opt, and TwoBatch Overlap; <b>(3) PD decode integration</b> — L2 RadixTree, NIXL DRAM support, cross-TP CPU-memory sharing; <b>(4) more training-free algorithms</b> — "extension points for Quest and other training-free sparse attention algorithms." Linked PRs include #28523, #26445, #28753, #28752, #27563, #27370, #25288, #28879.</span>
+<span class="ko">공개 로드맵 이슈 "<a class="src" href="https://github.com/sgl-project/sglang/issues/28874">HiSparse Roadmap for Long-Context Sparse Serving</a>"(2026-06-22, hzh0425 개설)는 네 갈래를 든다: <b>(1) 더 많은 sparse 모델</b> — MiniMax-M3, DeepSeek-V4, GLM-5.2/5.1; <b>(2) 1 MB 롱컨텍스트 성능</b> — IO prefetch/compute overlap, MTP 호환("dynamic balancing: 작은 배치엔 MTP, 큰 배치엔 HiSparse"), 커널 최적화, TwoBatch Overlap; <b>(3) PD decode 통합</b> — L2 RadixTree, NIXL DRAM 지원, TP 간 CPU 메모리 공유; <b>(4) 더 많은 training-free 알고리즘</b> — "Quest 등 training-free 희소 어텐션 알고리즘용 확장점." 링크된 PR: #28523, #26445, #28753, #28752, #27563, #27370, #25288, #28879.</span></p>
+
+<p class="muted"><span class="en">Note: no PR numbers appear in comments next to the HiSparse code at this SHA, so this note doesn't pin the feature to a single landing PR. The in-repo guide credits Zhiqiang Xie, Zhangheng Huang, Tingwei Huang, Shangming Cai, Teng Ma and others, plus the Alibaba Cloud TairKVCache and AntGroup SCT Inference teams.</span>
+<span class="ko">참고: 이 SHA의 HiSparse 코드 주변 주석엔 PR 번호가 없어, 이 노트는 기능을 단일 랜딩 PR에 고정하지 않는다. 레포 가이드는 Zhiqiang Xie·Zhangheng Huang·Tingwei Huang·Shangming Cai·Teng Ma 외, 그리고 Alibaba Cloud TairKVCache·AntGroup SCT Inference 팀을 크레딧한다.</span></p>
+
+<div class="callout c-purple">
+  <span class="tag"><span class="en">editor's note — our angle (not an LMSYS/SGLang claim)</span><span class="ko">편집자 주 — 우리 관점 (LMSYS/SGLang 주장 아님)</span></span>
+  <span class="en">HiSparse is squarely in the <b>KV-tiering</b> family we care about (GPU↔host KV movement, à la HiCache / LMCache / NIXL DRAM), but with a sharp scope: it only helps a <b>DSA model</b>, decode-side, under PD disaggregation, when you're <b>HBM-capped</b>. For our MI250/ROCm lab that last point plus the explicit <b>ROCm DSv4 guard</b> means it's not a flip-a-switch win yet — the bf16→<code class="inl">flashmla_sparse</code> / <code class="inl">tilelang</code>/<code class="inl">aiter</code> backends exist, but V4 on ROCm unified-KV is blocked in-code. Where it connects to our work: it's the serving-side dual of the <b>HySparse</b> architecture idea (both make "sparse attention actually save memory" true — one at training time, one at serve time), and it needs the same <b>host-memory + RDMA transfer fabric</b> (NIXL DRAM is on its roadmap) that our P/D + wide-EP interest already leans on. Practical boundary to keep honest: the 3×/5× are vendor, best-case, high-pressure numbers; at low concurrency it's a documented regression, and it costs 1–2 TB of host RAM. Worth planning for at fleet scale on DSA models, not a single-box default.</span>
+  <span class="ko">HiSparse는 우리가 관심 있는 <b>KV 티어링</b> 계열(GPU↔host KV 이동, HiCache / LMCache / NIXL DRAM 류)에 정확히 들어가지만 범위가 좁다: <b>DSA 모델</b>·decode 측·PD 분리·<b>HBM에 막혔을 때</b>만 이득. 우리 MI250/ROCm 랩에선 그 마지막 조건 + 명시적 <b>ROCm DSv4 가드</b> 때문에 아직 스위치 하나로 되는 이득이 아니다 — bf16→<code class="inl">flashmla_sparse</code> / <code class="inl">tilelang</code>/<code class="inl">aiter</code> 백엔드는 있지만 ROCm unified-KV의 V4는 코드에서 막혀 있다. 우리 작업과의 접점: <b>HySparse</b> 아키텍처 아이디어의 서빙 측 쌍이고(둘 다 "희소 어텐션이 실제로 메모리를 아끼게" 만든다 — 하나는 학습 시점, 하나는 서빙 시점), 우리 P/D + wide-EP 관심이 이미 기대는 <b>host 메모리 + RDMA 전송 fabric</b>(NIXL DRAM이 로드맵에 있음)을 똑같이 필요로 한다. 정직히 지킬 경계: 3×/5×는 벤더·최선·고압박 수치; 낮은 동시성에선 문서화된 회귀이고, host RAM 1–2 TB가 든다. DSA 모델에서 fleet 스케일로 계획할 거리이지 단일 박스 기본값은 아니다.</span>
+</div>
+</section>
+
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<h4><span class="en">HiSparse (the SGLang feature)</span><span class="ko">HiSparse (SGLang 기능)</span></h4>
+<ul class="srcs">
+<li>LMSYS blog "SGLang HiSparse" (mechanism, 3×/5×, capacity-bound framing, LRU/buffer ablation) — <a href="https://www.lmsys.org/blog/2026-04-10-sglang-hisparse/">lmsys.org/blog/2026-04-10-sglang-hisparse</a></li>
+<li>HiSparse usage guide (flags, serve commands, backend selection, host_to_device_ratio guidance) — <a href="https://lmsysorg.mintlify.app/docs/advanced_features/hisparse_guide">lmsysorg.mintlify.app/docs/advanced_features/hisparse_guide</a> · in-repo: <a href="https://github.com/sgl-project/sglang/blob/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/docs_new/docs/advanced_features/hisparse_guide.mdx">docs_new/…/hisparse_guide.mdx</a></li>
+<li>Roadmap issue #28874 "HiSparse Roadmap for Long-Context Sparse Serving" — <a href="https://github.com/sgl-project/sglang/issues/28874">github.com/sgl-project/sglang/issues/28874</a></li>
+<li>Code @ <code>fc8b328</code> — <a href="https://github.com/sgl-project/sglang/tree/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/managers/hisparse_coordinator.py">hisparse_coordinator.py</a>, <a href="https://github.com/sgl-project/sglang/tree/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/kernels/jit/csrc/hisparse.cuh">hisparse.cuh</a>, <a href="https://github.com/sgl-project/sglang/tree/fc8b328f5cb526fd1fa2c26cb3dafe3761af8d5d/python/sglang/srt/arg_groups/hisparse_hook.py">hisparse_hook.py</a></li>
+</ul>
+<h4><span class="en">HySparse (the theory backbone — a different, similarly-named work)</span><span class="ko">HySparse (이론 backbone — 이름만 비슷한 별개 연구)</span></h4>
+<ul class="srcs">
+<li>HySparse: "A Hybrid Sparse Attention Architecture with Oracle Token Selection and KV Cache Sharing" (Yizhao Gao et al., LLM-Core Xiaomi) — <a href="https://arxiv.org/abs/2602.03560">arXiv:2602.03560</a> · <a href="https://arxiv.org/pdf/2602.03560">PDF</a></li>
+</ul>
+<p class="muted"><span class="en">Caveats: all HiSparse performance numbers are LMSYS/SGLang-blog (vendor), on DSA models, best-case high-concurrency/long-context; no independent reproduction. Code line numbers are valid at commit fc8b328 and may drift on other revisions. HiSparse (SGLang serving feature) and HySparse (Xiaomi model-architecture paper) are distinct works — the paper is used here only to frame the memory problem.</span>
+<span class="ko">주의: HiSparse 성능 수치는 전부 LMSYS/SGLang 블로그(벤더), DSA 모델·최선의 고동시성/롱컨텍스트; 독립 재현 없음. 코드 줄 번호는 커밋 fc8b328 기준이며 다른 리비전에선 달라질 수 있음. HiSparse(SGLang 서빙 기능)와 HySparse(Xiaomi 모델 아키텍처 논문)는 별개 연구 — 논문은 여기서 메모리 문제 정의용으로만 인용.</span></p>
+</section>
+
+<footer>
+  <span class="en">Inference study note · 2026-07-29 · HiSparse mechanism &amp; code @ sgl-project/sglang fc8b328 · theory backbone: HySparse (arXiv:2602.03560). Code line numbers are commit-pinned; every external claim is cited inline.</span>
+  <span class="ko">추론 스터디 노트 · 2026-07-29 · HiSparse 메커니즘 &amp; 코드 @ sgl-project/sglang fc8b328 · 이론 backbone: HySparse (arXiv:2602.03560). 코드 줄 번호는 커밋 핀, 모든 외부 주장은 본문 인용.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
