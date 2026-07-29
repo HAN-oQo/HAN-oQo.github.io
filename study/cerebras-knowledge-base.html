@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Cerebras Built Its Internal Knowledge Base — a plain-language walkthrough</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">How Cerebras Built Its Internal Knowledge Base — a plain-language walkthrough</span>
+    <span class="ko">Cerebras는 사내 지식베이스를 어떻게 만들었나 — 쉬운 말로 풀어 읽기</span>
+  </h1>
+  <p class="lede">
+    <span class="en">Despite coming from the fast-chip company, this post is <b>not about hardware speed</b> — it's a hands-on <b>RAG</b> (retrieval-augmented generation) story: how Cerebras built an internal search system that employees ask <b>15,000+ questions a day</b>, over data scattered across Slack, code, and docs. The interesting engineering is all in the retrieval: why plain vector search wasn't enough, and the layered mix of techniques that fixed it. Written for a reader who knows AI models but not every retrieval/systems term — each one (embedding, IDF, RRF, reranker, MCP…) is unpacked before it's used.</span>
+    <span class="ko">빠른 칩 회사에서 나온 글이지만 <b>하드웨어 속도 얘기가 아니다</b> — 실전 <b>RAG</b>(검색 증강 생성) 이야기다: Slack·코드·문서에 흩어진 데이터 위에, 직원들이 <b>하루 15,000개 이상</b> 질문하는 사내 검색을 어떻게 만들었나. 흥미로운 엔지니어링은 전부 검색(retrieval)에 있다 — 왜 단순 벡터 검색이 부족했고, 그걸 고친 기법들의 층층 조합. AI 모델은 알지만 검색/시스템 용어는 모르는 독자를 위해 각 용어(embedding, IDF, RRF, reranker, MCP…)를 쓰기 전에 풀어 설명한다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">Cerebras blog</a></span>
+    <span class="badge"><a href="https://x.com/cerebras/status/2077822555159945507">announcement (X)</a></span>
+    <span class="badge"><a href="https://github.com/cocoindex-io/cocoindex">CocoIndex</a></span>
+    <span class="badge"><a href="https://modelcontextprotocol.io/">MCP</a></span>
+    <span class="badge"><span class="en">Deep dive · system explainer</span><span class="ko">딥다이브 · 시스템 해설</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-07-29">2026-07-29</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. What it is, and the problem — "meet data where it lives"</span><span class="ko">1. 무엇이고 어떤 문제인가 — "데이터가 사는 곳으로"</span></a></li>
+    <li><a href="#s2"><span class="en">2. The whole thing is one embeddings table</span><span class="ko">2. 전부가 임베딩 테이블 하나</span></a></li>
+    <li><a href="#s3"><span class="en">3. The hard part — making messy Slack searchable</span><span class="ko">3. 어려운 부분 — 지저분한 Slack을 검색 가능하게</span></a></li>
+    <li><a href="#s4"><span class="en">4. Beyond Slack — code and custom sources</span><span class="ko">4. Slack 너머 — 코드와 커스텀 소스</span></a></li>
+    <li><a href="#s5"><span class="en">5. Answering a query — plan → fan out → rerank → synthesize</span><span class="ko">5. 질의에 답하기 — 계획 → 병렬 → 재랭킹 → 종합</span></a></li>
+    <li><a href="#s6"><span class="en">6. Two front-ends over the same parts — MCP &amp; the Web UI</span><span class="ko">6. 같은 부품 위 두 앞단 — MCP &amp; 웹 UI</span></a></li>
+    <li><a href="#s7"><span class="en">7. What's reusable, and honest limits (no code-walk)</span><span class="ko">7. 재사용 가능한 것, 그리고 정직한 한계 (코드 분석 없음)</span></a></li>
+    <li><a href="#s8"><span class="en">8. Sources</span><span class="ko">8. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">Cerebras built an internal <b>knowledge base</b> (a search-and-answer system over company data) that gets <b>15,000+ questions/day</b> from humans, automations, and agents. Two ideas carry it: <b>(1) "meet data where it lives"</b> — pull from Slack, GitHub, Jira, and docs directly rather than forcing a single source of truth; and <b>(2) one Postgres <a class="src" href="#g-embed">embeddings</a> table</b> that every source lands in and is queried through. The real engineering is retrieval quality: plain vector search wasn't enough, so they layered <b>full-text + embeddings + rarity (IDF) + age-decay</b>, used an LLM to <b>distill</b> each Slack thread into a clean record, fused results with <b>Reciprocal Rank Fusion</b>, and finished with a small <b>reranker</b> and a synthesis LLM. They expose the pieces as <b>MCP</b> tools so an agent (e.g. Claude Code) can orchestrate. It's a single vendor blog with almost no performance numbers — read it as a design retrospective, not a benchmark.</span>
+  <span class="ko">Cerebras는 사람·자동화·에이전트가 <b>하루 15,000개 이상</b> 질문하는 사내 <b>지식베이스</b>(회사 데이터 위 검색·응답 시스템)를 만들었다. 두 아이디어가 떠받친다: <b>(1) "데이터가 사는 곳으로"</b> — 단일 진실 공급원을 강요하는 대신 Slack·GitHub·Jira·문서에서 직접 긁어옴; <b>(2) Postgres <a class="src" href="#g-embed">임베딩</a> 테이블 하나</b> — 모든 소스가 여기 들어가고 여기로 검색됨. 진짜 엔지니어링은 검색 품질: 단순 벡터 검색으론 부족해서 <b>full-text + 임베딩 + 희귀도(IDF) + 시간 감쇠</b>를 층층이 쌓고, LLM으로 각 Slack 스레드를 깔끔한 레코드로 <b>증류(distill)</b>하고, 결과를 <b>Reciprocal Rank Fusion</b>으로 융합한 뒤, 작은 <b>reranker</b>와 종합 LLM으로 마무리. 부품들을 <b>MCP</b> 도구로 노출해 에이전트(예: Claude Code)가 오케스트레이션. 성능 수치가 거의 없는 단일 벤더 블로그 — 벤치마크가 아니라 설계 회고로 읽을 것.</span>
+</div>
+
+<h3 style="margin-top:26px"><span class="en">Glossary — the retrieval words, in plain language (read this first)</span><span class="ko">용어집 — 검색 용어를 쉬운 말로 (먼저 읽기)</span></h3>
+<div class="grid3">
+  <div class="mini" id="g-embed"><h4><span class="en">embedding / vector search</span><span class="ko">임베딩 / 벡터 검색</span></h4><p><span class="en">An <b>embedding</b> turns a piece of text into a list of numbers (a "vector") that captures its meaning — similar meanings sit close together. <b>Vector search</b> finds the texts whose vectors are nearest to the query's. Great for paraphrase, blurry on exact strings.</span><span class="ko"><b>임베딩</b>은 글을 의미를 담은 숫자 목록("벡터")으로 바꾼다 — 뜻이 비슷하면 가까이 위치. <b>벡터 검색</b>은 질의 벡터에 가장 가까운 글을 찾음. 패러프레이즈엔 강하고, 정확한 문자열엔 흐릿.</span></p></div>
+  <div class="mini"><h4>RAG</h4><p><span class="en"><b>Retrieval-Augmented Generation</b>: first <i>retrieve</i> relevant documents, then feed them to an LLM to <i>generate</i> a grounded answer with citations — instead of relying on the model's memory. This whole system is a big RAG pipeline.</span><span class="ko"><b>Retrieval-Augmented Generation</b>: 먼저 관련 문서를 <i>검색</i>하고, 그걸 LLM에 넣어 인용 있는 근거 답변을 <i>생성</i> — 모델 기억에 의존하지 않고. 이 시스템 전체가 큰 RAG 파이프라인.</span></p></div>
+  <div class="mini"><h4><span class="en">full-text / lexical search</span><span class="ko">풀텍스트 / 어휘 검색</span></h4><p><span class="en">Old-school keyword search on the <i>exact</i> words (Postgres does it with a <b>GIN index</b>). Perfect for error strings, flag names, hostnames — the things embeddings blur.</span><span class="ko"><i>정확한</i> 단어에 대한 전통 키워드 검색(Postgres는 <b>GIN 인덱스</b>로). 에러 문자열·플래그명·호스트명 — 임베딩이 흐리는 것들 — 에 완벽.</span></p></div>
+  <div class="mini"><h4>IDF</h4><p><span class="en"><b>Inverse Document Frequency</b> — a rarity score. Words that appear everywhere ("thanks!") count for little; rare words (an obscure config flag) count for a lot. Separates signal from filler.</span><span class="ko"><b>Inverse Document Frequency</b> — 희귀도 점수. 어디나 나오는 단어("고마워요!")는 값이 작고, 희귀한 단어(무명 설정 플래그)는 큼. 신호와 잡음을 가른다.</span></p></div>
+  <div class="mini"><h4>RRF</h4><p><span class="en"><b>Reciprocal Rank Fusion</b> — a simple way to merge several ranked lists into one: each list votes with <code class="inl">1/(k+rank)</code>. A doc that several searchers rank highly beats one that a single searcher loved. No tuning weights needed.</span><span class="ko"><b>Reciprocal Rank Fusion</b> — 여러 순위 목록을 하나로 합치는 단순한 방법: 각 목록이 <code class="inl">1/(k+순위)</code>로 투표. 여러 검색기가 상위에 올린 문서가 한 검색기만 사랑한 문서를 이김. 가중치 튜닝 불필요.</span></p></div>
+  <div class="mini"><h4>reranker</h4><p><span class="en">A small model that looks at the query and a shortlist of candidates <i>together</i> and scores how well each truly answers it. Slower per item than search, so it's run only on the top candidates, as a final filter.</span><span class="ko">질의와 후보 목록을 <i>함께</i> 보고 각 후보가 얼마나 잘 답하는지 점수 매기는 작은 모델. 검색보다 항목당 느려서, 상위 후보에만 최종 필터로 실행.</span></p></div>
+  <div class="mini"><h4><span class="en">distillation (here)</span><span class="ko">증류 (여기선)</span></h4><p><span class="en">Not model distillation — here it means using an <b>LLM to boil a messy Slack thread down</b> to a clean record: a one-line question, a summary, the resolution, and the systems/code it mentions. That clean record is what gets embedded.</span><span class="ko">모델 증류가 아니라, 여기선 <b>LLM으로 지저분한 Slack 스레드를 압축</b>해 깔끔한 레코드로: 한 줄 질문, 요약, 해결책, 언급된 시스템/코드. 그 깔끔한 레코드를 임베딩한다.</span></p></div>
+  <div class="mini"><h4><span class="en">chunking</span><span class="ko">청킹</span></h4><p><span class="en">Splitting a long document (or big code file) into smaller pieces so each can be embedded and retrieved on its own. Cerebras chunks code by language structure (class → method → block).</span><span class="ko">긴 문서(또는 큰 코드 파일)를 작은 조각으로 쪼개 각각 임베딩·검색되게. Cerebras는 코드를 언어 구조로 쪼갬(클래스 → 메서드 → 블록).</span></p></div>
+  <div class="mini"><h4>MCP</h4><p><span class="en"><b>Model Context Protocol</b> — a standard way to expose "tools" that an AI agent can call. Cerebras exposes each search primitive as an MCP tool, so an agent like Claude Code becomes the orchestrator that decides which tools to call.</span><span class="ko"><b>Model Context Protocol</b> — AI 에이전트가 호출할 "도구"를 노출하는 표준. Cerebras는 각 검색 기능을 MCP 도구로 노출해, Claude Code 같은 에이전트가 어떤 도구를 부를지 정하는 오케스트레이터가 되게 한다.</span></p></div>
+</div>
+
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">What it is, and the problem — "meet data where it lives"</span><span class="ko">무엇이고 어떤 문제인가 — "데이터가 사는 곳으로"</span></h2>
+
+<p><span class="en">"Cerebras Knowledge" is an internal search-and-answer system: an employee asks a question in plain English and gets an answer drawn from the company's own Slack, code, wikis, and databases — with citations. It launched three months before the post and is already one of the most-used internal tools:</span>
+<span class="ko">"Cerebras Knowledge"는 사내 검색·응답 시스템이다: 직원이 평범한 말로 질문하면 회사의 Slack·코드·위키·DB에서 끌어온 답을 — 인용과 함께 — 받는다. 글이 나오기 3개월 전 출시됐고 이미 가장 많이 쓰이는 사내 도구 중 하나다:</span></p>
+<blockquote class="q">
+  <p>"Employees ask our internal knowledge base more than 15,000 questions every day. It's become one of the most widely adopted internal tools at the company since launching 3 months ago. Used by humans, automations and agents."</p>
+  <cite>— Cerebras, "How Cerebras Built Its Enterprise Knowledge Base" · <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai</a></cite>
+</blockquote>
+<p><span class="en">Note "<b>used by humans, automations and agents</b>" — the same system answers a person in a web UI <i>and</i> feeds an AI coding agent. That dual audience shapes the design (see §6).</span>
+<span class="ko">"<b>사람·자동화·에이전트가 사용</b>"에 주목 — 같은 시스템이 웹 UI의 사람에게 답하고 <i>동시에</i> AI 코딩 에이전트에도 공급한다. 이 이중 청중이 설계를 형성한다(§6 참고).</span></p>
+
+<h3><span class="en">The problem: information is scattered, and "put it all in one place" never works</span><span class="ko">문제: 정보는 흩어져 있고, "한 곳에 모으자"는 늘 실패한다</span></h3>
+<p><span class="en">With hundreds of new hires a year, the same questions ("where's X? who knows Y? what's Z?") kept clogging chat. The tempting fix — force everyone to record everything in one platform — is a trap:</span>
+<span class="ko">연간 수백 명이 입사하니 같은 질문("X 어디 있어? Y 누가 알아? Z가 뭐야?")이 채팅을 계속 막았다. 솔깃한 해법 — 모두에게 모든 걸 한 플랫폼에 기록하게 강제 — 은 함정이다:</span></p>
+<blockquote class="q">
+  <p>"The dream of a single source of truth, of course, rarely works in practice. Information is generated wherever it is convenient and ergonomic: suggested edits in a document, threads in Slack, code references in GitHub, and status metadata in Jira."</p>
+  <cite>— Cerebras blog · <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai</a></cite>
+</blockquote>
+<p><span class="en">So they inverted it: don't move the data, <b>meet it where it lives</b> — extract from each platform directly, changing no one's habits. Discussing a pull request in Google Docs would be miserable; let Slack be Slack and GitHub be GitHub, and index across all of them.</span>
+<span class="ko">그래서 뒤집었다: 데이터를 옮기지 말고 <b>있는 곳으로 찾아간다</b> — 각 플랫폼에서 직접 추출하되 누구의 습관도 안 바꾼다. 풀 리퀘스트를 Google Docs에서 논하는 건 끔찍하다; Slack은 Slack, GitHub은 GitHub이게 두고, 그 전부를 가로질러 인덱싱한다.</span></p>
+
+<div class="callout c-amber">
+  <span class="tag"><span class="en">expectation check — this is a RAG post, not a chip post</span><span class="ko">기대 점검 — 칩이 아니라 RAG 글이다</span></span>
+  <span class="en">Cerebras is famous for wafer-scale chips and very fast inference, so you might expect this to be about tokens-per-second. It isn't. The post barely mentions their hardware; it's a practical retrieval-engineering write-up. Read it for the RAG design patterns, not for a speed benchmark.</span>
+  <span class="ko">Cerebras는 웨이퍼 스케일 칩과 초고속 추론으로 유명해서 이 글도 초당 토큰 얘기일 것 같지만, 아니다. 글은 하드웨어를 거의 언급하지 않는다; 실전 검색 엔지니어링 글이다. 속도 벤치마크가 아니라 RAG 설계 패턴을 보러 읽으라.</span>
+</div>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">The whole thing is one embeddings table</span><span class="ko">전부가 임베딩 테이블 하나</span></h2>
+<p><span class="en">The knowledge base provides three things: a place to <b>collect and store</b> internal data, a way to <b>query</b> it, and a layer that enforces <b>authentication and authorization</b> (who's allowed to see what) with auditing and analytics. The surprising part is how simple the storage is:</span>
+<span class="ko">지식베이스는 세 가지를 제공한다: 사내 데이터를 <b>수집·저장</b>할 곳, 그걸 <b>질의</b>할 방법, 그리고 <b>인증·인가</b>(누가 무엇을 볼 수 있나)를 감사·분석과 함께 강제하는 층. 놀라운 건 저장이 얼마나 단순한가다:</span></p>
+<blockquote class="q">
+  <p>"At the core is a single Postgres table that holds embeddings, raw summaries, and metadata from many sources… every source, from Slack threads to netlists, lands in the same embeddings table, and anything in that table is immediately queryable through the same interface."</p>
+  <cite>— Cerebras blog · <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai</a></cite>
+</blockquote>
+<p><span class="en">(<b>Netlists</b> are chip-design files — Cerebras is a chip company — so "from Slack threads to netlists" just means "from casual chat to deeply technical artifacts, same table.") Each <b>data source</b> declares three things: what the data is, how to connect to it, and how often to re-fetch. Whatever it produces must come out shaped like a standard embeddings row — so the rest of the system never needs to know where a row came from.</span>
+<span class="ko">(<b>넷리스트(netlist)</b>는 칩 설계 파일이다 — Cerebras는 칩 회사 — 그러니 "Slack 스레드부터 넷리스트까지"는 "가벼운 채팅부터 깊이 기술적인 산출물까지, 같은 테이블"이란 뜻.) 각 <b>데이터 소스</b>는 셋을 선언한다: 데이터가 무엇인지, 어떻게 연결하는지, 얼마나 자주 다시 가져오는지. 무엇을 만들든 표준 임베딩 행 형태로 나와야 한다 — 그래서 시스템의 나머지는 행이 어디서 왔는지 알 필요가 없다.</span></p>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="Ingestion: many sources into one embeddings table">
+  <style>
+    .bx{fill:var(--card);stroke:var(--line);stroke-width:1.3}
+    .lb{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+    .sm{font:11px -apple-system,sans-serif;fill:var(--muted)}
+    .ar{stroke:var(--muted);stroke-width:1.4;fill:none;marker-end:url(#a)}
+  </style>
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="20" class="lb">Sources (data stays where it lives)</text>
+  <rect class="bx" x="20" y="34" width="150" height="30" rx="6"/><text x="95" y="53" class="sm" text-anchor="middle">Slack threads</text>
+  <rect class="bx" x="20" y="70" width="150" height="30" rx="6"/><text x="95" y="89" class="sm" text-anchor="middle">GitHub code repos</text>
+  <rect class="bx" x="20" y="106" width="150" height="30" rx="6"/><text x="95" y="125" class="sm" text-anchor="middle">Docs / wiki</text>
+  <rect class="bx" x="20" y="142" width="150" height="30" rx="6"/><text x="95" y="161" class="sm" text-anchor="middle">Jira / status</text>
+  <rect class="bx" x="20" y="178" width="150" height="30" rx="6"/><text x="95" y="197" class="sm" text-anchor="middle">Custom team DB</text>
+  <!-- connector/process -->
+  <rect class="bx" x="250" y="80" width="180" height="86" rx="8" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="340" y="104" class="lb" text-anchor="middle">Per-source connector</text><text x="340" y="123" class="sm" text-anchor="middle">what · how to connect ·</text><text x="340" y="139" class="sm" text-anchor="middle">how often to re-fetch</text><text x="340" y="157" class="sm" text-anchor="middle">+ distill / chunk (LLM)</text>
+  <!-- table -->
+  <rect class="bx" x="510" y="72" width="230" height="102" rx="8" fill="var(--purple-bg)" stroke="var(--purple-bd)"/><text x="625" y="96" class="lb" text-anchor="middle">One Postgres table</text><text x="625" y="116" class="sm" text-anchor="middle">embedding (3,072-dim)</text><text x="625" y="133" class="sm" text-anchor="middle">+ raw summary + metadata</text><text x="625" y="150" class="sm" text-anchor="middle">+ full-text (GIN) index</text><text x="625" y="167" class="sm" text-anchor="middle">every source, same shape</text>
+  <!-- query -->
+  <rect class="bx" x="510" y="196" width="230" height="34" rx="8" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="625" y="217" class="lb" text-anchor="middle">one query interface →</text>
+  <!-- arrows -->
+  <path class="ar" d="M170,49 C 210,60 210,110 248,120"/>
+  <path class="ar" d="M170,85 C 210,95 210,118 248,124"/>
+  <path class="ar" d="M170,121 L248,124"/>
+  <path class="ar" d="M170,157 C 210,150 210,130 248,128"/>
+  <path class="ar" d="M170,193 C 210,180 210,140 248,132"/>
+  <path class="ar" d="M430,123 L508,123"/>
+  <path class="ar" d="M625,174 L625,194"/>
+</svg>
+<p class="figcap"><span class="en">Fig 1 — Ingestion. Data stays in its home tool; a per-source connector pulls it, an LLM distills/chunks it, and every result lands as an identically-shaped row in one Postgres table (embedding + summary + metadata, with a full-text index alongside). One table → one query interface. Redrawn from the Cerebras blog.</span><span class="ko">그림 1 — 수집. 데이터는 원래 도구에 남고, 소스별 커넥터가 당겨오고, LLM이 증류/청킹하고, 모든 결과가 동일한 형태의 행으로 하나의 Postgres 테이블에 안착(임베딩 + 요약 + 메타데이터, 옆에 풀텍스트 인덱스). 테이블 하나 → 질의 인터페이스 하나. Cerebras 블로그 재구성.</span></p>
+
+<p class="muted"><span class="en">Why this matters: because the storage schema is uniform, adding a brand-new kind of data (a team's private database) is just "write a small script that emits rows in this shape" — no changes anywhere else. That's the same "don't make it a special snowflake" instinct we saw in the Netflix note, applied to data sources instead of models.</span>
+<span class="ko">왜 중요한가: 저장 스키마가 균일하니, 완전히 새로운 종류의 데이터(팀의 사설 DB)를 추가하는 건 그저 "이 형태의 행을 뱉는 작은 스크립트 작성" — 다른 어디도 안 바꿈. Netflix 노트에서 본 "특별한 눈송이로 만들지 말자" 본능을 모델 대신 데이터 소스에 적용한 것.</span></p>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">The hard part — making messy Slack searchable</span><span class="ko">어려운 부분 — 지저분한 Slack을 검색 가능하게</span></h2>
+<p><span class="en">Slack is the single most valuable source (it's where live engineering discussion happens) and the hardest to search. The naive approach — embed the raw messages and do vector search — failed fast:</span>
+<span class="ko">Slack은 가장 값진 단일 소스(살아있는 엔지니어링 토론이 벌어지는 곳)이자 검색이 가장 어렵다. 순진한 접근 — 원문 메시지를 임베딩하고 벡터 검색 — 은 금방 실패했다:</span></p>
+<blockquote class="q">
+  <p>"We quickly realized that vector search alone was insufficient for matching all relevant data."</p>
+  <cite>— Cerebras blog · <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai</a></cite>
+</blockquote>
+<p><span class="en">Why: message length and quality vary wildly ("hey yeah sure mike" vs a detailed kernel explanation), short messages often beat long ones in raw similarity, and meaning depends on surrounding context. The fix is a <b>hybrid</b>: four different scorers, each covering the others' blind spots, fused together.</span>
+<span class="ko">이유: 메시지 길이·품질이 극단적으로 다르고("ㅇㅇ 그래 마이크" vs 상세한 커널 설명), 짧은 메시지가 원시 유사도에서 긴 것을 자주 이기며, 의미가 주변 문맥에 의존한다. 해법은 <b>하이브리드</b>: 서로의 사각지대를 메우는 네 개의 스코어러를 융합.</span></p>
+
+<h3><span class="en">Four signals, one worked example</span><span class="ko">네 가지 신호, 하나의 실제 예</span></h3>
+<p><span class="en">Take the query <code class="inl">"restore hangs after manifest load"</code>. Here's how each signal votes on candidate messages:</span>
+<span class="ko">질의 <code class="inl">"restore hangs after manifest load"</code>를 보자. 각 신호가 후보 메시지에 어떻게 투표하는지:</span></p>
+<table>
+<tr><th><span class="en">Signal</span><span class="ko">신호</span></th><th><span class="en">Catches</span><span class="ko">잡는 것</span></th><th><span class="en">In the example</span><span class="ko">예에서</span></th></tr>
+<tr><td><b>Full-text</b> <span class="muted">(GIN)</span></td><td><span class="en">exact tokens — error strings, flags, hostnames</span><span class="ko">정확한 토큰 — 에러 문자열·플래그·호스트명</span></td><td><span class="en">a message literally saying <code class="inl">ERR_MANIFEST_TIMEOUT: restore hangs…</code> is a near-perfect lexical hit</span><span class="ko"><code class="inl">ERR_MANIFEST_TIMEOUT: restore hangs…</code>라고 그대로 쓴 메시지가 거의 완벽한 어휘 매칭</span></td></tr>
+<tr><td><b>Embedding</b></td><td><span class="en">paraphrase — same idea, different words</span><span class="ko">패러프레이즈 — 같은 뜻, 다른 단어</span></td><td><span class="en">"checkpoint stalls on the NFS mount" shares <i>no</i> words with the query but is the actual answer — only vectors connect them</span><span class="ko">"checkpoint stalls on the NFS mount"는 질의와 단어가 <i>하나도</i> 안 겹치지만 실제 답 — 벡터만이 연결</span></td></tr>
+<tr><td><b>IDF</b> <span class="muted">(rarity)</span></td><td><span class="en">signal vs filler — rare tokens rank, common ones don't</span><span class="ko">신호 vs 잡음 — 희귀 토큰은 랭크, 흔한 건 아님</span></td><td><span class="en">"sounds good, thanks!" sits near the query in vector space but scores ~0 once rarity is applied</span><span class="ko">"sounds good, thanks!"는 벡터 공간에서 질의에 가깝지만 희귀도 적용 후 점수 ≈ 0</span></td></tr>
+<tr><td><b>Age decay</b></td><td><span class="en">freshness — old answers expire</span><span class="ko">최신성 — 오래된 답은 만료</span></td><td><span class="en">an 8-month-old thread with the same words is penalized: it may describe infrastructure that no longer exists</span><span class="ko">같은 단어의 8개월 된 스레드는 감점: 이미 없어진 인프라 얘기일 수 있음</span></td></tr>
+</table>
+<blockquote class="q">
+  <p>"When an engineer pastes a literal error message, an exact lexical match is almost always the best evidence, and no amount of semantic similarity should outrank it."</p>
+  <cite>— Cerebras blog (on why full-text search stays in the mix) · <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai</a></cite>
+</blockquote>
+<p class="muted"><span class="en">No single scorer is trusted alone; each produces its own ranked view and they're fused at query time (the fusion math is in §5). The lesson: <b>embeddings are necessary but not sufficient</b> — real search needs exact-match and rarity and recency too.</span>
+<span class="ko">어떤 스코어러도 혼자 신뢰받지 않는다; 각자 순위 뷰를 내고 질의 때 융합된다(융합 수식은 §5). 교훈: <b>임베딩은 필요하지만 충분하지 않다</b> — 실제 검색엔 정확 매칭·희귀도·최신성도 필요.</span></p>
+
+<h3><span class="en">Real-time ingestion, and re-fetching the whole thread</span><span class="ko">실시간 수집, 그리고 스레드 전체 다시 가져오기</span></h3>
+<p><span class="en">A Slack bot runs in <b>Socket Mode</b> — Slack pushes every message to Cerebras over a persistent connection (a WebSocket), so they get updates in real time without constantly polling and hitting rate limits. When a message arrives they acknowledge it, de-duplicate by its event ID, and — importantly — <b>re-fetch the entire thread</b> (parent + all replies) and store the whole conversation as one row. A single new reply refreshes the complete thread, so the stored version is never a half-conversation.</span>
+<span class="ko">Slack 봇이 <b>Socket Mode</b>로 돈다 — Slack이 모든 메시지를 상시 연결(WebSocket)로 밀어줘서, 계속 폴링해 rate limit에 부딪히지 않고 실시간으로 받는다. 메시지가 오면 확인(ack)하고, 이벤트 ID로 중복 제거하고, 중요하게 — <b>스레드 전체를 다시 가져와</b>(부모 + 모든 답글) 대화 전체를 한 행으로 저장한다. 새 답글 하나가 전체 스레드를 갱신하니, 저장본이 반쪽 대화인 적이 없다.</span></p>
+
+<h3><span class="en">Distillation — let an LLM turn a thread into a clean record</span><span class="ko">증류(distillation) — LLM으로 스레드를 깔끔한 레코드로</span></h3>
+<p><span class="en">Raw Slack text is keyword-searchable immediately (the full-text index). But for good <i>vector</i> search, they don't embed the raw transcript — an LLM first <b>distills</b> each thread into a structured record: a one-line question an engineer would actually search for, a short summary, the resolution, and the systems/code it references. Those fields (not the raw chat) are embedded into a 3,072-dimension vector.</span>
+<span class="ko">원문 Slack 텍스트는 즉시 키워드 검색 가능하다(풀텍스트 인덱스). 하지만 좋은 <i>벡터</i> 검색을 위해 원문 대화를 임베딩하지 않고 — LLM이 먼저 각 스레드를 구조화된 레코드로 <b>증류</b>한다: 엔지니어가 실제 검색할 한 줄 질문, 짧은 요약, 해결책, 참조된 시스템/코드. 그 필드들(원시 채팅이 아니라)을 3,072차원 벡터로 임베딩.</span></p>
+<blockquote class="q">
+  <p>"In our experiments, accuracy increased significantly when the thread was normalized into a consistent format. The additional metadata also gives the semantic match more useful signal."</p>
+  <cite>— Cerebras blog · <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai</a></cite>
+</blockquote>
+
+<h3><span class="en">Bursting — rescue the good sentence buried in a long thread</span><span class="ko">bursting — 긴 스레드에 묻힌 좋은 한 문장 구하기</span></h3>
+<p><span class="en">One thread-level summary can miss a crucial aside. So they also use <b>bursting</b>: a "burst" is a run of consecutive messages from the same author, embedded on its own (with the thread's topic prepended for context), so an answer that lived in one tangent message is still findable. To keep junk out, a burst is only embedded if it clears a bar — it contains a rare token (<b>IDF ≥ 4.0</b>), is at least <b>200 characters</b>, and ideally has emoji reactions (a social signal that it mattered).</span>
+<span class="ko">스레드 레벨 요약 하나가 결정적 곁가지를 놓칠 수 있다. 그래서 <b>bursting</b>도 쓴다: "burst"는 같은 작성자의 연속 메시지 묶음으로, (문맥용으로 스레드 주제를 앞에 붙여) 따로 임베딩 — 그래서 한 곁가지 메시지에 있던 답도 찾을 수 있다. 쓰레기를 막으려고, burst는 문턱을 넘어야만 임베딩됨 — 희귀 토큰 포함(<b>IDF ≥ 4.0</b>), 최소 <b>200자</b>, 그리고 가급적 이모지 반응 있음(중요했다는 사회적 신호).</span></p>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">Beyond Slack — code and custom sources</span><span class="ko">Slack 너머 — 코드와 커스텀 소스</span></h2>
+
+<h3><span class="en">Code: is embedding it even worth it?</span><span class="ko">코드: 임베딩할 가치가 있나?</span></h3>
+<p><span class="en">They hesitated — in the era of Claude Code and command-line tools, "grep is all you need" felt plausible (plain keyword search over code often works). But after reading Cursor's findings on semantic search in large codebases, they tried it. The challenge was scale: some internal repos are <b>larger than 40 GB</b>, and re-embedding everything on every change is wasteful.</span>
+<span class="ko">망설였다 — Claude Code와 명령줄 도구 시대에 "grep이면 충분"이 그럴듯했다(코드에 대한 단순 키워드 검색이 자주 통함). 하지만 대규모 코드베이스의 시맨틱 검색에 대한 Cursor의 결과를 읽고 시도했다. 난점은 규모: 일부 사내 레포는 <b>40 GB 이상</b>이라, 변경마다 전부 다시 임베딩하는 건 낭비다.</span></p>
+<p><span class="en">Solution: <b>CocoIndex</b>, an open-source framework for embedding codebases. Two things make it fit:</span>
+<span class="ko">해법: 코드베이스 임베딩용 오픈소스 프레임워크 <b>CocoIndex</b>. 두 가지가 잘 맞았다:</span></p>
+<ul>
+<li><span class="en"><b>Language-aware chunking.</b> Split code by structure, coarse to fine — try class boundaries first; if a chunk is still too big, fall back to methods, then smaller blocks. One file can produce several embeddings at different granularity (file-level <i>and</i> function-level), so both "what does this file do" and "where's this exact function" are searchable.</span><span class="ko"><b>언어 인식 청킹.</b> 코드를 구조로, 굵게→가늘게 쪼갬 — 먼저 클래스 경계 시도; 조각이 여전히 크면 메서드로, 그다음 더 작은 블록으로. 한 파일이 서로 다른 granularity의 임베딩 여럿을 낼 수 있음(파일 레벨 <i>과</i> 함수 레벨) — "이 파일이 뭘 하나"와 "이 정확한 함수가 어디 있나" 둘 다 검색 가능.</span></li>
+<li><span class="en"><b>Incremental updates.</b> CocoIndex tracks sync metadata in Postgres, so on each commit it re-embeds only the <i>changed</i> chunks — not the whole repo. It works especially well here because the sync state and the embedding store live in the same database.</span><span class="ko"><b>증분 업데이트.</b> CocoIndex는 동기화 메타데이터를 Postgres에 추적해, 커밋마다 <i>바뀐</i> 청크만 다시 임베딩 — 레포 전체가 아니라. 동기화 상태와 임베딩 저장소가 같은 DB에 살아 특히 잘 맞았다.</span></li>
+</ul>
+<p class="muted"><span class="en">Repo onboarding moved into config files teams submit themselves, with per-file-path allowlists and denylists — the same self-service instinct as everywhere else in this system.</span>
+<span class="ko">레포 온보딩은 팀이 직접 제출하는 설정 파일로 옮겼고, 파일 경로별 allowlist/denylist 지원 — 이 시스템 전반의 셀프서비스 본능 그대로.</span></p>
+
+<h3><span class="en">Custom sources: a pull request, not a meeting</span><span class="ko">커스텀 소스: 회의가 아니라 풀 리퀘스트</span></h3>
+<p><span class="en">Some teams already had their own databases and didn't want to move data just to be searchable. So custom sources are <b>plugin scripts</b>: a team opens a pull request with a small Python module that reads its system and emits rows shaped like the standard embeddings row, plus a data-source entry. As long as it writes the shared schema, everything downstream — search, ranking, the UI — works with zero special handling. This is the payoff of the "one table, one shape" decision from §2.</span>
+<span class="ko">일부 팀은 자기 DB가 이미 있어 검색되려고 데이터를 옮기고 싶지 않았다. 그래서 커스텀 소스는 <b>플러그인 스크립트</b>다: 팀이 자기 시스템을 읽어 표준 임베딩 행 형태로 뱉는 작은 Python 모듈과 데이터 소스 항목을 풀 리퀘스트로 올린다. 공유 스키마로 쓰기만 하면, 하류 전부 — 검색·랭킹·UI — 가 특별 처리 없이 동작. §2의 "테이블 하나, 형태 하나" 결정의 보상.</span></p>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Answering a query — plan → fan out → rerank → synthesize</span><span class="ko">질의에 답하기 — 계획 → 병렬 → 재랭킹 → 종합</span></h2>
+<p><span class="en">A question doesn't go straight to one search. It runs through a four-stage pipeline:</span>
+<span class="ko">질문은 곧장 하나의 검색으로 가지 않는다. 네 단계 파이프라인을 거친다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 250" role="img" aria-label="Query pipeline: plan, executor fan-out, RRF + rerank, synthesize">
+  <style>
+    .bx{fill:var(--card);stroke:var(--line);stroke-width:1.3}
+    .lb{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+    .sm{font:10.5px -apple-system,sans-serif;fill:var(--muted)}
+    .ar{stroke:var(--muted);stroke-width:1.4;fill:none;marker-end:url(#a)}
+  </style>
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <rect class="bx" x="20" y="100" width="96" height="44" rx="8"/><text x="68" y="120" class="lb" text-anchor="middle">Query</text><text x="68" y="136" class="sm" text-anchor="middle">+ active project</text>
+  <rect class="bx" x="140" y="100" width="110" height="44" rx="8" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="195" y="120" class="lb" text-anchor="middle">1 Planner</text><text x="195" y="136" class="sm" text-anchor="middle">LLM picks tools</text>
+  <!-- executor fan out -->
+  <rect class="bx" x="278" y="24" width="150" height="24" rx="6"/><text x="353" y="40" class="sm" text-anchor="middle">search (unified vector)</text>
+  <rect class="bx" x="278" y="54" width="150" height="24" rx="6"/><text x="353" y="70" class="sm" text-anchor="middle">search_slack</text>
+  <rect class="bx" x="278" y="84" width="150" height="24" rx="6"/><text x="353" y="100" class="sm" text-anchor="middle">search_code (ripgrep)</text>
+  <rect class="bx" x="278" y="114" width="150" height="24" rx="6"/><text x="353" y="130" class="sm" text-anchor="middle">recent_prs</text>
+  <rect class="bx" x="278" y="144" width="150" height="24" rx="6"/><text x="353" y="160" class="sm" text-anchor="middle">who_knows (experts)</text>
+  <rect class="bx" x="278" y="174" width="150" height="24" rx="6"/><text x="353" y="190" class="sm" text-anchor="middle">subsystem_index</text>
+  <text x="353" y="216" class="sm" text-anchor="middle">2 Executor — fan out in parallel</text>
+  <!-- rrf + rerank -->
+  <rect class="bx" x="456" y="88" width="120" height="68" rx="8" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="516" y="110" class="lb" text-anchor="middle">3 Fuse</text><text x="516" y="127" class="sm" text-anchor="middle">RRF → top 20</text><text x="516" y="143" class="sm" text-anchor="middle">reranker → top 10</text>
+  <rect class="bx" x="604" y="88" width="136" height="68" rx="8" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="672" y="110" class="lb" text-anchor="middle">4 Synthesis</text><text x="672" y="127" class="sm" text-anchor="middle">LLM writes answer</text><text x="672" y="143" class="sm" text-anchor="middle">+ citations, caveats</text>
+  <!-- arrows -->
+  <path class="ar" d="M116,122 L138,122"/>
+  <path class="ar" d="M250,118 C 262,90 266,50 276,40"/>
+  <path class="ar" d="M250,122 L276,96"/>
+  <path class="ar" d="M250,124 L276,126"/>
+  <path class="ar" d="M250,126 C 262,150 266,170 276,186"/>
+  <path class="ar" d="M428,110 C 440,120 444,120 454,120"/>
+  <path class="ar" d="M576,122 L602,122"/>
+</svg>
+<p class="figcap"><span class="en">Fig 2 — Query pipeline. (1) A lightweight LLM planner picks which tools matter; (2) the executor fans those tool calls out in parallel and normalizes results into one evidence format; (3) results are fused with RRF to a top-20, then a small reranker cuts to a top-10; (4) a synthesis LLM writes the final cited answer. Redrawn from the Cerebras blog.</span><span class="ko">그림 2 — 질의 파이프라인. (1) 가벼운 LLM 플래너가 어떤 도구가 중요한지 고르고; (2) 실행기가 그 도구 호출을 병렬로 펼쳐 결과를 한 증거 형식으로 정규화하고; (3) RRF로 융합해 top-20, 이어 작은 reranker가 top-10으로 줄이고; (4) 종합 LLM이 인용 포함 최종 답을 작성. Cerebras 블로그 재구성.</span></p>
+
+<h3><span class="en">The tools the planner can pick</span><span class="ko">플래너가 고를 수 있는 도구들</span></h3>
+<p><span class="en">Notice the tools go beyond text search: <code class="inl">search</code> (the unified vector pipeline across all sources), <code class="inl">search_slack</code>, <code class="inl">search_code</code> (plain <b>ripgrep</b> over repos — not everything needs embeddings), <code class="inl">recent_prs</code>, <code class="inl">subsystem_index</code> (per-file LLM summaries), and <code class="inl">who_knows</code> — which returns <i>people</i> with demonstrated expertise, answering "who should I ask?" not just "what's the answer?"</span>
+<span class="ko">도구가 텍스트 검색을 넘어선다는 데 주목: <code class="inl">search</code>(모든 소스를 가로지르는 통합 벡터 파이프라인), <code class="inl">search_slack</code>, <code class="inl">search_code</code>(레포에 대한 단순 <b>ripgrep</b> — 전부 임베딩이 필요한 건 아님), <code class="inl">recent_prs</code>, <code class="inl">subsystem_index</code>(파일별 LLM 요약), 그리고 <code class="inl">who_knows</code> — 이건 "정답이 뭐야?"가 아니라 "누구에게 물어야 해?"에 답하는, 검증된 전문성을 가진 <i>사람</i>을 반환.</span></p>
+
+<h3><span class="en">Reranking: fuse first (RRF), then let a model judge</span><span class="ko">재랭킹: 먼저 융합(RRF), 그다음 모델이 판단</span></h3>
+<p><span class="en">The different searchers return incompatible lists (a vector score and a full-text score aren't on the same scale). To merge them, Cerebras uses <b>Reciprocal Rank Fusion (RRF)</b>: for each document, add up <code class="inl">weight / (60 + rank)</code> across every list it appears in (default weight 1.0, smoothing constant 60). Ranks — not raw scores — are what's combined, so incompatible scales stop mattering.</span>
+<span class="ko">서로 다른 검색기는 호환 안 되는 목록을 낸다(벡터 점수와 풀텍스트 점수는 같은 척도가 아니다). 이를 합치려고 Cerebras는 <b>Reciprocal Rank Fusion (RRF)</b>을 쓴다: 각 문서에 대해, 그 문서가 등장한 모든 목록에서 <code class="inl">weight / (60 + 순위)</code>를 더함(기본 weight 1.0, smoothing 상수 60). 원시 점수가 아니라 순위를 합치니, 호환 안 되는 척도가 문제되지 않는다.</span></p>
+<blockquote class="q">
+  <p>"The smoothing constant makes consensus matter more than a single strong vote: a document that shows up near the top across several retrievers can beat one that ranks first in only one of them."</p>
+  <cite>— Cerebras blog · <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai</a></cite>
+</blockquote>
+<p><span class="en">After fusing to a diverse top-20 (duplicate chunks merged back to their source, and a cap on how many results any one file can contribute), a <b>small reranker model</b> reads the query and each candidate together and scores it 0–10; they keep the top 10. Finally they <b>add context back</b> to the winners — e.g. if a wiki section matched, they pull in the two neighboring sections so the heading, preconditions, and caveats that chunking split apart aren't lost. The output is "a rich packet of evidence" handed to the synthesis LLM.</span>
+<span class="ko">다양한 top-20로 융합한 뒤(중복 청크는 원 소스로 병합, 한 파일이 기여할 결과 수에 상한), <b>작은 reranker 모델</b>이 질의와 각 후보를 함께 읽어 0–10점을 매기고 top 10만 남긴다. 마지막으로 이긴 문서에 <b>문맥을 되붙인다</b> — 예: 위키 섹션이 매칭되면 이웃 두 섹션을 끌어와, 청킹이 갈라놓은 제목·전제조건·주의사항을 잃지 않게. 그 출력이 "풍부한 증거 묶음"으로 종합 LLM에 전달된다.</span></p>
+<p class="muted"><span class="en">Why cap per-file and pull neighbors? Two nods to known RAG failure modes: over-representing one document crowds out diversity, and a lone chunk stripped of its heading/caveats can mislead (the "lost in the middle" and context-loss problems the blog cites).</span>
+<span class="ko">왜 파일별 상한을 두고 이웃을 끌어오나? 알려진 RAG 실패 양상 둘에 대한 대응: 한 문서 과대표현은 다양성을 밀어내고, 제목/주의사항이 벗겨진 외톨이 청크는 오도할 수 있다(블로그가 인용하는 "lost in the middle"과 문맥 손실 문제).</span></p>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Two front-ends over the same parts — MCP &amp; the Web UI</span><span class="ko">같은 부품 위 두 앞단 — MCP &amp; 웹 UI</span></h2>
+<p><span class="en">Remember the audience is "humans, automations, and agents." Cerebras serves both with the <i>same</i> retrieval primitives, exposed two ways.</span>
+<span class="ko">청중이 "사람·자동화·에이전트"였음을 기억하자. Cerebras는 <i>같은</i> 검색 프리미티브를 두 방식으로 노출해 양쪽을 서빙한다.</span></p>
+
+<h3><span class="en">MCP — hand the agent the raw tools, let it orchestrate</span><span class="ko">MCP — 에이전트에게 raw 도구를 주고 오케스트레이션은 맡긴다</span></h3>
+<p><span class="en">Instead of hiding everything behind one "answer this question" endpoint, they expose each retrieval primitive as its own <b>MCP</b> tool — <code class="inl">search_slack</code>, <code class="inl">search_code</code>, <code class="inl">search</code>, <code class="inl">who_knows</code> — deliberately kept simple, LLM-free, and cheap to call, with narrow, stable inputs/outputs. Then:</span>
+<span class="ko">모든 걸 "이 질문에 답해줘" 엔드포인트 하나 뒤에 숨기는 대신, 각 검색 프리미티브를 각자의 <b>MCP</b> 도구로 노출한다 — <code class="inl">search_slack</code>, <code class="inl">search_code</code>, <code class="inl">search</code>, <code class="inl">who_knows</code> — 일부러 단순하게, LLM 없이, 호출이 싸게, 좁고 안정적인 입출력으로. 그러면:</span></p>
+<blockquote class="q">
+  <p>"Claude Code, or any MCP-compatible agent, becomes the orchestration engine. It decides which tools to call, in what order, and how to assemble the results… The retrieval layer itself does not depend on those LLM decisions in order to serve requests."</p>
+  <cite>— Cerebras blog · <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai</a></cite>
+</blockquote>
+<p><span class="en">This is a clean separation: the retrieval layer is a set of fast, dumb, reliable primitives; the <i>intelligence</i> (which tool, what order, how to combine) lives in whatever agent is calling — and can change without touching retrieval. It's the same "keep the serving layer simple, put smarts at the edge" instinct as exposing an OpenAI-compatible API.</span>
+<span class="ko">깔끔한 분리다: 검색 층은 빠르고 멍청하고 신뢰할 수 있는 프리미티브 집합; <i>지능</i>(어떤 도구·어떤 순서·어떻게 결합)은 호출하는 에이전트에 살고 — 검색을 건드리지 않고 바꿀 수 있다. OpenAI 호환 API를 노출하는 것과 같은 "서빙 층은 단순하게, 똑똑함은 가장자리에" 본능.</span></p>
+
+<h3><span class="en">Web UI — the same tools, wired into the full pipeline</span><span class="ko">웹 UI — 같은 도구를 풀 파이프라인에 배선</span></h3>
+<p><span class="en">For humans, the same tools are connected end-to-end into the §5 pipeline: a <b>planner</b> LLM pass picks tools, an <b>executor</b> fans them out and normalizes results, and a <b>synthesis</b> LLM writes the cited answer. From the user's side it's just "ask a question, get an answer" — but under the hood it's the same planner → executor → synthesizer that an MCP agent would recreate explicitly. One set of parts, two audiences.</span>
+<span class="ko">사람을 위해, 같은 도구가 §5 파이프라인에 end-to-end로 연결된다: <b>플래너</b> LLM 패스가 도구를 고르고, <b>실행기</b>가 펼쳐 결과를 정규화하고, <b>종합</b> LLM이 인용 답을 쓴다. 사용자 쪽에선 그냥 "질문하면 답" — 하지만 내부는 MCP 에이전트가 명시적으로 재현할 그 planner → executor → synthesizer 그대로. 부품 한 벌, 청중 둘.</span></p>
+
+<h3><span class="en">Projects — because "search everything" stops being useful</span><span class="ko">Projects — "전부 검색"이 쓸모없어지므로</span></h3>
+<p><span class="en">As the corpus grew, searching everything at once got noisy — compiler engineers didn't want infrastructure runbooks in their results, and vice versa. So a <b>project</b> is a named bundle of data sources (specific Slack channels, repos, databases, doc spaces) for a team or initiative. Sources can be shared across projects instead of duplicated. During onboarding a user picks a default project (ML Training Infra, Compiler, Data Center Ops…), which then scopes their queries automatically — so a new engineer gets high-signal answers without first learning which channels and repos matter.</span>
+<span class="ko">코퍼스가 커지자 한 번에 전부 검색하는 게 시끄러워졌다 — 컴파일러 엔지니어는 인프라 런북이 결과에 섞이길 원치 않고, 반대도 마찬가지. 그래서 <b>project</b>는 팀/이니셔티브를 위한 데이터 소스의 명명된 묶음(특정 Slack 채널·레포·DB·문서 공간)이다. 소스는 복제 대신 프로젝트 간 공유 가능. 온보딩 때 사용자가 기본 프로젝트(ML Training Infra, Compiler, Data Center Ops…)를 고르면, 그게 질의 범위를 자동으로 좁힌다 — 그래서 신규 엔지니어가 어느 채널·레포가 중요한지 먼저 배우지 않고도 고신호 답을 받는다.</span></p>
+</section>
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">What's reusable, and honest limits (no code-walk)</span><span class="ko">재사용 가능한 것, 그리고 정직한 한계 (코드 분석 없음)</span></h2>
+<p><span class="en">Our deep-dives usually trace real code with commit-pinned links. Not here — <b>Cerebras Knowledge is an internal tool with no public repository</b>, so there's nothing to walk. But the ideas are built from public, reusable parts, and the design patterns transfer even if the code doesn't:</span>
+<span class="ko">우리 딥다이브는 보통 commit에 핀된 링크로 실제 코드를 짚는다. 여기선 아니다 — <b>Cerebras Knowledge는 공개 저장소가 없는 사내 도구</b>라 짚을 게 없다. 하지만 아이디어는 공개·재사용 가능한 부품으로 지어졌고, 코드는 못 옮겨도 설계 패턴은 옮겨진다:</span></p>
+<div class="grid2">
+  <div class="mini"><h4><span class="en">Postgres (+ pgvector, GIN)</span><span class="ko">Postgres (+ pgvector, GIN)</span></h4><p><span class="en">One database holds both the embeddings (vector search) and the full-text index — no separate vector DB. The "one table, one shape" backbone.</span><span class="ko">한 DB가 임베딩(벡터 검색)과 풀텍스트 인덱스를 모두 보유 — 별도 벡터 DB 없음. "테이블 하나, 형태 하나" 척추.</span></p></div>
+  <div class="mini"><h4>CocoIndex</h4><p><span class="en">Open-source codebase-embedding framework with language-aware chunking and incremental re-embedding — <a class="src" href="https://github.com/cocoindex-io/cocoindex">github.com/cocoindex-io/cocoindex</a>.</span><span class="ko">언어 인식 청킹과 증분 재임베딩을 갖춘 오픈소스 코드베이스 임베딩 프레임워크 — <a class="src" href="https://github.com/cocoindex-io/cocoindex">github.com/cocoindex-io/cocoindex</a>.</span></p></div>
+  <div class="mini"><h4>RRF</h4><p><span class="en">Reciprocal Rank Fusion (Cormack et al., SIGIR 2009) — a tiny, tuning-free formula to merge multiple rankers. Reusable anywhere you have several retrievers.</span><span class="ko">Reciprocal Rank Fusion (Cormack 외, SIGIR 2009) — 여러 랭커를 합치는 작고 튜닝 없는 수식. 검색기가 여럿인 어디서든 재사용.</span></p></div>
+  <div class="mini"><h4>MCP</h4><p><span class="en">Model Context Protocol — expose retrieval as agent-callable tools so any MCP client (Claude Code) can orchestrate. The interop layer.</span><span class="ko">Model Context Protocol — 검색을 에이전트 호출 가능 도구로 노출해 어떤 MCP 클라이언트(Claude Code)든 오케스트레이션. 상호운용 층.</span></p></div>
+</div>
+<p class="muted"><span class="en">Honesty notes: this is a <b>single company blog</b>, Cerebras's own account, with <b>almost no hard numbers</b> — 15,000 questions/day, 3-month-old, 3,072-dim embeddings, IDF ≥ 4.0, RRF constant 60, top-20 → top-10. No accuracy, latency, or precision/recall figures; no independent verification. The interactive diagrams in the post illustrate patterns, not measurements. Read it as a well-reasoned design retrospective.</span>
+<span class="ko">정직성 노트: 이건 <b>단일 회사 블로그</b>, Cerebras 자체 서술이고 <b>구체 수치가 거의 없다</b> — 하루 15,000 질문, 출시 3개월, 3,072차원 임베딩, IDF ≥ 4.0, RRF 상수 60, top-20 → top-10. 정확도·지연·정밀도/재현율 수치 없음; 독립 검증 없음. 글의 인터랙티브 다이어그램은 측정이 아니라 패턴 예시. 잘 논증된 설계 회고로 읽으라.</span></p>
+
+<div class="callout c-purple">
+  <span class="tag"><span class="en">editor's note — our angle (not a Cerebras claim)</span><span class="ko">편집자 주 — 우리 관점 (Cerebras 주장 아님)</span></span>
+  <span class="en">Two things make this worth our time even though it's not about serving throughput. <b>First, the retrieval recipe is directly reusable</b>: "embeddings alone are not enough → fuse full-text + vector + rarity + recency with RRF, then rerank, then re-attach context" is the current best-practice shape for production RAG, and it maps onto anything we build that has to search real, messy internal data. <b>Second, the MCP separation is the sharpest architectural idea</b> — keep the retrieval layer as fast, LLM-free primitives and let an agent be the brain. That mirrors the "serving layer stays simple, intelligence at the edge" pattern we like in llm-d / agentic serving, and it's exactly how an MCP-tool + Claude Code setup would consume our own infra. Boundaries: no performance data, and much of the value here is unglamorous data-plumbing (Slack Socket Mode, per-channel freshness, distillation prompts) that's specific to Cerebras's toolset — the transferable part is the <i>shape</i> of the pipeline, not the wiring.</span>
+  <span class="ko">서빙 처리량 얘기가 아님에도 우리가 볼 값어치가 있는 두 가지. <b>첫째, 검색 레시피가 바로 재사용 가능</b>: "임베딩만으론 부족 → full-text + 벡터 + 희귀도 + 최신성을 RRF로 융합, 그다음 rerank, 그다음 문맥 재부착"은 프로덕션 RAG의 현재 베스트프랙티스 형태이고, 실제의 지저분한 사내 데이터를 검색해야 하는 우리 무엇에든 대응된다. <b>둘째, MCP 분리가 가장 날카로운 아키텍처 아이디어</b> — 검색 층은 빠르고 LLM 없는 프리미티브로 두고 에이전트를 두뇌로. 이는 우리가 llm-d / agentic serving에서 선호하는 "서빙 층은 단순, 지능은 가장자리" 패턴을 반영하며, MCP 도구 + Claude Code 셋업이 우리 인프라를 소비할 바로 그 방식이다. 경계: 성능 데이터 없음, 그리고 여기 가치의 상당수는 Cerebras 도구 특정적인 화려하지 않은 데이터 배관(Slack Socket Mode, 채널별 신선도, distillation 프롬프트) — 옮겨지는 건 배선이 아니라 파이프라인의 <i>형태</i>다.</span>
+</div>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<h4><span class="en">Primary</span><span class="ko">1차</span></h4>
+<ul class="srcs">
+<li><span class="en">Cerebras — "How Cerebras Built Its Enterprise Knowledge Base"</span><span class="ko">Cerebras — "How Cerebras Built Its Enterprise Knowledge Base"</span> — <a href="https://www.cerebras.ai/blog/how-we-built-our-knowledge-base">cerebras.ai/blog/how-we-built-our-knowledge-base</a> · <span class="en">announcement</span><span class="ko">발표</span>: <a href="https://x.com/cerebras/status/2077822555159945507">x.com/cerebras/status/2077822555159945507</a></li>
+</ul>
+<h4><span class="en">Reusable building blocks &amp; the ideas the post cites</span><span class="ko">재사용 블록 &amp; 글이 인용하는 아이디어</span></h4>
+<ul class="srcs">
+<li>CocoIndex (code-embedding framework) — <a href="https://github.com/cocoindex-io/cocoindex">github.com/cocoindex-io/cocoindex</a> · MCP — <a href="https://modelcontextprotocol.io/">modelcontextprotocol.io</a></li>
+<li>Reciprocal Rank Fusion — Cormack, Clarke &amp; Büttcher, SIGIR 2009 — <a href="https://dl.acm.org/doi/10.1145/1571941.1572114">dl.acm.org/doi/10.1145/1571941.1572114</a></li>
+<li>HNSW approximate nearest-neighbor — Malkov &amp; Yashunin — <a href="https://arxiv.org/abs/1603.09320">arXiv:1603.09320</a> · Anthropic, Contextual Retrieval — <a href="https://www.anthropic.com/news/contextual-retrieval">anthropic.com/news/contextual-retrieval</a></li>
+<li>"Lost in the Middle" (why context position matters) — Liu et al. — <a href="https://arxiv.org/abs/2307.03172">arXiv:2307.03172</a> · Search-o1 (agentic search) — <a href="https://arxiv.org/abs/2501.05366">arXiv:2501.05366</a> · Cursor, semantic search in codebases — <a href="https://cursor.com/blog/semsearch">cursor.com/blog/semsearch</a></li>
+</ul>
+<p class="muted"><span class="en">Caveats: single vendor blog, Cerebras's own account, no independent verification, almost no performance numbers. Cerebras Knowledge is an internal tool with no public code — hence no code-flow section; the links above are the open-source parts and prior work the design builds on.</span>
+<span class="ko">주의: 단일 벤더 블로그, Cerebras 자체 서술, 독립 검증 없음, 성능 수치 거의 없음. Cerebras Knowledge는 공개 코드 없는 사내 도구 — 그래서 코드 흐름 섹션 없음; 위 링크는 설계가 기반한 오픈소스 부품과 선행 연구.</span></p>
+</section>
+
+<footer>
+  <span class="en">Inference study note · 2026-07-29 · a plain-language reading of Cerebras "How Cerebras Built Its Enterprise Knowledge Base" (Jul 2026). A RAG/retrieval-engineering post, not a hardware one. Internal tool, no public repo; every external claim is cited inline.</span>
+  <span class="ko">추론 스터디 노트 · 2026-07-29 · Cerebras "How Cerebras Built Its Enterprise Knowledge Base"(2026-07)를 쉬운 말로 읽기. 하드웨어가 아니라 RAG/검색 엔지니어링 글. 사내 도구, 공개 저장소 없음; 모든 외부 주장은 본문 인용.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
