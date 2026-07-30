@@ -40,6 +40,7 @@
   .src { font-size: 0.78rem; color: var(--muted); margin: -6px 0 14px; }
   .src a { color: var(--blue-ink); }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
+  svg.fig { margin: 16px 0 4px; display: block; max-width: 100%; height: auto; }
 </style>
 </head>
 <body>
@@ -80,6 +81,7 @@
 
 <div class="toc">
   <strong>목차</strong>
+  <p style="margin:6px 0 2px"><a href="#figures"><strong>0. 그림으로 먼저 보기 — 도해 5장</strong></a> <span style="color:var(--muted)">(글이 안 읽히면 여기부터)</span></p>
   <ol>
     <li><a href="#env">재현 환경과 준비</a></li>
     <li><a href="#repro">증상 재현</a> · <a href="#byhand">손으로 직접 확인하는 3단계</a></li>
@@ -93,6 +95,221 @@
     <li><a href="#appendix">부록 — 재현 스크립트 전문 / 인용 코드 위치</a></li>
   </ol>
 </div>
+
+<h2 id="figures">0. 그림으로 먼저 보기</h2>
+
+<p>
+  본문을 읽기 전에 그림 5장으로 전체 구조를 잡는다. 숫자는 모두 이 문서에서 실제로 측정한 값이다.
+</p>
+
+<h3>그림 1 — 2턴에서 무엇을 다시 계산하는가</h3>
+
+<svg class="fig" viewBox="0 0 880 268" xmlns="http://www.w3.org/2000/svg"
+     font-family="-apple-system,sans-serif" role="img"
+     aria-label="2턴 프롬프트는 81 토큰. cold 는 81 토큰 전부를 다시 프리필하고, warm 은 앞 62 토큰을 캐시에서 재사용하고 델타 19 토큰만 프리필한다">
+  <text x="0" y="16" font-size="13" font-weight="700" fill="#1f1e1b">2턴에 엔진이 받는 토큰 열 — 양쪽 완전히 동일 (81 토큰)</text>
+
+  <rect x="120" y="30" width="551" height="34" fill="#f1efe8" stroke="#c2c0b6"/>
+  <rect x="671" y="30" width="169" height="34" fill="#e6f1fb" stroke="#85b7eb"/>
+  <text x="395" y="52" font-size="12" fill="#3a3934" text-anchor="middle">1턴 질문 + 1턴 답변 &#160;(62 토큰)</text>
+  <text x="755" y="52" font-size="12" fill="#0c447c" text-anchor="middle">2턴 델타 (19)</text>
+  <text x="112" y="52" font-size="12" fill="#6b6a63" text-anchor="end">토큰 열</text>
+
+  <text x="0" y="106" font-size="13" font-weight="700" fill="#27500a">COLD — 전체 재프리필</text>
+  <rect x="120" y="118" width="720" height="34" fill="#eaf3de" stroke="#97c459"/>
+  <text x="480" y="140" font-size="12" fill="#27500a" text-anchor="middle">81 토큰 전부를 이번 호출에서 다시 계산</text>
+  <text x="112" y="140" font-size="12" fill="#6b6a63" text-anchor="end">cactus serve</text>
+
+  <text x="0" y="192" font-size="13" font-weight="700" fill="#6f2a12">WARM — 증분 재사용</text>
+  <rect x="120" y="204" width="551" height="34" fill="#ffffff" stroke="#e3e1d8" stroke-dasharray="4 3"/>
+  <rect x="671" y="204" width="169" height="34" fill="#fce6dd" stroke="#ef9f86"/>
+  <text x="395" y="226" font-size="12" fill="#8a8f98" text-anchor="middle">캐시에 있는 걸 그대로 씀 (계산 안 함)</text>
+  <text x="755" y="226" font-size="12" fill="#6f2a12" text-anchor="middle">19 토큰만 계산</text>
+  <text x="112" y="226" font-size="12" fill="#6b6a63" text-anchor="end">cactus run 2턴+</text>
+
+  <text x="0" y="262" font-size="11.5" fill="#6b6a63">측정된 prefill_tokens: COLD 81 (42~147 범위) · WARM 19 (15~20 범위)</text>
+</svg>
+<p class="cap">
+  여기까지는 정상적인 최적화다. 문제는 <strong>이 둘의 결과가 같아야 하는데 다르다</strong>는 것이다.
+  causal attention 에서 앞 토큰의 K/V 는 뒤에 뭐가 붙어도 안 변하므로, prefix caching 은 속도만 바꾸고 결과는 바꾸지 않아야 한다.
+</p>
+
+<h3>그림 2 — 결함 ① : 꼬리 패딩. “몇 개를 넣었는지”가 결과를 바꾼다</h3>
+
+<svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg"
+     font-family="-apple-system,sans-serif" role="img"
+     aria-label="프리필은 128 토큰 폭 청크로 실행된다. cold 는 실제 81 토큰 + 패딩 47칸, warm 은 실제 19 토큰 + 패딩 109칸. 같은 실제 토큰인데 패딩 양이 달라 결과가 달라진다">
+  <defs>
+    <pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="7" stroke="#c2c0b6" stroke-width="2.5"/>
+    </pattern>
+  </defs>
+
+  <text x="0" y="16" font-size="13" font-weight="700" fill="#1f1e1b">프리필 그래프는 폭이 128 토큰으로 고정 — 남는 자리는 패딩으로 채워 실행한다</text>
+  <text x="0" y="34" font-size="11.5" fill="#6b6a63">model.cpp:1327-1343 &#160;use_padded_tail 경로 (Gemma 4 는 슬라이딩 윈도우가 있어 이 경로를 탄다)</text>
+
+  <text x="0" y="80" font-size="13" font-weight="700" fill="#27500a">COLD</text>
+  <rect x="130" y="60" width="405" height="36" fill="#eaf3de" stroke="#97c459"/>
+  <rect x="535" y="60" width="235" height="36" fill="url(#hatch)" stroke="#c2c0b6"/>
+  <text x="332" y="83" font-size="12" fill="#27500a" text-anchor="middle">실제 토큰 81</text>
+  <text x="652" y="83" font-size="12" fill="#3a3934" text-anchor="middle">패딩 47칸</text>
+
+  <text x="0" y="152" font-size="13" font-weight="700" fill="#6f2a12">WARM</text>
+  <rect x="130" y="132" width="95" height="36" fill="#fce6dd" stroke="#ef9f86"/>
+  <rect x="225" y="132" width="545" height="36" fill="url(#hatch)" stroke="#c2c0b6"/>
+  <text x="177" y="155" font-size="12" fill="#6f2a12" text-anchor="middle">19</text>
+  <text x="497" y="155" font-size="12" fill="#3a3934" text-anchor="middle">패딩 109칸</text>
+
+  <line x1="130" y1="190" x2="770" y2="190" stroke="#c2c0b6"/>
+  <line x1="130" y1="186" x2="130" y2="194" stroke="#c2c0b6"/>
+  <line x1="770" y1="186" x2="770" y2="194" stroke="#c2c0b6"/>
+  <text x="450" y="208" font-size="11.5" fill="#6b6a63" text-anchor="middle">청크 폭 128 토큰 (engine.h:692) — pads = 128 − tail_tokens</text>
+
+  <rect x="0" y="230" width="880" height="60" rx="8" fill="#fce6dd" stroke="#ef9f86"/>
+  <text x="16" y="254" font-size="12.5" font-weight="700" fill="#6f2a12">같은 실제 토큰인데 패딩 양이 47칸 vs 109칸 → 결과가 달라진다.</text>
+  <text x="16" y="276" font-size="12" fill="#6f2a12">CACTUS_DISABLE_PREFILL_TAIL_PAD=1 로 이 패딩을 끄면, 증분 프리필이 콜드 프리필과 confidence 까지 일치한다 (0/6 → 4/6).</text>
+</svg>
+<p class="cap">
+  KV 추가분은 <code>rollback_cache_padded_append</code> 로 되돌리지만, <strong>그 청크에서 계산된 출력 자체는 패딩과 함께 계산된 값</strong>이다.
+</p>
+
+<h3>그림 3 — 결함 ② : 캐시의 KV 를 누가 썼는가</h3>
+
+<svg class="fig" viewBox="0 0 880 292" xmlns="http://www.w3.org/2000/svg"
+     font-family="-apple-system,sans-serif" role="img"
+     aria-label="warm 캐시에서 1턴 답변 구간의 KV 는 decoder_step 이 썼고 나머지는 decoder_prefill_chunk 가 썼다. cold 는 전 구간을 decoder_prefill_chunk 가 쓴다">
+  <text x="0" y="16" font-size="13" font-weight="700" fill="#1f1e1b">번들에는 서로 다른 디코더 그래프가 두 개 있다 — 어느 쪽이 KV 를 썼는지가 구간마다 다르다</text>
+
+  <rect x="0" y="30" width="15" height="12" fill="#e6f1fb" stroke="#85b7eb"/>
+  <text x="22" y="41" font-size="11.5" fill="#0c447c">decoder_prefill_chunk (배치 프리필)</text>
+  <rect x="270" y="30" width="15" height="12" fill="#fce6dd" stroke="#ef9f86"/>
+  <text x="292" y="41" font-size="11.5" fill="#6f2a12">decoder_step (단일 토큰 디코드)</text>
+
+  <text x="0" y="90" font-size="13" font-weight="700" fill="#6f2a12">WARM 캐시</text>
+  <rect x="150" y="68" width="222" height="36" fill="#e6f1fb" stroke="#85b7eb"/>
+  <rect x="372" y="68" width="299" height="36" fill="#fce6dd" stroke="#ef9f86"/>
+  <rect x="671" y="68" width="169" height="36" fill="#e6f1fb" stroke="#85b7eb"/>
+  <text x="261" y="91" font-size="11.5" fill="#0c447c" text-anchor="middle">1턴 질문</text>
+  <text x="521" y="91" font-size="11.5" fill="#6f2a12" text-anchor="middle">1턴 답변 — 생성된 토큰</text>
+  <text x="755" y="91" font-size="11.5" fill="#0c447c" text-anchor="middle">2턴 델타</text>
+
+  <text x="0" y="156" font-size="13" font-weight="700" fill="#27500a">COLD 캐시</text>
+  <rect x="150" y="134" width="690" height="36" fill="#e6f1fb" stroke="#85b7eb"/>
+  <text x="495" y="157" font-size="11.5" fill="#0c447c" text-anchor="middle">전 구간을 프리필 그래프가 다시 씀 (같은 토큰이라도 값이 새로 계산된다)</text>
+
+  <rect x="0" y="196" width="880" height="88" rx="8" fill="#fce6dd" stroke="#ef9f86"/>
+  <text x="16" y="220" font-size="12.5" font-weight="700" fill="#6f2a12">패딩(결함 ①)을 꺼도 이 구간 때문에 warm 은 cold 와 6/6 전부 불일치했다.</text>
+  <text x="16" y="242" font-size="12" fill="#6f2a12">cactus_prefill() 로 같은 대화를 “생성 없이” 캐시에 넣으면 빨간 구간이 파란색으로 바뀌는데,</text>
+  <text x="16" y="262" font-size="12" fill="#6f2a12">그때만 cold 와 일치한다 → 두 arm 의 차이는 “이 구간을 누가 썼는가” 하나뿐이므로, 두 그래프의 수치가 다르다는 뜻이다.</text>
+</svg>
+<p class="cap">
+  최신 업스트림 커밋 제목이 “optimize attention and gemv kernels” 인 것도 참고가 된다 —
+  GEMV 는 단일 토큰 디코드 경로, GEMM 은 배치 프리필 경로다. 다만 <em>왜</em> 값이 다른지는 커널 레벨 대조가 필요하다(미확정).
+</p>
+
+<h3>그림 4 — 실험 하나로 결함 두 개를 가른 방법</h3>
+
+<svg class="fig" viewBox="0 0 880 330" xmlns="http://www.w3.org/2000/svg"
+     font-family="-apple-system,sans-serif" role="img"
+     aria-label="2x2 실험 결과. 패딩 ON 에서는 W 0/6 P 0/6, 패딩 OFF 에서는 W 0/6 P 4/6">
+  <text x="0" y="16" font-size="13" font-weight="700" fill="#1f1e1b">cold 와 일치한 횟수 (그리디 6개 대화, 2턴 메시지 배열은 세 갈래 모두 동일)</text>
+
+  <text x="330" y="58" font-size="12" font-weight="700" fill="#3a3934" text-anchor="middle">W</text>
+  <text x="330" y="76" font-size="11" fill="#6b6a63" text-anchor="middle">캐시에 decode 그래프 KV 있음</text>
+  <text x="620" y="58" font-size="12" font-weight="700" fill="#3a3934" text-anchor="middle">P</text>
+  <text x="620" y="76" font-size="11" fill="#6b6a63" text-anchor="middle">캐시를 프리필 그래프로만 채움</text>
+
+  <text x="180" y="126" font-size="12" font-weight="700" fill="#3a3934" text-anchor="end">패딩 ON (기본)</text>
+  <rect x="210" y="94" width="240" height="56" rx="6" fill="#fce6dd" stroke="#ef9f86"/>
+  <text x="330" y="129" font-size="17" font-weight="700" fill="#6f2a12" text-anchor="middle">0 / 6</text>
+  <rect x="500" y="94" width="240" height="56" rx="6" fill="#fce6dd" stroke="#ef9f86"/>
+  <text x="620" y="129" font-size="17" font-weight="700" fill="#6f2a12" text-anchor="middle">0 / 6</text>
+
+  <text x="180" y="212" font-size="12" font-weight="700" fill="#3a3934" text-anchor="end">패딩 OFF</text>
+  <rect x="210" y="180" width="240" height="56" rx="6" fill="#fce6dd" stroke="#ef9f86"/>
+  <text x="330" y="215" font-size="17" font-weight="700" fill="#6f2a12" text-anchor="middle">0 / 6</text>
+  <rect x="500" y="180" width="240" height="56" rx="6" fill="#eaf3de" stroke="#97c459" stroke-width="2"/>
+  <text x="620" y="211" font-size="17" font-weight="700" fill="#27500a" text-anchor="middle">4 / 6</text>
+  <text x="620" y="229" font-size="10.5" fill="#27500a" text-anchor="middle">confidence 까지 동일</text>
+
+  <text x="760" y="150" font-size="11.5" fill="#0c447c">↓ 이 변화가</text>
+  <text x="760" y="166" font-size="11.5" font-weight="700" fill="#0c447c">결함 ①</text>
+  <text x="330" y="264" font-size="11.5" font-weight="700" fill="#6f2a12" text-anchor="middle">이 열이 끝까지 0/6 → 결함 ②</text>
+
+  <rect x="0" y="282" width="880" height="44" rx="8" fill="#f1efe8" stroke="#c2c0b6"/>
+  <text x="16" y="309" font-size="12" fill="#3a3934">P 는 warm 재사용을 그대로 하면서 decode 가 쓴 KV 만 없앤 조건이다 — 그래서 두 결함을 따로 떼어낼 수 있었다.</text>
+</svg>
+<p class="cap">§7.3 <code>root_cause.py</code> 결과. 처음 세운 가설(“decode 가 쓴 KV 때문”)은 패딩 ON 행에서 P 도 0/6 이라 반증됐고, 패딩을 끄고 나서야 두 성분이 분리됐다.</p>
+
+<h3>그림 5 — 서버가 매 턴 리셋하며 버리는 비용</h3>
+
+<svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg"
+     font-family="-apple-system,sans-serif" role="img"
+     aria-label="턴별 프리필 토큰 수. warm 은 1턴 1244 이후 20 내외로 평평, cold 는 1244 에서 1439 까지 계속 증가">
+  <text x="0" y="16" font-size="13" font-weight="700" fill="#1f1e1b">턴별 프리필 토큰 수 — 1턴에 ~1,200 토큰 문서를 준 8턴 대화</text>
+
+  <rect x="0" y="30" width="15" height="12" fill="#fce6dd" stroke="#ef9f86"/>
+  <text x="22" y="41" font-size="11.5" fill="#6f2a12">WARM (캐시 유지 · cactus run)</text>
+  <rect x="250" y="30" width="15" height="12" fill="#eaf3de" stroke="#97c459"/>
+  <text x="272" y="41" font-size="11.5" fill="#27500a">COLD (매 턴 리셋 · cactus serve)</text>
+
+  <line x1="86" y1="250" x2="860" y2="250" stroke="#c2c0b6"/>
+  <line x1="86" y1="60" x2="86" y2="250" stroke="#c2c0b6"/>
+  <text x="78" y="64" font-size="10.5" fill="#6b6a63" text-anchor="end">1500</text>
+  <text x="78" y="158" font-size="10.5" fill="#6b6a63" text-anchor="end">750</text>
+  <text x="78" y="254" font-size="10.5" fill="#6b6a63" text-anchor="end">0</text>
+
+  <g>
+    <rect x="102" y="101" width="34" height="149" fill="#fce6dd" stroke="#ef9f86"/>
+    <rect x="140" y="101" width="34" height="149" fill="#eaf3de" stroke="#97c459"/>
+    <text x="138" y="268" font-size="11" fill="#6b6a63" text-anchor="middle">1턴</text>
+    <text x="138" y="94" font-size="10" fill="#6b6a63" text-anchor="middle">1244</text>
+  </g>
+  <g>
+    <rect x="212" y="248" width="34" height="2" fill="#fce6dd" stroke="#ef9f86"/>
+    <rect x="250" y="96" width="34" height="154" fill="#eaf3de" stroke="#97c459"/>
+    <text x="248" y="268" font-size="11" fill="#6b6a63" text-anchor="middle">2턴</text>
+    <text x="229" y="242" font-size="10" fill="#6f2a12" text-anchor="middle">19</text>
+    <text x="267" y="89" font-size="10" fill="#6b6a63" text-anchor="middle">1287</text>
+  </g>
+  <g>
+    <rect x="322" y="248" width="34" height="2" fill="#fce6dd" stroke="#ef9f86"/>
+    <rect x="360" y="92" width="34" height="158" fill="#eaf3de" stroke="#97c459"/>
+    <text x="358" y="268" font-size="11" fill="#6b6a63" text-anchor="middle">3턴</text>
+    <text x="339" y="242" font-size="10" fill="#6f2a12" text-anchor="middle">16</text>
+  </g>
+  <g>
+    <rect x="432" y="248" width="34" height="2" fill="#fce6dd" stroke="#ef9f86"/>
+    <rect x="470" y="89" width="34" height="161" fill="#eaf3de" stroke="#97c459"/>
+    <text x="468" y="268" font-size="11" fill="#6b6a63" text-anchor="middle">4턴</text>
+    <text x="449" y="242" font-size="10" fill="#6f2a12" text-anchor="middle">16</text>
+  </g>
+  <g>
+    <rect x="542" y="248" width="34" height="2" fill="#fce6dd" stroke="#ef9f86"/>
+    <rect x="580" y="84" width="34" height="166" fill="#eaf3de" stroke="#97c459"/>
+    <text x="578" y="268" font-size="11" fill="#6b6a63" text-anchor="middle">5턴</text>
+    <text x="559" y="242" font-size="10" fill="#6f2a12" text-anchor="middle">18</text>
+  </g>
+  <g>
+    <rect x="652" y="248" width="34" height="2" fill="#fce6dd" stroke="#ef9f86"/>
+    <rect x="690" y="81" width="34" height="169" fill="#eaf3de" stroke="#97c459"/>
+    <text x="688" y="268" font-size="11" fill="#6b6a63" text-anchor="middle">6턴</text>
+    <text x="669" y="242" font-size="10" fill="#6f2a12" text-anchor="middle">18</text>
+  </g>
+  <g>
+    <rect x="762" y="248" width="34" height="2" fill="#fce6dd" stroke="#ef9f86"/>
+    <rect x="800" y="77" width="34" height="173" fill="#eaf3de" stroke="#97c459"/>
+    <text x="798" y="268" font-size="11" fill="#6b6a63" text-anchor="middle">7턴</text>
+    <text x="779" y="242" font-size="10" fill="#6f2a12" text-anchor="middle">17</text>
+    <text x="817" y="70" font-size="10" fill="#6b6a63" text-anchor="middle">1439</text>
+  </g>
+
+  <text x="0" y="292" font-size="12" fill="#3a3934">누적 프리필 토큰: WARM <tspan font-weight="700">1,348</tspan> vs COLD <tspan font-weight="700" fill="#6f2a12">9,418 (7.0배)</tspan> · 누적 TTFT 7.3초 vs 12.0초 (1.6배)</text>
+</svg>
+<p class="cap">
+  warm 은 2턴 이후 20 토큰 내외로 평평한데, cold 는 매 턴 전체를 다시 프리필하므로 대화가 길어질수록 계속 올라간다.
+  즉 현재 Cactus 는 <strong>품질(cold)과 속도(warm) 중 하나만 고를 수 있는 상태</strong>다 — 원래는 둘 다 가져야 한다.
+</p>
 
 <h2 id="env">1. 재현 환경과 준비</h2>
 
