@@ -61,6 +61,13 @@
     똑같은 대화를 <em>한 번에</em> 프리필하면 한국어 전환이 <span class="ok">5/5 성공</span>하지만,
     <code>cactus run</code> 이 2턴째부터 타는 <strong>KV 캐시 증분 재사용 경로</strong>로 넣으면
     <span class="no">0/5 실패</span>한다. 토큰 열은 동일하고 캐시 재사용 여부만 다르다.
+  </p>
+  <p>
+    이 결함은 <strong>언어와 무관하다</strong>. 순수 영어 대화를 그리디(argmax)로 돌리면 warm 과 cold 의 출력이
+    <span class="no">6개 중 5개</span>에서 서로 다르다 — 같은 토큰 열, 같은 argmax인데 결과가 갈린다(<a href="#en-repro">§7.2</a>).
+    일본어→한국어는 그 차이가 <em>눈에 보이는 실패</em>로 넘어간 지점일 뿐이다.
+  </p>
+  <p style="margin-bottom:0">
     부수적으로, <code>cactus serve</code>/Python 바인딩에는 <strong>모든 비-ASCII 입력이 깨지는 별개의 확정 버그</strong>가 있다.
   </p>
 </div>
@@ -74,7 +81,7 @@
     <li><a href="#decisive">결정적 실험 — warm(캐시 재사용) vs cold(재프리필)</a></li>
     <li><a href="#path">경로 특정 — 세 가지 프리필 경로 비교</a></li>
     <li><a href="#notbroken">반증 — 캐시가 “깨진” 것은 아니다</a></li>
-    <li><a href="#numerics">수치 비등가성 — 같은 프롬프트, 다른 로짓</a></li>
+    <li><a href="#numerics">수치 비등가성 — 같은 프롬프트, 다른 로짓</a> · <a href="#en-repro">7.2 영어로도 재현된다</a></li>
     <li><a href="#asciibug">별건 버그 — serve/바인딩의 비-ASCII 파괴</a></li>
     <li><a href="#verdict">판정과 워크어라운드</a></li>
     <li><a href="#appendix">부록 — 재현 스크립트 전문 / 인용 코드 위치</a></li>
@@ -323,9 +330,10 @@ def trial(h, q1, warm):
 </div>
 
 <div class="note">
-  <strong>왜 영어 컨텍스트에선 티가 안 났나.</strong> 이 결함은 결과를 “무작위로 망가뜨리는” 종류가 아니라
-  <em>경계선 판단을 뒤집는</em> 종류다. 영어→한국어 전환은 모델에게 쉬운(마진이 큰) 판단이라 warm 경로에서도 살아남고,
-  일본어→한국어는 마진이 작아 뒤집힌다. 그래서 사용자가 일본어로 시작했을 때만 증상이 드러났다.
+  <strong>왜 영어 컨텍스트에선 티가 안 났나.</strong> <em>이 표만 보고 “영어에선 결함이 없다”고 읽으면 안 된다.</em>
+  이 결함은 결과를 무작위로 망가뜨리는 종류가 아니라 <em>경계선 판단을 뒤집는</em> 종류다.
+  영어→한국어 전환은 모델에게 마진이 큰 판단이라 warm 경로의 오차를 먹고도 살아남고, 일본어→한국어는 마진이 작아 뒤집힌다.
+  <strong>영어에서도 결함 자체는 그대로 존재하며, 측정하면 보인다</strong> — <a href="#en-repro">§7.2</a> 에서 순수 영어로 증명한다.
 </div>
 
 <h2 id="path">5. 경로 특정 — 엔진에는 프리필 구현이 세 갈래 있다</h2>
@@ -486,6 +494,103 @@ cactus_reset(h); send(h, unrelated);      C = send(h, M2)   # B chunked
 </table>
 <p class="cap">패딩을 끄면 두 경로의 confidence 가 서로 수렴한다(0.6549 ≈ 0.6584). 즉 <strong>fused 경로만 적용하는 꼬리 패딩</strong>이 두 경로의 수치 차이를 만드는 주요 성분이다.</p>
 
+<h3 id="en-repro">7.2 영어로도 재현된다 — 그리디 결정성 테스트</h3>
+
+<div class="note">
+  <strong>이 절이 필요한 이유.</strong> §4 의 표에서 영어 대조군이 warm 에서도 성공했기 때문에
+  “결함이 일본어에서만 생긴다”로 읽힐 여지가 있었다. 그건 틀린 독해다.
+  결함은 언어와 무관하고, 앞 절들이 보여준 것은 <em>증상</em>이 일본어에서 임계를 넘었다는 사실뿐이다.
+  여기서 <strong>한국어·일본어를 전혀 쓰지 않고</strong> 결함 자체를 증명한다.
+</div>
+
+<p>
+  가장 깔끔한 증명은 <strong>그리디(argmax) 결정성</strong>이다.
+  warm 과 cold 는 완전히 같은 토큰 열을 보고, argmax 는 확률적 요소가 없다.
+  두 경로가 등가라면 출력이 <strong>바이트 단위로 같아야</strong> 한다. 다르면 그 자체로 비등가의 증거다 — 샘플링 운을 따질 여지가 없다.
+</p>
+
+<pre><code># evidence/english_repro.py  (Part 1)
+GREEDY = {"temperature": 0.0, "top_k": 1, "top_p": 0.0, "max_tokens": 120,
+          "auto_handoff": False, "enable_thinking_if_supported": False,
+          "stop_sequences": ["&lt;|im_end|&gt;", "&lt;end_of_turn&gt;", "&lt;turn|&gt;"]}
+
+def warm_cold(h, q1, q2, opts):
+    cactus_reset(h)
+    m1 = [{"role": "user", "content": q1}]
+    r1, _, _ = send(h, m1, opts)
+    m2 = m1 + [{"role": "assistant", "content": r1}, {"role": "user", "content": q2}]
+    warm = send(h, m2, opts)      # 접두사 재사용
+    cactus_reset(h)
+    cold = send(h, m2, opts)      # 전체 재프리필
+    return warm, cold
+</code></pre>
+
+<table>
+  <tr><th style="width:23%">2턴 (영어)</th><th class="num" style="width:9%">prefill<br>W / C</th><th class="num" style="width:8%">동일?</th><th>WARM vs COLD</th></tr>
+  <tr>
+    <td>“Now say that again, but shorter.”</td><td class="num">17 / 85</td><td class="num no">✗</td>
+    <td><strong>W:</strong> Tokyo is a <u>major metropolitan area</u> in Japan, characterized by…<br>
+        <strong>C:</strong> Tokyo is a <u>dense, dynamic metropolis</u> in Japan, known for…</td>
+  </tr>
+  <tr>
+    <td>“From now on, answer with exactly one word.”</td><td class="num">19 / 83</td><td class="num no">✗</td>
+    <td><strong>W:</strong> <code>**Word**</code> ← 지시를 문자 그대로 받아 붕괴<br>
+        <strong>C:</strong> <code>Understood.</code></td>
+  </tr>
+  <tr>
+    <td>“Now give me three completely different ones.”</td><td class="num">17 / 147</td><td class="num no">✗</td>
+    <td><strong>W:</strong> “three uses that <u>require different types of use</u>” (지시 왜곡)<br>
+        <strong>C:</strong> “three <u>completely different</u> uses for a paperclip”</td>
+  </tr>
+  <tr>
+    <td>“Now answer only with a JSON object.”</td><td class="num">17 / 42</td><td class="num ok">✓</td>
+    <td>둘 다 <code>```json {"capital": "Paris"} ```</code></td>
+  </tr>
+  <tr>
+    <td>“Rewrite that for a five-year-old.”</td><td class="num">19 / 81</td><td class="num no">✗</td>
+    <td><strong>W:</strong> “This request requires a slight shift in tone…” ← <u>과제를 수행하지 않고 메타 설명</u><br>
+        <strong>C:</strong> “The water cycle is like a big, repeating dance!” ← <u>실제로 수행</u></td>
+  </tr>
+  <tr>
+    <td>“Now rank them by release date, oldest first.”</td><td class="num">19 / 99</td><td class="num no">✗</td>
+    <td><strong>W:</strong> “we need to assume a hypothetical scenario…” (회피)<br>
+        <strong>C:</strong> “Ranking programming languages by release date is tricky because…” (교전)</td>
+  </tr>
+</table>
+<p class="cap">그리디 디코딩, 영어 전용. <strong>6개 중 5개에서 출력이 다르다.</strong> 일부는 첫 글자(char 0)부터 갈린다. <code>prefill_tokens</code> 이 warm(17–19, 델타만) / cold(42–147, 전체) 경로를 확정한다.</p>
+
+<div class="bad">
+  <strong>이것이 결정적 증거다.</strong> argmax 는 결정론적이고 두 갈래가 보는 토큰 열은 동일하다.
+  그런데 출력이 다르다 ⇒ <strong>두 경로의 로짓이 다르다</strong>. 언어 문제도, 샘플링 운도, 모델의 다국어 능력도 개입할 여지가 없다.
+  §4 의 일본어 실험은 이 비등가성이 <em>사용자 눈에 보이는 실패</em>로 넘어간 사례였을 뿐이다.
+</div>
+
+<h4>영어에서 결함이 어떻게 “보이는가”</h4>
+
+<p>
+  영어에서는 하드 실패 대신 <strong>2턴 응답 품질 저하</strong>로 나타난다. 위 표에서 warm 쪽은 반복적으로
+  <em>과제를 수행하는 대신 과제에 대해 논평</em>하거나(“This request requires a slight shift in tone…”),
+  지시를 왜곡해서 받는다(“three uses that require different types of use”).
+  샘플링(N=5)으로 측정한 형식 전환 준수율은 두 갈래가 비슷했지만, <strong>내용의 정확도</strong>에서 갈렸다:
+</p>
+
+<pre><code>##### one-word switch   ("What colour is chlorophyll?" — 한 단어로 답하라)
+   준수율        WARM 5/5   COLD 5/5      ← 형식은 둘 다 지킴
+   prefill_tokens  WARM=[24]*5   COLD=[85, 88, 95, 86, 89]
+     [WARM] Chlorophyll     ← 질문에 대한 오답 (색을 물었는데 물질명)
+     [WARM] Chlorophyll
+     [WARM] Chlorophyll
+     [COLD] Green           ← 정답
+     [COLD] Green
+     [COLD] Green
+</code></pre>
+
+<p>
+  “한 단어로 답하라”는 형식은 둘 다 지켰지만, <strong>warm 은 5/5 오답, cold 는 5/5 정답</strong>이다.
+  같은 메시지 배열, 캐시 재사용 여부만 다르다. 영어에서도 결함은 명확히 사용자에게 도달한다 — 다만
+  “일본어로 계속 답한다” 처럼 즉시 알아챌 수 있는 형태가 아니라, <em>조용히 답이 나빠지는</em> 형태라 놓치기 쉬울 뿐이다.
+</p>
+
 <div class="ed">
   <strong>편집자 주 — 여기부터는 해석이다.</strong> 위 관측(경로별 로짓 차이, 패딩 플래그의 영향)은 측정값이지만,
   “<em>어느 쪽이 수학적으로 옳은 구현인가</em>” 는 이 실험만으로 단정할 수 없다. 커널 레벨에서 참조 구현과
@@ -595,6 +700,11 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
     <td>동일 토큰 열에 대해 경로별 confidence 상이(0.84 / 0.66), 동작 결과 상이(5/5 vs 0/5), <code>prefill_tokens</code> 로 경로 확정 (§5·§7).</td>
   </tr>
   <tr>
+    <td>이 결함은 일본어(또는 다국어) 상황에서만 생긴다</td><td class="ok">기각</td>
+    <td>순수 영어 그리디 테스트에서 warm≠cold 가 <strong>6개 중 5개</strong>. 영어에서도 2턴 응답 품질이 떨어지고
+        “chlorophyll 색” 질문에 warm 5/5 오답 · cold 5/5 정답 (§7.2).</td>
+  </tr>
+  <tr>
     <td>(별건) serve/바인딩이 비-ASCII 를 파괴한다</td><td class="no"><strong>확정</strong></td>
     <td><code>ensure_ascii=True</code> ↔ <code>\uXXXX</code> 미처리 파서. 인코딩만 바꾼 A/B 로 증명 (§8).</td>
   </tr>
@@ -606,10 +716,16 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
     <strong>프레임워크 문제다.</strong> 다만 “프레임워크가 대화를 잃어버린다” 같은 단순한 결함이 아니라,
     <strong>엔진의 프리필 구현 세 갈래가 서로 등가가 아니고, <code>cactus run</code> 의 2턴 이후가 그중 품질이 떨어지는 갈래에 고정된다</strong>는 형태다.
   </p>
-  <p style="margin-bottom:0">
+  <p>
     모델(Gemma 4 E2B, CQ4 4-bit)의 기여가 0 은 아니다. 이 모델은 언어 전환 판단의 마진이 작아서
     수치가 조금만 틀어져도 결과가 뒤집힌다. 더 큰/덜 양자화된 모델이라면 같은 결함이 있어도 증상이 안 보였을 것이다.
     <strong>결함은 프레임워크에 있고, 모델은 그 결함을 드러낸 리트머스지에 가깝다.</strong>
+  </p>
+  <p style="margin-bottom:0">
+    <strong>영향 범위는 “일본어 대화”가 아니라 “모든 멀티턴 대화”다.</strong> 언어와 무관하게
+    <code>cactus run</code>·<code>cactus serve</code> 의 <strong>2턴 이후 모든 응답</strong>이 1턴과 다른 계산 경로에서 나온다.
+    영어에서는 하드 실패 대신 조용한 품질 저하로 나타나므로(<a href="#en-repro">§7.2</a>) 오히려 발견하기 더 어렵다.
+    사용자가 일본어로 시작한 덕분에 눈에 띄는 형태로 드러난 셈이다.
   </p>
 </div>
 
@@ -648,6 +764,11 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
   <br>② 도중에 바꿔야 하면 <code>reset</code> 을 치고 새 대화로 시작하라 — 캐시가 비므로 콜드(정상) 경로를 탄다.
   <br>③ <code>cactus serve</code>/Python 바인딩으로 비영어를 다룬다면 <code>ensure_ascii=False</code> 패치 전까지는 쓰지 말거나,
   메시지를 직접 <code>json.dumps(..., ensure_ascii=False)</code> 문자열로 넘겨라.
+  <br><br>
+  <strong>다만 ①·②는 증상 완화지 치료가 아니다.</strong> <code>--system</code> 은 언어 고착이라는 <em>한 가지</em> 증상을 덮을 뿐,
+  2턴 이후가 다른 계산 경로를 탄다는 사실은 그대로다 — <a href="#en-repro">§7.2</a> 의 영어 품질 저하는 <code>--system</code> 으로 해결되지 않는다.
+  품질이 중요한 멀티턴 작업이라면 근본 수정 전까지는 <strong>매 턴 새 프로세스/새 세션으로 전체 히스토리를 다시 보내는 것</strong>(= 콜드 경로 강제)이
+  유일하게 확실한 방법이다. 프리필 비용을 매 턴 다시 내는 대가를 치른다.
 </div>
 
 <h3>9.3 업스트림에 보고할 내용</h3>
@@ -662,6 +783,8 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
     <strong>[요조사] 프리필 경로 비등가</strong> — 동일 토큰 열에 대해 fused / chunked / warm 세 경로의 first-token
     로짓 마진이 다르다(0.84 / 0.66 / 0.68). <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 이 fused 를 chunked 쪽으로
     수렴시키는 것으로 보아 꼬리 패딩이 주요 성분으로 보인다. 재현: §5.1 · §7 스크립트.
+    <br>업스트림에 보낼 최소 재현은 <strong>§7.2 의 영어 그리디 테스트</strong>가 가장 좋다 — 다국어·샘플링을 전부 배제하고
+    “argmax 인데 warm 과 cold 의 출력이 다르다(6개 중 5개)” 한 줄로 끝난다.
   </li>
 </ol>
 
@@ -688,6 +811,9 @@ $PY numerics_probe.py
 CACTUS_DISABLE_PREFILL_TAIL_PAD=1 $PY numerics_probe.py
 $PY ab_ensure_ascii.py
 $PY workaround_test.py
+
+# 4) 언어를 배제한 최소 재현 (§7.2) — 업스트림 보고용으로 이것만 돌려도 된다
+$PY english_repro.py
 </code></pre>
 
 <h3>10.1 <code>lang_probe.py</code> — 공통 하네스 (다른 스크립트가 import 한다)</h3>
@@ -873,6 +999,57 @@ CASES = [("기본",                KO_REQ,    None),
          ("--system 언어 고정",   KO_REQ,    SYS_KO),
          ("system + 강한 지시",   KO_STRONG, SYS_KO)]
 </code></pre>
+
+<h3>10.8 <code>english_repro.py</code> — 언어를 배제한 최소 재현 (§7.2)</h3>
+
+<pre><code>import json
+from cactus.bindings.cactus import cactus_init, cactus_complete, cactus_reset, cactus_destroy
+
+MODEL  = "/Users/&lt;you&gt;/.cache/cactus/weights/gemma-4-e2b-it-cq4"
+STOP   = ["&lt;|im_end|&gt;", "&lt;end_of_turn&gt;", "&lt;turn|&gt;"]
+GREEDY = {"temperature": 0.0, "top_k": 1, "top_p": 0.0, "max_tokens": 120,
+          "auto_handoff": False, "enable_thinking_if_supported": False, "stop_sequences": STOP}
+
+def send(h, msgs, opts):
+    out = cactus_complete(h, json.dumps(msgs, ensure_ascii=False), opts)
+    return (out.get("response") or "", out.get("confidence"), out.get("prefill_tokens"))
+
+def warm_cold(h, q1, q2, opts):
+    """두 갈래가 받는 m2 는 완전히 동일. 다른 것은 캐시 상태뿐."""
+    cactus_reset(h)
+    m1 = [{"role": "user", "content": q1}]
+    r1, _, _ = send(h, m1, opts)
+    m2 = m1 + [{"role": "assistant", "content": r1}, {"role": "user", "content": q2}]
+    warm = send(h, m2, opts)        # 접두사 재사용 (prefill_tokens 17~19)
+    cactus_reset(h)
+    cold = send(h, m2, opts)        # 전체 재프리필 (prefill_tokens 42~147)
+    return warm, cold
+
+PAIRS = [
+    ("Explain Tokyo in three sentences.",            "Now say that again, but shorter."),
+    ("Explain photosynthesis in three sentences.",   "From now on, answer with exactly one word."),
+    ("List three uses for a paperclip.",             "Now give me three completely different ones."),
+    ("What is the capital of France?",               "Now answer only with a JSON object."),
+    ("Describe the water cycle in three sentences.", "Rewrite that for a five-year-old."),
+    ("Name three programming languages.",            "Now rank them by release date, oldest first."),
+]
+
+h = cactus_init(MODEL)
+diffs = 0
+for q1, q2 in PAIRS:
+    (w, _, wpf), (c, _, cpf) = warm_cold(h, q1, q2, GREEDY)
+    same = (w == c); diffs += (not same)
+    print(f"{q2!r}  prefill W={wpf} C={cpf}  identical={same}")
+    if not same:
+        print("  WARM:", w[:150]); print("  COLD:", c[:150])
+cactus_destroy(h)
+print(f"&gt;&gt;&gt; greedy outputs differ in {diffs}/{len(PAIRS)} English conversations")   # → 5/6
+</code></pre>
+
+<p class="src">
+  Part 2(형식 전환 준수율 + chlorophyll 오답 사례)는 같은 <code>warm_cold()</code> 를 샘플링 옵션
+  (<code>temperature 0.7 / top_p 0.95 / top_k 40</code>)으로 N=5 반복하고, 케이스별 판정 함수로 채점한다.
+</p>
 
 <h2>11. 인용한 코드 위치</h2>
 
