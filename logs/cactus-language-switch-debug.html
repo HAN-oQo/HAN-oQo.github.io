@@ -76,7 +76,7 @@
   <strong>목차</strong>
   <ol>
     <li><a href="#env">재현 환경과 준비</a></li>
-    <li><a href="#repro">증상 재현</a></li>
+    <li><a href="#repro">증상 재현</a> · <a href="#byhand">손으로 직접 확인하는 3단계</a></li>
     <li><a href="#exonerate">1차 용의자 소거 — 히스토리·챗 템플릿·토크나이저</a></li>
     <li><a href="#decisive">결정적 실험 — warm(캐시 재사용) vs cold(재프리필)</a></li>
     <li><a href="#path">경로 특정 — 세 가지 프리필 경로 비교</a></li>
@@ -181,6 +181,107 @@ You: Assistant (local): 알겠습니다. 요청하신 내용에 대해 한국어
   <strong>이 시점의 관찰.</strong> 토크나이저·디토크나이저·한국어 생성 능력은 멀쩡하다(한국어 단독 정상).
   다국어 전환 자체도 가능하다(영어→한국어 정상). <strong>일본어 컨텍스트에서만</strong> 무너진다.
   여기서 “작은 양자화 모델의 언어 고착”으로 결론 내리기 쉬운데, 그건 아직 가설일 뿐이다.
+</div>
+
+<h3 id="byhand">손으로 직접 확인하는 3단계</h3>
+
+<p>
+  스크립트 없이, 설치된 CLI 두 개(<code>cactus run</code> / <code>cactus serve</code>)만으로 결함을 눈으로 확인하는 절차다.
+  핵심은 <strong>이 둘이 서로 다른 프리필 경로를 탄다</strong>는 사실이다.
+</p>
+
+<table>
+  <tr><th style="width:22%">도구</th><th style="width:16%">캐시 동작</th><th>왜 그런가</th></tr>
+  <tr>
+    <td><code>cactus run</code></td><td class="no">warm (재사용)</td>
+    <td><code>reset</code> 을 치거나 이미지/오디오를 붙이지 않는 한 캐시를 비우지 않는다 → 2턴부터 증분 경로</td>
+  </tr>
+  <tr>
+    <td><code>cactus serve</code></td><td class="ok">cold (항상)</td>
+    <td>매 요청 직전에 <code>cactus_reset(slot.handle)</code> 를 호출한다 (<code>server.py:605</code>, <code>:802</code>) → 언제나 전체 재프리필</td>
+  </tr>
+</table>
+<p class="src"><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/python/cactus/server.py#L800-L806">server.py#L800-L806</a> — 서버가 매 요청 리셋한다는 것은, 접두사 캐싱을 통째로 포기하는 대신 <strong>정상 경로만 쓴다</strong>는 뜻이다.</p>
+
+<p><strong>1단계 — 증상 보기 (warm).</strong> 두 줄만 치면 된다.</p>
+<pre><code>cactus run --no-cloud-handoff
+You: 日本語で「東京」について3文で説明してください。
+You: 이제부터 한국어로 이야기해줘.        ← 일본어로 답하면 재현 성공
+</code></pre>
+
+<p><strong>2단계 — 모델은 멀쩡하다는 것 확인.</strong> 각각 새 세션으로.</p>
+<pre><code>cactus run --no-cloud-handoff --prompt '한국어로 서울에 대해 세 문장으로 설명해줘.'
+# → 완벽한 한국어 (confidence 99%대). 토크나이저·한국어 능력 문제가 아니다.
+
+cactus run --no-cloud-handoff --system 'You must always answer in Korean, regardless of the language used earlier in the conversation.'
+You: 日本語で「東京」について3文で説明してください。
+You: 이제부터 한국어로 이야기해줘.        ← 이번엔 한국어로 답한다 (5/5)
+</code></pre>
+
+<p>
+  <strong>3단계 — 결함 자체를 영어로 확인 (warm vs cold).</strong>
+  같은 2턴 대화를 warm 쪽(<code>cactus run</code>)과 cold 쪽(<code>cactus serve</code>)에 각각 물어 답을 비교한다.
+  질문은 <em>정답이 하나로 정해진</em> 것을 쓰는 게 좋다 — “엽록소는 무슨 색인가”.
+</p>
+
+<pre><code># (A) warm — cactus run 으로 5회
+printf '%s\n' 'Explain photosynthesis in three sentences.' \
+  'From now on, answer with exactly one word. What colour is chlorophyll?' 'exit' &gt; chl.txt
+for i in 1 2 3 4 5; do cactus run --no-cloud-handoff --max-new-tokens 40 &lt; chl.txt \
+  | grep -a 'Assistant (local)' | tail -1; done
+</code></pre>
+
+<pre><code># (B) cold — cactus serve 에 같은 2턴을 보낸다 (서버는 매 요청 reset → 항상 cold)
+cactus serve google/gemma-4-E2B-it --no-cloud-handoff --port 8099   # 다른 터미널에서
+
+A1=$(curl -s localhost:8099/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"gemma-4-e2b-it-cq4","temperature":0.7,"top_p":0.95,"top_k":40,"max_tokens":120,
+       "messages":[{"role":"user","content":"Explain photosynthesis in three sentences."}]}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["choices"][0]["message"]["content"])')
+
+python3 - "$A1" &lt;&lt;'PY'
+import sys, json, urllib.request
+a1 = sys.argv[1]
+msgs = [{"role":"user","content":"Explain photosynthesis in three sentences."},
+        {"role":"assistant","content":a1},
+        {"role":"user","content":"From now on, answer with exactly one word. What colour is chlorophyll?"}]
+body = json.dumps({"model":"gemma-4-e2b-it-cq4","temperature":0.7,"top_p":0.95,"top_k":40,
+                   "max_tokens":40,"messages":msgs}).encode()
+req = urllib.request.Request("http://127.0.0.1:8099/v1/chat/completions", data=body,
+                             headers={"Content-Type":"application/json"})
+print(json.load(urllib.request.urlopen(req))["choices"][0]["message"]["content"])
+PY
+</code></pre>
+
+<table>
+  <tr><th style="width:34%">경로</th><th class="num">정답(Green) 비율</th><th>실제 출력</th></tr>
+  <tr><td><code>cactus run</code> · <strong>warm</strong></td><td class="num no">2 / 5</td>
+      <td><code>Chlorophyll</code> ×3 (오답 — 색을 물었는데 물질명), <code>**Green**</code> ×2</td></tr>
+  <tr><td><code>cactus serve</code> · <strong>cold</strong></td><td class="num ok">5 / 5</td>
+      <td><code>Green</code> ×5</td></tr>
+</table>
+<p class="cap">같은 모델·같은 샘플링(0.7 / 0.95 / 40)·같은 2턴 구조. 형식(“한 단어”)은 양쪽 다 지키는데 <strong>정확도가 갈린다</strong>.</p>
+
+<div class="note">
+  <strong>이 3단계 비교의 한계.</strong> <code>cactus run</code> 과 <code>cactus serve</code> 는 클라이언트가 달라
+  1턴 응답 문자열까지 완전히 통제되지는 않는다(엄밀한 단일변수 A/B 는 아니다).
+  손으로 빠르게 확인하는 용도로는 충분하지만, <strong>엄밀한 증명은 같은 핸들에서 <code>cactus_reset()</code> 하나만
+  토글한 <a href="#decisive">§4</a>·<a href="#en-repro">§7.2</a></strong> 쪽을 봐야 한다.
+  <br><br>
+  <strong>한국어로는 3단계를 할 수 없다.</strong> <code>cactus serve</code> 는 비-ASCII 입력을 파괴하므로(<a href="#asciibug">§8</a>)
+  cold 대조군을 한국어로 만들 수 없다. 그래서 이 단계만 영어로 한다.
+</div>
+
+<h3>관찰 포인트 — CLI 가 매 턴 찍어 주는 confidence</h3>
+
+<p>
+  <code>cactus run</code> 은 턴마다 <code>confidence: NN%</code> 를 출력한다. 이 값은 첫 생성 토큰의 top-1/top-2 로짓 마진에서 나오는
+  결정론적 값이라, 대화가 진행되며 어떻게 움직이는지 볼 만하다. 재현 세션에서는 <strong>98.6% → 72.5% → 50.4%</strong> 로 떨어지며
+  3턴째에 같은 문단을 반복하는 붕괴가 시작됐다.
+</p>
+<div class="note" style="border-left-color:var(--gray-bd);background:var(--gray-bg);color:var(--muted)">
+  다만 confidence 는 프롬프트마다 자연히 달라지므로 <strong>이 숫자 하나만으로는 증거가 되지 않는다</strong>.
+  증거가 되는 건 <em>같은 토큰 열</em>에 대해 경로별로 값이 다른 경우다(<a href="#numerics">§7</a>).
 </div>
 
 <h2 id="exonerate">3. 1차 용의자 소거 — 히스토리 · 챗 템플릿 · 토크나이저</h2>
