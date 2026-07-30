@@ -67,6 +67,12 @@
     <span class="no">6개 중 5개</span>에서 서로 다르다 — 같은 토큰 열, 같은 argmax인데 결과가 갈린다(<a href="#en-repro">§7.2</a>).
     일본어→한국어는 그 차이가 <em>눈에 보이는 실패</em>로 넘어간 지점일 뿐이다.
   </p>
+  <p>
+    근본 원인은 <strong>두 개의 결함</strong>으로 쪼개졌다(<a href="#rootcause">§7.3</a>) —
+    ① <strong>프리필 꼬리 패딩</strong>이 결과를 “한 번에 몇 토큰을 넣었는지”에 의존하게 만들고,
+    ② <strong>배치 프리필 그래프(<code>decoder_prefill_chunk</code>)와 단일 토큰 디코드 그래프(<code>decoder_step</code>)의 수치가 다르다.</strong>
+    멀티턴 2턴째는 이 둘에 동시에 걸린다.
+  </p>
   <p style="margin-bottom:0">
     부수적으로, <code>cactus serve</code>/Python 바인딩에는 <strong>모든 비-ASCII 입력이 깨지는 별개의 확정 버그</strong>가 있다.
   </p>
@@ -81,7 +87,7 @@
     <li><a href="#decisive">결정적 실험 — warm(캐시 재사용) vs cold(재프리필)</a></li>
     <li><a href="#path">경로 특정 — 세 가지 프리필 경로 비교</a></li>
     <li><a href="#notbroken">반증 — 캐시가 “깨진” 것은 아니다</a></li>
-    <li><a href="#numerics">수치 비등가성 — 같은 프롬프트, 다른 로짓</a> · <a href="#en-repro">7.2 영어로도 재현된다</a></li>
+    <li><a href="#numerics">수치 비등가성 — 같은 프롬프트, 다른 로짓</a> · <a href="#en-repro">7.2 영어로도 재현된다</a> · <a href="#rootcause"><strong>7.3 근본 원인 — 결함은 두 개다</strong></a></li>
     <li><a href="#asciibug">별건 버그 — serve/바인딩의 비-ASCII 파괴</a></li>
     <li><a href="#verdict">판정과 워크어라운드</a> · <a href="#resetcost">9.4 서버는 왜 매 턴 리셋하나 (7× 비용)</a></li>
     <li><a href="#appendix">부록 — 재현 스크립트 전문 / 인용 코드 위치</a></li>
@@ -692,8 +698,102 @@ def warm_cold(h, q1, q2, opts):
   “일본어로 계속 답한다” 처럼 즉시 알아챌 수 있는 형태가 아니라, <em>조용히 답이 나빠지는</em> 형태라 놓치기 쉬울 뿐이다.
 </p>
 
+<h3 id="rootcause">7.3 근본 원인 — 결함은 두 개다</h3>
+
+<p>
+  “경로가 다르면 결과가 다르다”까지가 §7.1–7.2 였다. 그럼 <em>무엇 때문에</em> 다른가.
+  번들이 <strong>서로 다른 디코더 그래프 두 개</strong>를 싣고 있다는 데서 출발한다.
+</p>
+
+<pre><code>$ ls ~/.cache/cactus/weights/gemma-4-e2b-it-cq4/components/
+decoder_prefill_chunk     ← 배치 프리필용 (128 토큰 폭)
+decoder_step              ← 단일 토큰 디코드용
+</code></pre>
+
+<p>
+  프롬프트 토큰의 KV 는 <code>decoder_prefill_chunk</code> 가 쓰고, <strong>생성된 토큰의 KV 는 <code>decoder_step</code> 이 쓴다.</strong>
+  cold 재프리필은 그 생성 토큰들의 KV 를 <em>프리필 그래프로 다시</em> 쓴다. 여기서 첫 가설이 나온다.
+</p>
+
+<div class="card">
+  <strong>H1.</strong> warm 이 다른 이유는 캐시에 <code>decoder_step</code> 이 쓴 KV 가 섞여 있기 때문이다.
+</div>
+
+<p>
+  바인딩에 <code>cactus_prefill()</code> 이 노출돼 있어서 이걸 직접 가를 수 있다.
+  <strong>같은 대화를 “생성 없이 프리필만”으로 캐시에 넣으면</strong>, warm 재사용은 그대로면서 decode 가 쓴 KV 는 하나도 없는 상태가 된다.
+</p>
+
+<pre><code># evidence/root_cause.py — 세 갈래 모두 동일한 M2, 그리디
+# C  cold        : reset → complete(M2)
+# W  warm(decode): complete(M1)→a1 → complete(M2)          1턴 답변 KV = decoder_step
+# P  warm(prefill): reset → cactus_prefill([q1,a1]) → complete(M2)   같은 warm 재사용, KV = 프리필 그래프
+</code></pre>
+
+<table>
+  <tr><th>설정</th><th class="num">W == C</th><th class="num">P == C</th><th>해석</th></tr>
+  <tr>
+    <td>기본</td><td class="num no">0 / 6</td><td class="num no">0 / 6</td>
+    <td><strong>H1 반증.</strong> decode 가 쓴 KV 를 전부 제거해도 warm 은 여전히 cold 와 다르다</td>
+  </tr>
+  <tr>
+    <td><code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code></td>
+    <td class="num no">0 / 6</td><td class="num ok">4 / 6</td>
+    <td>패딩을 끄면 P 는 cold 와 <strong>confidence 까지 동일</strong>해진다 (0.7718/0.7718, 0.7931/0.7931, 0.8105/0.8105).
+        그런데 W 는 여전히 0/6</td>
+  </tr>
+</table>
+<p class="cap">그리디(argmax) 6개 대화. 세 갈래가 받는 2턴 메시지 배열은 완전히 동일하고, 1턴 답변 문자열도 같다.</p>
+
+<p>이 두 줄이 결함을 정확히 두 개로 쪼갠다.</p>
+
+<div class="bad">
+  <strong>결함 ① — 꼬리 패딩이 배치 프리필 결과를 오염시킨다.</strong><br>
+  Gemma 4 는 슬라이딩 윈도우 레이어가 있어 <code>pad_tail=false</code> · <code>use_padded_tail=true</code> 경로를 탄다
+  (<code>model.cpp:1327-1343</code>). 이 경로는 남은 꼬리를 <strong>128 폭 청크로 채워 실행</strong>하고,
+  <code>pads = 128 − tail_tokens</code> 만큼의 패딩 슬롯을 쓴 뒤 KV 추가분을 롤백한다.
+  <br>· cold: tail ≈ 81 → 패딩 47칸 · warm: tail = 19 → 패딩 <strong>109칸</strong>
+  <br>같은 실제 토큰인데 패딩 양이 다르면 결과가 달라진다 ⇒ <strong>프리필이 “한 번에 몇 개를 넣었는지”에 의존한다</strong>.
+  패딩을 끄면 이 성분이 사라지고 P 가 cold 와 비트 단위로 일치한다.
+</div>
+
+<div class="bad">
+  <strong>결함 ② — 배치 그래프와 단일 토큰 그래프의 수치가 다르다.</strong><br>
+  패딩을 꺼도 W 는 <strong>0/6</strong>. W 와 P 의 차이는 오직 <em>1턴 답변의 KV 를 누가 썼는가</em>
+  (<code>decoder_step</code> vs <code>decoder_prefill_chunk</code>) 하나뿐이다.
+  즉 두 그래프가 같은 토큰·같은 위치에 대해 다른 KV/로짓을 낸다.
+  <br>패딩 off 에서 P 가 4/6 인 것(2개는 불일치)도 같은 결함으로 설명된다 — 그 2개는 1턴 답변이 가장 길어
+  전체 길이가 128 을 넘고, 그래서 <strong>어떤 토큰이 청크 그래프를 타고 어떤 토큰이 스칼라 경로를 타는지</strong>가
+  warm/cold 간에 달라진다.
+</div>
+
+<h4>그래서 멀티턴이 왜 깨지는가 — 한 문장</h4>
+
+<div class="card">
+  <p style="margin:0">
+    Cactus 의 프리필은 <strong>토큰 열이 같아도 “그 호출에 몇 개를 넣었는지”에 따라 다른 결과를 낸다</strong>
+    (청크 경계 + 꼬리 패딩 + 어느 그래프를 타는지). 멀티턴에서 2턴 이후는 델타 17~19 토큰만 넣으므로
+    1턴과 기하가 완전히 다르고, 게다가 1턴 생성 토큰의 KV 는 디코드 그래프가 쓴 것이다.
+    <strong>결함 ①과 ②가 동시에 걸리는 지점이 바로 “2턴째”다.</strong>
+  </p>
+</div>
+
+<p>
+  이것으로 앞선 관측들이 전부 한 원인으로 모인다 — fused ≠ chunked(§7.1)도, 영어 그리디 5/6 불일치(§7.2)도,
+  <code>prefill_tokens</code> 이 17 인 경로만 실패하는 것(§5)도 모두 “프리필이 기하에 불변이 아니다”의 결과다.
+  <strong>prefix caching 은 원래 속도만 바꾸고 결과는 바꾸지 않아야 하는 최적화인데, Cactus 에서는 그 전제가 성립하지 않는다.</strong>
+</p>
+
 <div class="ed">
-  <strong>편집자 주 — 여기부터는 해석이다.</strong> 위 관측(경로별 로짓 차이, 패딩 플래그의 영향)은 측정값이지만,
+  <strong>편집자 주 — 남는 부분.</strong> 결함 ①은 플래그로 켜고 끄며 확인했으므로 기전까지 확정이다.
+  결함 ②는 “두 그래프가 다르다”까지가 측정 결과이고, <em>왜</em> 다른지(양자화 스케일, GEMM↔GEMV 커널,
+  누산 순서 중 무엇인지)는 커널 레벨 대조가 필요하다.
+  또한 <strong>어느 쪽이 “옳은” 값인지</strong>도 참조 구현과 대조해야 알 수 있다 —
+  다만 실무적으로는 cold 쪽이 일관되게 더 나은 출력을 낸다.
+</div>
+
+<div class="ed">
+  <strong>편집자 주 — §7.1 에 대한 해석.</strong> 위 관측(경로별 로짓 차이, 패딩 플래그의 영향)은 측정값이지만,
   “<em>어느 쪽이 수학적으로 옳은 구현인가</em>” 는 이 실험만으로 단정할 수 없다. 커널 레벨에서 참조 구현과
   로짓을 대조해야 한다. 확실한 것은 <strong>세 경로가 서로 등가가 아니며, 그 차이가 사용자에게 보이는 동작을 바꿀 만큼 크다</strong>는 사실이다.
   <code>cactus run</code> 의 1턴은 A 경로, 2턴 이후는 C 경로를 타므로 — <strong>대화가 길어질수록 사용자는 계속 다른(그리고 확신도가 낮은) 계산 경로에 머문다.</strong>
@@ -881,11 +981,21 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
     <code>\uXXXX</code> 를 풀지 않는다. 재현: §8.3 A/B 스크립트.
   </li>
   <li>
-    <strong>[요조사] 프리필 경로 비등가</strong> — 동일 토큰 열에 대해 fused / chunked / warm 세 경로의 first-token
-    로짓 마진이 다르다(0.84 / 0.66 / 0.68). <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 이 fused 를 chunked 쪽으로
-    수렴시키는 것으로 보아 꼬리 패딩이 주요 성분으로 보인다. 재현: §5.1 · §7 스크립트.
-    <br>업스트림에 보낼 최소 재현은 <strong>§7.2 의 영어 그리디 테스트</strong>가 가장 좋다 — 다국어·샘플링을 전부 배제하고
+    <strong>[확정] 프리필 꼬리 패딩이 결과를 청크 기하에 의존하게 만든다</strong> —
+    <code>use_padded_tail</code> 경로(<code>model.cpp:1327-1343</code>)가 꼬리를 128 폭 청크로 채워 실행하므로
+    패딩 양(cold 47칸 vs warm 109칸)이 결과를 바꾼다. <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 을 주면
+    증분 프리필이 콜드 프리필과 confidence 까지 일치한다(0/6 → 4/6). 재현: §7.3 <code>root_cause.py</code>.
+  </li>
+  <li>
+    <strong>[확정] <code>decoder_prefill_chunk</code> 와 <code>decoder_step</code> 의 수치가 다르다</strong> —
+    패딩을 꺼도, 캐시에 디코드 그래프가 쓴 KV 가 섞이면 여전히 0/6 불일치.
+    두 arm 의 차이는 “1턴 답변 KV 를 누가 썼는가” 하나뿐이다. <em>왜</em> 다른지(양자화 스케일 / GEMM↔GEMV /
+    누산 순서)는 커널 레벨 대조가 필요하다.
+  </li>
+  <li>
+    <strong>최소 재현</strong>은 <strong>§7.2 의 영어 그리디 테스트</strong>가 가장 좋다 — 다국어·샘플링을 전부 배제하고
     “argmax 인데 warm 과 cold 의 출력이 다르다(6개 중 5개)” 한 줄로 끝난다.
+    거기에 §7.3 의 <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 대조를 붙이면 원인 분해까지 같이 전달된다.
   </li>
 </ol>
 
@@ -985,7 +1095,11 @@ $PY workaround_test.py
 # 4) 언어를 배제한 최소 재현 (§7.2) — 업스트림 보고용으로 이것만 돌려도 된다
 $PY english_repro.py
 
-# 5) 서버의 매-턴 리셋이 버리는 비용 (§9.4)
+# 5) 근본 원인 분해 (§7.3) — 결함 ①/② 를 가른다
+$PY root_cause.py
+CACTUS_DISABLE_PREFILL_TAIL_PAD=1 $PY root_cause.py
+
+# 6) 서버의 매-턴 리셋이 버리는 비용 (§9.4)
 $PY cache_cost.py
 </code></pre>
 
@@ -1224,6 +1338,45 @@ print(f"&gt;&gt;&gt; greedy outputs differ in {diffs}/{len(PAIRS)} English conve
   (<code>temperature 0.7 / top_p 0.95 / top_k 40</code>)으로 N=5 반복하고, 케이스별 판정 함수로 채점한다.
 </p>
 
+<h3>10.9 <code>root_cause.py</code> — 결함 두 개를 가르는 실험 (§7.3)</h3>
+
+<pre><code>from cactus.bindings.cactus import (cactus_init, cactus_complete, cactus_prefill,
+                                    cactus_reset, cactus_destroy)
+
+def three_arms(h, q1, q2):
+    m1 = [{"role": "user", "content": q1}]
+
+    # W : 실제 1턴 생성 → 답변 KV 를 decoder_step 이 쓴다 → 2턴 warm
+    cactus_reset(h)
+    a1, _, _ = send(h, m1)
+    m2 = m1 + [{"role":"assistant","content":a1}, {"role":"user","content":q2}]
+    W = send(h, m2)
+
+    # C : 같은 m2, 빈 캐시
+    cactus_reset(h); C = send(h, m2)
+
+    # P : 같은 m2, warm 재사용이지만 캐시를 cactus_prefill 로만 채운다
+    #     → 캐시에 decoder_step 이 쓴 KV 가 하나도 없다
+    cactus_reset(h)
+    cactus_prefill(h, json.dumps(m1 + [{"role":"assistant","content":a1}], ensure_ascii=False))
+    P = send(h, m2)
+    return a1, W, C, P
+</code></pre>
+
+<pre><code>$ python root_cause.py                                   # 기본
+&gt;&gt;&gt; warm-with-decode-KV  matches cold: 0/6
+&gt;&gt;&gt; warm-with-prefill-KV matches cold: 0/6               ← H1 반증
+
+$ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 python root_cause.py  # 패딩만 끔
+&gt;&gt;&gt; warm-with-decode-KV  matches cold: 0/6               ← 결함 ② 잔존
+&gt;&gt;&gt; warm-with-prefill-KV matches cold: 4/6               ← 결함 ① 제거됨 (confidence 까지 동일)
+</code></pre>
+
+<p class="src">
+  Part B(생성 길이 1·4·16·48·80 토큰으로 바꿔 보는 dose-response)는 <strong>용량 반응이 없음</strong>을 보인다 —
+  1 토큰만 생성해도 warm≠cold. 기본 설정에서는 결함 ①이 이미 전부를 설명하므로 생성 길이와 무관하다.
+</p>
+
 <h2>11. 인용한 코드 위치</h2>
 
 <p>모두 <code>cactus-compute/cactus @ 8e0eec1</code> 기준. 링크는 커밋 고정 퍼머링크다.</p>
@@ -1280,7 +1433,28 @@ print(f"&gt;&gt;&gt; greedy outputs differ in {diffs}/{len(PAIRS)} English conve
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/model.cpp#L573">src/model.cpp:573</a></td>
-    <td><code>CACTUS_DISABLE_PREFILL_TAIL_PAD</code></td><td>프리필 꼬리 패딩 토글 — 경로 간 수치 차이의 주요 성분</td>
+    <td><code>CACTUS_DISABLE_PREFILL_TAIL_PAD</code></td><td>프리필 꼬리 패딩 토글 — 결함 ① 을 켜고 끄는 스위치</td>
+  </tr>
+  <tr>
+    <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/model.cpp#L1327-L1343">src/model.cpp:1327-1343</a></td>
+    <td><code>pad_tail</code> / <code>use_padded_tail</code></td>
+    <td><strong>결함 ①</strong> — 슬라이딩 윈도우 모델은 꼬리를 128 폭 청크로 채워 실행한다.
+        <code>pads = 128 − tail_tokens</code> 이므로 한 번에 넣는 토큰 수가 결과를 바꾼다</td>
+  </tr>
+  <tr>
+    <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/model.cpp#L1361-L1390">src/model.cpp:1361-1390</a></td>
+    <td>패딩 청크 실행 + 롤백</td>
+    <td><code>snapshot_cache_padded_append</code> → <code>execute_prefill_chunk</code> → <code>rollback_cache_padded_append</code>.
+        KV 추가분은 되돌리지만 그 청크에서 계산된 <em>출력</em>은 패딩과 함께 계산된 값이다</td>
+  </tr>
+  <tr>
+    <td>번들 <code>components/decoder_prefill_chunk</code> · <code>components/decoder_step</code></td>
+    <td>별개로 컴파일된 두 그래프</td>
+    <td><strong>결함 ②</strong> — 프롬프트 토큰 KV 는 전자가, 생성 토큰 KV 는 후자가 쓴다. 같은 토큰에 대해 값이 다르다</td>
+  </tr>
+  <tr>
+    <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/engine.h#L692">src/engine.h:692</a></td>
+    <td><code>get_prefill_chunk_size() → 128</code></td><td>청크 폭. 패딩 양 계산의 기준</td>
   </tr>
 </table>
 
