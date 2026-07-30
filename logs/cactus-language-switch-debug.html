@@ -83,7 +83,7 @@
     <li><a href="#notbroken">반증 — 캐시가 “깨진” 것은 아니다</a></li>
     <li><a href="#numerics">수치 비등가성 — 같은 프롬프트, 다른 로짓</a> · <a href="#en-repro">7.2 영어로도 재현된다</a></li>
     <li><a href="#asciibug">별건 버그 — serve/바인딩의 비-ASCII 파괴</a></li>
-    <li><a href="#verdict">판정과 워크어라운드</a></li>
+    <li><a href="#verdict">판정과 워크어라운드</a> · <a href="#resetcost">9.4 서버는 왜 매 턴 리셋하나 (7× 비용)</a></li>
     <li><a href="#appendix">부록 — 재현 스크립트 전문 / 인용 코드 위치</a></li>
   </ol>
 </div>
@@ -889,6 +889,75 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
   </li>
 </ol>
 
+<h3 id="resetcost">9.4 남는 의문 — 서버는 왜 매 턴 리셋하고, 그 대가는 얼마인가</h3>
+
+<p>
+  <code>cactus serve</code> 가 요청마다 <code>cactus_reset()</code> 을 부른다는 것은
+  <strong>prefix caching 을 통째로 포기한다</strong>는 뜻이다. 온디바이스 엔진에서 이건 작은 손해가 아니다.
+  실제로 재봤다 — 1턴에 ~1,200 토큰짜리 문서를 주고 7턴을 이어가는, 흔한 시나리오다.
+</p>
+
+<pre><code># evidence/cache_cost.py — 같은 8턴 대화, 캐시 유지 vs 매 턴 리셋
+for turn in ...:
+    msgs.append(user_turn)
+    if cold: cactus_reset(h)          # ← cactus serve 가 하는 일
+    out = cactus_complete(h, json.dumps(msgs, ensure_ascii=False), OPTS)
+</code></pre>
+
+<table>
+  <tr>
+    <th rowspan="2">턴</th>
+    <th colspan="2">WARM — 캐시 유지 (<code>cactus run</code>)</th>
+    <th colspan="2">COLD — 매 턴 리셋 (<code>cactus serve</code>)</th>
+  </tr>
+  <tr><th class="num">prefill 토큰</th><th class="num">TTFT</th><th class="num">prefill 토큰</th><th class="num">TTFT</th></tr>
+  <tr><td>1</td><td class="num">1244</td><td class="num">1667 ms</td><td class="num">1244</td><td class="num">1593 ms</td></tr>
+  <tr><td>2</td><td class="num">19</td><td class="num">978 ms</td><td class="num">1287</td><td class="num">1764 ms</td></tr>
+  <tr><td>3</td><td class="num">16</td><td class="num">893 ms</td><td class="num">1314</td><td class="num">1703 ms</td></tr>
+  <tr><td>4</td><td class="num">16</td><td class="num">879 ms</td><td class="num">1343</td><td class="num">1661 ms</td></tr>
+  <tr><td>5</td><td class="num">18</td><td class="num">1006 ms</td><td class="num">1381</td><td class="num">1667 ms</td></tr>
+  <tr><td>6</td><td class="num">18</td><td class="num">961 ms</td><td class="num">1410</td><td class="num">1774 ms</td></tr>
+  <tr><td>7</td><td class="num">17</td><td class="num">950 ms</td><td class="num">1439</td><td class="num">1824 ms</td></tr>
+  <tr style="font-weight:700">
+    <td>합계</td><td class="num">1348</td><td class="num">7334 ms</td>
+    <td class="num no">9418 (7.0×)</td><td class="num no">11986 ms (1.6×)</td>
+  </tr>
+</table>
+<p class="cap">M2 Pro, <code>gemma-4-e2b-it-cq4</code>. 프리필 연산량 <strong>7배</strong>, 누적 TTFT <strong>1.6배</strong>. 턴당 TTFT 가 warm 은 ~950 ms 로 평평한 반면 cold 는 1593 → 1824 ms 로 계속 올라간다.</p>
+
+<p>
+  TTFT 배수가 토큰 배수보다 작은 건, TTFT 에 프리필과 무관한 고정 오버헤드(~880 ms)가 섞여 있기 때문이다.
+  <strong>순수하게 낭비되는 몫은 턴당 ~800 ms 이고, 대화가 길어질수록 선형으로 늘어난다</strong>
+  (누적으로는 대화 길이의 제곱에 비례). 문서·시스템 프롬프트가 길수록, 턴이 많을수록 손해가 커진다.
+</p>
+
+<h4>왜 이렇게 만들었을까</h4>
+
+<p>
+  슬롯이 <strong>모델당 하나</strong>라는 점이 배경으로 보인다 — <code>self.slots: dict[str, _ModelSlot]</code>,
+  즉 같은 모델을 쓰는 모든 클라이언트가 캐시 하나를 공유한다. 남의 대화 캐시가 섞이면 안 되니 매번 지우는 것이다.
+</p>
+
+<div class="ed">
+  <strong>편집자 주 — 여기부터는 추론이다.</strong> 그런데 그 안전장치는 엔진에 <em>이미</em> 있다.
+  <code>prompt_context_matches()</code> 가 캐시 토큰이 새 프롬프트의 접두사인지 검사하고, 아니면 알아서 리셋한다
+  (<a href="#path">§5</a>). 다른 대화의 캐시는 접두사가 될 수 없으므로 자동으로 걸러진다.
+  즉 <strong>명시적 리셋은 안전을 위해 필요한 게 아니라, 정당한 재사용까지 같이 없앤다.</strong>
+  <br><br>
+  더 그럴듯한 설명은 이 조사 결과와 맞물린다 — <strong>warm 경로를 믿을 수 없어서 우회한 것</strong>일 수 있다.
+  확증은 없다(커밋 메시지·이슈를 확인하지 않았다). 다만 결과적으로 두 진입점이 정반대 판단을 하고 있다:
+  <code>cactus run</code> 은 warm 을 <em>무조건</em> 쓰고, <code>cactus serve</code> 는 <em>무조건</em> 거부한다.
+  둘 중 하나는 틀렸고, 이 문서의 측정에 따르면 <strong>서버가 품질 면에서는 옳고 비용 면에서는 7배를 버리고 있다.</strong>
+</div>
+
+<p>
+  제대로 된 해법은 둘 중 하나를 고르는 게 아니라 <strong>둘 다 고치는 것</strong>이다 —
+  ① 증분 재사용이 콜드 프리필과 수치적으로 등가가 되도록 만들고,
+  ② 캐시를 <em>대화 단위</em>로 분리해 서버가 안심하고 재사용할 수 있게 한다.
+  vLLM·SGLang 의 prefix caching 이 정확히 그 구조다. Cactus 는 접두사 판정 로직(<code>prompt_context_matches</code>)은
+  이미 갖췄지만, 캐시가 모델당 하나뿐이고 재사용이 등가가 아니어서 <strong>두 진입점 중 어느 쪽도 이 기능을 제대로 쓰지 못하고 있다.</strong>
+</p>
+
 <h2 id="appendix">10. 부록 — 재현 스크립트 전문</h2>
 
 <h3>10.0 실행 순서</h3>
@@ -915,6 +984,9 @@ $PY workaround_test.py
 
 # 4) 언어를 배제한 최소 재현 (§7.2) — 업스트림 보고용으로 이것만 돌려도 된다
 $PY english_repro.py
+
+# 5) 서버의 매-턴 리셋이 버리는 비용 (§9.4)
+$PY cache_cost.py
 </code></pre>
 
 <h3>10.1 <code>lang_probe.py</code> — 공통 하네스 (다른 스크립트가 import 한다)</h3>
