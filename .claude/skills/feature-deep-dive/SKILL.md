@@ -70,6 +70,12 @@ the terms a reader needs) and a "한 줄 요약" `c-blue` callout near the top.
    + the post-meta-bump check). Co-Authored-By the repo's standard line.
 
 ## Notes
+- **Model notes (a note explaining an LLM's architecture): two required extras** (user standing
+  preference). (1) **Architecture diagram** — redraw the model's architecture as an inline
+  theme-colored SVG based on the matching figure in Sebastian Raschka's *LLM Architecture Gallery*
+  (https://sebastianraschka.com/llm-architecture-gallery/), cited in the `figcap`. Redraw, don't
+  hotlink. (2) **End with a "lineage & competitors" section** — how the model evolved from its
+  predecessors and how it differs from a key competitor.
 - `/paper-note` = academic papers (fixed 5-part, verbatim-quote-with-anchor, plain-language math).
   `/feature-deep-dive` = features/systems/codebases (flexible sections, code-flow permalinks).
   Both share the type-A template, diagram, and source-citation discipline.

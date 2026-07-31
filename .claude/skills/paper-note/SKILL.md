@@ -79,6 +79,13 @@ Base template to copy: `study/llm-serving-software-aging.html` (hero + TOC + glo
    Co-Authored-By line.
 
 ## Notes
+- **Model notes (papers/reports describing an LLM's architecture): two required extras** (user
+  standing preference). (1) **Architecture diagram** — redraw the model's architecture as an
+  inline theme-colored SVG based on the matching figure in Sebastian Raschka's *LLM Architecture
+  Gallery* (https://sebastianraschka.com/llm-architecture-gallery/), citing it in the `figcap`.
+  Redraw, don't hotlink (self-contained theme + copyright). (2) **End with a "lineage &
+  competitors" section**: how the model evolved from its predecessors, and how it differs from a
+  key competitor — e.g. Kimi K3 → K2/K2.5/K2.6/K2.7-Code lineage + vs GLM-5.2.
 - Multiple papers in one request → research them concurrently (separate agent sets), write each
   as its own page, batch the check + push.
 - This skill is the paper-specific sibling of the general feature/code deep-dive notes
