@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM structured output &amp; tool calling — constrain the tokens, parse the text</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:26px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">vLLM structured output &amp; tool calling — constrain the tokens, parse the text</span>
+    <span class="ko">vLLM structured output &amp; tool calling — 토큰을 제약하고, 텍스트를 파싱한다</span>
+  </h1>
+  <p class="lede">
+    <span class="en">A code-walk of how vLLM guarantees JSON-schema-valid output, calls tools, and separates a reasoning model's "thinking" from its answer — traced end-to-end on the <b>latest main</b>. The whole area splits cleanly into two halves: <b>structured/guided output</b> constrains generation at the <i>logit</i> level inside the engine (a per-step token bitmask that forces disallowed tokens to <code class="inl">−inf</code>), while <b>tool &amp; reasoning parsing</b> is pure <i>post-processing</i> of already-generated text in the serving layer. Covers the 4 grammar backends (xgrammar / guidance / outlines / lm-format-enforcer) and their auto-fallback, how the FSM survives speculative decoding (validate → advance → rollback), the newly-unified <code class="inl">Parser</code>/<code class="inl">DelegatingParser</code> layer, the 42-parser tool zoo and streaming partial-JSON diffing, the two ways <code class="inl">tool_choice="required"</code> forces valid JSON, and the single <code class="inl">reasoning_ended</code> gate that ties it all together. Pinned to vLLM commit 34bb795.</span>
+    <span class="ko">vLLM이 JSON-스키마에 맞는 출력을 보장하고, 도구를 호출하고, 추론 모델의 "생각"을 답에서 분리하는 방식을 <b>최신 main</b> 기준으로 코드까지 추적한 노트. 이 영역은 두 반쪽으로 깔끔히 나뉜다: <b>structured/guided output</b>은 엔진 안에서 <i>logit</i> 레벨로 생성을 제약하고(스텝마다 허용 토큰 bitmask로 금지 토큰을 <code class="inl">−inf</code>로), <b>tool &amp; reasoning 파싱</b>은 서빙 레이어에서 이미 생성된 텍스트를 <i>후처리</i>할 뿐이다. 4개 문법 백엔드(xgrammar / guidance / outlines / lm-format-enforcer)와 auto-fallback, FSM이 speculative decoding을 견디는 법(validate → advance → rollback), 새로 통합된 <code class="inl">Parser</code>/<code class="inl">DelegatingParser</code> 계층, 42개 tool 파서 동물원과 스트리밍 부분-JSON 디핑, <code class="inl">tool_choice="required"</code>가 유효 JSON을 강제하는 두 경로, 그리고 이 모두를 잇는 단일 <code class="inl">reasoning_ended</code> 게이트를 다룬다. vLLM 커밋 34bb795에 핀 고정.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output">v1/structured_output</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers">tool_parsers</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser">parser</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55">code @ 34bb795</a></span>
+    <span class="badge"><span class="en">Deep dive · code-walk · Apache-2.0</span><span class="ko">딥다이브 · 코드 분석 · Apache-2.0</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. The big picture — two planes</span><span class="ko">1. 큰 그림 — 두 평면</span></a></li>
+    <li><a href="#s2"><span class="en">2. Structured output — grammar → bitmask → −inf</span><span class="ko">2. Structured output — 문법 → bitmask → −inf</span></a></li>
+    <li><a href="#s3"><span class="en">3. The 4 backends &amp; auto-fallback</span><span class="ko">3. 4개 백엔드와 auto-fallback</span></a></li>
+    <li><a href="#s4"><span class="en">4. Surviving speculative decoding — validate / advance / rollback</span><span class="ko">4. speculative decoding 견디기 — validate / advance / rollback</span></a></li>
+    <li><a href="#s5"><span class="en">5. Tool calling — two ways to get valid JSON</span><span class="ko">5. Tool calling — 유효 JSON을 얻는 두 경로</span></a></li>
+    <li><a href="#s6"><span class="en">6. The tool-parser zoo &amp; streaming partial-JSON</span><span class="ko">6. tool 파서 동물원과 스트리밍 부분-JSON</span></a></li>
+    <li><a href="#s7"><span class="en">7. Reasoning parsers &amp; the post-processing pipeline</span><span class="ko">7. reasoning 파서와 후처리 파이프라인</span></a></li>
+    <li><a href="#s8"><span class="en">8. Usage, flags, status &amp; our take</span><span class="ko">8. 사용법·플래그·상태·우리 관점</span></a></li>
+    <li><a href="#s9"><span class="en">9. Sources</span><span class="ko">9. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">vLLM does two very different jobs under one banner. (1) <b>Structured output</b> = constrain <i>what token can come next</i>: a grammar/FSM (compiled by <b>xgrammar</b> by default, else <b>guidance</b>/<b>outlines</b>/<b>lm-format-enforcer</b>) emits a packed <b>token bitmask</b> each step; the engine <code class="inl">masked_fill</code>s disallowed tokens to <code class="inl">−inf</code> on the raw logits <i>before</i> the sampler. (2) <b>Tool &amp; reasoning parsing</b> = <i>post-process</i> the generated text: a unified <code class="inl">DelegatingParser</code> first splits reasoning (e.g. everything before <code class="inl">&lt;/think&gt;</code>), then extracts tool calls (regex / JSON / pythonic-AST / structural-tag). <code class="inl">tool_choice="required"</code> bridges the two — it builds a JSON schema (or structural tag) from the tools and routes it through structured output so the tool JSON is <i>guaranteed</i> valid. The one thing linking both halves is <code class="inl">reasoning_ended</code>: until the model finishes thinking, the engine skips the grammar bitmask and the serving layer stays in the "reasoning" phase.</span>
+  <span class="ko">vLLM은 한 깃발 아래 아주 다른 두 일을 한다. (1) <b>Structured output</b> = <i>다음에 올 수 있는 토큰</i>을 제약: 문법/FSM(기본 <b>xgrammar</b>, 아니면 <b>guidance</b>/<b>outlines</b>/<b>lm-format-enforcer</b>)이 스텝마다 packed <b>토큰 bitmask</b>를 내고, 엔진이 sampler <i>전에</i> raw logit에서 금지 토큰을 <code class="inl">−inf</code>로 <code class="inl">masked_fill</code>한다. (2) <b>Tool &amp; reasoning 파싱</b> = 생성된 텍스트를 <i>후처리</i>: 통합 <code class="inl">DelegatingParser</code>가 먼저 reasoning을 분리하고(예: <code class="inl">&lt;/think&gt;</code> 이전 전부), 그다음 tool call을 추출(regex / JSON / pythonic-AST / structural-tag). <code class="inl">tool_choice="required"</code>가 둘을 잇는다 — tool들에서 JSON 스키마(또는 structural tag)를 만들어 structured output으로 태워 tool JSON을 <i>보장</i>한다. 두 반쪽을 잇는 단 하나는 <code class="inl">reasoning_ended</code>: 모델이 생각을 끝낼 때까지 엔진은 문법 bitmask를 건너뛰고 서빙은 "reasoning" 단계에 머문다.</span>
+</div>
+
+<h3 style="margin-top:26px"><span class="en">Glossary</span><span class="ko">용어집</span></h3>
+<div class="grid3">
+  <div class="mini"><h4><span class="en">structured / guided output</span><span class="ko">structured / guided output</span></h4><p><span class="en">Forcing generation to match a JSON schema, regex, grammar, or choice list — by masking illegal next-tokens, not by re-prompting.</span><span class="ko">생성을 JSON 스키마·regex·문법·choice에 맞게 강제 — 불법 다음-토큰을 마스킹해서, 재프롬프트가 아니라.</span></p></div>
+  <div class="mini"><h4><span class="en">token bitmask</span><span class="ko">토큰 bitmask</span></h4><p><span class="en">A packed int32 tensor <code class="inl">[N, ⌈vocab/32⌉]</code>; bit=1 → token allowed this step, bit=0 → set its logit to <code class="inl">−inf</code>.</span><span class="ko">packed int32 텐서 <code class="inl">[N, ⌈vocab/32⌉]</code>; bit=1 → 이번 스텝 허용, bit=0 → 그 logit을 <code class="inl">−inf</code>로.</span></p></div>
+  <div class="mini"><h4><span class="en">grammar / FSM</span><span class="ko">문법 / FSM</span></h4><p><span class="en">A compiled state machine (per request) that, from the tokens so far, knows exactly which tokens keep the output valid. Advanced one token at a time.</span><span class="ko">요청마다 컴파일된 상태기계 — 지금까지 토큰에서 어떤 토큰이 유효를 유지하는지 안다. 토큰 하나씩 전진.</span></p></div>
+  <div class="mini"><h4><span class="en">tool parser</span><span class="ko">tool 파서</span></h4><p><span class="en">Post-processing that turns the model's raw tool-call text (markers / JSON / pythonic) into structured <code class="inl">tool_calls</code>. 42 model-specific ones ship in vLLM.</span><span class="ko">모델의 raw tool-call 텍스트(마커/JSON/pythonic)를 구조화된 <code class="inl">tool_calls</code>로. vLLM에 42개 모델별 파서.</span></p></div>
+  <div class="mini"><h4><span class="en">structural tag</span><span class="ko">structural tag</span></h4><p><span class="en">A grammar that constrains only the tool-call <i>region</i> (between the model's native markers) while leaving the surrounding text free. The strict path for required/named.</span><span class="ko">tool-call <i>영역</i>만(모델 고유 마커 사이) 제약하고 주변 텍스트는 자유롭게 두는 문법. required/named의 strict 경로.</span></p></div>
+  <div class="mini"><h4><span class="en">reasoning parser</span><span class="ko">reasoning 파서</span></h4><p><span class="en">Splits a reasoning model's "thinking" from its answer (e.g. on <code class="inl">&lt;/think&gt;</code>). <code class="inl">reasoning_ended</code> also gates when structured output turns on.</span><span class="ko">추론 모델의 "생각"을 답에서 분리(예: <code class="inl">&lt;/think&gt;</code>). <code class="inl">reasoning_ended</code>는 structured output이 켜지는 시점도 게이팅.</span></p></div>
+</div>
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">The big picture — two planes</span><span class="ko">큰 그림 — 두 평면</span></h2>
+<p><span class="en">The single most clarifying fact: <b>structured output and tool/reasoning parsing live on opposite sides of the sampler.</b> One shapes tokens <i>before</i> they exist; the other interprets text <i>after</i> it's generated. Keep them apart and the whole subsystem falls into place.</span>
+<span class="ko">가장 명료하게 해주는 사실 하나: <b>structured output과 tool/reasoning 파싱은 sampler의 반대편에 산다.</b> 하나는 토큰이 존재하기 <i>전에</i> 토큰을 빚고, 다른 하나는 생성된 <i>후에</i> 텍스트를 해석한다. 둘을 나누면 전체 서브시스템이 제자리를 찾는다.</span></p>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="Two planes: engine-side logit constraint vs serving-side text parsing, split by the sampler">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.eng{fill:var(--green-bg);stroke:var(--green-bd)}.srv{fill:var(--blue-bg);stroke:var(--blue-bd)}.samp{fill:var(--amber-bg);stroke:var(--amber-bd)}.bx{fill:var(--card);stroke:var(--line)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a1)}</style>
+  <defs><marker id="a1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <!-- engine plane -->
+  <rect class="eng" x="16" y="30" width="360" height="150" rx="10"/>
+  <text x="30" y="52" class="t">CONSTRAIN THE TOKENS — engine (GPU worker)</text>
+  <text x="30" y="70" class="k">structured / guided output</text>
+  <rect class="bx" x="30" y="80" width="150" height="34" rx="5"/><text x="105" y="101" class="k" text-anchor="middle">grammar / FSM (§2–3)</text>
+  <rect class="bx" x="196" y="80" width="164" height="34" rx="5"/><text x="278" y="96" class="k" text-anchor="middle">token bitmask →</text><text x="278" y="109" class="k" text-anchor="middle">logits masked to −inf</text>
+  <text x="30" y="140" class="k">runs BEFORE the sampler, on raw logits.</text>
+  <text x="30" y="158" class="k">per decode step, per request. (gpu_model_runner)</text>
+  <path class="a" d="M180,97 L194,97"/>
+  <!-- sampler divider -->
+  <rect class="samp" x="300" y="200" width="160" height="40" rx="8"/><text x="380" y="224" class="t" text-anchor="middle">SAMPLER (the divide)</text>
+  <path class="a" d="M278,114 C 278,170 360,180 372,198"/>
+  <!-- serving plane -->
+  <rect class="srv" x="384" y="30" width="360" height="150" rx="10"/>
+  <text x="398" y="52" class="t">PARSE THE TEXT — serving (front-end)</text>
+  <text x="398" y="70" class="k">tool &amp; reasoning post-processing</text>
+  <rect class="bx" x="398" y="80" width="150" height="34" rx="5"/><text x="473" y="101" class="k" text-anchor="middle">detokenize (§7)</text>
+  <rect class="bx" x="560" y="80" width="170" height="34" rx="5"/><text x="645" y="96" class="k" text-anchor="middle">DelegatingParser:</text><text x="645" y="109" class="k" text-anchor="middle">reasoning → tools (§5–7)</text>
+  <text x="398" y="140" class="k">runs AFTER sampling, on decoded text.</text>
+  <text x="398" y="158" class="k">once per output chunk. (chat_completion/serving)</text>
+  <path class="a" d="M548,97 L558,97"/>
+  <path class="a" d="M388,220 C 430,220 620,200 645,116"/>
+  <!-- bridge -->
+  <rect class="bx" x="230" y="258" width="300" height="32" rx="6" fill="var(--purple-bg)" stroke="var(--purple-bd)"/><text x="380" y="278" class="k" text-anchor="middle" fill="var(--purple-ink)">tool_choice="required" bridges them: tools → schema → structured output (§5)</text>
+</svg>
+<p class="figcap"><span class="en">Fig 1 — Two planes split by the sampler. Left: structured output masks logits inside the engine, before sampling. Right: tool/reasoning parsers post-process decoded text in the serving layer, after sampling. <code>tool_choice="required"</code> is the bridge (§5). Original diagram.</span><span class="ko">그림 1 — sampler로 갈린 두 평면. 왼쪽: structured output이 sampling 전 엔진 안에서 logit을 마스킹. 오른쪽: tool/reasoning 파서가 sampling 후 서빙 레이어에서 디코드된 텍스트를 후처리. <code>tool_choice="required"</code>가 다리(§5). 직접 작성한 다이어그램.</span></p>
+
+<p><span class="en">Two consequences worth internalizing up front: (1) <b>structured output cannot fix bad text after the fact</b> — it can only stop illegal tokens from being sampled in the first place, so it needs a grammar that knows the legal next-token set at every step. (2) <b>tool parsing can never guarantee validity on its own</b> — a plain <code class="inl">tool_choice="auto"</code> parser just hopes the model emitted parseable markers; the <i>guarantee</i> only appears when a request routes its tools <i>through</i> the structured-output plane (§5). The rest of this note walks the left plane (§2–4), the right plane (§6–7), and the bridge between them (§5).</span>
+<span class="ko">미리 새겨둘 두 결과: (1) <b>structured output은 나온 텍스트를 사후에 못 고친다</b> — 애초에 불법 토큰이 sampling되지 않게 막을 뿐이라, 매 스텝의 합법 다음-토큰 집합을 아는 문법이 필요하다. (2) <b>tool 파싱만으론 유효성을 절대 보장 못 한다</b> — 순수 <code class="inl">tool_choice="auto"</code> 파서는 모델이 파싱 가능한 마커를 냈길 바랄 뿐이고, <i>보장</i>은 요청이 tool들을 structured-output 평면 <i>으로</i> 태울 때만 생긴다(§5). 이 노트의 나머지는 왼쪽 평면(§2–4), 오른쪽 평면(§6–7), 그리고 그 사이의 다리(§5)를 걷는다.</span></p>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">Structured output — grammar → bitmask → −inf</span><span class="ko">Structured output — 문법 → bitmask → −inf</span></h2>
+<p><span class="en">The left plane. A request that asks for JSON-schema-valid output carries a <code class="inl">StructuredOutputsParams</code> (one of <code class="inl">json / regex / grammar / choice / json_object / structural_tag</code>). The engine turns that spec into a <b>grammar</b> — a per-request state machine that, given the tokens generated so far, can produce the exact set of tokens that keep the output valid. Each decode step, that set becomes a <b>bitmask</b>, and the engine forces every other token's logit to <code class="inl">−inf</code> so it can never be sampled.</span>
+<span class="ko">왼쪽 평면. JSON-스키마 유효 출력을 요구하는 요청은 <code class="inl">StructuredOutputsParams</code>(<code class="inl">json / regex / grammar / choice / json_object / structural_tag</code> 중 하나)를 지닌다. 엔진은 그 스펙을 <b>문법</b>으로 바꾼다 — 지금까지 생성된 토큰에서 출력을 유효하게 유지하는 토큰 집합을 정확히 낼 수 있는 요청별 상태기계. 매 디코드 스텝, 그 집합이 <b>bitmask</b>가 되고, 엔진은 나머지 모든 토큰의 logit을 <code class="inl">−inf</code>로 강제해 sampling되지 못하게 한다.</span></p>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="Per-step structured output loop: grammar fills a bitmask, engine masks logits to -inf, sampler picks, grammar advances">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.mono{font:11px "SF Mono",Menlo,monospace}.bx{fill:var(--card);stroke:var(--line)}.ok{fill:var(--green-bg);stroke:var(--green-bd)}.no{fill:var(--coral-bg);stroke:var(--coral-bd)}.gr{fill:var(--blue-bg);stroke:var(--blue-bd)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a2)}</style>
+  <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="22" class="t">State: already generated  {"name":  → grammar says only a string may follow</text>
+  <!-- grammar box -->
+  <rect class="gr" x="20" y="36" width="150" height="46" rx="6"/><text x="95" y="55" class="k" text-anchor="middle">grammar / FSM</text><text x="95" y="71" class="k" text-anchor="middle">fill_bitmask()</text>
+  <path class="a" d="M170,59 L206,59"/>
+  <!-- bitmask -->
+  <text x="214" y="34" class="k">token bitmask [1, ⌈vocab/32⌉]</text>
+  <g class="mono">
+  <rect class="ok" x="214" y="40" width="70" height="22" rx="3"/><text x="249" y="55" text-anchor="middle" fill="var(--green-ink)">&#34; = 1</text>
+  <rect class="no" x="288" y="40" width="70" height="22" rx="3"/><text x="323" y="55" text-anchor="middle" fill="var(--coral-ink)">{ = 0</text>
+  <rect class="no" x="362" y="40" width="70" height="22" rx="3"/><text x="397" y="55" text-anchor="middle" fill="var(--coral-ink)">42 = 0</text>
+  <rect class="no" x="436" y="40" width="80" height="22" rx="3"/><text x="476" y="55" text-anchor="middle" fill="var(--coral-ink)">true = 0</text>
+  <rect class="ok" x="520" y="40" width="90" height="22" rx="3"/><text x="565" y="55" text-anchor="middle" fill="var(--green-ink)">"Bob = 1</text>
+  </g>
+  <path class="a" d="M380,64 L380,86"/>
+  <!-- apply to logits -->
+  <rect class="bx" x="150" y="92" width="460" height="60" rx="6"/>
+  <text x="380" y="110" class="t" text-anchor="middle">apply_grammar_bitmask(logits)  — before the sampler</text>
+  <text x="380" y="130" class="mono" text-anchor="middle">logits[ token where bit==0 ] = −inf</text>
+  <text x="380" y="146" class="k" text-anchor="middle">{ , 42 , true → −inf   (can never be sampled)</text>
+  <path class="a" d="M380,152 L380,172"/>
+  <!-- sampler -->
+  <rect class="ok" x="280" y="176" width="200" height="34" rx="6"/><text x="380" y="197" class="t" text-anchor="middle">sampler → picks  "  (a legal token)</text>
+  <path class="a" d="M480,193 C 620,193 660,120 640,90"/>
+  <!-- advance -->
+  <rect class="gr" x="560" y="66" width="180" height="24" rx="5"/><text x="650" y="82" class="k" text-anchor="middle">accept_tokens(") → advance FSM</text>
+  <text x="20" y="238" class="k">Next step the grammar is in a new state (inside a string) and the allowed set changes again. Repeat until the JSON is complete → is_terminated().</text>
+  <text x="20" y="262" class="k">The mask is a per-request row in a packed int32 tensor [N, ⌈vocab/32⌉]; one bit per vocab token. bit=1 allowed, bit=0 → −inf.</text>
+  <text x="20" y="286" class="k">Crucially the model's own probabilities still choose AMONG the legal tokens — the grammar only removes illegal ones. Quality is preserved.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 2 — One structured-output step. The grammar fills a bitmask of legal next-tokens; the engine masks all others to −inf on the raw logits; the sampler picks among what's left; the chosen token advances the FSM. Original diagram; per structured_output/__init__.py &amp; gpu_model_runner.py.</span><span class="ko">그림 2 — structured-output 한 스텝. 문법이 합법 다음-토큰 bitmask를 채우고; 엔진이 나머지를 raw logit에서 −inf로 마스킹하고; sampler가 남은 것 중 고르고; 고른 토큰이 FSM을 전진. 직접 작성한 다이어그램; 출처 structured_output/__init__.py &amp; gpu_model_runner.py.</span></p>
+
+<h3><span class="en">The manager, the backend interface, the apply</span><span class="ko">매니저·백엔드 인터페이스·적용</span></h3>
+<p><span class="en"><b>StructuredOutputManager</b> (one per engine core) compiles the grammar <b>asynchronously</b> on a thread pool and stores a <code class="inl">Future</code> on the request, so a slow compile never blocks the engine — the request just waits in a special <code class="inl">WAITING_FOR_STRUCTURED_OUTPUT_GRAMMAR</code> state until its grammar is ready, and a compile error fails only that one request:</span>
+<span class="ko"><b>StructuredOutputManager</b>(엔진 코어당 하나)는 문법을 스레드풀에서 <b>비동기</b> 컴파일하고 요청에 <code class="inl">Future</code>를 저장한다 — 느린 컴파일이 엔진을 막지 않게. 요청은 특별한 <code class="inl">WAITING_FOR_STRUCTURED_OUTPUT_GRAMMAR</code> 상태로 문법이 준비될 때까지 대기하고, 컴파일 에러는 그 요청 하나만 실패시킨다:</span></p>
+<pre><code># vllm/v1/structured_output/__init__.py:166  (grammar_init)
+if self._use_async_grammar_compilation:
+    grammar = self.executor.submit(self._create_grammar, request)   # ThreadPoolExecutor
+...
+request.structured_output_request.grammar = grammar                 # a Future</code></pre>
+<p><span class="en">Every backend implements the same small interface (<code class="inl">backend_types.py</code>) — the manager never touches xgrammar/outlines directly, it only calls these:</span>
+<span class="ko">모든 백엔드는 같은 작은 인터페이스(<code class="inl">backend_types.py</code>)를 구현한다 — 매니저는 xgrammar/outlines를 직접 건드리지 않고 이것들만 호출한다:</span></p>
+<table>
+<thead><tr><th><span class="en">method</span><span class="ko">메서드</span></th><th><span class="en">what it does</span><span class="ko">역할</span></th></tr></thead>
+<tbody>
+<tr><td><code class="inl">compile_grammar(type, spec)</code></td><td><span class="en">compile a JSON-schema/regex/grammar spec into a per-request grammar object</span><span class="ko">JSON-스키마/regex/문법 스펙을 요청별 문법 객체로 컴파일</span></td></tr>
+<tr><td><code class="inl">fill_bitmask(mask, idx)</code></td><td><span class="en">write this state's allowed-next-token mask into row <code class="inl">idx</code></span><span class="ko">현재 상태의 허용 다음-토큰 마스크를 <code class="inl">idx</code> 행에 씀</span></td></tr>
+<tr><td><code class="inl">accept_tokens(id, toks)</code></td><td><span class="en"><b>advance</b> the FSM by sampled tokens; returns False if a token is illegal</span><span class="ko">sampled 토큰으로 FSM <b>전진</b>; 불법이면 False</span></td></tr>
+<tr><td><code class="inl">validate_tokens(toks)</code></td><td><span class="en">check-only (does <i>not</i> advance) — used to filter speculative drafts (§4)</span><span class="ko">확인만(<i>전진 안 함</i>) — speculative draft 필터링에 사용(§4)</span></td></tr>
+<tr><td><code class="inl">rollback(n)</code></td><td><span class="en">undo <code class="inl">n</code> advances — for rejected spec-decode drafts (§4)</span><span class="ko"><code class="inl">n</code>번 전진 취소 — 거부된 spec-decode draft용(§4)</span></td></tr>
+<tr><td><code class="inl">is_terminated()</code></td><td><span class="en">the grammar has reached a valid end state</span><span class="ko">문법이 유효 종료 상태 도달</span></td></tr>
+</tbody>
+</table>
+<p><span class="en">The assembled bitmask rides the <code class="inl">SchedulerOutput</code> to the worker, where — <b>right before the sampler</b> — it's applied to the logits. On the newer V2 runner this is a vLLM-owned Triton kernel that unpacks each bit and stores <code class="inl">−inf</code> where the bit is 0:</span>
+<span class="ko">조립된 bitmask는 <code class="inl">SchedulerOutput</code>을 타고 워커로 가서, <b>sampler 바로 전에</b> logit에 적용된다. 새 V2 runner에선 vLLM 자체 Triton 커널이 각 bit을 풀어 bit이 0인 곳에 <code class="inl">−inf</code>를 저장한다:</span></p>
+<pre><code># vllm/v1/worker/gpu/structured_outputs.py:106  (_apply_grammar_bitmask_kernel)
+bitmask = ((packed_bitmask[:, None] >> (tl.arange(0, 32)[None, :])) & 1) == 0
+...
+tl.store(logits_ptr + logits_idx * logits_stride + block_offset,
+         -float("inf"), mask=bitmask & (block_offset < vocab_size))   # bit 0 → −inf
+
+# vllm/v1/worker/gpu_model_runner.py:4582  (order: mask THEN sample)
+if grammar_output is not None:
+    apply_grammar_bitmask(scheduler_output, grammar_output, self.input_batch, logits)
+sampler_output = self._sample(logits, spec_decode_metadata)</code></pre>
+<p><span class="en">After a token is sampled, the scheduler advances the <i>confirmed</i> grammar; if the model somehow produced an illegal token the request is killed rather than emitting invalid output:</span>
+<span class="ko">토큰이 sampling된 뒤, 스케줄러가 <i>확정된</i> 문법을 전진시킨다; 모델이 어떻게든 불법 토큰을 냈다면 유효하지 않은 출력을 내는 대신 요청을 죽인다:</span></p>
+<pre><code># vllm/v1/core/sched/scheduler.py:1817  (update_from_output)
+if new_token_ids and self.structured_output_manager.should_advance(request, new_token_ids=...):
+    advance_token_ids = self.structured_output_manager.trim_reasoning_for_advance(request, new_token_ids)
+    if advance_token_ids and not grammar.accept_tokens(req_id, advance_token_ids):
+        request.status = RequestStatus.FINISHED_ERROR    # grammar rejected → kill</code></pre>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L114-L192">StructuredOutputManager.grammar_init</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/backend_types.py#L31-L136">backend interface</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/worker/gpu/structured_outputs.py#L85-L115">Triton −inf kernel</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/worker/gpu_model_runner.py#L4582-L4589">apply then sample</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/core/sched/scheduler.py#L1817-L1834">advance / kill</a></li>
+</ul>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">The 4 backends &amp; auto-fallback</span><span class="ko">4개 백엔드와 auto-fallback</span></h2>
+<p><span class="en">vLLM doesn't write its own grammar engine — it wraps four libraries behind the one interface from §2. The default (<code class="inl">backend="auto"</code>) tries <b>xgrammar</b> first and falls back to <b>guidance</b> (or <b>outlines</b> for Mistral/unsupported schemas). They differ in which constraint types they support and whether they work with speculative decoding:</span>
+<span class="ko">vLLM은 자체 문법 엔진을 쓰지 않는다 — §2의 단일 인터페이스 뒤로 네 라이브러리를 감싼다. 기본(<code class="inl">backend="auto"</code>)은 <b>xgrammar</b>를 먼저 시도하고 <b>guidance</b>(또는 Mistral/미지원 스키마엔 <b>outlines</b>)로 fallback한다. 지원 제약 타입과 speculative decoding 호환 여부가 다르다:</span></p>
+<table>
+<thead><tr><th><span class="en">backend</span><span class="ko">백엔드</span></th><th><span class="en">library</span><span class="ko">라이브러리</span></th><th>JSON</th><th>regex</th><th><span class="en">grammar</span><span class="ko">문법(EBNF)</span></th><th>choice</th><th>struct-tag</th><th>spec-dec</th><th><span class="en">auto role</span><span class="ko">auto 역할</span></th></tr></thead>
+<tbody>
+<tr><td><b>xgrammar</b></td><td><code class="inl">xgrammar</code> (mlc-ai)</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td><span class="en"><b>primary</b> (tried first)</span><span class="ko"><b>1순위</b>(먼저 시도)</span></td></tr>
+<tr><td><b>guidance</b></td><td><code class="inl">llguidance</code></td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td><span class="en"><b>default fallback</b></span><span class="ko"><b>기본 fallback</b></span></td></tr>
+<tr><td><b>outlines</b></td><td><code class="inl">outlines_core</code></td><td>✅</td><td>✅</td><td>❌</td><td>✅</td><td>❌</td><td>✅</td><td><span class="en">Mistral / guidance-unsupported</span><span class="ko">Mistral / guidance 미지원</span></td></tr>
+<tr><td><b>lm-format-enforcer</b></td><td><code class="inl">lmformatenforcer</code></td><td>✅</td><td>✅</td><td>❌</td><td>✅</td><td>❌</td><td>❌</td><td><span class="en">never auto; opt-in only</span><span class="ko">auto 안 됨; 수동만</span></td></tr>
+</tbody>
+</table>
+<p class="figcap"><span class="en">Table — the 4 structured-output backends at commit 34bb795. lm-format-enforcer is the only one that can't do speculative decoding and is never chosen automatically. xgrammar rewrites <code>choice</code> into an EBNF grammar internally.</span><span class="ko">표 — 커밋 34bb795의 4개 structured-output 백엔드. lm-format-enforcer만 speculative decoding 불가이고 auto로 안 뽑힌다. xgrammar는 <code>choice</code>를 내부에서 EBNF 문법으로 재작성.</span></p>
+
+<svg class="fig" viewBox="0 0 760 210" role="img" aria-label="auto backend resolution: try xgrammar, on unsupported feature fall back to outlines or guidance">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.xg{fill:var(--green-bg);stroke:var(--green-bd)}.gd{fill:var(--blue-bg);stroke:var(--blue-bd)}.ol{fill:var(--amber-bg);stroke:var(--amber-bd)}.dec{fill:var(--card);stroke:var(--line)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a3)}</style>
+  <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="22" class="t">backend = "auto"  (the default)</text>
+  <rect class="xg" x="20" y="34" width="200" height="40" rx="6"/><text x="120" y="52" class="k" text-anchor="middle">validate_xgrammar_grammar()</text><text x="120" y="67" class="k" text-anchor="middle">supported? → xgrammar ✅</text>
+  <path class="a" d="M220,54 L250,54"/>
+  <rect class="dec" x="252" y="34" width="180" height="40" rx="6"/><text x="342" y="52" class="k" text-anchor="middle">ValueError</text><text x="342" y="67" class="k" text-anchor="middle">(unsupported feature)</text>
+  <path class="a" d="M342,74 L342,96"/>
+  <rect class="dec" x="230" y="98" width="224" height="34" rx="6"/><text x="342" y="119" class="k" text-anchor="middle">non-tekken Mistral tokenizer, OR</text>
+  <path class="a" d="M300,132 C 260,150 200,150 160,158"/>
+  <path class="a" d="M384,132 C 430,150 500,150 560,158"/>
+  <rect class="ol" x="60" y="156" width="200" height="34" rx="6"/><text x="160" y="177" class="k" text-anchor="middle">→ outlines</text>
+  <rect class="gd" x="460" y="156" width="240" height="34" rx="6"/><text x="580" y="171" class="k" text-anchor="middle">→ guidance (llguidance)</text><text x="580" y="184" class="k" text-anchor="middle">the general fallback</text>
+  <text x="160" y="150" class="k" text-anchor="middle">schema uses guidance-unsupported feature</text>
+  <text x="20" y="205" class="k">xgrammar rejects e.g. multipleOf, array uniqueItems/contains, unknown string "format", object patternProperties → triggers the fallback. Explicit non-auto backends never fall back.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 3 — <code>auto</code> backend resolution (sampling_params.py). Try xgrammar; if the schema uses a feature xgrammar can't handle, fall back to outlines (Mistral / guidance-unsupported) or guidance. Original diagram.</span><span class="ko">그림 3 — <code>auto</code> 백엔드 결정(sampling_params.py). xgrammar 시도; 스키마가 xgrammar 미지원 기능을 쓰면 outlines(Mistral / guidance 미지원) 또는 guidance로 fallback. 직접 작성한 다이어그램.</span></p>
+<pre><code># vllm/sampling_params.py:1043  (auto resolution, condensed)
+try:
+    validate_xgrammar_grammar(self);  self._backend = "xgrammar"
+except ValueError:
+    # xgrammar can't handle this schema → pick a fallback
+    if <non-tekken Mistral> or <schema has guidance-unsupported feature>:
+        self._backend = "outlines"
+    else:
+        self._backend = "guidance"</code></pre>
+<p><span class="en">Config is a single object <code class="inl">StructuredOutputsConfig</code> (CLI: <code class="inl">--structured-outputs-config '{"backend":"xgrammar"}'</code>); the old <code class="inl">--guided-decoding-backend</code> flag is <b>gone</b> at this SHA, and per-<i>request</i> backend selection is effectively disabled. Two honest limitations worth knowing: (1) <b>no jump-forward decoding</b> — the grammar advances one token per step; the fast-forward optimization xgrammar/guidance support is not wired in (only a TODO). (2) Grammar <b>caching is delegated to the libraries</b> (xgrammar's byte-limited LRU, outlines' optional on-disk cache), not owned by vLLM.</span>
+<span class="ko">설정은 단일 객체 <code class="inl">StructuredOutputsConfig</code>(CLI: <code class="inl">--structured-outputs-config '{"backend":"xgrammar"}'</code>); 옛 <code class="inl">--guided-decoding-backend</code> 플래그는 이 SHA에서 <b>사라졌고</b>, 요청별 백엔드 선택도 사실상 비활성. 알아둘 정직한 한계 둘: (1) <b>jump-forward 디코딩 없음</b> — 문법이 스텝당 토큰 하나씩 전진; xgrammar/guidance가 지원하는 fast-forward 최적화는 미연결(TODO만). (2) 문법 <b>캐싱은 라이브러리에 위임</b>(xgrammar의 바이트 제한 LRU, outlines의 선택적 디스크 캐시), vLLM이 소유하지 않음.</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/backend_xgrammar.py#L78-L126">xgrammar compile</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/backend_guidance.py#L108-L131">guidance compile</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/backend_outlines.py#L73-L87">outlines compile</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/sampling_params.py#L1043-L1082">auto resolution</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/config/structured_outputs.py#L12-L42">StructuredOutputsConfig</a></li>
+</ul>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">Surviving speculative decoding — validate / advance / rollback</span><span class="ko">speculative decoding 견디기 — validate / advance / rollback</span></h2>
+<p><span class="en">Structured output and speculative decoding collide head-on. Spec decode proposes several <b>draft</b> tokens per step and only some survive verification — but the grammar is a stateful FSM that can only be advanced by tokens it's <i>sure</i> about. If you advanced it through a draft that later gets rejected, the FSM would be in the wrong state. vLLM solves this with three grammar operations working together:</span>
+<span class="ko">structured output과 speculative decoding은 정면충돌한다. spec decode는 스텝마다 여러 <b>draft</b> 토큰을 제안하고 일부만 검증을 통과한다 — 그런데 문법은 <i>확실한</i> 토큰으로만 전진할 수 있는 상태기계다. 나중에 거부될 draft로 전진시켰다면 FSM이 잘못된 상태가 된다. vLLM은 세 문법 연산의 협력으로 해결한다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 280" role="img" aria-label="Speculative decoding with a grammar: validate drafts, temp-advance to build bitmasks, rollback, then advance only accepted tokens">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.mono{font:10.5px "SF Mono",Menlo,monospace}.ok{fill:var(--green-bg);stroke:var(--green-bd)}.no{fill:var(--coral-bg);stroke:var(--coral-bd)}.tmp{fill:var(--amber-bg);stroke:var(--amber-bd)}.gr{fill:var(--blue-bg);stroke:var(--blue-bd)}.a{stroke:var(--muted);stroke-width:1.2;fill:none;marker-end:url(#a4)}</style>
+  <defs><marker id="a4" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="20" class="t">1 spec-decode step, 3 draft tokens proposed:  d1 d2 d3</text>
+  <!-- validate -->
+  <rect class="gr" x="20" y="34" width="220" height="40" rx="6"/><text x="130" y="52" class="k" text-anchor="middle">① validate_tokens(d1,d2,d3)</text><text x="130" y="67" class="k" text-anchor="middle">check-only, NO advance → keep legal prefix</text>
+  <path class="a" d="M240,54 L272,54"/>
+  <!-- build bitmasks (temp advance) -->
+  <rect class="tmp" x="274" y="30" width="300" height="70" rx="6"/><text x="424" y="48" class="t" text-anchor="middle">② build a bitmask per draft slot</text>
+  <text x="424" y="66" class="k" text-anchor="middle">fill row → accept_tokens(d1) → fill row → accept(d2) …</text>
+  <text x="424" y="82" class="k" text-anchor="middle">(temporarily advance to know each slot's legal set)</text>
+  <text x="424" y="96" class="k" text-anchor="middle" fill="var(--amber-ink)">FSM now advanced by 3 — but these aren't confirmed!</text>
+  <path class="a" d="M574,64 L606,64"/>
+  <!-- rollback -->
+  <rect class="tmp" x="608" y="44" width="132" height="40" rx="6"/><text x="674" y="62" class="k" text-anchor="middle">③ rollback(3)</text><text x="674" y="77" class="k" text-anchor="middle">undo the temp advances</text>
+  <path class="a" d="M674,100 C 674,140 424,140 424,150"/>
+  <!-- sampler verify -->
+  <rect class="gr" x="220" y="154" width="410" height="40" rx="6"/><text x="425" y="172" class="t" text-anchor="middle">sampler + verify: which drafts survive?</text>
+  <text x="425" y="188" class="mono" text-anchor="middle">d1 ✓  d2 ✓  d3 ✗   (rejected drafts padded with −1)</text>
+  <path class="a" d="M425,194 L425,214"/>
+  <!-- confirmed advance -->
+  <rect class="ok" x="240" y="218" width="370" height="40" rx="6"/><text x="425" y="236" class="t" text-anchor="middle">④ accept_tokens([d1, d2])  — confirmed advance only</text>
+  <text x="425" y="252" class="k" text-anchor="middle">grammar ends the step advanced by exactly the accepted tokens</text>
+  <text x="20" y="274" class="k">Rollback capacity is set at compile time: max_rollback_tokens = num_speculative_tokens. lm-format-enforcer can't roll back → no spec decode.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 4 — Grammar + speculative decoding. Drafts are ① validated without advancing, ② temporarily advanced to build a bitmask per draft slot, ③ rolled back, then ④ the grammar is advanced only by the drafts that actually survived verification. Original diagram; per structured_output/__init__.py &amp; scheduler.py.</span><span class="ko">그림 4 — 문법 + speculative decoding. draft를 ① 전진 없이 검증, ② draft 슬롯마다 bitmask를 만들려 임시 전진, ③ rollback, 그다음 ④ 실제 검증 통과한 draft로만 문법 전진. 직접 작성한 다이어그램; 출처 structured_output/__init__.py &amp; scheduler.py.</span></p>
+
+<pre><code># vllm/v1/structured_output/__init__.py:324  (bitmask assembly, spec-decode path — condensed)
+for each scheduled draft token:
+    grammar.fill_bitmask(bitmask, row)         # this slot's legal set
+    grammar.accept_tokens(req_id, [draft])     # temp-advance to the next slot
+    state_advancements += 1
+...
+grammar.rollback(state_advancements)           # undo — drafts aren't confirmed yet</code></pre>
+<p><span class="en">The <b>non-advancing</b> <code class="inl">validate_tokens</code> is what lets the scheduler pre-filter drafts against the grammar before they're even scheduled (rejected ones become a <code class="inl">−1</code> sentinel that flips <code class="inl">apply_bitmask=False</code> for that slot). The whole dance means a grammar-constrained request gets the full throughput of speculative decoding without ever letting a rejected draft corrupt the FSM. (This has been a real source of subtle bugs — the code cites fixes in PRs #43388 and #44006.)</span>
+<span class="ko"><b>전진하지 않는</b> <code class="inl">validate_tokens</code> 덕에 스케줄러는 draft가 스케줄되기도 전에 문법으로 미리 걸러낸다(거부된 건 <code class="inl">−1</code> 센티널이 되어 그 슬롯의 <code class="inl">apply_bitmask=False</code>로). 이 전체 춤 덕에 문법 제약 요청도 speculative decoding의 처리량을 온전히 누리면서 거부된 draft가 FSM을 오염시키지 않는다. (실제로 미묘한 버그의 원천 — 코드가 PR #43388, #44006의 수정을 인용.)</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L272-L350">bitmask assembly + rollback</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/core/sched/scheduler.py#L2163-L2198">draft pre-validation</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/backend_xgrammar.py#L119-L123">max_rollback_tokens</a></li>
+</ul>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Tool calling — two ways to get valid JSON</span><span class="ko">Tool calling — 유효 JSON을 얻는 두 경로</span></h2>
+<p><span class="en">Now the right plane, and the bridge. At this SHA the serving layer no longer calls a tool parser directly — a unified <b><code class="inl">DelegatingParser</code></b> (synthesized by <code class="inl">ParserManager.get_parser</code>) wraps a reasoning parser + a tool parser, and serving just calls <code class="inl">parser.parse()</code> / <code class="inl">parse_delta()</code>. What happens next depends entirely on <code class="inl">tool_choice</code>:</span>
+<span class="ko">이제 오른쪽 평면과 다리. 이 SHA에선 서빙이 tool 파서를 직접 부르지 않는다 — 통합 <b><code class="inl">DelegatingParser</code></b>(<code class="inl">ParserManager.get_parser</code>가 합성)가 reasoning 파서 + tool 파서를 감싸고, 서빙은 <code class="inl">parser.parse()</code> / <code class="inl">parse_delta()</code>만 부른다. 그다음은 전적으로 <code class="inl">tool_choice</code>에 달렸다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 330" role="img" aria-label="Two tool-calling paths: auto (parse and hope) vs required/named (force via structured output then trivial parse)">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.auto{fill:var(--amber-bg);stroke:var(--amber-bd)}.req{fill:var(--green-bg);stroke:var(--green-bd)}.so{fill:var(--blue-bg);stroke:var(--blue-bd)}.bx{fill:var(--card);stroke:var(--line)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a5)}</style>
+  <defs><marker id="a5" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <!-- LEFT: auto -->
+  <text x="20" y="22" class="t">(a) tool_choice = "auto"  — parse &amp; hope</text>
+  <rect class="auto" x="20" y="32" width="340" height="40" rx="6"/><text x="190" y="50" class="k" text-anchor="middle">no constraint applied — model free-generates</text><text x="190" y="65" class="k" text-anchor="middle">native markers: &lt;tool_call&gt;{…}&lt;/tool_call&gt;, [f(x=1)], …</text>
+  <path class="a" d="M190,72 L190,92"/>
+  <rect class="bx" x="20" y="94" width="340" height="46" rx="6"/><text x="190" y="112" class="k" text-anchor="middle">tool_parser.extract_tool_calls(text)</text><text x="190" y="128" class="k" text-anchor="middle">regex / json.loads / ast.parse the markers</text>
+  <path class="a" d="M190,140 L190,160"/>
+  <rect class="auto" x="20" y="162" width="340" height="38" rx="6"/><text x="190" y="180" class="k" text-anchor="middle">tool_calls — IF the model emitted parseable text</text><text x="190" y="194" class="k" text-anchor="middle" fill="var(--coral-ink)">no validity guarantee</text>
+  <!-- RIGHT: required -->
+  <text x="400" y="22" class="t">(b) tool_choice = "required" / named — forced</text>
+  <rect class="req" x="400" y="32" width="340" height="52" rx="6"/><text x="570" y="50" class="k" text-anchor="middle">adjust_request builds a constraint from the tools:</text><text x="570" y="66" class="k" text-anchor="middle">path A: JSON schema  ·  path B: structural tag</text><text x="570" y="79" class="k" text-anchor="middle">→ StructuredOutputsParams</text>
+  <path class="a" d="M570,84 L570,104"/>
+  <rect class="so" x="400" y="106" width="340" height="46" rx="6"/><text x="570" y="124" class="t" text-anchor="middle">STRUCTURED OUTPUT (§2–4)</text><text x="570" y="140" class="k" text-anchor="middle">grammar bitmask forces every token → valid JSON</text>
+  <path class="a" d="M570,152 L570,172"/>
+  <rect class="bx" x="400" y="174" width="340" height="44" rx="6"/><text x="570" y="192" class="k" text-anchor="middle">DelegatingParser._extract_tool_calls</text><text x="570" y="207" class="k" text-anchor="middle">trivial parse — content IS the args / validate_json(array)</text>
+  <path class="a" d="M570,218 L570,238"/>
+  <rect class="req" x="400" y="240" width="340" height="34" rx="6"/><text x="570" y="261" class="k" text-anchor="middle" fill="var(--green-ink)">tool_calls — GUARANTEED valid ✓</text>
+  <!-- bridge label -->
+  <path class="a" d="M360,52 C 380,52 382,52 398,52" stroke-dasharray="3 3"/>
+  <text x="380" y="300" class="t" text-anchor="middle">The guarantee always comes from routing tools THROUGH the left plane (structured output).</text>
+  <text x="380" y="320" class="k" text-anchor="middle">"auto" hopes; "required/named" forces. Same tool parser, opposite reliability.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 5 — Two tool-calling paths. (a) <code>auto</code>: the model free-generates markers and the parser tries to extract them — no guarantee. (b) <code>required</code>/named: <code>adjust_request</code> turns the tools into a JSON schema (path A) or structural tag (path B), routes generation through structured output, and the parse-back is then trivial and guaranteed. Original diagram; per parser/ &amp; tool_parsers/.</span><span class="ko">그림 5 — tool-calling 두 경로. (a) <code>auto</code>: 모델이 마커를 자유 생성하고 파서가 추출 시도 — 보장 없음. (b) <code>required</code>/named: <code>adjust_request</code>가 tool을 JSON 스키마(경로 A)나 structural tag(경로 B)로 바꿔 structured output으로 태우고, 되파싱은 사소하고 보장된다. 직접 작성한 다이어그램; 출처 parser/ &amp; tool_parsers/.</span></p>
+
+<p><span class="en"><b>Path A — generic JSON schema.</b> For most parsers, <code class="inl">adjust_request</code> builds a schema from the tools and attaches it as a structured-output constraint. <code class="inl">required</code> → an <b>array of <code class="inl">anyOf</code>({name enum, parameters})</b>; a <b>named</b> choice → just that one tool's <code class="inl">parameters</code> (so the whole output <i>is</i> the arguments object):</span>
+<span class="ko"><b>경로 A — 일반 JSON 스키마.</b> 대부분 파서는 <code class="inl">adjust_request</code>가 tool들에서 스키마를 만들어 structured-output 제약으로 붙인다. <code class="inl">required</code> → <b><code class="inl">anyOf</code>({name enum, parameters})의 배열</b>; <b>named</b> → 그 tool 하나의 <code class="inl">parameters</code>만(출력 전체가 인자 객체 그 자체):</span></p>
+<pre><code># vllm/tool_parsers/abstract_tool_parser.py:145  (adjust_request — path A)
+json_schema_from_tool = get_json_schema_from_tools(tool_choice=request.tool_choice, tools=request.tools)
+if json_schema_from_tool is not None:
+    request.structured_outputs = StructuredOutputsParams(json=json_schema_from_tool)  # → §2
+    request.response_format = None</code></pre>
+<p><span class="en">Because the output is now guaranteed-valid JSON, parsing it back is trivial — no marker detection at all:</span>
+<span class="ko">출력이 이제 유효 JSON 보장이라, 되파싱은 사소하다 — 마커 감지가 전혀 없다:</span></p>
+<pre><code># vllm/parser/abstract_parser.py:461  (_extract_tool_calls, required branch)
+parsed_calls = TypeAdapter(list[FunctionDefinition]).validate_json(content or "")
+for tc in parsed_calls:
+    tool_calls.append(FunctionCall(name=tc.name, arguments=json.dumps(tc.parameters, ...)))</code></pre>
+<p><span class="en"><b>Path B — structural tag.</b> Some models (Mistral, and any parser with a <code class="inl">structural_tag_model</code> when <code class="inl">VLLM_ENFORCE_STRICT_TOOL_CALLING</code> is on — the default) emit native markers like <code class="inl">[TOOL_CALLS]…</code>, so a plain JSON schema doesn't fit. Instead vLLM builds an xgrammar <b>structural tag</b> that constrains only the <i>bytes inside the tool-call region</i> (between the markers) while leaving surrounding prose free. Those parsers set <code class="inl">supports_required_and_named=False</code>, so their required/named path reuses the normal marker extraction — but now on grammar-constrained output:</span>
+<span class="ko"><b>경로 B — structural tag.</b> 일부 모델(Mistral, 그리고 <code class="inl">VLLM_ENFORCE_STRICT_TOOL_CALLING</code>(기본 on) 시 <code class="inl">structural_tag_model</code>을 가진 파서)은 <code class="inl">[TOOL_CALLS]…</code> 같은 고유 마커를 내므로 순수 JSON 스키마가 안 맞는다. 대신 vLLM은 <i>tool-call 영역 안(마커 사이) 바이트</i>만 제약하고 주변 산문은 자유롭게 두는 xgrammar <b>structural tag</b>를 만든다. 그런 파서는 <code class="inl">supports_required_and_named=False</code>라, required/named 경로가 평소 마커 추출을 재사용 — 단 이제 문법 제약된 출력 위에서:</span></p>
+<pre><code># vllm/parser/abstract_parser.py:522  (_apply_structural_tag — path B)
+structure_tag = self._tool_parser.get_structural_tag(request, reasoning=False)
+request.structured_outputs = StructuredOutputsParams(structural_tag=json.dumps(structure_tag.model_dump()))</code></pre>
+<p><span class="en">Both paths are triggered from the renderer's <code class="inl">adjust_request</code>, in order: reasoning adjust → structural tag → tool schema. Either way the reliability comes from the <b>same left plane</b> — the tool parser's own text-extraction is only trusted blindly in the <code class="inl">auto</code> case.</span>
+<span class="ko">두 경로 모두 렌더러의 <code class="inl">adjust_request</code>에서 순서대로 촉발된다: reasoning adjust → structural tag → tool 스키마. 어느 쪽이든 신뢰성은 <b>같은 왼쪽 평면</b>에서 온다 — tool 파서의 텍스트 추출을 맹신하는 건 <code class="inl">auto</code>일 때뿐이다.</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/parser_manager.py#L76-L140">ParserManager.get_parser</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/renderers/online_renderer.py#L437-L457">adjust_request trigger</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/utils.py#L350-L420">get_json_schema_from_tools</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/abstract_parser.py#L417-L558">_extract_tool_calls + _apply_structural_tag</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/structural_tag_registry.py#L103-L141">structural_tag_registry</a></li>
+</ul>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">The tool-parser zoo &amp; streaming partial-JSON</span><span class="ko">tool 파서 동물원과 스트리밍 부분-JSON</span></h2>
+<p><span class="en">Why 42 tool parsers? Because every model family emits tool calls in its own syntax, and (in <code class="inl">auto</code> mode) vLLM has to recognize whatever that model was trained to produce. They fall into a handful of shapes:</span>
+<span class="ko">왜 42개 tool 파서? 모델 계열마다 tool call을 자기 문법으로 내기 때문이고, (<code class="inl">auto</code> 모드에선) vLLM이 그 모델이 학습한 형태를 인식해야 한다. 몇 가지 모양으로 나뉜다:</span></p>
+<table>
+<thead><tr><th><span class="en">style</span><span class="ko">스타일</span></th><th><span class="en">detection</span><span class="ko">감지</span></th><th><span class="en">example parsers</span><span class="ko">예시 파서</span></th></tr></thead>
+<tbody>
+<tr><td><span class="en">JSON-in-XML-tag</span><span class="ko">XML 태그 안 JSON</span></td><td><code class="inl">&lt;tool_call&gt;{…}&lt;/tool_call&gt;</code> <span class="en">regex → <code class="inl">json.loads</code></span><span class="ko">regex → <code class="inl">json.loads</code></span></td><td>hermes, internlm2, granite</td></tr>
+<tr><td><span class="en">bare JSON (token-prefixed)</span><span class="ko">맨 JSON(토큰 prefix)</span></td><td><span class="en">scan <code class="inl">{</code> with <code class="inl">raw_decode</code>; opt. <code class="inl">&lt;|python_tag|&gt;</code></span><span class="ko"><code class="inl">{</code>를 <code class="inl">raw_decode</code>로 스캔; 선택 <code class="inl">&lt;|python_tag|&gt;</code></span></td><td>llama3_json, deepseek_v3</td></tr>
+<tr><td><span class="en">pythonic / AST</span><span class="ko">pythonic / AST</span></td><td><span class="en"><code class="inl">[f(x=1), g(y=2)]</code> → <code class="inl">ast.parse</code></span><span class="ko"><code class="inl">[f(x=1), g(y=2)]</code> → <code class="inl">ast.parse</code></span></td><td>pythonic, llama4_pythonic, olmo3</td></tr>
+<tr><td><span class="en">XML-args / engine FSM</span><span class="ko">XML 인자 / 엔진 FSM</span></td><td><span class="en">stateful <code class="inl">ParserEngine</code> (adapter-wrapped)</span><span class="ko">상태기계 <code class="inl">ParserEngine</code>(어댑터 래핑)</span></td><td>qwen3_xml, gemma4, seed_oss, deepseek_v4</td></tr>
+<tr><td><span class="en">delimiter envelope</span><span class="ko">구분자 봉투</span></td><td><code class="inl">[TOOL_CALLS]name[ARGS]{…}</code></td><td>mistral <span class="en">(<code class="inl">supports_required_and_named=False</code>)</span><span class="ko">(<code class="inl">supports_required_and_named=False</code>)</span></td></tr>
+<tr><td><span class="en">Harmony channels</span><span class="ko">Harmony 채널</span></td><td><span class="en"><code class="inl">HarmonyParser</code> (analysis/final/commentary)</span><span class="ko"><code class="inl">HarmonyParser</code>(analysis/final/commentary)</span></td><td>openai (gpt-oss)</td></tr>
+</tbody>
+</table>
+<p><span class="en">The many "engine" parsers (qwen3, gemma4, deepseek_v4, minimax, seed_oss…) are now thin adapters over stateful <code class="inl">ParserEngine</code> state machines in <code class="inl">vllm/parser/</code> — e.g. <code class="inl">mistral_tool_parser.py</code> is a ~40-line shim; the real logic lives in <code class="inl">vllm/parser/mistral.py</code>. Non-streaming extraction is stateless (<code class="inl">extract_tool_calls</code>); the hard part is streaming.</span>
+<span class="ko">수많은 "engine" 파서(qwen3, gemma4, deepseek_v4, minimax, seed_oss…)는 이제 <code class="inl">vllm/parser/</code>의 상태기계 <code class="inl">ParserEngine</code>를 감싼 얇은 어댑터다 — 예: <code class="inl">mistral_tool_parser.py</code>는 ~40줄 shim이고 진짜 로직은 <code class="inl">vllm/parser/mistral.py</code>에. 비스트리밍 추출은 무상태(<code class="inl">extract_tool_calls</code>); 어려운 건 스트리밍이다.</span></p>
+
+<h3><span class="en">Streaming — the partial-JSON problem</span><span class="ko">스트리밍 — 부분-JSON 문제</span></h3>
+<p><span class="en">In streaming, each decode step produces a token or two — often a <i>fragment</i> of the tool-call JSON. You can't just forward it: emitting a half-finished string like <code class="inl">"Seou</code> or a name that's still being typed would corrupt the client's incremental parse. So every streaming parser re-parses the whole text-so-far as <b>partial JSON</b> and emits only the safe delta:</span>
+<span class="ko">스트리밍에선 매 스텝이 토큰 한둘 — 종종 tool-call JSON의 <i>조각</i>을 낸다. 그냥 흘려보낼 수 없다: <code class="inl">"Seou</code> 같은 반쯤 된 문자열이나 아직 타이핑 중인 이름을 내보내면 클라이언트의 증분 파싱이 깨진다. 그래서 모든 스트리밍 파서는 지금까지 텍스트 전체를 <b>부분 JSON</b>으로 다시 파싱하고 안전한 델타만 낸다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 240" role="img" aria-label="Streaming partial-JSON: current text grows, parser re-parses as partial JSON and emits only safe deltas">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.mono{font:10.5px "SF Mono",Menlo,monospace;fill:var(--ink)}.cur{fill:var(--gray-bg);stroke:var(--gray-bd)}.emit{fill:var(--green-bg);stroke:var(--green-bd)}.hold{fill:var(--coral-bg);stroke:var(--coral-bd)}</style>
+  <text x="20" y="20" class="t">model streams:  {"name": "get_weather", "arguments": {"city": "Seoul"}}</text>
+  <!-- rows: current_text growing → what gets emitted -->
+  <text x="20" y="46" class="k">step</text><text x="150" y="46" class="k">current_text (re-parsed as partial JSON)</text><text x="520" y="46" class="k">emitted delta</text>
+  <rect class="cur" x="150" y="54" width="330" height="22" rx="3"/><text x="158" y="69" class="mono">{"name": "get_wea</text>
+  <rect class="hold" x="520" y="54" width="220" height="22" rx="3"/><text x="528" y="69" class="k" fill="var(--coral-ink)">— (name incomplete → HOLD)</text>
+  <text x="30" y="69" class="k">1</text>
+  <rect class="cur" x="150" y="82" width="330" height="22" rx="3"/><text x="158" y="97" class="mono">{"name": "get_weather", "argu</text>
+  <rect class="emit" x="520" y="82" width="220" height="22" rx="3"/><text x="528" y="97" class="k" fill="var(--green-ink)">name = "get_weather" (now complete)</text>
+  <text x="30" y="97" class="k">2</text>
+  <rect class="cur" x="150" y="110" width="330" height="22" rx="3"/><text x="158" y="125" class="mono">…"arguments": {"city": "Seou</text>
+  <rect class="hold" x="520" y="110" width="220" height="22" rx="3"/><text x="528" y="125" class="k" fill="var(--coral-ink)">— ("Seou incomplete → HOLD)</text>
+  <text x="30" y="125" class="k">3</text>
+  <rect class="cur" x="150" y="138" width="330" height="22" rx="3"/><text x="158" y="153" class="mono">…{"city": "Seoul"}}</text>
+  <rect class="emit" x="520" y="138" width="220" height="22" rx="3"/><text x="528" y="153" class="k" fill="var(--green-ink)">args diff: {"city":"Seoul"}</text>
+  <text x="30" y="153" class="k">4</text>
+  <text x="20" y="188" class="k">Mechanism: partial_json_loads(current_text, flags) → compare to what was already sent → emit the common-prefix diff.</text>
+  <text x="20" y="208" class="k">flags = Allow.ALL &amp; ~Allow.STR while a name/string is mid-word, so a half-typed string is never streamed (find_common_prefix / extract_intermediate_diff).</text>
+  <text x="20" y="228" class="k">Close-brackets and quotes are held back until confirmed complete — the client always receives incrementally-valid JSON.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 6 — Streaming a tool call as partial JSON. Each step re-parses the whole current text; fragments (an unfinished name or string) are held back, complete pieces are emitted as diffs against what was already sent. Original diagram; per tool_parsers/streaming.py &amp; utils.py.</span><span class="ko">그림 6 — tool call을 부분 JSON으로 스트리밍. 매 스텝 전체 텍스트를 다시 파싱; 조각(미완성 이름·문자열)은 보류하고 완성된 부분만 이미 보낸 것과의 diff로 낸다. 직접 작성한 다이어그램; 출처 tool_parsers/streaming.py &amp; utils.py.</span></p>
+<pre><code># vllm/tool_parsers/llama_tool_parser.py:189  (canonical streaming approach)
+flags = Allow.ALL if self.current_tool_name_sent else Allow.ALL & ~Allow.STR  # don't stream a half name
+tool_call_arr = partial_json_loads(cur_arguments_text, flags)                 # parse partial JSON
+...
+argument_diff = extract_intermediate_diff(cur_args_json, sent_args_json)      # only the new, safe part</code></pre>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/abstract_tool_parser.py#L43-L220">ToolParser + Manager</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/__init__.py#L24-L214">42-parser registry</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/hermes_tool_parser.py#L70-L120">hermes extract</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/utils.py#L57-L140">partial-JSON diff helpers</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/streaming.py#L83-L223">required/named streaming</a></li>
+</ul>
+</section>
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">Reasoning parsers &amp; the post-processing pipeline</span><span class="ko">reasoning 파서와 후처리 파이프라인</span></h2>
+<p><span class="en">The last piece of the right plane. A reasoning model interleaves its "thinking" with its answer — DeepSeek-R1 wraps thoughts in <code class="inl">&lt;think&gt;…&lt;/think&gt;</code>, gpt-oss uses Harmony channels, Granite uses English phrases ("Here is my thought process:"). A <b>reasoning parser</b> splits the two so the API can return <code class="inl">reasoning_content</code> separately from <code class="inl">content</code>. Its core method is deceptively simple:</span>
+<span class="ko">오른쪽 평면의 마지막 조각. 추론 모델은 "생각"을 답과 섞는다 — DeepSeek-R1은 <code class="inl">&lt;think&gt;…&lt;/think&gt;</code>로 감싸고, gpt-oss는 Harmony 채널, Granite는 영어 문구("Here is my thought process:"). <b>reasoning 파서</b>가 둘을 분리해 API가 <code class="inl">reasoning_content</code>를 <code class="inl">content</code>와 따로 반환한다. 핵심 메서드는 의외로 단순하다:</span></p>
+<pre><code># vllm/reasoning/basic_parsers.py:72  (is_reasoning_end — the &lt;think&gt; family)
+for i in range(len(input_ids) - 1, -1, -1):     # scan backwards
+    if input_ids[i] == start_token_id: return False   # saw &lt;think&gt; last → still thinking
+    if input_ids[i] == end_token_id:   return True    # saw &lt;/think&gt; last → done</code></pre>
+
+<p><span class="en">Now the whole post-processing order. A crucial fact: by the time the serving layer sees output, <b>the text is already detokenized</b> — the V1 engine's <code class="inl">OutputProcessor</code> ran an <code class="inl">IncrementalDetokenizer</code> (with stop-string handling) upstream. Serving then runs one <code class="inl">DelegatingParser</code> that does reasoning-split <i>then</i> tool-extract, in that order:</span>
+<span class="ko">이제 전체 후처리 순서. 중요한 사실: 서빙이 출력을 볼 때쯤 <b>텍스트는 이미 디코드돼 있다</b> — V1 엔진의 <code class="inl">OutputProcessor</code>가 상류에서 <code class="inl">IncrementalDetokenizer</code>(stop-string 처리 포함)를 돌렸다. 서빙은 그다음 하나의 <code class="inl">DelegatingParser</code>로 reasoning 분리 <i>그다음</i> tool 추출을 순서대로 한다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="Full pipeline: bitmask pre-sample in engine, sample, detokenize, then serving reasoning-split then tool-parse, all gated by reasoning_ended">
+  <style>.t{font:600 11.5px -apple-system,sans-serif;fill:var(--ink)}.k{font:9.5px -apple-system,sans-serif;fill:var(--muted)}.eng{fill:var(--green-bg);stroke:var(--green-bd)}.mid{fill:var(--gray-bg);stroke:var(--gray-bd)}.srv{fill:var(--blue-bg);stroke:var(--blue-bd)}.gate{fill:var(--purple-bg);stroke:var(--purple-bd)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a7)}</style>
+  <defs><marker id="a7" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="18" class="t">ENGINE (GPU worker)</text>
+  <rect class="eng" x="20" y="26" width="150" height="48" rx="6"/><text x="95" y="45" class="k" text-anchor="middle">apply_grammar_bitmask</text><text x="95" y="58" class="k" text-anchor="middle">(logits → −inf)</text><text x="95" y="70" class="k" text-anchor="middle">§2, only if reasoning ended</text>
+  <rect class="eng" x="182" y="26" width="120" height="48" rx="6"/><text x="242" y="52" class="k" text-anchor="middle">Sampler → token</text>
+  <path class="a" d="M170,50 L180,50"/>
+  <text x="330" y="18" class="t">FRONT-END (OutputProcessor)</text>
+  <rect class="mid" x="330" y="26" width="150" height="48" rx="6"/><text x="405" y="45" class="k" text-anchor="middle">IncrementalDetokenizer</text><text x="405" y="58" class="k" text-anchor="middle">tokens → text delta</text><text x="405" y="70" class="k" text-anchor="middle">+ stop-string check</text>
+  <path class="a" d="M302,50 L328,50"/>
+  <text x="520" y="18" class="t">SERVING (DelegatingParser)</text>
+  <rect class="srv" x="520" y="26" width="220" height="48" rx="6"/><text x="630" y="45" class="k" text-anchor="middle">parse() / parse_delta()</text><text x="630" y="58" class="k" text-anchor="middle">reasoning split → tool extract</text><text x="630" y="70" class="k" text-anchor="middle">→ ChatCompletion(Stream)Response</text>
+  <path class="a" d="M480,50 L518,50"/>
+  <!-- serving internal -->
+  <rect class="srv" x="520" y="96" width="105" height="40" rx="5"/><text x="572" y="113" class="k" text-anchor="middle">① reasoning</text><text x="572" y="127" class="k" text-anchor="middle">extract_reasoning</text>
+  <rect class="srv" x="635" y="96" width="105" height="40" rx="5"/><text x="687" y="113" class="k" text-anchor="middle">② tools</text><text x="687" y="127" class="k" text-anchor="middle">on stripped content</text>
+  <path class="a" d="M625,116 L633,116"/>
+  <path class="a" d="M630,74 L630,94"/>
+  <!-- the gate -->
+  <rect class="gate" x="150" y="170" width="460" height="86" rx="10"/>
+  <text x="380" y="192" class="t" text-anchor="middle">reasoning_ended — the single gate across BOTH planes</text>
+  <text x="380" y="214" class="k" text-anchor="middle">ENGINE side: grammar bitmask/advance is SKIPPED while thinking</text>
+  <text x="380" y="230" class="k" text-anchor="middle">(should_fill_bitmask / should_advance) — unless enable_in_reasoning</text>
+  <text x="380" y="248" class="k" text-anchor="middle">SERVING side: parse_delta stays in ① until reasoning_ended, then switches to ②</text>
+  <path class="a" d="M95,74 C 95,150 200,160 260,168" stroke-dasharray="3 3"/>
+  <path class="a" d="M572,136 C 520,150 480,158 470,168" stroke-dasharray="3 3"/>
+  <text x="20" y="284" class="k">So a reasoning model that also does structured/tool output only starts obeying the grammar AFTER &lt;/think&gt; — its chain-of-thought is left completely free.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 7 — The full pipeline and the reasoning_ended gate. Grammar masking happens in the engine before sampling; detokenization in the front-end; reasoning-split then tool-parse in serving. <code>reasoning_ended</code> gates both the engine (skip the grammar while thinking) and serving (reasoning phase → tool phase). Original diagram; per structured_output/__init__.py, serving.py, reasoning/.</span><span class="ko">그림 7 — 전체 파이프라인과 reasoning_ended 게이트. 문법 마스킹은 엔진에서 sampling 전, 디코딩은 프런트엔드, reasoning 분리 후 tool 파싱은 서빙에서. <code>reasoning_ended</code>가 엔진(생각 중 문법 건너뜀)과 서빙(reasoning 단계 → tool 단계) 둘 다 게이팅. 직접 작성한 다이어그램; 출처 structured_output/__init__.py, serving.py, reasoning/.</span></p>
+
+<p><span class="en">This <code class="inl">reasoning_ended</code> gate is the elegant hinge of the whole subsystem. On the <b>engine</b> side, structured output checks it before ever filling a bitmask — so a JSON-constrained request with a reasoning model thinks in free-form prose and only starts being forced into JSON after <code class="inl">&lt;/think&gt;</code>:</span>
+<span class="ko">이 <code class="inl">reasoning_ended</code> 게이트가 전체 서브시스템의 우아한 경첩이다. <b>엔진</b> 쪽에서 structured output은 bitmask를 채우기 전에 이걸 확인한다 — JSON 제약 요청도 추론 모델이면 자유 산문으로 생각하고 <code class="inl">&lt;/think&gt;</code> 후에야 JSON으로 강제되기 시작한다:</span></p>
+<pre><code># vllm/v1/structured_output/__init__.py:361  (should_fill_bitmask)
+if reasoner is not None:
+    if self.enable_in_reasoning: return True
+    ...  # only fill the grammar bitmask once reasoning_ended
+    return req.structured_output_request.reasoning_ended
+return True</code></pre>
+<p><span class="en">On the <b>serving</b> side, the same signal (<code class="inl">is_reasoning_end_streaming</code>) is what flips <code class="inl">parse_delta</code> from emitting <code class="inl">reasoning</code> to emitting <code class="inl">content</code>/<code class="inl">tool_calls</code>. One concept, gating both halves. (One caveat: parsers like Granite that split on prose phrases don't implement <code class="inl">is_reasoning_end</code>, so they do content-splitting only and can't gate structured output.)</span>
+<span class="ko"><b>서빙</b> 쪽에선 같은 신호(<code class="inl">is_reasoning_end_streaming</code>)가 <code class="inl">parse_delta</code>를 <code class="inl">reasoning</code> 방출에서 <code class="inl">content</code>/<code class="inl">tool_calls</code> 방출로 뒤집는다. 하나의 개념이 두 반쪽을 게이팅. (주의: Granite처럼 산문 문구로 나누는 파서는 <code class="inl">is_reasoning_end</code>를 구현 안 해서 콘텐츠 분리만 하고 structured output을 게이팅 못 한다.)</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/abs_reasoning_parsers.py#L26-L210">ReasoningParser interface</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/deepseek_r1_reasoning_parser.py#L10-L67">DeepSeek-R1 parser</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/engine/detokenizer.py#L96-L143">IncrementalDetokenizer</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/abstract_parser.py#L785-L799">DelegatingParser.parse</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L361-L437">reasoning_ended gate</a></li>
+</ul>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span><span class="en">Usage, flags, status &amp; our take</span><span class="ko">사용법·플래그·상태·우리 관점</span></h2>
+
+<h3><span class="en">Flags &amp; config (code-level, at 34bb795)</span><span class="ko">플래그·설정 (코드 레벨, 34bb795)</span></h3>
+<table>
+<thead><tr><th><span class="en">flag / env</span><span class="ko">플래그 / env</span></th><th><span class="en">default</span><span class="ko">기본</span></th><th><span class="en">what</span><span class="ko">역할</span></th></tr></thead>
+<tbody>
+<tr><td><code class="inl">--structured-outputs-config '{"backend":…}'</code></td><td><code class="inl">auto</code></td><td><span class="en">grammar backend (auto / xgrammar / guidance / outlines / lm-format-enforcer)</span><span class="ko">문법 백엔드</span></td></tr>
+<tr><td><code class="inl">--reasoning-parser NAME</code></td><td><code class="inl">""</code></td><td><span class="en">enable a reasoning parser (deepseek_r1, qwen3, granite, openai_gptoss, …)</span><span class="ko">reasoning 파서 활성</span></td></tr>
+<tr><td><code class="inl">--enable-auto-tool-choice</code></td><td><code class="inl">False</code></td><td><span class="en">turn on <code class="inl">tool_choice="auto"</code> extraction (requires the flag below)</span><span class="ko"><code class="inl">auto</code> 추출 켬(아래 플래그 필수)</span></td></tr>
+<tr><td><code class="inl">--tool-call-parser NAME</code></td><td><code class="inl">None</code></td><td><span class="en">which of the 42 parsers (hermes, mistral, llama3_json, qwen3_xml, pythonic, …)</span><span class="ko">42개 중 어느 파서</span></td></tr>
+<tr><td><code class="inl">VLLM_ENFORCE_STRICT_TOOL_CALLING</code></td><td><code class="inl">1</code></td><td><span class="en">use the structural-tag (grammar) path for marker models on required/named</span><span class="ko">마커 모델의 required/named에 structural-tag 경로 사용</span></td></tr>
+<tr><td><code class="inl">VLLM_XGRAMMAR_CACHE_MB</code></td><td><code class="inl">512</code></td><td><span class="en">compiled-grammar LRU byte budget</span><span class="ko">컴파일 문법 LRU 바이트 예산</span></td></tr>
+<tr><td><code class="inl">VLLM_TOOL_PARSE_REGEX_TIMEOUT_SECONDS</code></td><td><code class="inl">1</code></td><td><span class="en">ReDoS guard on tool-detection regexes</span><span class="ko">tool 감지 regex의 ReDoS 방어</span></td></tr>
+</tbody>
+</table>
+<p><span class="en">At the API, structured output is requested via <code class="inl">response_format={"type":"json_schema", …}</code> (or the legacy <code class="inl">extra_body={"guided_json": …}</code>); tool calling via <code class="inl">tools=[…]</code> + <code class="inl">tool_choice</code> (<code class="inl">"auto"</code> / <code class="inl">"required"</code> / <code class="inl">{"type":"function","function":{"name":…}}</code>). Auto tool extraction needs <b>both</b> <code class="inl">--enable-auto-tool-choice</code> and a matching <code class="inl">--tool-call-parser</code> (and usually a model chat template that emits the expected markers).</span>
+<span class="ko">API에선 structured output은 <code class="inl">response_format={"type":"json_schema", …}</code>(또는 레거시 <code class="inl">extra_body={"guided_json": …}</code>)로; tool calling은 <code class="inl">tools=[…]</code> + <code class="inl">tool_choice</code>(<code class="inl">"auto"</code> / <code class="inl">"required"</code> / <code class="inl">{"type":"function","function":{"name":…}}</code>)로 요청. auto tool 추출은 <code class="inl">--enable-auto-tool-choice</code>와 맞는 <code class="inl">--tool-call-parser</code>가 <b>둘 다</b> 필요(그리고 보통 기대 마커를 내는 모델 chat template).</span></p>
+
+<h3><span class="en">Status &amp; sharp edges (at this SHA)</span><span class="ko">상태·주의점 (이 SHA)</span></h3>
+<ul>
+<li><span class="en"><b>Two grammar-apply paths coexist</b>: the legacy runner uses xgrammar's C++ <code class="inl">apply_token_bitmask_inplace</code>; the new V2 runner uses a vendored Triton kernel — which runs depends on <code class="inl">VLLM_USE_V2_MODEL_RUNNER</code>.</span><span class="ko"><b>문법 적용 경로 2개 공존</b>: 레거시 runner는 xgrammar C++ <code class="inl">apply_token_bitmask_inplace</code>, 새 V2 runner는 vendored Triton 커널 — <code class="inl">VLLM_USE_V2_MODEL_RUNNER</code>에 달림.</span></li>
+<li><span class="en"><b>No jump-forward decoding</b> yet (only TODOs), so structured output still pays one forward pass per token even through fixed schema regions.</span><span class="ko"><b>jump-forward 디코딩 아직 없음</b>(TODO만), 고정 스키마 구간도 토큰당 forward 한 번씩.</span></li>
+<li><span class="en"><b>Speculative decoding disables min_p &amp; logit_bias</b> (only <code class="inl">MinTokens</code> survives) — a documented trade-off, unrelated to grammar.</span><span class="ko"><b>speculative decoding은 min_p·logit_bias 비활성</b>(<code class="inl">MinTokens</code>만 생존) — 문서화된 트레이드오프.</span></li>
+<li><span class="en"><b>lm-format-enforcer</b> can't do speculative decoding and is never auto-selected; <b>outlines</b> can't do EBNF grammar or structural tags.</span><span class="ko"><b>lm-format-enforcer</b>는 spec decode 불가·auto 미선택; <b>outlines</b>는 EBNF 문법·structural tag 불가.</span></li>
+<li><span class="en"><b>Structured output is rejected for diffusion LLMs</b>; the reasoning-integration code (<code class="inl">enable_in_reasoning</code>, <code class="inl">trim_reasoning_for_advance</code>) is recent and cites several bug-fix PRs (#42452, #43388, #44006).</span><span class="ko"><b>diffusion LLM엔 structured output 거부</b>; reasoning 통합 코드(<code class="inl">enable_in_reasoning</code> 등)는 최근이고 버그 수정 PR(#42452, #43388, #44006) 인용.</span></li>
+</ul>
+
+<div class="callout c-purple">
+<p><b><span class="en">Editor's note — our take (not a vLLM claim)</span><span class="ko">편집자 주 — 우리 관점 (vLLM의 주장 아님)</span></b></p>
+<p><span class="en">This subsystem is exactly the compatibility surface an OpenAI/Anthropic-compatible gateway (our heimdall / AIGateway work) has to reproduce, so three things are worth flagging. (1) <b>The tool-JSON "guarantee" is not in the parser — it's in structured output.</b> If a gateway claims <code class="inl">tool_choice="required"</code> support but doesn't route the tools through a grammar backend, it's really doing best-effort <code class="inl">auto</code> and will occasionally emit malformed tool calls under load; the honest coverage question is "which backend, and does it fall back?", not "do you parse tool calls?". (2) <b>The 42-parser zoo is the real compatibility cost.</b> Per-model tool syntax (Hermes XML vs Llama pythonic vs Mistral <code class="inl">[TOOL_CALLS]</code> vs Harmony channels) means "supports tool calling" is per-model, not a single feature — matching vLLM's model coverage means shipping (or reusing) that many parsers, and the streaming partial-JSON diffing is where subtle client-visible bugs hide. (3) <b>The <code class="inl">reasoning_ended</code> gate is a correctness requirement, not a nicety</b> — for a reasoning model, applying a JSON grammar during the chain-of-thought would force the <i>thinking</i> into JSON and destroy quality; any gateway that adds structured output in front of a reasoning model must replicate this gate. For MI250/vLLM serving specifically, note the grammar bitmask is cheap host+one-kernel work off the attention hot path, but the async compile pool and xgrammar cache (<code class="inl">VLLM_XGRAMMAR_CACHE_MB</code>) are the things to watch under a flood of distinct schemas.</span>
+<span class="ko">이 서브시스템은 OpenAI/Anthropic 호환 게이트웨이(우리 heimdall / AIGateway 작업)가 그대로 재현해야 하는 호환 표면이라, 셋을 짚는다. (1) <b>tool-JSON "보장"은 파서가 아니라 structured output에 있다.</b> 게이트웨이가 <code class="inl">tool_choice="required"</code>를 지원한다면서 tool을 문법 백엔드로 태우지 않으면 사실상 best-effort <code class="inl">auto</code>이고 부하 시 가끔 깨진 tool call을 낸다; 정직한 커버리지 질문은 "tool call 파싱하냐?"가 아니라 "어느 백엔드고, fallback 하냐?"다. (2) <b>42개 파서 동물원이 진짜 호환 비용.</b> 모델별 tool 문법(Hermes XML vs Llama pythonic vs Mistral <code class="inl">[TOOL_CALLS]</code> vs Harmony 채널)이라 "tool calling 지원"은 단일 기능이 아니라 모델별이다 — vLLM 모델 커버리지를 맞추려면 그만큼의 파서를 내야 하고, 스트리밍 부분-JSON 디핑에 미묘한 클라이언트 버그가 숨는다. (3) <b><code class="inl">reasoning_ended</code> 게이트는 편의가 아니라 정확성 요건</b> — 추론 모델에 chain-of-thought 동안 JSON 문법을 적용하면 <i>생각</i>을 JSON으로 강제해 품질을 파괴한다; 추론 모델 앞에 structured output을 붙이는 게이트웨이는 이 게이트를 반드시 재현해야 한다. MI250/vLLM 서빙 관점에선, 문법 bitmask는 어텐션 핫패스 밖 값싼 호스트+커널 한 번 작업이지만, 서로 다른 스키마가 폭주할 땐 async 컴파일 풀과 xgrammar 캐시(<code class="inl">VLLM_XGRAMMAR_CACHE_MB</code>)를 주시해야 한다.</span></p>
+</div>
+</section>
+
+<section id="s9">
+<h2><span class="num">9</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<p><span class="en">All line numbers pinned to vLLM commit <code class="inl">34bb795</code> (latest main, 2026-07-31; they drift). Apache-2.0. This area is refactoring fast — the unified <code class="inl">Parser</code> layer and engine-based parsers are recent.</span>
+<span class="ko">모든 라인 번호는 vLLM 커밋 <code class="inl">34bb795</code>(최신 main, 2026-07-31; 변동됨) 기준. Apache-2.0. 이 영역은 빠르게 리팩터 중 — 통합 <code class="inl">Parser</code> 계층과 engine-based 파서는 최근이다.</span></p>
+<ul class="srcs">
+<li><b>Structured output</b> — <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py">StructuredOutputManager</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/backend_types.py">backend_types.py</a> · <a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output">backends (xgrammar/guidance/outlines/lmfe)</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/worker/gpu/structured_outputs.py">Triton −inf kernel</a></li>
+<li><b>Backend selection</b> — <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/sampling_params.py#L1043-L1082">auto resolution</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/config/structured_outputs.py">StructuredOutputsConfig</a></li>
+<li><b>Tool calling</b> — <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/abstract_tool_parser.py">abstract_tool_parser.py</a> · <a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers">42 parsers</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/structural_tag_registry.py">structural_tag_registry.py</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/tool_parsers/streaming.py">streaming.py</a></li>
+<li><b>Unified parser layer</b> — <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/abstract_parser.py">DelegatingParser</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/parser_manager.py">parser_manager.py</a> · <a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/engine">engine adapters</a></li>
+<li><b>Reasoning + pipeline</b> — <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/abs_reasoning_parsers.py">reasoning interface</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/engine/detokenizer.py">detokenizer</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/entrypoints/openai/chat_completion/serving.py">chat_completion/serving.py</a></li>
+<li><b>Companion notes</b> — <a href="./vllm-scheduler-prefill-decode-batching.html">scheduler</a> · <a href="./vllm-kv-cache-block-management.html">KV-cache block management</a> · <a href="./vllm-paged-attention-v1-v2.html">PagedAttention v1/v2</a></li>
+</ul>
+</section>
+
+<footer class="foot">
+<p><span class="en">Code-walk of vLLM's structured output + tool/reasoning parsing, pinned to commit <a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55">34bb795</a> (latest main, Apache-2.0). Diagrams are original, drawn from the code paths cited above; research fanned out across three code-analysis passes.</span><span class="ko">vLLM structured output + tool/reasoning 파싱 코드워크, 커밋 <a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55">34bb795</a>(최신 main, Apache-2.0) 기준. 다이어그램은 위 코드 경로 기반 직접 작성; 리서치는 3개 코드분석 패스로 팬아웃.</span></p>
+<p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
+</footer>
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
