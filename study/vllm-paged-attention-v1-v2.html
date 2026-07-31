@@ -103,7 +103,13 @@
     <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd">code @ 8700f86</a></span>
     <span class="badge"><span class="en">Deep dive · code-walk</span><span class="ko">딥다이브 · 코드 분석</span></span>
   </div>
-  <p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
+  <p class="post-meta">
+    <time datetime="2026-07-31">2026-07-31</time>
+    <span class="sep">·</span>
+    <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
+    <time datetime="2026-07-31">2026-07-31</time>
+    <span class="en">(more diagrams, gentler GPU explanation)</span><span class="ko">(다이어그램 추가, GPU 설명 완화)</span>
+  </p>
 </header>
 
 <nav class="toc">
@@ -138,6 +144,65 @@
   <div class="mini"><h4><span class="en">attention backend</span><span class="ko">어텐션 백엔드</span></h4><p><span class="en">vLLM can run attention through different implementations (FlashAttention, FlashInfer, Triton, the old PagedAttention kernels, ROCm/AITER…). A registry picks one per hardware/config. "v1/v2" were the <i>original</i> built-in backend.</span><span class="ko">vLLM은 어텐션을 여러 구현으로 돌릴 수 있다(FlashAttention, FlashInfer, Triton, 옛 PagedAttention 커널, ROCm/AITER…). registry가 하드웨어/설정별로 하나 고른다. "v1/v2"는 <i>원조</i> 내장 백엔드였다.</span></p></div>
 </div>
 
+<h3 style="margin-top:26px"><span class="en">First, a 60-second GPU primer (the one analogy you need)</span><span class="ko">먼저, 60초 GPU 입문 (필요한 딱 하나의 비유)</span></h3>
+<p><span class="en">If GPU terms are the hard part, hold this single picture and the rest of the note follows from it. <b>A GPU is a room of ~108 identical workers</b> (the <b>SMs</b>). To run a computation on it, you chop the work into a big pile of small, independent <b>task-cards</b> (the <b>thread blocks</b>) and dump them on the table. Each worker grabs a card, does it, grabs another — until the pile is empty. Two rules follow, and they are the <i>whole</i> story of v1 vs v2:</span>
+<span class="ko">GPU 용어가 어려운 부분이라면, 이 그림 하나만 붙잡으면 노트의 나머지가 따라온다. <b>GPU는 똑같은 일꾼 ~108명이 있는 방</b>이다(<b>SM</b>). 여기서 계산을 돌리려면 일을 작고 독립적인 <b>task 카드</b> 더미(<b>thread block</b>)로 쪼개 테이블에 쏟는다. 일꾼마다 카드를 하나 집어 처리하고 또 집고 — 더미가 빌 때까지. 규칙 둘이 따라오는데, 그게 v1 vs v2의 <i>전부</i>다:</span></p>
+<ul>
+<li><span class="en"><b>Too few cards → idle workers.</b> If you make only 32 task-cards for 108 workers, 76 workers stand around doing nothing. The GPU is mostly wasted.</span><span class="ko"><b>카드가 너무 적으면 → 노는 일꾼.</b> 108명에게 카드를 32장만 만들면 76명이 할 일 없이 서 있다. GPU가 대부분 낭비된다.</span></li>
+<li><span class="en"><b>Each card should be small.</b> If one card is a giant multi-hour job, whoever grabs it is stuck while others finish and wait. Many small cards spread the load evenly.</span><span class="ko"><b>카드는 작아야 한다.</b> 한 카드가 몇 시간짜리 거대한 일이면, 그걸 집은 사람은 묶여 있고 나머지는 끝내고 기다린다. 작은 카드가 많으면 부하가 고르게 퍼진다.</span></li>
+</ul>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="GPU as a room of workers; too few task-cards leaves workers idle">
+  <style>
+    .t{font:600 12.5px -apple-system,sans-serif;fill:var(--ink)}
+    .k{font:11px -apple-system,sans-serif;fill:var(--muted)}
+    .busy{fill:var(--green-bd)} .idlew{fill:var(--gray-bg);stroke:var(--gray-bd);stroke-dasharray:2 2}
+  </style>
+  <!-- Case A: too few cards -->
+  <text x="20" y="20" class="t">Few big cards (v1 on 1 sequence) — 32 workers busy, ~76 idle</text>
+  <g>
+    <!-- 108 worker dots in a grid, 32 green, rest grey -->
+    <g id="rowsA"></g>
+  </g>
+  <!-- draw workers manually: 9 cols x 12 rows = 108 -->
+  <g transform="translate(30,34)">
+    <!-- busy 32 -->
+    <g fill="var(--green-bd)">
+      <circle cx="0" cy="0" r="4"/><circle cx="16" cy="0" r="4"/><circle cx="32" cy="0" r="4"/><circle cx="48" cy="0" r="4"/><circle cx="64" cy="0" r="4"/><circle cx="80" cy="0" r="4"/><circle cx="96" cy="0" r="4"/><circle cx="112" cy="0" r="4"/>
+      <circle cx="0" cy="14" r="4"/><circle cx="16" cy="14" r="4"/><circle cx="32" cy="14" r="4"/><circle cx="48" cy="14" r="4"/><circle cx="64" cy="14" r="4"/><circle cx="80" cy="14" r="4"/><circle cx="96" cy="14" r="4"/><circle cx="112" cy="14" r="4"/>
+      <circle cx="0" cy="28" r="4"/><circle cx="16" cy="28" r="4"/><circle cx="32" cy="28" r="4"/><circle cx="48" cy="28" r="4"/><circle cx="64" cy="28" r="4"/><circle cx="80" cy="28" r="4"/><circle cx="96" cy="28" r="4"/><circle cx="112" cy="28" r="4"/>
+      <circle cx="0" cy="42" r="4"/><circle cx="16" cy="42" r="4"/><circle cx="32" cy="42" r="4"/><circle cx="48" cy="42" r="4"/><circle cx="64" cy="42" r="4"/><circle cx="80" cy="42" r="4"/><circle cx="96" cy="42" r="4"/><circle cx="112" cy="42" r="4"/>
+    </g>
+    <!-- idle rest (grey) rows 5-12 -->
+    <g fill="var(--gray-bd)" opacity="0.45">
+      <circle cx="0" cy="56" r="4"/><circle cx="16" cy="56" r="4"/><circle cx="32" cy="56" r="4"/><circle cx="48" cy="56" r="4"/><circle cx="64" cy="56" r="4"/><circle cx="80" cy="56" r="4"/><circle cx="96" cy="56" r="4"/><circle cx="112" cy="56" r="4"/>
+      <circle cx="0" cy="70" r="4"/><circle cx="16" cy="70" r="4"/><circle cx="32" cy="70" r="4"/><circle cx="48" cy="70" r="4"/><circle cx="64" cy="70" r="4"/><circle cx="80" cy="70" r="4"/><circle cx="96" cy="70" r="4"/><circle cx="112" cy="70" r="4"/>
+      <circle cx="0" cy="84" r="4"/><circle cx="16" cy="84" r="4"/><circle cx="32" cy="84" r="4"/><circle cx="48" cy="84" r="4"/><circle cx="64" cy="84" r="4"/><circle cx="80" cy="84" r="4"/><circle cx="96" cy="84" r="4"/><circle cx="112" cy="84" r="4"/>
+    </g>
+  </g>
+  <text x="30" y="150" class="k" fill="var(--coral-ink)">most of the room is idle → GPU wasted</text>
+  <!-- divider -->
+  <line x1="380" y1="20" x2="380" y2="170" stroke="var(--line)"/>
+  <!-- Case B: many small cards -->
+  <text x="410" y="20" class="t">Many small cards (v2) — every worker busy</text>
+  <g transform="translate(420,34)" fill="var(--green-bd)">
+    <circle cx="0" cy="0" r="4"/><circle cx="16" cy="0" r="4"/><circle cx="32" cy="0" r="4"/><circle cx="48" cy="0" r="4"/><circle cx="64" cy="0" r="4"/><circle cx="80" cy="0" r="4"/><circle cx="96" cy="0" r="4"/><circle cx="112" cy="0" r="4"/><circle cx="128" cy="0" r="4"/>
+    <circle cx="0" cy="14" r="4"/><circle cx="16" cy="14" r="4"/><circle cx="32" cy="14" r="4"/><circle cx="48" cy="14" r="4"/><circle cx="64" cy="14" r="4"/><circle cx="80" cy="14" r="4"/><circle cx="96" cy="14" r="4"/><circle cx="112" cy="14" r="4"/><circle cx="128" cy="14" r="4"/>
+    <circle cx="0" cy="28" r="4"/><circle cx="16" cy="28" r="4"/><circle cx="32" cy="28" r="4"/><circle cx="48" cy="28" r="4"/><circle cx="64" cy="28" r="4"/><circle cx="80" cy="28" r="4"/><circle cx="96" cy="28" r="4"/><circle cx="112" cy="28" r="4"/><circle cx="128" cy="28" r="4"/>
+    <circle cx="0" cy="42" r="4"/><circle cx="16" cy="42" r="4"/><circle cx="32" cy="42" r="4"/><circle cx="48" cy="42" r="4"/><circle cx="64" cy="42" r="4"/><circle cx="80" cy="42" r="4"/><circle cx="96" cy="42" r="4"/><circle cx="112" cy="42" r="4"/><circle cx="128" cy="42" r="4"/>
+    <circle cx="0" cy="56" r="4"/><circle cx="16" cy="56" r="4"/><circle cx="32" cy="56" r="4"/><circle cx="48" cy="56" r="4"/><circle cx="64" cy="56" r="4"/><circle cx="80" cy="56" r="4"/><circle cx="96" cy="56" r="4"/><circle cx="112" cy="56" r="4"/><circle cx="128" cy="56" r="4"/>
+    <circle cx="0" cy="70" r="4"/><circle cx="16" cy="70" r="4"/><circle cx="32" cy="70" r="4"/><circle cx="48" cy="70" r="4"/><circle cx="64" cy="70" r="4"/><circle cx="80" cy="70" r="4"/><circle cx="96" cy="70" r="4"/><circle cx="112" cy="70" r="4"/><circle cx="128" cy="70" r="4"/>
+    <circle cx="0" cy="84" r="4"/><circle cx="16" cy="84" r="4"/><circle cx="32" cy="84" r="4"/><circle cx="48" cy="84" r="4"/><circle cx="64" cy="84" r="4"/><circle cx="80" cy="84" r="4"/><circle cx="96" cy="84" r="4"/><circle cx="112" cy="84" r="4"/><circle cx="128" cy="84" r="4"/>
+  </g>
+  <text x="410" y="150" class="k" fill="var(--green-ink)">whole room busy → GPU fully used</text>
+  <line x1="20" y1="185" x2="740" y2="185" stroke="var(--line)"/>
+  <text x="20" y="208" class="t">The jargon, mapped to the analogy</text>
+  <text x="20" y="230" class="k">• <tspan font-weight="600">SM</tspan> = a worker (~108 in an A100)   • <tspan font-weight="600">thread block</tspan> = one task-card   • <tspan font-weight="600">grid</tspan> = the whole pile of cards</text>
+  <text x="20" y="250" class="k">• <tspan font-weight="600">occupancy</tspan> = how much of the room is busy   • a <tspan font-weight="600">kernel</tspan> = the recipe printed on every card (what to compute)</text>
+  <text x="20" y="272" class="k">The one goal, always: make <tspan font-weight="600">enough small cards</tspan> that all ~108 workers stay busy. v1 and v2 differ only in how they cut the cards.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 1 — The only GPU model you need. Workers = SMs, task-cards = thread blocks. Left: too few cards, most workers idle (the v1-on-one-sequence problem). Right: many small cards, room full (what v2 achieves). Original diagram.</span><span class="ko">그림 1 — 필요한 유일한 GPU 모델. 일꾼 = SM, task 카드 = thread block. 왼쪽: 카드가 너무 적어 대부분 놀고(시퀀스 하나에 v1인 문제), 오른쪽: 작은 카드 많아 방이 꽉 참(v2가 달성하는 것). 직접 작성한 다이어그램.</span></p>
+
 
 <section id="s1">
 <h2><span class="num">1</span><span class="en">Background — PagedAttention and the decode-time kernel</span><span class="ko">배경 — PagedAttention과 디코드 시점 커널</span></h2>
@@ -163,6 +228,33 @@
 <h2><span class="num">2</span><span class="en">v1 — one kernel, one pass over the whole context</span><span class="ko">v1 — 커널 하나로 전체 컨텍스트를 한 번에</span></h2>
 <p><span class="en">v1 is the straightforward design. Launch the grid as <code class="inl">(num_heads, num_seqs)</code> — <b>one thread block per (sequence, head)</b>, with <code class="inl">max_num_partitions = 1</code>. That single block is responsible for the sequence's <i>entire</i> KV history: it walks every KV block in the block table, computes the query·key scores, runs the online softmax across the whole context, multiplies by the values, and writes the final output. One block, one pass, done — <b>no second kernel</b>.</span>
 <span class="ko">v1은 직관적인 설계다. grid를 <code class="inl">(num_heads, num_seqs)</code>로 실행 — <b>(시퀀스, 헤드)당 thread block 하나</b>, <code class="inl">max_num_partitions = 1</code>. 그 블록 하나가 시퀀스의 <i>전체</i> KV 히스토리를 책임진다: block table의 모든 KV 블록을 훑고, query·key 점수를 계산하고, 전체 컨텍스트에 online softmax를 돌리고, value를 곱해 최종 출력을 쓴다. 블록 하나, 한 번의 통과, 끝 — <b>두 번째 커널 없음</b>.</span></p>
+
+<svg class="fig" viewBox="0 0 760 170" role="img" aria-label="v1: one worker reads every KV block in sequence, one after another">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.kv{fill:var(--blue-bg);stroke:var(--blue-bd)}.w{fill:var(--green-bd)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#v1a)}</style>
+  <defs><marker id="v1a" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="20" class="t">v1 — one worker (thread block) walks the whole KV history by itself, block by block</text>
+  <circle cx="45" cy="70" r="14" class="w"/><text x="45" y="98" class="k" text-anchor="middle">1 worker</text>
+  <!-- KV blocks in a row -->
+  <g>
+    <rect class="kv" x="110" y="56" width="52" height="28" rx="4"/><text x="136" y="74" class="k" text-anchor="middle">KV blk 0</text>
+    <rect class="kv" x="172" y="56" width="52" height="28" rx="4"/><text x="198" y="74" class="k" text-anchor="middle">blk 1</text>
+    <rect class="kv" x="234" y="56" width="52" height="28" rx="4"/><text x="260" y="74" class="k" text-anchor="middle">blk 2</text>
+    <rect class="kv" x="296" y="56" width="52" height="28" rx="4"/><text x="322" y="74" class="k" text-anchor="middle">blk 3</text>
+    <text x="368" y="74" class="k">· · ·</text>
+    <rect class="kv" x="400" y="56" width="62" height="28" rx="4"/><text x="431" y="74" class="k" text-anchor="middle">blk 2000</text>
+  </g>
+  <!-- sequential arrows -->
+  <path class="a" d="M59,68 C 85,60 95,60 108,64"/>
+  <path class="a" d="M162,82 C 168,92 168,92 172,84" />
+  <path class="a" d="M224,82 C 230,92 230,92 234,84"/>
+  <path class="a" d="M286,82 C 292,92 292,92 296,84"/>
+  <text x="250" y="118" class="k">reads blk 0, then blk 1, then blk 2 … all the way to the end — sequentially, on its own</text>
+  <!-- output -->
+  <rect x="520" y="56" width="80" height="28" rx="4" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="560" y="74" class="k" text-anchor="middle">final output</text>
+  <path class="a" d="M462,70 L518,70"/>
+  <text x="20" y="150" class="k" fill="var(--coral-ink)">With a 32K-token context that's ~2,000 blocks for ONE worker to grind through. Meanwhile (Fig 1) only ~32 workers are even running.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 2 — What "one pass" means in v1: a single worker (thread block) reads every KV block of the sequence one after another, accumulating the running softmax, then writes the answer. Simple and cheap — but on a long context that one worker has a lot to do, and few workers run at all. Original diagram.</span><span class="ko">그림 2 — v1의 "한 번의 통과"란: 한 일꾼(thread block)이 시퀀스의 모든 KV 블록을 차례로 읽어 running softmax를 누적한 뒤 답을 쓴다. 단순하고 싸지만 — 긴 컨텍스트에선 그 한 일꾼이 할 일이 많고, 애초에 도는 일꾼도 적다. 직접 작성한 다이어그램.</span></p>
 
 <p><span class="en">When is this great? When there are <b>enough sequences × heads to fill the GPU</b>. If you're serving a big batch — say 64 sequences × 32 heads = 2,048 thread blocks — you have far more blocks than the GPU has SMs (~108), so every SM stays busy and there's no wasted work. v1 is also the <i>cheaper</i> option: no extra memory traffic for partial results, no reduction launch.</span>
 <span class="ko">언제 좋은가? <b>시퀀스 × 헤드가 GPU를 채울 만큼 많을 때</b>. 큰 배치를 서빙하면 — 예: 64 시퀀스 × 32 헤드 = 2,048 thread block — GPU의 SM 수(~108)보다 블록이 훨씬 많아, 모든 SM이 바쁘고 낭비가 없다. v1은 <i>더 싼</i> 선택이기도 하다: 부분 결과용 추가 메모리 트래픽도, reduction 실행도 없다.</span></p>
@@ -232,7 +324,29 @@
   <text x="95" y="284" class="k" fill="var(--green-ink)">↳ same math, but the KV-length axis now feeds the whole GPU — then one cheap reduction.</text>
   <text x="95" y="302" class="k">Schematic; occupancy illustrative. Grid shapes per vLLM kernel design doc; split+reduce per Flash-Decoding.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 1 — Same computation, opposite parallelism. v1 (top): one sequence launches only ~32 blocks, leaving most SMs idle while each grinds the full 32K-token KV. v2 (bottom): splitting the KV into 512-token partitions launches thousands of short blocks that fill the GPU, then a cheap reduction kernel combines them via log-sum-exp. Schematic.</span><span class="ko">그림 1 — 같은 계산, 반대의 병렬성. v1(위): 시퀀스 하나가 ~32 블록만 띄워 대부분 SM이 노는 동안 각자 32K 토큰 KV를 간다. v2(아래): KV를 512 토큰 파티션으로 쪼개 수천 개의 짧은 블록이 GPU를 채우고, 싼 reduction 커널이 log-sum-exp로 합친다. 개략도.</span></p>
+<p class="figcap"><span class="en">Fig 3 — Same computation, opposite parallelism. v1 (top): one sequence launches only ~32 blocks, leaving most SMs idle while each grinds the full 32K-token KV. v2 (bottom): splitting the KV into 512-token partitions launches thousands of short blocks that fill the GPU, then a cheap reduction kernel combines them via log-sum-exp. Schematic.</span><span class="ko">그림 3 — 같은 계산, 반대의 병렬성. v1(위): 시퀀스 하나가 ~32 블록만 띄워 대부분 SM이 노는 동안 각자 32K 토큰 KV를 간다. v2(아래): KV를 512 토큰 파티션으로 쪼개 수천 개의 짧은 블록이 GPU를 채우고, 싼 reduction 커널이 log-sum-exp로 합친다. 개략도.</span></p>
+
+<h4><span class="en">The one tricky bit: why v2 needs a second "reduce" step</span><span class="ko">까다로운 딱 한 곳: v2에 두 번째 "reduce" 단계가 왜 필요한가</span></h4>
+<p><span class="en">Softmax turns scores into probabilities that must sum to 1 <i>over all tokens</i>. If you softmax each 512-token partition <i>separately</i>, each partition's numbers are normalized only against itself — you can't just add the partition outputs, or you'd be averaging apples measured on different scales. The fix is bookkeeping: each partition also reports its <b>biggest score</b> (<code class="inl">max_logit</code>) and its <b>sum of exp-scores</b> (<code class="inl">exp_sum</code>). The reduce step uses those to <b>rescale every partition onto one common scale</b> and combine them — giving <i>exactly</i> the same answer as one big softmax. (That's the "log-sum-exp trick" / online softmax.)</span>
+<span class="ko">softmax는 점수를 <i>모든 토큰에 걸쳐</i> 합이 1인 확률로 바꾼다. 512 토큰 파티션마다 <i>따로</i> softmax하면 각 파티션 숫자는 자기 안에서만 정규화된다 — 그래서 파티션 출력을 그냥 더하면 서로 다른 척도로 잰 사과를 평균 내는 꼴이 된다. 해결은 장부 기록이다: 각 파티션이 자기 <b>최대 점수</b>(<code class="inl">max_logit</code>)와 <b>exp-점수 합</b>(<code class="inl">exp_sum</code>)도 보고한다. reduce 단계가 그걸 써서 <b>모든 파티션을 하나의 공통 척도로 재조정</b>해 합친다 — 큰 softmax 하나와 <i>정확히</i> 같은 답. (이게 "log-sum-exp 트릭" / online softmax.)</span></p>
+<svg class="fig" viewBox="0 0 760 220" role="img" aria-label="v2 reduce: each partition reports partial output, local max, exp-sum; reduce rescales and merges">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.p{fill:var(--blue-bg);stroke:var(--blue-bd)}.r{fill:var(--amber-bg);stroke:var(--amber-bd)}.o{fill:var(--green-bg);stroke:var(--green-bd)}.a{stroke:var(--muted);stroke-width:1.4;fill:none;marker-end:url(#rda)}</style>
+  <defs><marker id="rda" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="20" class="t">Step 1: each partition softmaxes its own 512 tokens and reports 3 things</text>
+  <g>
+    <rect class="p" x="30" y="36" width="150" height="66" rx="7"/><text x="105" y="54" class="k" text-anchor="middle" font-weight="600">partition 0</text><text x="105" y="72" class="k" text-anchor="middle">partial output</text><text x="105" y="88" class="k" text-anchor="middle">+ local max, exp-sum</text>
+    <rect class="p" x="200" y="36" width="150" height="66" rx="7"/><text x="275" y="54" class="k" text-anchor="middle" font-weight="600">partition 1</text><text x="275" y="72" class="k" text-anchor="middle">partial output</text><text x="275" y="88" class="k" text-anchor="middle">+ local max, exp-sum</text>
+    <rect class="p" x="370" y="36" width="150" height="66" rx="7"/><text x="445" y="54" class="k" text-anchor="middle" font-weight="600">partition 2 …</text><text x="445" y="72" class="k" text-anchor="middle">partial output</text><text x="445" y="88" class="k" text-anchor="middle">+ local max, exp-sum</text>
+  </g>
+  <text x="20" y="132" class="t">Step 2: the reduce kernel rescales all partitions to one scale &amp; adds them</text>
+  <rect class="r" x="200" y="146" width="240" height="34" rx="7"/><text x="320" y="167" class="k" text-anchor="middle">reduce: weight each by exp(local_max − global_max) · exp_sum</text>
+  <rect class="o" x="560" y="146" width="150" height="34" rx="7"/><text x="635" y="167" class="k" text-anchor="middle" font-weight="600">final output (exact)</text>
+  <path class="a" d="M105,102 C 150,120 200,135 240,144"/>
+  <path class="a" d="M275,102 L300,144"/>
+  <path class="a" d="M445,102 C 420,120 400,135 380,144"/>
+  <path class="a" d="M440,163 L558,163"/>
+</svg>
+<p class="figcap"><span class="en">Fig 4 — v2's second kernel. Because each partition normalized its softmax against only its own tokens, the reduce step rescales them onto a common scale (using each partition's reported max and exp-sum) before adding — producing exactly the same result as one un-split softmax. Original diagram.</span><span class="ko">그림 4 — v2의 두 번째 커널. 각 파티션이 자기 토큰으로만 softmax를 정규화했으므로, reduce 단계가 (각 파티션이 보고한 max와 exp-sum으로) 공통 척도로 재조정한 뒤 더한다 — 쪼개지 않은 softmax 하나와 정확히 같은 결과. 직접 작성한 다이어그램.</span></p>
 
 <div class="callout c-coral">
   <span class="tag"><span class="en">v2 isn't free</span><span class="ko">v2는 공짜가 아니다</span></span>
@@ -260,6 +374,26 @@ use_v1 = (max_seq_len &lt;= 8192
 </table>
 <p class="muted"><span class="en">The <code class="inl">max_seq_len &lt;= 8192</code> guard is there for a hardware reason the code comment states plainly — <i>"For context len &gt; 8192, use V2 kernel to avoid shared memory shortage"</i> (v1 keeps the whole context's logits in one block's shared memory, which runs out past ~8K tokens). In short: <b>v2 is the long-context, small-batch decode kernel; v1 is everything else.</b></span>
 <span class="ko"><code class="inl">max_seq_len &lt;= 8192</code> 가드는 코드 주석이 분명히 밝히는 하드웨어 이유 때문이다 — <i>"컨텍스트 8192 초과면 shared memory 부족을 피하려 V2 커널 사용"</i>(v1은 전체 컨텍스트의 logits를 한 블록의 shared memory에 유지하는데 ~8K 토큰을 넘으면 부족해진다). 요약: <b>v2는 긴 컨텍스트·작은 배치 디코드 커널; v1은 그 외 전부.</b></span></p>
+
+<svg class="fig" viewBox="0 0 760 210" role="img" aria-label="Decision tree: v1 vs v2">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.q{fill:var(--card);stroke:var(--line);stroke-width:1.3}.v1{fill:var(--green-bg);stroke:var(--green-bd)}.v2{fill:var(--blue-bg);stroke:var(--blue-bd)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#dta)}.lbl{font:600 10px -apple-system,sans-serif;fill:var(--ink)}</style>
+  <defs><marker id="dta" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="18" class="t">How vLLM chose, per decode step</text>
+  <rect class="q" x="20" y="34" width="210" height="48" rx="8"/><text x="125" y="54" class="k" text-anchor="middle">Context short enough to fit</text><text x="125" y="70" class="k" text-anchor="middle">one 512-token partition?</text>
+  <rect class="q" x="300" y="34" width="210" height="48" rx="8"/><text x="405" y="54" class="k" text-anchor="middle">Already &gt; 512 (seq × head)</text><text x="405" y="70" class="k" text-anchor="middle">blocks running?</text>
+  <rect class="v1" x="580" y="24" width="150" height="30" rx="8"/><text x="655" y="44" class="lbl" text-anchor="middle">use v1 (single pass)</text>
+  <rect class="v1" x="580" y="70" width="150" height="30" rx="8"/><text x="655" y="90" class="lbl" text-anchor="middle">use v1 (single pass)</text>
+  <rect class="v2" x="300" y="130" width="210" height="44" rx="8"/><text x="405" y="150" class="lbl" text-anchor="middle">use v2 (split + reduce)</text><text x="405" y="166" class="k" text-anchor="middle">long context AND small batch</text>
+  <!-- arrows -->
+  <path class="a" d="M230,50 L298,50"/><text x="260" y="44" class="k">no</text>
+  <path class="a" d="M230,66 C 250,110 250,150 298,152"/><text x="243" y="120" class="k">— (also checks below)</text>
+  <path class="a" d="M125,82 C 125,150 200,152 298,152"/><text x="150" y="145" class="k">yes → the GPU is already full</text>
+  <path class="a" d="M510,44 C 545,40 550,40 578,39"/><text x="545" y="34" class="k">yes</text>
+  <path class="a" d="M405,82 L405,128"/><text x="415" y="108" class="k">no</text>
+  <!-- correction arrow: partition-fits → v1 -->
+  <path class="a" d="M230,42 C 400,-2 560,10 660,22" stroke-dasharray="4 3"/><text x="470" y="14" class="k">short context → v1 directly</text>
+</svg>
+<p class="figcap"><span class="en">Fig 5 — The <code>use_v1</code> heuristic as a picture: pick v1 if the context is short (fits one partition) OR there are already enough blocks to fill the GPU; only when the context is long AND the batch is small — the case where v1 would leave workers idle — switch to v2. Original diagram; logic per <code>paged_attn.py</code> (§6).</span><span class="ko">그림 5 — <code>use_v1</code> 휴리스틱을 그림으로: 컨텍스트가 짧거나(파티션 하나에 들어감) 이미 GPU를 채울 블록이 충분하면 v1; 컨텍스트가 길고 <i>동시에</i> 배치가 작을 때 — v1이 일꾼을 놀릴 경우 — 만 v2로. 직접 작성한 다이어그램; 로직 출처 <code>paged_attn.py</code>(§6).</span></p>
 </section>
 
 
