@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM scheduler — how prefill and decode share every step</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">vLLM scheduler — how prefill and decode share every step</span>
+    <span class="ko">vLLM 스케줄러 — prefill과 decode가 매 스텝을 함께 나눠 쓰는 법</span>
+  </h1>
+  <p class="lede">
+    <span class="en">The third companion to the <a class="src" href="vllm-paged-attention-v1-v2.html">PagedAttention</a> and <a class="src" href="vllm-kv-cache-block-management.html">block-management</a> notes. Those covered how the kernel reads blocks and how the engine owns them; this one is <b>who decides what runs each step</b>. Answered with worked examples and lots of diagrams: is there a "prefill phase" and a "decode phase"? (no — V1 abolished them); <b>how many prefill requests can one step admit?</b> (not one — as many as the token budget and <code class="inl">max_num_seqs</code> allow); how the two scheduling loops drain a single token budget; what preemption actually is; and the real V0 → V1 story — <b>continuous batching was never the same thing as mixing prefill+decode in one step</b>, and chunked prefill is the optimization that merged them. All pinned to vLLM commit 8700f86.</span>
+    <span class="ko"><a class="src" href="vllm-paged-attention-v1-v2.html">PagedAttention</a>·<a class="src" href="vllm-kv-cache-block-management.html">block 관리</a> 노트의 세 번째 짝. 앞의 둘은 커널이 block을 읽는 법과 엔진이 block을 소유하는 법이었고, 이건 <b>매 스텝 무엇을 돌릴지 누가 정하는가</b>다. 예시와 다이어그램을 많이 써서 답한다: "prefill 단계"와 "decode 단계"가 따로 있나?(아니오 — V1은 그 구분을 없앴다); <b>한 스텝이 prefill 요청을 몇 개나 받나?</b>(하나가 아니라 — token budget과 <code class="inl">max_num_seqs</code>가 허락하는 만큼); 두 스케줄링 루프가 하나의 token budget을 어떻게 나눠 쓰는지; preemption이 실제로 무엇인지; 그리고 진짜 V0 → V1 이야기 — <b>continuous batching은 prefill+decode를 한 스텝에 섞는 것과 애초에 같은 게 아니었고</b>, chunked prefill이 그 둘을 합친 최적화라는 것. 전부 vLLM 커밋 8700f86에 핀 고정.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py">scheduler.py</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/config/scheduler.py">config/scheduler.py</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd">code @ 8700f86</a></span>
+    <span class="badge"><span class="en">Deep dive · code-walk · Apache-2.0</span><span class="ko">딥다이브 · 코드 분석 · Apache-2.0</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. The one idea: there is no prefill phase</span><span class="ko">1. 한 가지 생각: prefill 단계는 없다</span></a></li>
+    <li><a href="#s2"><span class="en">2. Static vs continuous vs chunked — and why mixing ≠ continuous batching</span><span class="ko">2. static vs continuous vs chunked — 왜 혼합 ≠ continuous batching</span></a></li>
+    <li><a href="#s3"><span class="en">3. Inside schedule() — two loops, one token budget</span><span class="ko">3. schedule() 내부 — 두 루프, 하나의 token budget</span></a></li>
+    <li><a href="#s4"><span class="en">4. How many prefills per step? (a worked example)</span><span class="ko">4. 한 스텝에 prefill 몇 개? (예시로)</span></a></li>
+    <li><a href="#s5"><span class="en">5. Chunked prefill across steps — a long prompt</span><span class="ko">5. 스텝을 가로지르는 chunked prefill — 긴 프롬프트</span></a></li>
+    <li><a href="#s6"><span class="en">6. Preemption — when a step runs out of blocks</span><span class="ko">6. Preemption — 스텝에 block이 모자랄 때</span></a></li>
+    <li><a href="#s7"><span class="en">7. V0 → V1, the flags, and our take</span><span class="ko">7. V0 → V1, 플래그, 우리 관점</span></a></li>
+    <li><a href="#s8"><span class="en">8. Sources</span><span class="ko">8. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">vLLM's V1 scheduler has <b>no separate prefill and decode phases</b>. Every step it walks two queues — <b>running</b> (decodes + in-flight prefill chunks) then <b>waiting</b> (brand-new requests) — and hands each request just enough tokens to advance, draining <b>one shared token budget</b> (<code class="inl">max_num_batched_tokens</code>) until it hits zero or the running count hits <code class="inl">max_num_seqs</code> (effective defaults are hardware/usage-dependent — e.g. 8192/1024 on a big-GPU server, not the 2048/128 class fallback; §7). So <b>a single step can start many prefills at once</b> — not one — limited only by those two numbers; a long prompt is simply <b>chunked</b> across steps while decodes ride along. When there aren't enough KV blocks, allocation refuses and the scheduler <b>preempts</b> a running request back to the waiting queue. The V0 → V1 story: continuous batching (requests joining/leaving each iteration) always existed; <b>mixing prefill+decode in one forward pass is chunked prefill</b>, which was opt-in on V0 and is the only, always-on path on V1.</span>
+  <span class="ko">vLLM V1 스케줄러엔 <b>prefill 단계와 decode 단계 구분이 없다</b>. 매 스텝 두 큐를 훑는다 — <b>running</b>(decode + 진행 중인 prefill 청크) 다음 <b>waiting</b>(새 요청) — 각 요청에 전진할 만큼만 토큰을 주며 <b>하나의 공유 token budget</b>(<code class="inl">max_num_batched_tokens</code>)을 0이 되거나 running 수가 <code class="inl">max_num_seqs</code>에 닿을 때까지 소진한다(실효 기본값은 하드웨어/용도에 따라 다름 — 예: 대형 GPU 서버에서 8192/1024, 클래스 fallback 2048/128이 아님; §7). 그래서 <b>한 스텝이 prefill을 여러 개 동시에 시작</b>할 수 있다 — 하나가 아니라 — 오직 그 두 숫자로만 제한된다; 긴 프롬프트는 그냥 스텝에 걸쳐 <b>청크</b>로 잘리고 decode가 같이 탄다. KV block이 모자라면 할당이 거부되고 스케줄러는 running 요청을 waiting 큐로 <b>preempt</b>한다. V0 → V1 이야기: continuous batching(요청이 iteration마다 들고 남)은 늘 있었고; <b>prefill+decode를 한 forward에 섞는 게 chunked prefill</b>인데, V0에선 opt-in, V1에선 유일·상시 경로다.</span>
+</div>
+
+<h3 style="margin-top:26px"><span class="en">Glossary</span><span class="ko">용어집</span></h3>
+<div class="grid3">
+  <div class="mini"><h4><span class="en">prefill</span><span class="ko">prefill</span></h4><p><span class="en">Processing the prompt: compute KV for all prompt tokens in parallel (compute-bound, big GEMMs). Produces the first output token.</span><span class="ko">프롬프트 처리: 프롬프트 토큰 전체의 KV를 병렬 계산(연산 바운드, 큰 GEMM). 첫 출력 토큰을 냄.</span></p></div>
+  <div class="mini"><h4><span class="en">decode</span><span class="ko">decode</span></h4><p><span class="en">Generating one token at a time, each reading all prior KV (memory-bandwidth-bound). One decode = one token per request per step.</span><span class="ko">한 번에 토큰 하나 생성, 매번 이전 KV 전부 읽음(메모리 대역폭 바운드). decode 1회 = 요청당·스텝당 토큰 1개.</span></p></div>
+  <div class="mini"><h4><span class="en">continuous batching</span><span class="ko">continuous batching</span></h4><p><span class="en">Iteration-level scheduling: the batch's membership changes every step — finished requests leave, new ones join. The opposite of waiting for the whole batch to finish.</span><span class="ko">iteration 단위 스케줄링: 배치 구성원이 매 스텝 바뀜 — 끝난 요청 나가고 새 요청 들어옴. 배치 전체가 끝나길 기다리는 것의 반대.</span></p></div>
+  <div class="mini"><h4><span class="en">chunked prefill</span><span class="ko">chunked prefill</span></h4><p><span class="en">Splitting a long prompt into token-budget-sized chunks so its prefill can share a step with decodes — instead of a full prefill step that stalls all decodes.</span><span class="ko">긴 프롬프트를 token-budget 크기 청크로 쪼개, 그 prefill이 decode와 한 스텝을 공유하게 함 — 모든 decode를 멈추는 전체 prefill 스텝 대신.</span></p></div>
+  <div class="mini"><h4><span class="en">token budget</span><span class="ko">token budget</span></h4><p><span class="en"><code class="inl">max_num_batched_tokens</code>: the max tokens — prefill + decode combined — one step may process. The scheduler's main dial. Class fallback 2048; real defaults are hardware/usage-set (§7).</span><span class="ko"><code class="inl">max_num_batched_tokens</code>: 한 스텝이 처리할 수 있는 최대 토큰 — prefill+decode 합산. 스케줄러의 핵심 다이얼. 클래스 fallback 2048; 실제 기본값은 하드웨어/용도별(§7).</span></p></div>
+  <div class="mini"><h4><span class="en">max_num_seqs</span><span class="ko">max_num_seqs</span></h4><p><span class="en">The max number of sequences running concurrently. The count cap, alongside the token budget's byte-ish cap. Class fallback 128; real defaults 256–1024 by hardware/usage (§7).</span><span class="ko">동시에 running인 시퀀스 최대 수. token budget의 (바이트성) 상한과 나란한 개수 상한. 클래스 fallback 128; 실제 기본값은 하드웨어/용도별 256–1024(§7).</span></p></div>
+</div>
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">The one idea: there is no prefill phase</span><span class="ko">한 가지 생각: prefill 단계는 없다</span></h2>
+<p><span class="en">If you remember one thing about the V1 scheduler, make it this — and it's the maintainers' own opening comment on the algorithm:</span>
+<span class="ko">V1 스케줄러에서 하나만 기억한다면 이것 — 그리고 이건 알고리즘에 대한 관리자들 자신의 첫 주석이다:</span></p>
+<blockquote class="q">
+  <p>"There's no "decoding phase" nor "prefill phase" in the scheduler. Each request just has the num_computed_tokens and num_tokens_with_spec … At each step, the scheduler tries to assign tokens to the requests so that each request's num_computed_tokens can catch up its num_tokens_with_spec."</p>
+  <cite>— vllm/v1/core/sched/scheduler.py, schedule() · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L442-L450">L442–L450</a></cite>
+</blockquote>
+<p><span class="en">Every request carries two numbers: <code class="inl">num_computed_tokens</code> (how far it's been processed) and <code class="inl">num_tokens</code> (how far it needs to go — prompt, plus any tokens generated so far, plus speculative tokens). The scheduler's whole job each step is to give each request some <i>new</i> tokens to close that gap:</span>
+<span class="ko">모든 요청은 두 숫자를 지닌다: <code class="inl">num_computed_tokens</code>(얼마나 처리됐나)와 <code class="inl">num_tokens</code>(얼마나 가야 하나 — 프롬프트 + 지금까지 생성한 토큰 + speculative 토큰). 스케줄러의 매 스텝 일은 그 격차를 좁히도록 각 요청에 <i>새</i> 토큰을 주는 것뿐이다:</span></p>
+<ul>
+<li><span class="en"><b>A fresh request</b> has <code class="inl">num_computed_tokens = 0</code> and a 4000-token gap → give it a chunk. That's "prefill."</span><span class="ko"><b>새 요청</b>은 <code class="inl">num_computed_tokens = 0</code>이고 4000토큰 격차 → 청크를 준다. 그게 "prefill".</span></li>
+<li><span class="en"><b>A generating request</b> has closed its prompt gap → give it exactly 1 new token. That's "decode."</span><span class="ko"><b>생성 중 요청</b>은 프롬프트 격차를 닫음 → 정확히 새 토큰 1개를 준다. 그게 "decode".</span></li>
+</ul>
+<p><span class="en">Prefill and decode aren't <i>modes the scheduler is in</i> — they're just two sizes of the same "give this request N new tokens" action (a big N vs N=1). That is why they can trivially sit in the same batch: to the scheduler they're the same operation. Everything below follows from this.</span>
+<span class="ko">prefill과 decode는 <i>스케줄러가 처한 모드</i>가 아니라 — 같은 "이 요청에 새 토큰 N개 줘라" 동작의 두 크기일 뿐이다(큰 N vs N=1). 그래서 둘은 자연스럽게 한 배치에 앉을 수 있다: 스케줄러에겐 같은 연산이다. 아래 전부가 여기서 따라 나온다.</span></p>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">Static vs continuous vs chunked — and why mixing ≠ continuous batching</span><span class="ko">static vs continuous vs chunked — 왜 혼합 ≠ continuous batching</span></h2>
+<p><span class="en">This is the knot worth untangling carefully, because "continuous batching" and "mixing prefill with decode" get conflated. They are <b>two different levels</b>. Here are all three batching regimes on one timeline:</span>
+<span class="ko">이건 조심히 풀 만한 매듭이다. "continuous batching"과 "prefill을 decode와 섞기"가 뒤섞여 쓰이기 때문. 둘은 <b>다른 층위</b>다. 세 가지 배칭 방식을 한 타임라인에 놓으면:</span></p>
+
+<svg class="fig" viewBox="0 0 760 350" role="img" aria-label="Three batching regimes: static, continuous without chunked prefill, and chunked/unified">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.s{font:600 10.5px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.d{fill:var(--green-bg);stroke:var(--green-bd)}.p{fill:var(--blue-bg);stroke:var(--blue-bd)}.idle{fill:var(--gray-bg);stroke:var(--gray-bd)}.lbl{font:10px -apple-system,sans-serif;fill:var(--muted)}</style>
+  <!-- regime 1: static -->
+  <text x="20" y="22" class="t">① Static batching — batch frozen until every request finishes</text>
+  <text x="20" y="40" class="k">step →</text>
+  <g>
+    <rect class="p" x="70" y="30" width="60" height="16" rx="2"/><rect class="d" x="132" y="30" width="30" height="16" rx="2"/><rect class="d" x="164" y="30" width="30" height="16" rx="2"/><rect class="d" x="196" y="30" width="30" height="16" rx="2"/><rect class="d" x="228" y="30" width="30" height="16" rx="2"/><rect class="idle" x="260" y="30" width="120" height="16" rx="2"/>
+    <text x="320" y="42" class="lbl" text-anchor="middle">req A,B done — slots idle, C waits</text>
+    <rect class="idle" x="70" y="48" width="310" height="16" rx="2"/><text x="225" y="60" class="lbl" text-anchor="middle">req C cannot join until the whole batch ends</text>
+  </g>
+  <text x="400" y="52" class="k">← low utilization: finished slots sit idle</text>
+
+  <!-- regime 2: continuous, no chunked prefill -->
+  <text x="20" y="100" class="t">② Continuous batching, NO chunked prefill (early V0)</text>
+  <g transform="translate(0,10)">
+    <text x="20" y="120" class="k">step →</text>
+    <rect class="d" x="70" y="110" width="34" height="16" rx="2"/><rect class="d" x="106" y="110" width="34" height="16" rx="2"/>
+    <rect class="p" x="142" y="110" width="70" height="16" rx="2"/><text x="177" y="122" class="lbl" text-anchor="middle">PREFILL step (C)</text>
+    <rect class="d" x="214" y="110" width="34" height="16" rx="2"/><rect class="d" x="250" y="110" width="34" height="16" rx="2"/><rect class="d" x="286" y="110" width="34" height="16" rx="2"/>
+    <text x="90" y="122" class="lbl" text-anchor="middle">dec</text><text x="122" y="122" class="lbl" text-anchor="middle">dec</text>
+    <!-- stall marker -->
+    <rect x="142" y="132" width="70" height="14" rx="2" fill="var(--coral-bg)" stroke="var(--coral-bd)"/><text x="177" y="143" class="lbl" text-anchor="middle" fill="var(--coral-ink)">A,B decode STALLED</text>
+  </g>
+  <text x="340" y="132" class="k">✓ C joins the batch (continuous) — but its prefill</text>
+  <text x="340" y="146" class="k">is its OWN step, freezing A,B for that tick → ITL spike</text>
+
+  <!-- regime 3: chunked / unified -->
+  <text x="20" y="200" class="t">③ Chunked prefill / unified (V0 opt-in → V1 always)</text>
+  <g transform="translate(0,10)">
+    <text x="20" y="222" class="k">step →</text>
+    <rect class="d" x="70" y="210" width="22" height="16" rx="2"/><rect class="d" x="94" y="210" width="22" height="16" rx="2"/><rect class="p" x="118" y="210" width="44" height="16" rx="2"/>
+    <rect class="d" x="176" y="210" width="22" height="16" rx="2"/><rect class="d" x="200" y="210" width="22" height="16" rx="2"/><rect class="p" x="224" y="210" width="44" height="16" rx="2"/>
+    <rect class="d" x="282" y="210" width="22" height="16" rx="2"/><rect class="d" x="306" y="210" width="22" height="16" rx="2"/><rect class="p" x="330" y="210" width="44" height="16" rx="2"/>
+    <text x="140" y="222" class="lbl" text-anchor="middle" fill="var(--blue-ink)">C¼</text><text x="246" y="222" class="lbl" text-anchor="middle" fill="var(--blue-ink)">C½</text><text x="352" y="222" class="lbl" text-anchor="middle" fill="var(--blue-ink)">C¾</text>
+  </g>
+  <text x="400" y="222" class="k">✓ every step = decodes + a prefill CHUNK</text>
+  <text x="400" y="236" class="k">A,B never stall; C's prefill spread over steps</text>
+
+  <!-- legend -->
+  <g transform="translate(0,270)">
+    <rect class="d" x="70" y="0" width="16" height="14" rx="2"/><text x="92" y="11" class="k">decode (1 token / req)</text>
+    <rect class="p" x="220" y="0" width="16" height="14" rx="2"/><text x="242" y="11" class="k">prefill (a chunk of a prompt)</text>
+    <rect class="idle" x="400" y="0" width="16" height="14" rx="2"/><text x="422" y="11" class="k">idle GPU slot</text>
+  </g>
+  <text x="20" y="308" class="k">KEY: going from ① to ② is continuous batching (C can join). Going from ② to ③ is chunked prefill (C joins WITHOUT stalling A,B).</text>
+  <text x="20" y="326" class="k">They are different steps up the ladder — you get continuous batching in ② already, with no mixing at all.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 1 — Three regimes. ① static: slots idle until all finish. ② continuous batching (early V0): a new request joins, but via its own prefill step that stalls running decodes. ③ chunked prefill (V0 opt-in, V1 always): the new request's prefill is chunked and shares each step with decodes — no stall. Continuous batching is the ①→② jump; mixing is the ②→③ jump. Original diagram.</span><span class="ko">그림 1 — 세 방식. ① static: 다 끝날 때까지 슬롯 idle. ② continuous batching(초기 V0): 새 요청이 합류하되 running decode를 멈추는 자체 prefill 스텝을 통해. ③ chunked prefill(V0 opt-in, V1 상시): 새 요청 prefill이 청크로 잘려 매 스텝을 decode와 공유 — stall 없음. continuous batching은 ①→② 도약; 혼합은 ②→③ 도약. 직접 작성한 다이어그램.</span></p>
+
+<p><span class="en">So the answer to "if they don't mix, isn't continuous batching broken?" is <b>no</b>. Regime ② is fully continuous — request C joins the running batch the moment its prefill step finishes, and finished requests free their slots immediately. What ② lacks is only the <i>smoothness</i>: C's prefill monopolizes one step, so A and B emit no token that tick (a latency hiccup, not a batching failure). Chunked prefill (③) removes that hiccup by letting C's prefill share the step. Mixing is a <b>latency/utilization optimization layered on top of</b> continuous batching, not a precondition for it.</span>
+<span class="ko">그래서 "섞지 않으면 continuous batching이 깨지는 거 아니냐?"의 답은 <b>아니오</b>다. 방식 ②는 완전히 continuous다 — 요청 C는 자기 prefill 스텝이 끝나는 순간 running 배치에 합류하고, 끝난 요청은 즉시 슬롯을 반납한다. ②에 없는 건 오직 <i>매끄러움</i>뿐: C의 prefill이 한 스텝을 독점해 A·B가 그 텀에 토큰을 못 낸다(지연 딸꾹질이지, 배칭 실패가 아니다). chunked prefill(③)은 C의 prefill이 스텝을 공유하게 해서 그 딸꾹질을 없앤다. 혼합은 continuous batching <b>위에 얹은 지연/활용 최적화</b>이지, 그 전제가 아니다.</span></p>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">Inside schedule() — two loops, one token budget</span><span class="ko">schedule() 내부 — 두 루프, 하나의 token budget</span></h2>
+<p><span class="en">Each step, <code class="inl">schedule()</code> starts with a fresh <b>token budget</b> and spends it across two loops in order. Think of the budget as a jar of <code class="inl">max_num_batched_tokens</code> coins; each request scheduled takes some coins out.</span>
+<span class="ko">매 스텝 <code class="inl">schedule()</code>는 새 <b>token budget</b>으로 시작해 두 루프에 순서대로 쓴다. budget을 <code class="inl">max_num_batched_tokens</code>개 동전이 든 항아리라 생각하자; 스케줄되는 요청마다 동전을 꺼내 간다.</span></p>
+<pre><code># vllm/v1/core/sched/scheduler.py:459
+token_budget = self.max_num_scheduled_tokens   # = max_num_batched_tokens (default 2048)</code></pre>
+
+<svg class="fig" viewBox="0 0 760 340" role="img" aria-label="schedule() drains one token budget across the running loop then the waiting loop">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.bx{fill:var(--card);stroke:var(--line)}.run{fill:var(--green-bg);stroke:var(--green-bd)}.wait{fill:var(--blue-bg);stroke:var(--blue-bd)}.stop{fill:var(--coral-bg);stroke:var(--coral-bd)}.jar{fill:var(--amber-bg);stroke:var(--amber-bd)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a3)}</style>
+  <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <!-- budget jar -->
+  <rect class="jar" x="300" y="20" width="160" height="30" rx="6"/><text x="380" y="39" class="t" text-anchor="middle">token_budget = 2048</text>
+  <path class="a" d="M380,50 L380,66"/>
+  <!-- loop 1 -->
+  <rect class="run" x="60" y="70" width="640" height="92" rx="8"/>
+  <text x="80" y="90" class="t">LOOP 1 · while req in self.running and token_budget &gt; 0   (scheduler.py:485)</text>
+  <text x="80" y="110" class="k">the ALREADY-running set: decodes (N=1, +spec) and in-flight prefill chunks that started earlier</text>
+  <rect class="bx" x="80" y="120" width="120" height="30" rx="4"/><text x="140" y="139" class="k" text-anchor="middle">decode A → 1 tok</text>
+  <rect class="bx" x="210" y="120" width="120" height="30" rx="4"/><text x="270" y="139" class="k" text-anchor="middle">decode B → 1 tok</text>
+  <rect class="bx" x="340" y="120" width="150" height="30" rx="4"/><text x="415" y="139" class="k" text-anchor="middle">prefill C (cont.) → chunk</text>
+  <text x="520" y="139" class="k">… token_budget −= each</text>
+  <path class="a" d="M380,162 L380,182"/>
+  <!-- loop 2 -->
+  <rect class="wait" x="60" y="186" width="640" height="100" rx="8"/>
+  <text x="80" y="206" class="t">LOOP 2 · while (waiting) and token_budget &gt; 0   (scheduler.py:687)</text>
+  <text x="80" y="226" class="k">brand-NEW requests. Admit one, allocate blocks, take a prefill chunk, repeat — UNTIL a stop condition:</text>
+  <rect class="bx" x="80" y="236" width="130" height="30" rx="4"/><text x="145" y="255" class="k" text-anchor="middle">new req D → chunk</text>
+  <rect class="bx" x="220" y="236" width="130" height="30" rx="4"/><text x="285" y="255" class="k" text-anchor="middle">new req E → chunk</text>
+  <rect class="stop" x="380" y="236" width="150" height="30" rx="4"/><text x="455" y="251" class="k" text-anchor="middle">budget = 0 ?</text><text x="455" y="263" class="k" text-anchor="middle">→ break</text>
+  <rect class="stop" x="540" y="236" width="150" height="30" rx="4"/><text x="615" y="251" class="k" text-anchor="middle">running ≥ max_num_seqs?</text><text x="615" y="263" class="k" text-anchor="middle">→ break</text>
+  <text x="380" y="312" class="t" text-anchor="middle">→ one batch: [A, B, C-chunk, D-chunk, E-chunk] goes to the GPU</text>
+  <text x="380" y="330" class="k" text-anchor="middle">Running is served FIRST, so decodes + in-flight prefills get budget priority; new prefills take what's left.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 2 — One step of schedule(). A single token_budget is drained by the running loop (decodes + continuing prefill chunks) then the waiting loop (new requests), which keeps admitting prefills until the budget hits 0 or the running count reaches max_num_seqs. The resulting mixed batch is one GPU forward pass. Original diagram; per scheduler.py:459/485/687.</span><span class="ko">그림 2 — schedule() 한 스텝. 하나의 token_budget을 running 루프(decode + 이어지는 prefill 청크)가, 이어 waiting 루프(새 요청)가 소진하며, budget이 0이 되거나 running 수가 max_num_seqs에 닿을 때까지 prefill을 계속 admit한다. 결과인 혼합 배치가 GPU forward 한 번. 직접 작성한 다이어그램; 출처 scheduler.py:459/485/687.</span></p>
+
+<h3><span class="en">Loop 1 — the running set (decodes + in-flight prefills)</span><span class="ko">루프 1 — running 집합 (decode + 진행 중 prefill)</span></h3>
+<p><span class="en">The first loop walks <code class="inl">self.running</code>. A decode wants 1 new token (plus speculative tokens if any); an in-flight prefill chunk wants as many as the budget allows. Either way it's the same subtraction:</span>
+<span class="ko">첫 루프는 <code class="inl">self.running</code>을 훑는다. decode는 새 토큰 1개(있으면 speculative 포함)를, 진행 중 prefill 청크는 budget이 허락하는 만큼을 원한다. 어느 쪽이든 같은 뺄셈이다:</span></p>
+<pre><code># vllm/v1/core/sched/scheduler.py:485
+while req_index < len(self.running) and token_budget > 0:
+    ...
+    num_new_tokens = min(num_new_tokens, token_budget)   # decode → 1; prefill → a chunk
+    ...
+    token_budget -= num_new_tokens                       # scheduler.py:637</code></pre>
+
+<h3><span class="en">Loop 2 — the waiting set (this is where new prefills enter)</span><span class="ko">루프 2 — waiting 집합 (새 prefill이 들어오는 곳)</span></h3>
+<p><span class="en">The second loop is a <code class="inl">while</code> over the waiting queue — and because it's a <code class="inl">while</code>, not an <code class="inl">if</code>, it admits <b>as many new requests as fit</b>. Its two stop conditions are the entire answer to "how many prefills per step?":</span>
+<span class="ko">둘째 루프는 waiting 큐에 대한 <code class="inl">while</code>이고 — <code class="inl">if</code>가 아니라 <code class="inl">while</code>이라 — <b>들어맞는 만큼 새 요청을 admit</b>한다. 그 두 정지 조건이 "한 스텝에 prefill 몇 개?"의 답 전부다:</span></p>
+<pre><code># vllm/v1/core/sched/scheduler.py:687
+while (self.waiting or self.skipped_waiting) and token_budget > 0:   # ← STOP if budget spent
+    num_running = len(self.running) + self.num_waiting_for_streaming_input
+    if num_running >= self.max_num_running_reqs:                     # ← STOP at max_num_seqs
+        break
+    ...
+    token_budget -= num_new_tokens                                   # scheduler.py:1073</code></pre>
+<p><span class="en">No third condition. In particular there is <b>no cap on the number of concurrent partial prefills</b> in V1 — the old V0 knob <code class="inl">max_num_partial_prefills</code> does not exist in this scheduler. Only the token budget and <code class="inl">max_num_seqs</code> gate it.</span>
+<span class="ko">세 번째 조건은 없다. 특히 V1엔 <b>동시 부분-prefill 개수 상한이 없다</b> — 옛 V0 노브 <code class="inl">max_num_partial_prefills</code>는 이 스케줄러에 존재하지 않는다. 오직 token budget과 <code class="inl">max_num_seqs</code>만 통제한다.</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L459">token_budget init</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L485-L637">running loop</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L687-L692">waiting loop + stop conditions</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L109-L113">max_num_running_reqs</a></li>
+</ul>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">How many prefills per step? (a worked example)</span><span class="ko">한 스텝에 prefill 몇 개? (예시로)</span></h2>
+<p><span class="en">Now the concrete answer. Take a budget of <code class="inl">max_num_batched_tokens = 2048</code> and <code class="inl">max_num_seqs = 128</code> (the <code class="inl">SchedulerConfig</code> fallback — real per-context defaults are higher, §7; the arithmetic is identical at any budget), and suppose <b>48 decodes</b> are already running (they eat 48 tokens — one each). That leaves <b>2000 tokens</b> for the waiting loop to admit new prefills. How many it admits depends <i>entirely on the prompt lengths</i>:</span>
+<span class="ko">이제 구체적인 답. budget <code class="inl">max_num_batched_tokens = 2048</code>, <code class="inl">max_num_seqs = 128</code>(<code class="inl">SchedulerConfig</code> fallback — 실제 용도별 기본값은 더 큼, §7; 계산은 어떤 budget에서도 동일)이고, <b>decode 48개</b>가 이미 돌고 있다 하자(각 1토큰씩 48토큰 소비). 그러면 waiting 루프가 새 prefill을 admit할 <b>2000토큰</b>이 남는다. 몇 개를 admit하느냐는 <i>오직 프롬프트 길이</i>에 달렸다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 320" role="img" aria-label="Same 2048-token budget: four short prefills fit, or one long prefill chunk fills it">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.s{font:600 11px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.dec{fill:var(--green-bd)}.pf{fill:var(--blue-bg);stroke:var(--blue-bd)}.pf2{fill:var(--blue-bd)}.cap{font:10px -apple-system,sans-serif;fill:#fff}</style>
+  <!-- scenario A -->
+  <text x="20" y="22" class="t">Scenario A — SHORT prompts (500 tokens each) → many prefills in ONE step</text>
+  <text x="20" y="42" class="k">token budget: 2048</text>
+  <!-- bar A: 700px wide = 2048 tokens; scale ~0.3418 px/token -->
+  <rect class="dec" x="20" y="48" width="16" height="34" rx="2"/><text x="28" y="98" class="k" text-anchor="middle">48</text>
+  <rect class="pf" x="38" y="48" width="171" height="34" rx="2"/><text x="123" y="69" class="s" text-anchor="middle" fill="var(--blue-ink)">prefill D · 500</text>
+  <rect class="pf" x="211" y="48" width="171" height="34" rx="2"/><text x="296" y="69" class="s" text-anchor="middle" fill="var(--blue-ink)">prefill E · 500</text>
+  <rect class="pf" x="384" y="48" width="171" height="34" rx="2"/><text x="469" y="69" class="s" text-anchor="middle" fill="var(--blue-ink)">prefill F · 500</text>
+  <rect class="pf" x="557" y="48" width="171" height="34" rx="2"/><text x="642" y="69" class="s" text-anchor="middle" fill="var(--blue-ink)">prefill G · 500</text>
+  <text x="20" y="104" class="k">48 (decodes) + 500×4 = 2048 → budget exactly full → <tspan fill="var(--blue-ink)" font-weight="700">4 new prefills admitted this single step</tspan> (48+4 running = 52 &lt; 128 ✓)</text>
+
+  <!-- scenario B -->
+  <text x="20" y="150" class="t">Scenario B — ONE LONG prompt (5000 tokens) → 1 prefill chunk fills the budget</text>
+  <text x="20" y="170" class="k">token budget: 2048</text>
+  <rect class="dec" x="20" y="176" width="16" height="34" rx="2"/><text x="28" y="226" class="k" text-anchor="middle">48</text>
+  <rect class="pf2" x="38" y="176" width="690" height="34" rx="2"/><text x="383" y="197" class="cap" text-anchor="middle">prefill C · chunk 1 = min(5000, 2000) = 2000 tokens</text>
+  <text x="20" y="232" class="k">48 + 2000 = 2048 → budget full after ONE prefill → <tspan fill="var(--blue-ink)" font-weight="700">only 1 prefill this step</tspan>; C's remaining 3000 tokens spill to the next steps (§5)</text>
+
+  <!-- takeaway -->
+  <rect x="20" y="252" width="708" height="52" rx="6" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="34" y="272" class="s" fill="var(--amber-ink)">Same code, same budget, opposite outcome.</text>
+  <text x="34" y="290" class="k" fill="var(--amber-ink)">"Prefill = 1 per step" is never a rule — it only ever happens when one long prompt's chunk happens to consume the whole budget.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 3 — Prefills per step is a budget-division outcome, not a fixed limit. With 2000 tokens free, four 500-token prompts all start in one step; a single 5000-token prompt takes a 2000-token chunk and fills the budget alone. Both obey the exact same waiting loop. Original diagram.</span><span class="ko">그림 3 — 스텝당 prefill 수는 budget 나눗셈의 결과이지 고정 한도가 아니다. 2000토큰이 남으면 500토큰 프롬프트 4개가 한 스텝에 다 시작하고; 5000토큰 프롬프트 하나는 2000토큰 청크를 가져가 혼자 budget을 채운다. 둘 다 똑같은 waiting 루프를 따른다. 직접 작성한 다이어그램.</span></p>
+
+<p><span class="en">The chunk size for each new prefill is exactly this clamp — take the whole remaining prompt, unless a <code class="inl">long_prefill_token_threshold</code> caps it, then never exceed the remaining budget:</span>
+<span class="ko">각 새 prefill의 청크 크기는 정확히 이 클램프다 — 남은 프롬프트 전부를 가져오되, <code class="inl">long_prefill_token_threshold</code>가 있으면 그걸로 캡하고, 남은 budget을 절대 넘지 않는다:</span></p>
+<pre><code># vllm/v1/core/sched/scheduler.py:899  (waiting-loop chunk sizing)
+threshold = self.scheduler_config.long_prefill_token_threshold
+if 0 < threshold < num_new_tokens:
+    num_new_tokens = threshold              # cap one prefill's per-step size
+...
+num_new_tokens = min(num_new_tokens, token_budget)   # never exceed the jar</code></pre>
+
+<div class="callout c-amber">
+<span class="tag"><span class="en">the two ways to change the answer</span><span class="ko">답을 바꾸는 두 방법</span></span>
+<p><span class="en"><b>1. <code class="inl">--long-prefill-token-threshold</code>.</b> In Scenario B, set it to 1024 and prompt C's chunk becomes 1024, not 2000 — leaving 976 tokens for the waiting loop to admit a <i>second</i> new prefill this same step. It's the knob for "don't let one giant prompt hog the batch." <b>2. <code class="inl">--max-num-seqs</code>.</b> If 128 requests are already running, the waiting loop breaks on its very first check (<code class="inl">num_running ≥ max_num_seqs</code>) and admits <b>zero</b> new prefills this step no matter how much budget is free — the count cap, not the token cap, is binding.</span>
+<span class="ko"><b>1. <code class="inl">--long-prefill-token-threshold</code>.</b> Scenario B에서 1024로 두면 프롬프트 C의 청크가 2000이 아니라 1024가 되고 — 976토큰이 남아 waiting 루프가 같은 스텝에 <i>두 번째</i> 새 prefill을 admit한다. "거대한 프롬프트 하나가 배치를 독점하지 못하게" 하는 노브다. <b>2. <code class="inl">--max-num-seqs</code>.</b> 이미 128개가 돌고 있으면 waiting 루프는 첫 확인(<code class="inl">num_running ≥ max_num_seqs</code>)에서 break해 budget이 아무리 남아도 새 prefill을 <b>0개</b> admit한다 — token 상한이 아니라 개수 상한이 걸리는 경우.</span></p>
+</div>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L899-L913">chunk sizing (threshold + budget clamp)</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/config/scheduler.py#L42-L44">defaults 2048 / 128</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/config/scheduler.py#L70">long_prefill_token_threshold</a></li>
+</ul>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Chunked prefill across steps — following one long prompt</span><span class="ko">스텝을 가로지르는 chunked prefill — 긴 프롬프트 하나 따라가기</span></h2>
+<p><span class="en">Scenario B left prompt C with 3000 tokens still to prefill. Here's what happens over the next steps — and notice C <b>moves from the waiting loop to the running loop</b> the moment its first chunk is scheduled (it's now an "in-flight prefill"), and it <b>flips to decode</b> the moment its prompt is fully computed:</span>
+<span class="ko">Scenario B는 프롬프트 C에 아직 prefill할 3000토큰을 남겼다. 다음 스텝들에서 벌어지는 일 — 그리고 C가 첫 청크가 스케줄되는 순간 <b>waiting 루프에서 running 루프로 이동</b>(이제 "진행 중 prefill")하고, 프롬프트가 완전히 계산되는 순간 <b>decode로 전환</b>되는 것에 주목:</span></p>
+
+<svg class="fig" viewBox="0 0 760 340" role="img" aria-label="A 5000-token prompt chunked over three steps while decodes ride along, then flips to decode">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.s{font:600 10.5px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.dec{fill:var(--green-bd)}.pf{fill:var(--blue-bd)}.pfn{fill:var(--blue-bg);stroke:var(--blue-bd)}.newp{fill:var(--purple-bg);stroke:var(--purple-bd)}.cap{font:9.5px -apple-system,sans-serif;fill:#fff}.lp{font:9.5px -apple-system,sans-serif;fill:var(--blue-ink)}</style>
+  <!-- meter of C progress -->
+  <text x="20" y="20" class="t">Prompt C = 5000 prefill tokens, budget 2048/step. Watch num_computed_tokens climb, C stay in RUNNING, then flip to decode.</text>
+
+  <!-- step 1 -->
+  <text x="20" y="46" class="s">step 1</text><text x="76" y="46" class="k">[waiting loop admits C]</text>
+  <rect class="dec" x="150" y="34" width="16" height="20" rx="2"/>
+  <rect class="pf" x="168" y="34" width="552" height="20" rx="2"/><text x="444" y="48" class="cap" text-anchor="middle">C · chunk 1 = 2000</text>
+  <text x="20" y="70" class="k">C: 0 → 2000 / 5000 computed. C now enters self.running as an in-flight prefill.</text>
+
+  <!-- step 2 -->
+  <text x="20" y="98" class="s">step 2</text><text x="76" y="98" class="k">[running loop serves C]</text>
+  <rect class="dec" x="150" y="86" width="17" height="20" rx="2"/>
+  <rect class="pf" x="169" y="86" width="551" height="20" rx="2"/><text x="444" y="100" class="cap" text-anchor="middle">C · chunk 2 = 2000</text>
+  <text x="20" y="122" class="k">C: 2000 → 4000 / 5000. Still prefill, still in the running loop. Decodes (≈50) ride along untouched.</text>
+
+  <!-- step 3 -->
+  <text x="20" y="150" class="s">step 3</text><text x="76" y="150" class="k">[running: C finishes; waiting: H starts]</text>
+  <rect class="dec" x="150" y="138" width="18" height="20" rx="2"/>
+  <rect class="pf" x="170" y="138" width="276" height="20" rx="2"/><text x="308" y="152" class="cap" text-anchor="middle">C · chunk 3 = 1000</text>
+  <rect class="newp" x="448" y="138" width="272" height="20" rx="2"/><text x="584" y="152" class="lp" text-anchor="middle">new prefill H · 990 (leftover budget)</text>
+  <text x="20" y="174" class="k">C: 4000 → 5000 / 5000 → prompt DONE → C emits its first output token this step, then becomes a decode. Spare budget admitted H.</text>
+
+  <!-- step 4 -->
+  <text x="20" y="202" class="s">step 4</text><text x="76" y="202" class="k">[C is now a decode]</text>
+  <rect class="dec" x="150" y="190" width="18" height="20" rx="2"/>
+  <rect class="dec" x="170" y="190" width="18" height="20" rx="2"/><text x="179" y="204" class="cap" text-anchor="middle">C</text>
+  <rect class="pf" x="190" y="190" width="530" height="20" rx="2"/><text x="455" y="204" class="cap" text-anchor="middle">H · chunk 2 …</text>
+  <text x="20" y="226" class="k">C now takes 1 token/step like any decode; H continues its own chunked prefill. The roles were never fixed — only num_computed_tokens vs num_tokens.</text>
+
+  <!-- legend -->
+  <g transform="translate(0,250)">
+    <rect class="dec" x="150" y="0" width="16" height="14" rx="2"/><text x="172" y="11" class="k">decode (1 tok)</text>
+    <rect class="pf" x="300" y="0" width="16" height="14" rx="2"/><text x="322" y="11" class="k">C prefill chunk</text>
+    <rect class="newp" x="470" y="0" width="16" height="14" rx="2"/><text x="492" y="11" class="k">a different new prefill</text>
+  </g>
+  <text x="20" y="290" class="k">TTFT of C ≈ 3 steps (its prompt spanned 3 chunks). Meanwhile every decode kept emitting a token every step — that's the point of chunking.</text>
+  <text x="20" y="308" class="k">Smaller budget → more, thinner chunks → longer TTFT but smoother decode; bigger budget → fewer, fatter chunks → faster TTFT, more decode jitter.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 4 — One long prompt, chunked across steps. C's prefill is split into 2000+2000+1000 over three steps; it lives in the waiting loop for step 1 then the running loop, and flips to a decode once its prompt is fully computed. Decodes emit a token every step throughout. Original diagram; the roles follow only from num_computed_tokens vs num_tokens (§1).</span><span class="ko">그림 4 — 긴 프롬프트 하나, 스텝에 걸쳐 청크. C의 prefill이 세 스텝에 2000+2000+1000으로 쪼개진다; step 1엔 waiting 루프, 이후 running 루프에 살고, 프롬프트가 완전히 계산되면 decode로 전환. decode들은 내내 매 스텝 토큰을 낸다. 직접 작성한 다이어그램; 역할은 오직 num_computed_tokens vs num_tokens에서 따라 나온다(§1).</span></p>
+
+<p><span class="en">This is the trade the token budget controls: it's the <b>TTFT ⇄ decode-smoothness dial</b>. A big <code class="inl">max_num_batched_tokens</code> gives fat prefill chunks (a prompt finishes in fewer steps → lower time-to-first-token) but a fatter prefill can crowd the decodes' share of a step, adding inter-token jitter. A small budget does the reverse. There is no separate "prefill vs decode priority" flag to tune — you tune this one number, and the running-loop-first ordering already gives decodes first claim on the budget.</span>
+<span class="ko">이게 token budget이 조절하는 거래다: <b>TTFT ⇄ decode 매끄러움 다이얼</b>. 큰 <code class="inl">max_num_batched_tokens</code>는 두꺼운 prefill 청크를 줘(프롬프트가 더 적은 스텝에 끝남 → 낮은 TTFT) 하지만 두꺼운 prefill이 한 스텝에서 decode 몫을 밀어내 토큰 간 지터를 더할 수 있다. 작은 budget은 반대. 별도의 "prefill vs decode 우선순위" 플래그는 없다 — 이 숫자 하나를 튜닝하면 되고, running-루프-먼저 순서가 이미 decode에 budget 우선권을 준다.</span></p>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Preemption — when a step runs out of blocks</span><span class="ko">Preemption — 스텝에 block이 모자랄 때</span></h2>
+<p><span class="en">The token budget caps <i>compute</i> per step, but there's a second, harder limit: <b>KV-cache blocks</b>. A decode needs a fresh block every time its current block fills up (every 16 tokens). If the <a class="src" href="vllm-kv-cache-block-management.html">block pool</a> has no free block, the allocator returns <code class="inl">None</code> — and the scheduler must make room by <b>preempting</b> a running request:</span>
+<span class="ko">token budget은 스텝당 <i>연산</i>을 제한하지만, 더 딱딱한 두 번째 한계가 있다: <b>KV 캐시 block</b>. decode는 현재 block이 찰 때마다(16토큰마다) 새 block이 필요하다. <a class="src" href="vllm-kv-cache-block-management.html">block 풀</a>에 free block이 없으면 할당기는 <code class="inl">None</code>을 반환하고 — 스케줄러는 running 요청을 <b>preempt</b>해 자리를 만들어야 한다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 250" role="img" aria-label="Preemption: no free block, pop the last running request, free its blocks, send it back to waiting">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.run{fill:var(--green-bg);stroke:var(--green-bd)}.wait{fill:var(--blue-bg);stroke:var(--blue-bd)}.stop{fill:var(--coral-bg);stroke:var(--coral-bd)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a6p)}.ar{stroke:var(--coral-bd);stroke-width:1.5;fill:none;marker-end:url(#a6r)}</style>
+  <defs><marker id="a6p" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker><marker id="a6r" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--coral-bd)"/></marker></defs>
+  <text x="20" y="22" class="t">Running loop tries to grow request A's blocks…</text>
+  <rect class="run" x="20" y="34" width="130" height="40" rx="5"/><text x="85" y="52" class="k" text-anchor="middle">A needs +1 block</text><text x="85" y="67" class="k" text-anchor="middle">to keep decoding</text>
+  <rect class="stop" x="180" y="34" width="150" height="40" rx="5"/><text x="255" y="52" class="k" text-anchor="middle">block pool: 0 free</text><text x="255" y="67" class="k" text-anchor="middle">allocate → None</text>
+  <path class="a" d="M150,54 L178,54"/>
+  <text x="360" y="40" class="t">→ preempt to free blocks</text>
+  <!-- running list -->
+  <text x="360" y="64" class="k">self.running (FCFS): [ A, B, … , R ]</text>
+  <rect class="run" x="360" y="72" width="40" height="26" rx="4"/><text x="380" y="89" class="k" text-anchor="middle">A</text>
+  <rect class="run" x="404" y="72" width="40" height="26" rx="4"/><text x="424" y="89" class="k" text-anchor="middle">B</text>
+  <text x="460" y="89" class="k">…</text>
+  <rect class="stop" x="480" y="72" width="60" height="26" rx="4"/><text x="510" y="89" class="k" text-anchor="middle">R ← pop()</text>
+  <path class="ar" d="M540,85 C 600,85 610,140 540,150"/>
+  <!-- R goes to waiting -->
+  <rect class="stop" x="360" y="118" width="360" height="44" rx="6"/><text x="540" y="136" class="k" text-anchor="middle">_preempt_request(R): free ALL of R's KV blocks → pool,</text><text x="540" y="152" class="k" text-anchor="middle">R.status = PREEMPTED, R goes back to the WAITING queue</text>
+  <path class="ar" d="M255,74 C 255,120 340,140 358,140"/><text x="150" y="120" class="k">freed blocks refill the pool → A can grow</text>
+  <text x="20" y="196" class="t">Later, R is re-admitted by the waiting loop and re-prefills its prompt</text>
+  <text x="20" y="216" class="k">(prefix caching can salvage the still-cached prefix, so recompute is often partial, not full — see the block-management note).</text>
+  <text x="20" y="236" class="k">Default policy = FCFS: the LAST-added running request is preempted first (self.running.pop()). PRIORITY policy preempts the lowest-priority one.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 5 — Preemption. When block allocation returns None, the scheduler pops a running request (FCFS: the newest; PRIORITY: the lowest-priority), frees its KV blocks back to the pool, and returns it to the waiting queue as PREEMPTED. It re-prefills later — partially, if its prefix is still cached. Original diagram; per scheduler.py preempt path.</span><span class="ko">그림 5 — Preemption. block 할당이 None을 반환하면 스케줄러는 running 요청을 pop(FCFS: 가장 최근 것; PRIORITY: 최저 우선순위)해 KV block을 풀로 반납하고 waiting 큐에 PREEMPTED로 돌려보낸다. 나중에 재-prefill한다 — prefix가 아직 캐시돼 있으면 부분적으로. 직접 작성한 다이어그램; 출처 scheduler.py preempt 경로.</span></p>
+
+<pre><code># vllm/v1/core/sched/scheduler.py:610  (FCFS branch, inside the running loop)
+else:
+    preempted_req = self.running.pop()          # newest running request
+self._preempt_request(preempted_req, ...)       # free its blocks, → WAITING (PREEMPTED)
+preempted_reqs.append(preempted_req)
+if preempted_req == request:
+    break                                        # nothing left to preempt → give up this req</code></pre>
+<p><span class="en">This is the same <code class="inl">None</code>-from-the-allocator hinge described in the <a class="src" href="vllm-kv-cache-block-management.html">block-management note</a> §4 — seen there from the <code class="inl">KVCacheManager.allocate_slots</code> side, seen here from the scheduler side. The <b>watermark</b> (a sliver of blocks the waiting loop can't touch) exists precisely so a burst of new admissions can't drive the running set straight into this preemption loop.</span>
+<span class="ko">이건 <a class="src" href="vllm-kv-cache-block-management.html">block 관리 노트</a> §4에서 설명한 그 <code class="inl">None</code> 경첩과 같은 것이다 — 거긴 <code class="inl">KVCacheManager.allocate_slots</code> 쪽에서, 여긴 스케줄러 쪽에서 본 것. <b>워터마크</b>(waiting 루프가 못 건드리는 block 여유분)는 바로 신규 admission 폭주가 running 집합을 곧장 이 preemption 루프로 몰지 못하게 하려고 존재한다.</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L588-L630">preemption path (FCFS + PRIORITY)</a> · related: <a class="src" href="vllm-kv-cache-block-management.html">block-management note §4</a></li>
+</ul>
+</section>
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">V0 → V1, the flags, and our take</span><span class="ko">V0 → V1, 플래그, 우리 관점</span></h2>
+
+<h3><span class="en">The V0 → V1 evolution (the honest version)</span><span class="ko">V0 → V1 진화 (정확한 버전)</span></h3>
+<p><span class="en">Tying §2 to real history — and correcting a common overstatement that V0 "never mixed":</span>
+<span class="ko">§2를 실제 역사에 붙이며 — V0가 "절대 안 섞였다"는 흔한 과장을 바로잡으면:</span></p>
+<table>
+<thead><tr><th><span class="en">regime</span><span class="ko">방식</span></th><th><span class="en">within one step</span><span class="ko">한 스텝 안</span></th><th><span class="en">continuous batching?</span><span class="ko">continuous batching?</span></th></tr></thead>
+<tbody>
+<tr><td><span class="en">V0, chunked prefill <b>off</b> (early default)</span><span class="ko">V0, chunked prefill <b>off</b> (초기 기본)</span></td><td><span class="en">a step is all-prefill <i>or</i> all-decode; a prefill step stalls decodes</span><span class="ko">스텝이 전부-prefill <i>또는</i> 전부-decode; prefill 스텝이 decode를 멈춤</span></td><td><span class="en">✅ yes (requests still join/leave per step)</span><span class="ko">✅ 예 (요청은 스텝마다 들고 남)</span></td></tr>
+<tr><td><span class="en">V0, chunked prefill <b>on</b> (opt-in, later default for many configs)</span><span class="ko">V0, chunked prefill <b>on</b> (opt-in, 이후 다수 구성 기본)</span></td><td><span class="en">prefill + decode <b>mixed</b>; decodes first, prefill chunks fill the rest</span><span class="ko">prefill + decode <b>혼합</b>; decode 먼저, prefill 청크가 나머지 채움</span></td><td><span class="en">✅ yes</span><span class="ko">✅ 예</span></td></tr>
+<tr><td><span class="en"><b>V1</b> (this note)</span><span class="ko"><b>V1</b> (이 노트)</span></td><td><span class="en">always mixed — the unified "catch up num_computed_tokens" loop; no phase concept exists</span><span class="ko">항상 혼합 — 통합 "num_computed_tokens 따라잡기" 루프; phase 개념 자체가 없음</span></td><td><span class="en">✅ yes</span><span class="ko">✅ 예</span></td></tr>
+</tbody>
+</table>
+<p><span class="en">The takeaway from §2, restated: <b>continuous batching is present in every row</b>. What changed across the rows is only whether prefill and decode share a step. V1's real novelty isn't "mixing exists" — it's that the unified/chunked path is the <i>only</i>, always-on scheduler; there is no mode switch back to separate phases.</span>
+<span class="ko">§2의 요점을 다시 말하면: <b>continuous batching은 모든 행에 있다</b>. 행마다 달라진 건 오직 prefill과 decode가 스텝을 공유하느냐뿐. V1의 진짜 새로움은 "혼합이 있다"가 아니라 — 통합/chunked 경로가 <i>유일한</i> 상시 스케줄러라는 것; 분리 phase로 돌아가는 모드 스위치가 없다.</span></p>
+
+<h3><span class="en">The flags — and the real defaults (code-level)</span><span class="ko">플래그 — 그리고 실제 기본값 (코드 레벨)</span></h3>
+<p><span class="en">Two layers of defaults exist. The <code class="inl">SchedulerConfig</code> class fallback is <b>2048 / 128 / block 16</b>, but when you don't pass values, <code class="inl">EngineArgs._set_default_args</code> overrides them by <b>hardware × usage context</b>:</span>
+<span class="ko">기본값이 두 층이다. <code class="inl">SchedulerConfig</code> 클래스 fallback은 <b>2048 / 128 / block 16</b>이지만, 값을 안 주면 <code class="inl">EngineArgs._set_default_args</code>가 <b>하드웨어 × 용도</b>로 덮어쓴다:</span></p>
+<table>
+<thead><tr><th><span class="en">how you launch</span><span class="ko">실행 방식</span></th><th>H100 / H200 / MI300x (≥70GB)</th><th><span class="en">A100 / smaller</span><span class="ko">A100 / 소형</span></th></tr></thead>
+<tbody>
+<tr><td><span class="en"><code class="inl">LLM(...)</code> offline (LLM_CLASS)</span><span class="ko"><code class="inl">LLM(...)</code> 오프라인</span></td><td>batched <b>16384</b>, seqs <b>1024</b></td><td>batched <b>8192</b>, seqs <b>256</b></td></tr>
+<tr><td><span class="en"><code class="inl">vllm serve</code> (OPENAI_API_SERVER)</span><span class="ko"><code class="inl">vllm serve</code> API 서버</span></td><td>batched <b>8192</b>, seqs <b>1024</b></td><td>batched <b>2048</b>, seqs <b>256</b></td></tr>
+</tbody>
+</table>
+<pre><code># vllm/engine/arg_utils.py:2527  (≥70GB and NOT A100)
+default_max_num_batched_tokens = {UsageContext.LLM_CLASS: 16384,
+                                  UsageContext.OPENAI_API_SERVER: 8192}
+default_max_num_seqs         = {UsageContext.LLM_CLASS: 1024,
+                                  UsageContext.OPENAI_API_SERVER: 1024}
+# else (A100 / smaller): 8192/2048 tokens, 256/256 seqs  (arg_utils.py:2537)
+# A100 is deliberately kept low — large batched_tokens REDUCES A100 throughput (PR #17885)</code></pre>
+<ul>
+<li><span class="en"><code class="inl">--max-num-batched-tokens</code> — the token budget per step (§3). The TTFT ⇄ decode-smoothness dial (§5).</span><span class="ko"><code class="inl">--max-num-batched-tokens</code> — 스텝당 token budget(§3). TTFT ⇄ decode 매끄러움 다이얼(§5).</span></li>
+<li><span class="en"><code class="inl">--max-num-seqs</code> — the concurrent-sequence count cap; binds the waiting loop when many requests already run (§4).</span><span class="ko"><code class="inl">--max-num-seqs</code> — 동시 시퀀스 개수 상한; 이미 많이 돌 때 waiting 루프를 막음(§4).</span></li>
+<li><span class="en"><code class="inl">--long-prefill-token-threshold</code> — caps one prefill's per-step chunk so a giant prompt can't hog the batch (default 0 = off, §4).</span><span class="ko"><code class="inl">--long-prefill-token-threshold</code> — prefill 하나의 스텝당 청크를 캡해 거대 프롬프트가 배치를 독점 못 하게(기본 0 = off, §4).</span></li>
+<li><span class="en"><code class="inl">--enable-chunked-prefill</code> — default <b>True</b> on V1; forced off only for encoder-decoder models. There's no "turn V1 into separate phases" switch.</span><span class="ko"><code class="inl">--enable-chunked-prefill</code> — V1 기본 <b>True</b>; encoder-decoder 모델만 강제 off. "V1을 분리 phase로" 스위치는 없다.</span></li>
+</ul>
+
+<h3><span class="en">Block size (default 16) — the trade-off</span><span class="ko">Block size (기본 16) — 트레이드오프</span></h3>
+<p><span class="en">The token budget above bounds compute; block size bounds <i>how KV memory is chopped up</i>. Default is 16 tokens per block (<code class="inl">config/cache.py:47</code>), applied when you don't set <code class="inl">--block-size</code>:</span>
+<span class="ko">위의 token budget은 연산을 제한하고, block size는 <i>KV 메모리를 어떻게 쪼개는지</i>를 정한다. 기본은 block당 16토큰(<code class="inl">config/cache.py:47</code>), <code class="inl">--block-size</code>를 안 주면 적용:</span></p>
+<table>
+<thead><tr><th></th><th><span class="en">smaller block (e.g. 8)</span><span class="ko">작은 block (예: 8)</span></th><th><span class="en">larger block (e.g. 32)</span><span class="ko">큰 block (예: 32)</span></th></tr></thead>
+<tbody>
+<tr><td><span class="en">internal fragmentation</span><span class="ko">내부 단편화</span></td><td><span class="en">low — a seq wastes ≤7 tokens in its last block</span><span class="ko">낮음 — 마지막 block에서 ≤7토큰 낭비</span></td><td><span class="en">high — wastes up to 31 tokens</span><span class="ko">높음 — 최대 31토큰 낭비</span></td></tr>
+<tr><td><span class="en">prefix-cache reuse granularity</span><span class="ko">prefix 캐시 재사용 입도</span></td><td><span class="en">fine — shares on 8-token boundaries</span><span class="ko">세밀 — 8토큰 경계로 공유</span></td><td><span class="en">coarse — needs 32-token-aligned prefixes</span><span class="ko">거침 — 32토큰 정렬 prefix 필요</span></td></tr>
+<tr><td><span class="en">block-table size / mgmt overhead</span><span class="ko">block table 크기 / 관리 오버헤드</span></td><td><span class="en">larger (more blocks)</span><span class="ko">큼 (block 수↑)</span></td><td><span class="en">smaller (fewer blocks)</span><span class="ko">작음 (block 수↓)</span></td></tr>
+<tr><td><span class="en">kernel gather ops</span><span class="ko">커널 gather 연산</span></td><td><span class="en">more indexing</span><span class="ko">인덱싱 많음</span></td><td><span class="en">fewer, bigger gathers</span><span class="ko">적고 큰 gather</span></td></tr>
+</tbody>
+</table>
+<p><span class="en">16 is the balance point; some attention backends further constrain the legal block sizes. (Full block-lifecycle mechanics are in the <a class="src" href="vllm-kv-cache-block-management.html">block-management note</a>.)</span>
+<span class="ko">16이 균형점이고, 일부 어텐션 백엔드는 허용 block size를 더 제한한다. (block 생애주기 전체 메커니즘은 <a class="src" href="vllm-kv-cache-block-management.html">block 관리 노트</a>에.)</span></p>
+
+<div class="callout c-purple">
+<p><b><span class="en">Editor's note — our take (not a vLLM claim)</span><span class="ko">편집자 주 — 우리 관점 (vLLM의 주장 아님)</span></b></p>
+<p><span class="en">For MI250/MI300x serving, the practical reading: (1) <b>report the effective defaults, don't quote 2048/128.</b> On a ≥70GB AMD GPU via <code class="inl">vllm serve</code> you're actually at 8192/1024 — benchmarks that assume the class fallback will misjudge concurrency. (2) <b>The token budget is your single most important latency knob</b>, and it's a TTFT ⇄ ITL trade, not a throughput free-lunch — raise it and long prompts prefill faster but decodes jitter; the A100 regression baked into the code (PR #17885) is a live warning that "bigger budget = faster" is false on some hardware, so measure per-GPU. (3) <b>When you see decode latency cliffs under load, suspect preemption (§6), not the kernel</b> — it's driven by block exhaustion, i.e. the KV budget from the block-management note, and is tuned with <code class="inl">gpu_memory_utilization</code> + <code class="inl">max_num_seqs</code>, not by touching the scheduler. The scheduler itself is cheap host-side bookkeeping; its whole job is to keep the GPU's one forward pass per step as full as the budget and the block pool allow.</span>
+<span class="ko">MI250/MI300x 서빙 관점의 실무 독법: (1) <b>실효 기본값을 보고하라, 2048/128을 인용하지 말고.</b> ≥70GB AMD GPU에서 <code class="inl">vllm serve</code>면 실제로 8192/1024다 — 클래스 fallback을 가정한 벤치는 동시성을 오판한다. (2) <b>token budget이 가장 중요한 지연 노브</b>이고, throughput 공짜가 아니라 TTFT ⇄ ITL 거래다 — 올리면 긴 프롬프트 prefill은 빨라지지만 decode가 지터; 코드에 박힌 A100 회귀(PR #17885)는 "budget 크면 빠르다"가 일부 하드웨어에선 거짓이라는 살아있는 경고니 GPU별로 측정하라. (3) <b>부하 하 decode 지연 절벽이 보이면 커널이 아니라 preemption(§6)을 의심하라</b> — block 고갈, 즉 block 관리 노트의 KV budget이 원인이고, 스케줄러가 아니라 <code class="inl">gpu_memory_utilization</code> + <code class="inl">max_num_seqs</code>로 튜닝한다. 스케줄러 자체는 값싼 호스트 장부질이고, 그 일 전부는 스텝당 GPU forward 한 번을 budget과 block 풀이 허락하는 만큼 꽉 채우는 것이다.</span></p>
+</div>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<p><span class="en">All line numbers pinned to vLLM commit <code class="inl">8700f86</code> (they drift across releases). Apache-2.0.</span>
+<span class="ko">모든 라인 번호는 vLLM 커밋 <code class="inl">8700f86</code> 기준(릴리스마다 달라진다). Apache-2.0.</span></p>
+<ul class="srcs">
+<li><b>Scheduling algorithm / no-phase</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L442-L450">scheduler.py:442 (the comment)</a></li>
+<li><b>Two loops + budget</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L459">token_budget init</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L485-L637">running loop</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L687-L692">waiting loop + stops</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L899-L913">chunk sizing</a></li>
+<li><b>Preemption</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/sched/scheduler.py#L588-L630">preempt path (FCFS + PRIORITY)</a></li>
+<li><b>Defaults</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/config/scheduler.py#L42-L44">class fallback 2048 / 128</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/engine/arg_utils.py#L2500-L2577">EngineArgs usage-context defaults</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/config/scheduler.py#L74">enable_chunked_prefill=True</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/config/cache.py#L47">block_size 16</a></li>
+<li><b>Companion notes</b> — <a href="./vllm-kv-cache-block-management.html">KV-cache block management</a> · <a href="./vllm-paged-attention-v1-v2.html">PagedAttention v1 vs v2</a></li>
+</ul>
+</section>
+
+<footer class="foot">
+<p><span class="en">Code-walk of vLLM's V1 scheduler (prefill/decode batching), pinned to commit <a href="https://github.com/vllm-project/vllm/tree/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd">8700f86</a> (Apache-2.0). Diagrams are original, drawn from the code paths cited above.</span><span class="ko">vLLM V1 스케줄러(prefill/decode 배칭) 코드워크, 커밋 <a href="https://github.com/vllm-project/vllm/tree/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd">8700f86</a> 기준(Apache-2.0). 다이어그램은 위에 인용한 코드 경로를 바탕으로 직접 작성.</span></p>
+<p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
+</footer>
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
