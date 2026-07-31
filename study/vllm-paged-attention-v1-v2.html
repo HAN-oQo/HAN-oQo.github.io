@@ -353,6 +353,84 @@
   <span class="en">v2 writes every partition's partial output to global memory and then reads it all back in the reduction kernel — extra memory traffic and a second kernel launch. When v1 already fills the GPU (big batch, or short context), that overhead is pure loss. So neither kernel is universally better; vLLM chooses per step (§4).</span>
   <span class="ko">v2는 모든 파티션의 부분 출력을 global memory에 썼다가 reduction 커널에서 다시 읽는다 — 추가 메모리 트래픽 + 두 번째 커널 실행. v1이 이미 GPU를 채우면(큰 배치, 또는 짧은 컨텍스트) 그 오버헤드는 순손해다. 그러니 어느 커널도 보편적으로 낫지 않다; vLLM은 스텝마다 고른다(§4).</span>
 </div>
+
+<h3><span class="en">A concrete example — the block table across 3 layers, read by v1 vs v2</span><span class="ko">구체 예 — 3개 레이어의 block table, v1과 v2가 어떻게 읽나</span></h3>
+<p><span class="en">This is the part that trips people up, so here's a worked toy. One sequence "A" has <b>12 tokens</b>; use a tiny <code class="inl">block_size = 4</code> (real vLLM uses 16). That gives <b>3 storage blocks</b> per layer — a block holds <code class="inl">block_size</code> tokens <b>with all heads inside</b> (heads are <i>not</i> separate blocks). The sequence has <b>one block table</b> mapping its logical blocks to scattered physical slots, and <b>every layer shares that same table</b> while keeping its own KV values:</span>
+<span class="ko">여기가 다들 걸리는 부분이라 장난감 예제 하나. 시퀀스 "A"가 <b>12토큰</b>; 아주 작은 <code class="inl">block_size = 4</code>(실제 vLLM은 16). 그러면 레이어당 <b>저장 block 3개</b> — 한 block은 <code class="inl">block_size</code> 토큰을 <b>모든 head와 함께</b> 담는다(head는 <i>별도</i> block이 아님). 시퀀스엔 논리 block을 흩어진 물리 슬롯으로 매핑하는 <b>block table 하나</b>가 있고, <b>모든 레이어가 같은 테이블을 공유</b>하되 각자 자기 KV 값을 보관한다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 250" role="img" aria-label="One sequence's KV blocks scattered across physical slots, in 3 layers, via one shared block table">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.bt{fill:var(--amber-bg);stroke:var(--amber-bd)}.strip{fill:#fafbfd;stroke:var(--line);stroke-width:1}.hl{fill:var(--blue-bg);stroke:var(--blue-bd);stroke-width:1.4}.a{stroke:var(--muted);stroke-width:1;fill:none;marker-end:url(#f5a)}</style>
+  <defs><marker id="f5a" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="16" class="t">Seq A · 12 tokens · block_size 4 → 3 blocks/layer · a block = 4 tokens × ALL heads</text>
+  <!-- block table -->
+  <rect class="bt" x="16" y="34" width="176" height="150" rx="7"/>
+  <text x="104" y="52" class="t" text-anchor="middle">block table (Seq A)</text>
+  <text x="26" y="74" class="k">logical 0 · tok 0–3 → #7</text>
+  <text x="26" y="96" class="k">logical 1 · tok 4–7 → #2</text>
+  <text x="26" y="118" class="k">logical 2 · tok 8–11 → #5</text>
+  <text x="104" y="150" class="k" text-anchor="middle">ONE table,</text>
+  <text x="104" y="166" class="k" text-anchor="middle">shared by all layers ↓</text>
+  <!-- 3 layer strips, each 8 physical slots #0..#7 -->
+  <!-- Layer 0 -->
+  <text x="212" y="52" class="k">Layer 0 KV cache (physical slots)</text>
+  <rect class="strip" x="212" y="58" width="532" height="30" rx="4"/>
+  <rect class="hl" x="349" y="60" width="64" height="26" rx="3"/><text x="381" y="72" class="k" text-anchor="middle">#2</text><text x="381" y="83" class="k" text-anchor="middle">tok4–7</text>
+  <rect class="hl" x="551" y="60" width="64" height="26" rx="3"/><text x="583" y="72" class="k" text-anchor="middle">#5</text><text x="583" y="83" class="k" text-anchor="middle">tok8–11</text>
+  <rect class="hl" x="685" y="60" width="52" height="26" rx="3"/><text x="711" y="72" class="k" text-anchor="middle">#7</text><text x="711" y="83" class="k" text-anchor="middle">tok0–3</text>
+  <!-- Layer 1 -->
+  <text x="212" y="112" class="k">Layer 1 KV cache — same slots #2/#5/#7, its OWN values</text>
+  <rect class="strip" x="212" y="118" width="532" height="26" rx="4"/>
+  <rect class="hl" x="349" y="120" width="64" height="22" rx="3"/><text x="381" y="135" class="k" text-anchor="middle">#2</text>
+  <rect class="hl" x="551" y="120" width="64" height="22" rx="3"/><text x="583" y="135" class="k" text-anchor="middle">#5</text>
+  <rect class="hl" x="685" y="120" width="52" height="22" rx="3"/><text x="711" y="135" class="k" text-anchor="middle">#7</text>
+  <!-- Layer 2 -->
+  <text x="212" y="168" class="k">Layer 2 KV cache — same slots #2/#5/#7, its OWN values</text>
+  <rect class="strip" x="212" y="174" width="532" height="26" rx="4"/>
+  <rect class="hl" x="349" y="176" width="64" height="22" rx="3"/><text x="381" y="191" class="k" text-anchor="middle">#2</text>
+  <rect class="hl" x="551" y="176" width="64" height="22" rx="3"/><text x="583" y="191" class="k" text-anchor="middle">#5</text>
+  <rect class="hl" x="685" y="176" width="52" height="22" rx="3"/><text x="711" y="191" class="k" text-anchor="middle">#7</text>
+  <!-- arrows from table to layer 0 -->
+  <path class="a" d="M192,74 C 620,40 660,50 705,58"/>
+  <path class="a" d="M192,96 C 300,96 320,80 349,72"/>
+  <path class="a" d="M192,118 C 420,120 500,90 551,72"/>
+  <text x="20" y="222" class="k">Chunking axis = TOKEN (4 here, 16 real), per layer. Heads live inside each block. Sequence "owns" blocks via the table — blocks can be scattered.</text>
+  <text x="20" y="240" class="k">Same block table for all 93 layers; only the stored K/V differ. This is the storage picture — separate from the compute (thread block / partition) picture below.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 5 — Storage view. One block table (per sequence, shared by all layers) maps the 3 logical blocks to scattered physical slots #7/#2/#5; each layer has its own KV cache but uses the same slots. A block = block_size tokens × all heads. Original diagram.</span><span class="ko">그림 5 — 저장 관점. 하나의 block table(시퀀스당, 모든 레이어 공유)이 3개 논리 block을 흩어진 물리 슬롯 #7/#2/#5로 매핑; 각 레이어는 자기 KV cache를 갖되 같은 슬롯을 쓴다. 한 block = block_size 토큰 × 모든 head. 직접 작성한 다이어그램.</span></p>
+
+<p><span class="en">Now the same 3 blocks (for one layer), read two ways. <b>v1</b>: one worker gathers them via the block table in logical order (#7 → #2 → #5) and sweeps through — sequential. <b>v2</b>: group the blocks into <b>partitions</b> (here 8 tokens = 2 blocks; real: 512 tokens = 32 blocks), give each partition its own worker to run in parallel, then a reduce merges the partials (Fig 4). Same stored blocks, different <i>grouping for compute</i>:</span>
+<span class="ko">이제 같은 3개 block(한 레이어분)을 두 방식으로 읽는다. <b>v1</b>: 한 일꾼이 block table을 따라 논리 순서(#7 → #2 → #5)로 모아 훑는다 — 순차. <b>v2</b>: block들을 <b>partition</b>(여기선 8토큰 = 2 block; 실제: 512토큰 = 32 block)으로 묶고, 파티션마다 일꾼을 붙여 병렬로 돌린 뒤 reduce가 부분을 합친다(Fig 4). 같은 저장 block, 다른 <i>연산용 묶기</i>:</span></p>
+<svg class="fig" viewBox="0 0 760 210" role="img" aria-label="v1 reads the 3 blocks sequentially; v2 groups them into partitions computed in parallel then reduced">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.w{fill:var(--green-bd)}.blk{fill:var(--blue-bg);stroke:var(--blue-bd)}.pt{fill:var(--card);stroke:var(--blue-bd);stroke-dasharray:4 2}.rd{fill:var(--amber-bg);stroke:var(--amber-bd)}.o{fill:var(--green-bg);stroke:var(--green-bd)}.a{stroke:var(--muted);stroke-width:1.2;fill:none;marker-end:url(#f6b)}</style>
+  <defs><marker id="f6b" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <!-- v1 -->
+  <text x="16" y="16" class="t">v1 — 1 worker, blocks in order</text>
+  <circle cx="34" cy="60" r="12" class="w"/><text x="34" y="86" class="k" text-anchor="middle">1 worker</text>
+  <rect class="blk" x="66" y="48" width="86" height="24" rx="3"/><text x="109" y="64" class="k" text-anchor="middle">#7 tok0–3</text>
+  <rect class="blk" x="160" y="48" width="86" height="24" rx="3"/><text x="203" y="64" class="k" text-anchor="middle">#2 tok4–7</text>
+  <rect class="blk" x="254" y="48" width="94" height="24" rx="3"/><text x="301" y="64" class="k" text-anchor="middle">#5 tok8–11</text>
+  <path class="a" d="M46,60 L64,60"/><path class="a" d="M152,60 L158,60"/><path class="a" d="M246,60 L252,60"/>
+  <rect class="o" x="120" y="100" width="150" height="24" rx="3"/><text x="195" y="116" class="k" text-anchor="middle">running softmax → output</text>
+  <path class="a" d="M300,72 C 300,90 240,96 220,100"/>
+  <text x="16" y="150" class="k">1 worker per (layer, head), sweeps all 3 blocks sequentially.</text>
+  <!-- divider -->
+  <line x1="390" y1="12" x2="390" y2="175" stroke="var(--line)"/>
+  <!-- v2 -->
+  <text x="406" y="16" class="t">v2 — partitions, parallel + reduce</text>
+  <rect class="pt" x="406" y="34" width="180" height="30" rx="5"/><text x="496" y="53" class="k" text-anchor="middle">partition 0: #7 + #2 (tok0–7)</text>
+  <circle cx="600" cy="49" r="10" class="w"/><text x="600" y="72" class="k" text-anchor="middle">P0</text>
+  <rect class="pt" x="406" y="80" width="180" height="30" rx="5"/><text x="496" y="99" class="k" text-anchor="middle">partition 1: #5 (tok8–11)</text>
+  <circle cx="600" cy="95" r="10" class="w"/><text x="600" y="118" class="k" text-anchor="middle">P1</text>
+  <rect class="rd" x="636" y="56" width="52" height="30" rx="5"/><text x="662" y="75" class="k" text-anchor="middle">reduce</text>
+  <rect class="o" x="700" y="56" width="52" height="30" rx="5"/><text x="726" y="75" class="k" text-anchor="middle">out</text>
+  <path class="a" d="M586,49 L590,49"/><path class="a" d="M586,95 L590,95"/>
+  <path class="a" d="M610,49 C 620,58 626,64 634,66"/>
+  <path class="a" d="M610,95 C 620,86 626,80 634,76"/>
+  <path class="a" d="M688,71 L698,71"/>
+  <text x="406" y="150" class="k">1 worker per (layer, head, partition) — P0 &amp; P1 run at the same time, then merge.</text>
+  <text x="406" y="168" class="k" fill="var(--blue-ink)">Real: partition = 512 tokens = 32 blocks; a 32K-token seq → ~63 partitions × 96 heads of parallel workers.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 6 — Compute view of the same blocks. v1 (left): one worker reads #7→#2→#5 in order. v2 (right): the blocks are grouped into partitions run by parallel workers, then a reduce merges the partials. The stored blocks are identical; only how they're grouped for the GPU differs. Original diagram.</span><span class="ko">그림 6 — 같은 block의 연산 관점. v1(왼쪽): 한 일꾼이 #7→#2→#5를 순서대로. v2(오른쪽): block들을 partition으로 묶어 병렬 일꾼이 돌린 뒤 reduce가 부분을 합침. 저장 block은 동일; GPU용 묶기만 다름. 직접 작성한 다이어그램.</span></p>
 </section>
 
 <section id="s4">
@@ -393,7 +471,7 @@ use_v1 = (max_seq_len &lt;= 8192
   <!-- correction arrow: partition-fits → v1 -->
   <path class="a" d="M230,42 C 400,-2 560,10 660,22" stroke-dasharray="4 3"/><text x="470" y="14" class="k">short context → v1 directly</text>
 </svg>
-<p class="figcap"><span class="en">Fig 5 — The <code>use_v1</code> heuristic as a picture: pick v1 if the context is short (fits one partition) OR there are already enough blocks to fill the GPU; only when the context is long AND the batch is small — the case where v1 would leave workers idle — switch to v2. Original diagram; logic per <code>paged_attn.py</code> (§6).</span><span class="ko">그림 5 — <code>use_v1</code> 휴리스틱을 그림으로: 컨텍스트가 짧거나(파티션 하나에 들어감) 이미 GPU를 채울 블록이 충분하면 v1; 컨텍스트가 길고 <i>동시에</i> 배치가 작을 때 — v1이 일꾼을 놀릴 경우 — 만 v2로. 직접 작성한 다이어그램; 로직 출처 <code>paged_attn.py</code>(§6).</span></p>
+<p class="figcap"><span class="en">Fig 7 — The <code>use_v1</code> heuristic as a picture: pick v1 if the context is short (fits one partition) OR there are already enough blocks to fill the GPU; only when the context is long AND the batch is small — the case where v1 would leave workers idle — switch to v2. Original diagram; logic per <code>paged_attn.py</code> (§6).</span><span class="ko">그림 7 — <code>use_v1</code> 휴리스틱을 그림으로: 컨텍스트가 짧거나(파티션 하나에 들어감) 이미 GPU를 채울 블록이 충분하면 v1; 컨텍스트가 길고 <i>동시에</i> 배치가 작을 때 — v1이 일꾼을 놀릴 경우 — 만 v2로. 직접 작성한 다이어그램; 로직 출처 <code>paged_attn.py</code>(§6).</span></p>
 </section>
 
 
