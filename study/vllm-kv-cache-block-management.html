@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM KV-cache block management — the KVCacheManager &amp; BlockPool, from scratch</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  .flow{list-style:none;padding:0;margin:14px 0;counter-reset:fl}
+  .flow>li{position:relative;padding:10px 0 12px 40px;border-bottom:1px solid var(--line)}
+  .flow>li::before{counter-increment:fl;content:counter(fl);position:absolute;left:0;top:9px;
+    width:26px;height:26px;border-radius:50%;background:var(--blue-ink);color:#fff;font-size:12px;
+    font-weight:700;display:flex;align-items:center;justify-content:center}
+  .flow code{font-size:12px}
+  .flow a.pl{font-size:11.5px;color:var(--muted);border-bottom:1px dotted var(--muted);text-decoration:none}
+  .flow a.pl:hover{color:var(--blue-ink)}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">vLLM KV-cache block management — the KVCacheManager &amp; BlockPool, from scratch</span>
+    <span class="ko">vLLM의 KV 캐시 block 관리 — KVCacheManager &amp; BlockPool, 처음부터</span>
+  </h1>
+  <p class="lede">
+    <span class="en">A companion to the <a class="src" href="vllm-paged-attention-v1-v2.html">PagedAttention note</a>. That one was the GPU kernel that <i>reads</i> the block table; this one is the <b>engine-side machinery that owns the blocks</b>: how many blocks the engine even has (and the memory math that decides it), how they're allocated per step, how they're reference-counted, shared for common prefixes, evicted, and copy-on-written, and how a request's block list becomes the block table. All traced through vLLM's V1 core — <code class="inl">KVCacheManager</code>, <code class="inl">BlockPool</code>, and the memory-profiling path — pinned to a real commit. This is the answer to "who actually manages the blocks?": the engine does, on the CPU, and here's exactly how.</span>
+    <span class="ko"><a class="src" href="vllm-paged-attention-v1-v2.html">PagedAttention 노트</a>의 짝. 그건 block table을 <i>읽는</i> GPU 커널이었고, 이건 <b>block을 소유·관리하는 엔진 쪽 기계장치</b>다: 엔진이 애초에 block을 몇 개 갖는지(그걸 정하는 메모리 계산), 스텝마다 어떻게 할당하고, 어떻게 참조 카운트하고, 공통 prefix를 공유하고, 축출하고, copy-on-write 하는지, 그리고 요청의 block 리스트가 어떻게 block table이 되는지. 전부 vLLM V1 코어 — <code class="inl">KVCacheManager</code>, <code class="inl">BlockPool</code>, 메모리 프로파일링 경로 — 를 실제 커밋에 핀 고정해 추적한다. "block은 대체 누가 관리하나?"의 답: 엔진이 CPU에서 한다, 그리고 여기 그 방법이 정확히 있다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_manager.py">kv_cache_manager.py</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py">block_pool.py</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd">code @ 8700f86</a></span>
+    <span class="badge"><span class="en">Deep dive · code-walk · Apache-2.0</span><span class="ko">딥다이브 · 코드 분석 · Apache-2.0</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. Two planes — the engine owns blocks, the kernel just reads them</span><span class="ko">1. 두 평면 — 엔진이 block을 소유하고, 커널은 읽기만</span></a></li>
+    <li><a href="#s2"><span class="en">2. How many blocks does the engine get? (the memory math)</span><span class="ko">2. 엔진은 block을 몇 개 갖나? (메모리 계산)</span></a></li>
+    <li><a href="#s3"><span class="en">3. The BlockPool — physical blocks &amp; the free-block LRU queue</span><span class="ko">3. BlockPool — 물리 block과 free-block LRU 큐</span></a></li>
+    <li><a href="#s4"><span class="en">4. Allocation — allocate_slots, per step</span><span class="ko">4. 할당 — allocate_slots, 스텝마다</span></a></li>
+    <li><a href="#s5"><span class="en">5. Prefix caching, refcounts, eviction, copy-on-write</span><span class="ko">5. Prefix 캐싱·참조 카운트·축출·copy-on-write</span></a></li>
+    <li><a href="#s6"><span class="en">6. Lookup — the per-request block table, handed to the kernel</span><span class="ko">6. 조회 — 요청별 block table, 커널로 전달</span></a></li>
+    <li><a href="#s7"><span class="en">7. End-to-end flow &amp; our take</span><span class="ko">7. End-to-end 흐름 &amp; 우리 관점</span></a></li>
+    <li><a href="#s8"><span class="en">8. Sources</span><span class="ko">8. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">vLLM manages the KV cache as a pool of fixed-size <b>blocks</b> (default <b>16 tokens</b> each) on the CPU-side engine. At startup it runs a <b>memory profiling</b> pass to decide how many blocks fit — roughly <code class="inl">num_blocks ≈ (gpu_mem_util × total − weights − peak_activation − overhead) ÷ (per-block bytes × layers-per-block)</code> — and builds a <b>BlockPool</b>: an array of block objects plus a doubly-linked <b>free queue used as an LRU</b>. Each request gets a <b>block table</b> (<code class="inl">req_to_blocks</code>, one list of blocks, shared across all layers). Every step, <code class="inl">allocate_slots</code> pulls just enough new blocks (<code class="inl">cdiv(tokens, 16) − len(blocks)</code>) from the pool; if there aren't enough, it returns <code class="inl">None</code> and the request is preempted. Blocks are <b>reference-counted</b> — a block is free ⇔ ref_cnt 0 <i>and</i> sitting in the queue. <b>Prefix caching</b> hashes full blocks so two requests with the same prefix point their block tables at the <i>same</i> physical blocks (refcount &gt; 1); a partial hit triggers <b>copy-on-write</b>. Freed blocks go back to the queue — un-hashed to the front (evict first), hashed to the tail (linger as cache) until reused.</span>
+  <span class="ko">vLLM은 KV 캐시를 CPU 쪽 엔진에서 고정 크기 <b>block</b>(기본 <b>16 토큰</b>) 풀로 관리한다. 시작 시 <b>메모리 프로파일링</b>으로 block을 몇 개 담을지 정하고 — 대략 <code class="inl">num_blocks ≈ (gpu_mem_util × 전체 − 가중치 − 피크 활성 − 오버헤드) ÷ (block당 바이트 × block당 레이어수)</code> — <b>BlockPool</b>을 만든다: block 객체 배열 + <b>LRU로 쓰는 이중 연결 free 큐</b>. 각 요청은 <b>block table</b>(<code class="inl">req_to_blocks</code>, block 리스트 하나, 전 레이어 공유)을 갖는다. 매 스텝 <code class="inl">allocate_slots</code>가 딱 필요한 만큼 새 block(<code class="inl">cdiv(토큰, 16) − len(blocks)</code>)을 풀에서 당기고; 부족하면 <code class="inl">None</code>을 반환해 요청이 선점(preempt)된다. block은 <b>참조 카운트</b>된다 — free ⇔ ref_cnt 0 <i>이고</i> 큐에 있음. <b>Prefix 캐싱</b>은 꽉 찬 block을 해시해, 같은 prefix의 두 요청이 block table로 <i>같은</i> 물리 block을 가리키게 한다(refcount &gt; 1); 부분 일치는 <b>copy-on-write</b>. 반납된 block은 큐로 — 해시 없으면 앞(먼저 축출), 해시 있으면 뒤(캐시로 잔류)에 붙어 재사용될 때까지 남는다.</span>
+</div>
+
+<h3 style="margin-top:26px"><span class="en">Glossary</span><span class="ko">용어집</span></h3>
+<div class="grid3">
+  <div class="mini"><h4><span class="en">block (page)</span><span class="ko">block (페이지)</span></h4><p><span class="en">A fixed-size chunk of KV cache — default <b>16 tokens</b>, holding all heads. The unit of allocation. (See the <a class="src" href="vllm-paged-attention-v1-v2.html">PagedAttention note</a> for storage vs compute blocks.)</span><span class="ko">고정 크기 KV 캐시 조각 — 기본 <b>16 토큰</b>, 모든 head 포함. 할당의 단위. (저장 vs 연산 block은 <a class="src" href="vllm-paged-attention-v1-v2.html">PagedAttention 노트</a> 참고.)</span></p></div>
+  <div class="mini"><h4>BlockPool</h4><p><span class="en">The engine's global pool of every physical block, plus the free-block queue and the prefix-cache hash map. One per GPU worker. This is "the block manager."</span><span class="ko">모든 물리 block의 엔진 전역 풀 + free-block 큐 + prefix 캐시 해시맵. GPU 워커당 하나. 이게 "block manager".</span></p></div>
+  <div class="mini"><h4>KVCacheBlock</h4><p><span class="en">One physical block's metadata: its <code class="inl">block_id</code>, a <b>reference count</b>, an optional content <b>hash</b>, and prev/next pointers for the free list. Just bookkeeping — the actual KV tensors live in GPU memory.</span><span class="ko">물리 block 하나의 메타데이터: <code class="inl">block_id</code>, <b>참조 카운트</b>, 선택적 콘텐츠 <b>해시</b>, free 리스트용 prev/next 포인터. 장부일 뿐 — 실제 KV 텐서는 GPU 메모리에.</span></p></div>
+  <div class="mini"><h4><span class="en">block table (req_to_blocks)</span><span class="ko">block table (req_to_blocks)</span></h4><p><span class="en">Per request: the ordered list of physical blocks holding that request's tokens. <b>One per request, shared across all layers</b> (for a uniform-attention model). This is what the kernel indexes.</span><span class="ko">요청별: 그 요청의 토큰을 담은 물리 block 순서 리스트. <b>요청당 하나, 전 레이어 공유</b>(균일 어텐션 모델). 커널이 인덱싱하는 대상.</span></p></div>
+  <div class="mini"><h4><span class="en">prefix caching</span><span class="ko">prefix 캐싱</span></h4><p><span class="en">Reusing already-computed KV for a shared prefix: full blocks are content-hashed, so a new request with the same prefix reuses those physical blocks (skipping their prefill) instead of recomputing.</span><span class="ko">공유 prefix의 이미 계산된 KV를 재사용: 꽉 찬 block을 콘텐츠 해시해, 같은 prefix의 새 요청이 그 물리 block을 재사용(prefill 생략)한다.</span></p></div>
+  <div class="mini"><h4><span class="en">refcount / eviction / CoW</span><span class="ko">refcount / 축출 / CoW</span></h4><p><span class="en">A block is <b>free</b> ⇔ ref_cnt 0 and in the queue. Eviction = reuse the LRU tail. <b>Copy-on-write</b> = when a partially-shared block must be written, copy it to a private block first.</span><span class="ko">block이 <b>free</b> ⇔ ref_cnt 0 이고 큐에 있음. 축출 = LRU 꼬리 재사용. <b>Copy-on-write</b> = 부분 공유 block에 써야 하면 먼저 사설 block으로 복사.</span></p></div>
+</div>
+
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">Two planes — the engine owns blocks, the kernel just reads them</span><span class="ko">두 평면 — 엔진이 block을 소유하고, 커널은 읽기만</span></h2>
+<p><span class="en">The confusion people hit (including in the discussion that prompted this note) is that "PagedAttention" mixes two very different jobs under one name. Split them and everything clarifies:</span>
+<span class="ko">사람들이 부딪히는 혼란(이 노트를 촉발한 대화 포함)은 "PagedAttention"이 한 이름 아래 아주 다른 두 일을 섞는다는 것. 나누면 전부 명확해진다:</span></p>
+<div class="grid2">
+  <div class="mini"><h4><span class="en">Control plane (this note)</span><span class="ko">컨트롤 플레인 (이 노트)</span></h4><p><span class="en">The <b>engine</b>, on the CPU: it owns the pool of physical blocks, allocates them to requests, reference-counts them, shares them for common prefixes, evicts, and builds each request's block table. This is <code class="inl">KVCacheManager</code> + <code class="inl">BlockPool</code>.</span><span class="ko">CPU의 <b>엔진</b>: 물리 block 풀을 소유하고, 요청에 할당하고, 참조 카운트하고, 공통 prefix에 공유하고, 축출하고, 요청별 block table을 만든다. <code class="inl">KVCacheManager</code> + <code class="inl">BlockPool</code>.</span></p></div>
+  <div class="mini"><h4><span class="en">Data plane (the other note)</span><span class="ko">데이터 플레인 (다른 노트)</span></h4><p><span class="en">The <b>attention kernel</b>, on the GPU: it just <i>reads</i> the block table the engine built and gathers the scattered KV. It never allocates or frees a block. That's the <a class="src" href="vllm-paged-attention-v1-v2.html">PagedAttention v1/v2 note</a>.</span><span class="ko">GPU의 <b>어텐션 커널</b>: 엔진이 만든 block table을 <i>읽어</i> 흩어진 KV를 모을 뿐. block을 할당하거나 해제하지 않는다. 그게 <a class="src" href="vllm-paged-attention-v1-v2.html">PagedAttention v1/v2 노트</a>.</span></p></div>
+</div>
+<p><span class="en">So yes — <b>blocks are absolutely managed at the engine level.</b> Everything below is the CPU-side control plane in vLLM's "V1" engine. The code is Apache-2.0 and lives almost entirely in <code class="inl">vllm/v1/core/</code>. Four objects do the work: the <b>BlockPool</b> (owns all blocks), the per-attention-type <b>SingleTypeKVCacheManager</b> (owns each request's block list), the <b>KVCacheCoordinator</b> (fans out across attention types), and the <b>KVCacheManager</b> (the front door the scheduler calls). We'll build them up in the order a block's life actually flows: how many exist → the pool → allocate → cache/share/evict → look up.</span>
+<span class="ko">그러니 맞다 — <b>block은 분명히 엔진 레벨에서 관리된다.</b> 아래 전부가 vLLM "V1" 엔진의 CPU 쪽 컨트롤 플레인이다. 코드는 Apache-2.0이고 거의 전부 <code class="inl">vllm/v1/core/</code>에 있다. 네 객체가 일한다: <b>BlockPool</b>(모든 block 소유), 어텐션 타입별 <b>SingleTypeKVCacheManager</b>(요청별 block 리스트 소유), <b>KVCacheCoordinator</b>(어텐션 타입 간 분배), <b>KVCacheManager</b>(스케줄러가 부르는 정문). block의 생애가 실제 흐르는 순서로 쌓아 올린다: 몇 개 있나 → 풀 → 할당 → 캐시/공유/축출 → 조회.</span></p>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">How many blocks does the engine get? (the memory math)</span><span class="ko">엔진은 block을 몇 개 갖나? (메모리 계산)</span></h2>
+<p><span class="en">The block count isn't a config knob you set directly — the engine <b>measures</b> it at startup. The logic is: take a slice of the GPU's memory, subtract everything that <i>isn't</i> KV cache, and divide the rest by the size of one block.</span>
+<span class="ko">block 개수는 직접 설정하는 노브가 아니다 — 엔진이 시작 시 <b>측정</b>한다. 로직은: GPU 메모리의 일부를 떼고, KV 캐시가 <i>아닌</i> 모든 것을 빼고, 남은 걸 block 하나의 크기로 나눈다.</span></p>
+
+<svg class="fig" viewBox="0 0 760 250" role="img" aria-label="GPU memory budget: utilization cap minus non-KV memory, divided by per-block size">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.tot{fill:var(--gray-bg);stroke:var(--gray-bd)}.wt{fill:var(--purple-bd)}.ac{fill:var(--amber-bd)}.ov{fill:var(--coral-bd)}.kv{fill:var(--green-bd)}</style>
+  <text x="20" y="18" class="t">Step 1 — carve the GPU memory budget (one worker)</text>
+  <!-- total bar -->
+  <rect class="tot" x="20" y="30" width="720" height="26" rx="3"/><text x="380" y="47" class="k" text-anchor="middle">total GPU memory (e.g. 80 GB)</text>
+  <!-- util cap -->
+  <rect x="20" y="64" width="648" height="22" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="344" y="79" class="k" text-anchor="middle">× gpu_memory_utilization (e.g. 0.90) = the cap vLLM may use</text>
+  <text x="672" y="79" class="k">reserved →</text>
+  <!-- breakdown of the cap -->
+  <rect class="wt" x="20" y="98" width="150" height="24" rx="3"/><text x="95" y="114" class="k" text-anchor="middle" fill="#fff">model weights</text>
+  <rect class="ac" x="172" y="98" width="120" height="24" rx="3"/><text x="232" y="114" class="k" text-anchor="middle">peak activation</text>
+  <rect class="ov" x="294" y="98" width="90" height="24" rx="3"/><text x="339" y="114" class="k" text-anchor="middle">non-torch</text>
+  <rect x="386" y="98" width="70" height="24" rx="3" fill="var(--gray-bg)" stroke="var(--gray-bd)"/><text x="421" y="114" class="k" text-anchor="middle">cudagraph</text>
+  <rect class="kv" x="458" y="98" width="210" height="24" rx="3"/><text x="563" y="114" class="k" text-anchor="middle" fill="#fff">← everything left = KV budget</text>
+  <text x="20" y="146" class="t">Step 2 — divide by one block's size</text>
+  <rect class="kv" x="20" y="156" width="210" height="22" rx="3"/><text x="125" y="171" class="k" text-anchor="middle" fill="#fff">available KV bytes</text>
+  <text x="240" y="171" class="t">÷</text>
+  <rect x="260" y="156" width="330" height="22" rx="3" fill="var(--blue-bg)" stroke="var(--blue-bd)"/><text x="425" y="171" class="k" text-anchor="middle">per-block bytes (2·block_size·kv_heads·head_dim·dtype) × layers</text>
+  <text x="600" y="171" class="t">=</text>
+  <rect x="620" y="156" width="120" height="22" rx="3" fill="var(--green-bg)" stroke="var(--green-bd)"/><text x="680" y="171" class="k" text-anchor="middle" font-weight="600">num_blocks</text>
+  <text x="20" y="210" class="k">The "2" = one K block + one V block. "× layers" because a block index is stacked across all of a group's layers (§6).</text>
+  <text x="20" y="228" class="k">Bigger gpu_memory_utilization or a smaller model → more free bytes → more blocks → more concurrent requests / longer contexts.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 1 — Deciding num_blocks. The engine caps memory at gpu_memory_utilization × total, subtracts model weights + peak activation + non-torch + a CUDA-graph reserve (measured by a real profiling forward pass), then divides the remainder by one block's size × layers-per-block. Original diagram; logic per gpu_worker.py / kv_cache_utils.py.</span><span class="ko">그림 1 — num_blocks 결정. 엔진은 gpu_memory_utilization × 전체로 메모리를 상한 잡고, 모델 가중치 + 피크 활성 + non-torch + CUDA-graph 예약(실제 프로파일링 forward로 측정)을 뺀 뒤, 나머지를 block 하나 크기 × block당 레이어수로 나눈다. 직접 작성한 다이어그램; 로직 출처 gpu_worker.py / kv_cache_utils.py.</span></p>
+
+<h3><span class="en">The three steps, in code</span><span class="ko">세 단계, 코드로</span></h3>
+<p><span class="en"><b>Step A — the byte budget.</b> Cap the GPU memory at the utilization fraction, then subtract everything that isn't KV cache. What counts as "not KV" is <i>measured</i> during a profiling forward pass — model weights and non-torch allocations (captured as <code class="inl">total_consumed</code>) plus the peak transient activation (<code class="inl">transient_peak_headroom</code>):</span>
+<span class="ko"><b>Step A — 바이트 예산.</b> GPU 메모리를 utilization 비율로 상한 잡고, KV 캐시가 아닌 모든 걸 뺀다. "KV가 아닌 것"은 프로파일링 forward 중에 <i>측정</i>된다 — 모델 가중치 + non-torch 할당(<code class="inl">total_consumed</code>) + 피크 일시 활성(<code class="inl">transient_peak_headroom</code>):</span></p>
+<pre><code># vllm/v1/worker/gpu_worker.py:544
+available_kv_cache_memory_bytes = (
+    requested_memory                       # ceil(total × gpu_memory_utilization)
+    - profile_result.non_kv_cache_memory   # weights + non-torch + peak activation
+    - cudagraph_memory_estimate_applied)</code></pre>
+<p><span class="en"><b>Step B — one block's size.</b> For standard attention a block holds <code class="inl">block_size</code> tokens, times 2 (K and V), times the KV heads and head dimension, times the dtype size:</span>
+<span class="ko"><b>Step B — block 하나 크기.</b> 표준 어텐션에서 block은 <code class="inl">block_size</code> 토큰 × 2(K와 V) × KV head × head 차원 × dtype 크기를 담는다:</span></p>
+<pre><code># vllm/v1/kv_cache_interface.py:203  (real_page_size_bytes)
+return 2 * self.block_size * self.num_kv_heads * head_dim * get_dtype_size(self.dtype)</code></pre>
+<p><span class="en"><b>Step C — bytes → blocks.</b> Divide the budget by the per-block size — and, importantly, by the number of layers, because one logical block index is stacked across every layer in the group (that's why the naive "budget ÷ page_size" is off by a factor of <code class="inl">num_layers</code>):</span>
+<span class="ko"><b>Step C — 바이트 → block.</b> 예산을 block당 크기로 나누고 — 중요하게 — 레이어 수로도 나눈다. 하나의 논리 block 인덱스가 그룹의 모든 레이어에 걸쳐 쌓이기 때문(그래서 순진한 "예산 ÷ page_size"는 <code class="inl">num_layers</code>배 어긋난다):</span></p>
+<pre><code># vllm/v1/core/kv_cache_utils.py:1008
+num_blocks = int(available_memory // page_size // num_layers)</code></pre>
+<p><span class="en">The finalized count lands in <code class="inl">KVCacheConfig.num_blocks</code>, is clamped to the minimum across tensor/pipeline-parallel workers (so every rank agrees), and can be forced with <code class="inl">--num-gpu-blocks-override</code>. The default block size is 16:</span>
+<span class="ko">확정된 개수는 <code class="inl">KVCacheConfig.num_blocks</code>에 들어가고, tensor/pipeline 병렬 워커 간 최솟값으로 클램프되며(모든 rank 합의), <code class="inl">--num-gpu-blocks-override</code>로 강제 가능. 기본 block 크기는 16:</span></p>
+<pre><code># vllm/config/cache.py:47
+DEFAULT_BLOCK_SIZE: ClassVar[int] = 16</code></pre>
+<ul class="srcs">
+<li>memory profiling — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/worker/gpu_worker.py#L544-L548">gpu_worker.py#L544-L548</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/worker/utils.py#L403-L405">utils.py#L403-L405</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/utils/mem_utils.py#L317-L326">mem_utils.py#L317-L326</a></li>
+<li>per-block size &amp; num_blocks — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/kv_cache_interface.py#L203-L218">kv_cache_interface.py#L203-L218</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L1008">kv_cache_utils.py#L1008</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/config/cache.py#L47">cache.py#L47</a></li>
+</ul>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">The BlockPool — physical blocks &amp; the free-block LRU queue</span><span class="ko">BlockPool — 물리 block과 free-block LRU 큐</span></h2>
+<p><span class="en">Once the engine knows it has, say, <code class="inl">num_blocks</code> blocks, it creates that many <b>block objects</b> and threads the free ones onto a queue. A block object is pure bookkeeping — a <code class="inl">block_id</code> (its slot number in the GPU KV tensors), a <b>reference count</b>, an optional content <b>hash</b>, and two pointers so it can live in a linked list:</span>
+<span class="ko">엔진이 <code class="inl">num_blocks</code>개 block을 가진다는 걸 알면, 그만큼 <b>block 객체</b>를 만들고 free한 것들을 큐에 엮는다. block 객체는 순수 장부다 — <code class="inl">block_id</code>(GPU KV 텐서에서의 슬롯 번호), <b>참조 카운트</b>, 선택적 콘텐츠 <b>해시</b>, 그리고 연결 리스트에 살 수 있게 하는 포인터 둘:</span></p>
+<pre><code># vllm/v1/core/kv_cache_utils.py:117
+@dataclass(slots=True)
+class KVCacheBlock:
+    block_id: int
+    ref_cnt: int = 0
+    _block_hash: BlockHashWithGroupId | None = None
+    prev_free_block: "KVCacheBlock | None" = None
+    next_free_block: "KVCacheBlock | None" = None
+    is_null: bool = False</code></pre>
+
+<p><span class="en">The free blocks live in a <b><code class="inl">FreeKVCacheBlockQueue</code></b> — a hand-rolled doubly-linked list (with fake head/tail sentinels) used as an <b>LRU</b>. Why not a plain Python list or <code class="inl">deque</code>? Because vLLM needs O(1) removal from the <i>middle</i> (when a cached block in the queue gets a prefix-cache hit, it must be pulled out of the free list without a linear scan), and it allocates no per-op Python objects. The two ends have distinct meaning:</span>
+<span class="ko">free block들은 <b><code class="inl">FreeKVCacheBlockQueue</code></b>에 산다 — <b>LRU</b>로 쓰는 손수 만든 이중 연결 리스트(가짜 head/tail 센티널). 왜 그냥 리스트나 <code class="inl">deque</code>가 아니라? vLLM은 <i>중간</i>에서 O(1) 제거가 필요하고(큐에 있던 캐시 block이 prefix 히트를 받으면 선형 스캔 없이 free 리스트에서 빼야 함), op마다 Python 객체를 할당하지 않기 때문. 양 끝은 뜻이 다르다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 210" role="img" aria-label="The free-block queue: head is evict-first, tail is most-recently-freed and lingers as prefix cache">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.b{fill:var(--card);stroke:var(--line)}.hh{fill:var(--gray-bg);stroke:var(--gray-bd)}.a{stroke:var(--muted);stroke-width:1.2;fill:none;marker-end:url(#fq)}.up{stroke:var(--green-bd);stroke-width:1.4;fill:none;marker-end:url(#fqg)}.dn{stroke:var(--blue-bd);stroke-width:1.4;fill:none;marker-end:url(#fqb)}</style>
+  <defs><marker id="fq" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker><marker id="fqg" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--green-bd)"/></marker><marker id="fqb" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--blue-bd)"/></marker></defs>
+  <text x="20" y="18" class="t">FreeKVCacheBlockQueue (doubly-linked, used as LRU)</text>
+  <rect class="hh" x="20" y="48" width="46" height="30" rx="4"/><text x="43" y="67" class="k" text-anchor="middle">head</text>
+  <rect class="b" x="86" y="48" width="90" height="30" rx="4"/><text x="131" y="63" class="k" text-anchor="middle">blk (hashless)</text><text x="131" y="75" class="k" text-anchor="middle">ref 0</text>
+  <rect class="b" x="196" y="48" width="90" height="30" rx="4"/><text x="241" y="63" class="k" text-anchor="middle">blk</text><text x="241" y="75" class="k" text-anchor="middle">ref 0</text>
+  <rect class="b" x="306" y="48" width="90" height="30" rx="4"/><text x="351" y="63" class="k" text-anchor="middle">blk (hashed)</text><text x="351" y="75" class="k" text-anchor="middle">ref 0 · cached</text>
+  <rect class="b" x="416" y="48" width="90" height="30" rx="4"/><text x="461" y="63" class="k" text-anchor="middle">blk (hashed)</text><text x="461" y="75" class="k" text-anchor="middle">ref 0 · cached</text>
+  <rect class="hh" x="526" y="48" width="46" height="30" rx="4"/><text x="549" y="67" class="k" text-anchor="middle">tail</text>
+  <path class="a" d="M66,63 L84,63"/><path class="a" d="M176,63 L194,63"/><path class="a" d="M286,63 L304,63"/><path class="a" d="M396,63 L414,63"/><path class="a" d="M506,63 L524,63"/>
+  <text x="43" y="98" class="k" text-anchor="middle" fill="var(--green-ink)">↑ evict / allocate first</text>
+  <text x="549" y="98" class="k" text-anchor="middle" fill="var(--blue-ink)">↑ most-recently-freed</text>
+  <!-- allocate arrow -->
+  <path class="up" d="M110,42 C 80,20 60,26 46,44"/><text x="120" y="30" class="k" fill="var(--green-ink)">get_new_blocks → popleft from front</text>
+  <!-- free arrows -->
+  <path class="dn" d="M600,120 C 560,120 555,90 549,80"/><text x="605" y="124" class="k" fill="var(--blue-ink)">free a HASHED block → append to tail (lingers as cache)</text>
+  <path class="up" d="M40,140 C 40,120 42,100 43,80"/><text x="55" y="150" class="k" fill="var(--green-ink)">free a HASHLESS block → prepend to front (evict first)</text>
+  <text x="20" y="188" class="k">A block is FREE ⇔ ref_cnt == 0 AND it sits in this queue. Hashed free blocks keep their content until reused — that's the prefix cache.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 2 — The free-block queue. Allocation pops from the head (evict-first); freed blocks are appended by hash-status — hashless to the front (reuse/evict first), hashed to the tail so they linger as prefix-cache candidates. A cached block that gets a prefix hit is removed from the middle in O(1). Original diagram; per block_pool.py &amp; kv_cache_utils.py.</span><span class="ko">그림 2 — free-block 큐. 할당은 head에서 pop(먼저 축출); 반납 block은 해시 상태로 붙임 — 해시 없으면 앞(먼저 재사용/축출), 해시 있으면 뒤에 붙어 prefix 캐시 후보로 잔류. prefix 히트를 받은 캐시 block은 중간에서 O(1)로 제거. 직접 작성한 다이어그램; 출처 block_pool.py &amp; kv_cache_utils.py.</span></p>
+
+<p><span class="en">The <code class="inl">BlockPool</code> ties it together: it builds every block, wraps them in the free queue, keeps the prefix-cache map, and reserves block 0 as a <b>null block</b> (a shared placeholder for "no real block here," e.g. masked-out sliding-window positions):</span>
+<span class="ko"><code class="inl">BlockPool</code>이 묶는다: 모든 block을 만들고, free 큐로 감싸고, prefix 캐시 맵을 두고, block 0을 <b>null block</b>으로 예약한다(공유 자리표시자 — "여기 진짜 block 없음", 예: 마스킹된 sliding-window 위치):</span></p>
+<pre><code># vllm/v1/core/block_pool.py:175
+self.blocks = [KVCacheBlock(idx) for idx in range(num_gpu_blocks)]
+self.free_block_queue = FreeKVCacheBlockQueue(self.blocks)
+self.cached_block_hash_to_block = BlockHashToBlockMap()   # the prefix cache
+self.null_block = self.free_block_queue.popleft()
+self.null_block.is_null = True</code></pre>
+<p><span class="en">Allocating fresh blocks is just <b>pop N from the front</b>, evict any stale cached content on those slots, and bump their refcount to 1:</span>
+<span class="ko">새 block 할당은 그저 <b>앞에서 N개 pop</b>, 그 슬롯의 낡은 캐시 내용을 축출, refcount를 1로 올림:</span></p>
+<pre><code># vllm/v1/core/block_pool.py:661  (get_new_blocks)
+ret = self.free_block_queue.popleft_n(num_blocks)
+for block in ret:
+    self._maybe_evict_cached_block(block)   # if this slot was cached, drop it
+    block.ref_cnt += 1
+return ret</code></pre>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L117-L138">KVCacheBlock</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L184-L234">FreeKVCacheBlockQueue</a> (popleft <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L262-L271">L262</a>, append <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L337-L347">L337</a>) · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L175-L191">BlockPool init</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L661-L677">get_new_blocks</a></li>
+</ul>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">Allocating on every step — get_computed_blocks → allocate_slots</span><span class="ko">스텝마다 할당 — get_computed_blocks → allocate_slots</span></h2>
+<p><span class="en">The <b><code class="inl">KVCacheManager</code></b> is the object the scheduler calls. It doesn't touch GPU tensors — it just decides <i>which block ids</i> a request owns. Every scheduler step, for a request that will run, it does two things:</span>
+<span class="ko"><b><code class="inl">KVCacheManager</code></b>는 스케줄러가 호출하는 객체다. GPU 텐서는 건드리지 않고 — 요청이 <i>어떤 block id</i>를 소유하는지만 정한다. 스케줄러 스텝마다, 실행될 요청에 대해 두 가지를 한다:</span></p>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="allocate_slots decision flow: prefix hit, count new blocks, enough free, allocate or return None">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.bx{fill:var(--card);stroke:var(--line)}.bl{fill:var(--blue-bg);stroke:var(--blue-bd)}.gr{fill:var(--green-bg);stroke:var(--green-bd)}.am{fill:var(--amber-bg);stroke:var(--amber-bd)}.rd{fill:var(--coral-bg);stroke:var(--coral-bd)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a4)}</style>
+  <defs><marker id="a4" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <rect class="bx" x="20" y="24" width="150" height="44" rx="5"/><text x="95" y="42" class="k" text-anchor="middle">request to schedule</text><text x="95" y="57" class="k" text-anchor="middle">(has N new tokens)</text>
+  <rect class="bl" x="200" y="24" width="180" height="44" rx="5"/><text x="290" y="42" class="t" text-anchor="middle">① get_computed_blocks</text><text x="290" y="57" class="k" text-anchor="middle">prefix-cache lookup → hit blocks</text>
+  <rect class="bx" x="410" y="24" width="180" height="44" rx="5"/><text x="500" y="42" class="k" text-anchor="middle">how many NEW blocks</text><text x="500" y="57" class="k" text-anchor="middle">for the uncached tokens?</text>
+  <path class="a" d="M170,46 L198,46"/><path class="a" d="M380,46 L408,46"/>
+  <!-- decision -->
+  <path class="am" d="M500,96 L610,132 L500,168 L390,132 Z"/><text x="500" y="128" class="t" text-anchor="middle">required ≤</text><text x="500" y="144" class="k" text-anchor="middle">free − reserved − watermark?</text>
+  <path class="a" d="M500,68 L500,94"/>
+  <!-- no -->
+  <rect class="rd" x="628" y="110" width="112" height="44" rx="5"/><text x="684" y="128" class="t" text-anchor="middle">return None</text><text x="684" y="143" class="k" text-anchor="middle">→ wait / preempt</text>
+  <path class="a" d="M610,132 L626,132"/><text x="619" y="124" class="k">no</text>
+  <!-- yes -->
+  <rect class="gr" x="20" y="200" width="220" height="50" rx="5"/><text x="130" y="220" class="t" text-anchor="middle">② touch hit blocks</text><text x="130" y="236" class="k" text-anchor="middle">ref_cnt++, pull from free queue</text>
+  <rect class="gr" x="270" y="200" width="220" height="50" rx="5"/><text x="380" y="220" class="t" text-anchor="middle">allocate_new_blocks</text><text x="380" y="236" class="k" text-anchor="middle">popleft from BlockPool (§3)</text>
+  <rect class="gr" x="520" y="200" width="220" height="50" rx="5"/><text x="630" y="220" class="t" text-anchor="middle">cache_blocks</text><text x="630" y="236" class="k" text-anchor="middle">hash now-full blocks → cache map</text>
+  <path class="a" d="M500,168 L500,184 L130,184 L130,198"/><text x="470" y="182" class="k">yes</text>
+  <path class="a" d="M240,225 L268,225"/><path class="a" d="M490,225 L518,225"/>
+  <text x="20" y="280" class="k">Returning None is not an error — it's how vLLM says "no room this step." The scheduler then defers the request or preempts a lower-priority one.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 3 — One scheduler step through KVCacheManager. ① a prefix-cache lookup finds already-computed blocks; the manager counts blocks for the still-uncached tokens; if the free pool (minus a reserved slice and a watermark) can't cover it, it returns None so the scheduler waits or preempts; otherwise ② it touches the reused blocks, pops fresh ones, and caches any block that just filled up. Original diagram; per kv_cache_manager.py.</span><span class="ko">그림 3 — KVCacheManager를 지나는 스케줄러 한 스텝. ① prefix 캐시 조회로 이미 계산된 block을 찾고; 아직 캐시 안 된 토큰용 block 수를 세고; free 풀(예약분+워터마크 제외)이 못 덮으면 None을 반환해 스케줄러가 대기/축출; 아니면 ② 재사용 block을 touch, 새 block을 pop, 방금 꽉 찬 block을 캐시. 직접 작성한 다이어그램; 출처 kv_cache_manager.py.</span></p>
+
+<p><span class="en"><b>① Find what's already cached.</b> Before allocating anything, ask the prefix cache how much of this request's prompt is already sitting in blocks (from an earlier request that shared the same prefix):</span>
+<span class="ko"><b>① 이미 캐시된 것 찾기.</b> 뭔가 할당하기 전에, 이 요청 프롬프트의 얼마가 이미 block에 있는지 prefix 캐시에 묻는다(같은 prefix를 공유한 이전 요청이 남긴 것):</span></p>
+<pre><code># vllm/v1/core/kv_cache_manager.py:229  (get_computed_blocks)
+computed_blocks, num_new_computed_tokens, num_uncached = (
+    self.coordinator.find_longest_cache_hit(
+        request.block_hashes, max_cache_hit_length))</code></pre>
+<p><span class="en"><b>② Allocate the rest — but only if there's room.</b> The manager counts how many new blocks the uncached tokens need, and refuses (returns <code class="inl">None</code>) if that would eat into the reserved headroom or the admission watermark. This <code class="inl">None</code> is the exact hinge between "schedule" and "preempt":</span>
+<span class="ko"><b>② 나머지 할당 — 단, 자리가 있을 때만.</b> 매니저는 캐시 안 된 토큰이 필요로 하는 새 block 수를 세고, 그게 예약 여유분이나 admission 워터마크를 침범하면 거부(<code class="inl">None</code> 반환)한다. 이 <code class="inl">None</code>이 "스케줄"과 "축출"을 가르는 바로 그 경첩이다:</span></p>
+<pre><code># vllm/v1/core/kv_cache_manager.py:522
+available_blocks = self.block_pool.get_num_free_blocks() - reserved_blocks
+required_blocks = num_blocks_to_allocate + watermark_blocks
+if required_blocks > available_blocks:
+    return None                              # scheduler will wait / preempt
+...
+new_blocks = self.coordinator.allocate_new_blocks(...)   # popleft from pool
+self.coordinator.cache_blocks(request, num_tokens_to_cache)  # hash full blocks</code></pre>
+<p><span class="en">The <b>watermark</b> (default from <code class="inl">--kv-cache-memory</code> policy, applied only to waiting/preempted admissions) keeps a sliver of blocks free so a burst of new requests can't starve the running ones into a deadlock.</span>
+<span class="ko"><b>워터마크</b>(대기/축출된 admission에만 적용)는 block을 조금 남겨둬, 신규 요청 폭주가 실행 중 요청을 굶겨 교착에 빠뜨리지 못하게 한다.</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_manager.py#L229-L296">get_computed_blocks</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_manager.py#L344-L565">allocate_slots</a> (watermark check <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_manager.py#L522-L527">L522</a>) · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L799-L805">get_num_free_blocks</a></li>
+</ul>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Sharing a prefix — content hashing, reference counts &amp; eviction</span><span class="ko">prefix 공유 — 콘텐츠 해싱, 참조 카운트, 축출</span></h2>
+<p><span class="en">This is the payoff of the paged design, and the answer to "<i>what happens when two sequences share a prefix?</i>" They point at the <b>same physical block</b>. Nothing is copied. The machinery is three pieces: a <b>content hash</b> per full block, a <b>hash → block map</b>, and a <b>reference count</b> per block.</span>
+<span class="ko">이게 paged 설계의 결실이자 "<i>두 시퀀스가 prefix를 공유하면 어떻게 되나?</i>"의 답이다. 둘은 <b>같은 물리 block</b>을 가리킨다. 아무것도 복사되지 않는다. 장치는 셋: full block마다의 <b>콘텐츠 해시</b>, <b>해시 → block 맵</b>, block마다의 <b>참조 카운트</b>.</span></p>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="Two requests sharing prefix blocks by reference count, diverging into private tail blocks">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.rowa{fill:var(--blue-bg);stroke:var(--blue-bd)}.rowb{fill:var(--amber-bg);stroke:var(--amber-bd)}.sh{fill:var(--green-bg);stroke:var(--green-bd)}.pa{fill:var(--blue-bg);stroke:var(--blue-bd)}.pb{fill:var(--amber-bg);stroke:var(--amber-bd)}.a{stroke:var(--muted);stroke-width:1.2;fill:none;marker-end:url(#a5)}</style>
+  <defs><marker id="a5" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <!-- req A table -->
+  <text x="20" y="34" class="t">Req A block table</text>
+  <rect class="rowa" x="20" y="44" width="46" height="26" rx="3"/><text x="43" y="61" class="k" text-anchor="middle">5</text>
+  <rect class="rowa" x="70" y="44" width="46" height="26" rx="3"/><text x="93" y="61" class="k" text-anchor="middle">6</text>
+  <rect class="pa" x="120" y="44" width="46" height="26" rx="3"/><text x="143" y="61" class="k" text-anchor="middle">9</text>
+  <text x="176" y="61" class="k">← A's private tail</text>
+  <!-- req B table -->
+  <text x="20" y="104" class="t">Req B block table</text>
+  <rect class="rowb" x="20" y="114" width="46" height="26" rx="3"/><text x="43" y="131" class="k" text-anchor="middle">5</text>
+  <rect class="rowb" x="70" y="114" width="46" height="26" rx="3"/><text x="93" y="131" class="k" text-anchor="middle">6</text>
+  <rect class="pb" x="120" y="114" width="46" height="26" rx="3"/><text x="143" y="131" class="k" text-anchor="middle">12</text>
+  <text x="176" y="131" class="k">← B's private tail</text>
+  <!-- physical blocks -->
+  <text x="470" y="34" class="t">Physical KV blocks (BlockPool)</text>
+  <rect class="sh" x="470" y="44" width="120" height="40" rx="4"/><text x="530" y="60" class="k" text-anchor="middle">block 5 · "You are…"</text><text x="530" y="76" class="k" text-anchor="middle" font-weight="600">ref_cnt = 2</text>
+  <rect class="sh" x="470" y="92" width="120" height="40" rx="4"/><text x="530" y="108" class="k" text-anchor="middle">block 6 · "…helpful."</text><text x="530" y="124" class="k" text-anchor="middle" font-weight="600">ref_cnt = 2</text>
+  <rect class="pa" x="620" y="44" width="120" height="36" rx="4"/><text x="680" y="60" class="k" text-anchor="middle">block 9 · A only</text><text x="680" y="74" class="k" text-anchor="middle">ref_cnt = 1</text>
+  <rect class="pb" x="620" y="96" width="120" height="36" rx="4"/><text x="680" y="112" class="k" text-anchor="middle">block 12 · B only</text><text x="680" y="126" class="k" text-anchor="middle">ref_cnt = 1</text>
+  <!-- arrows shared -->
+  <path class="a" d="M66,57 C 250,57 300,62 468,62"/><path class="a" d="M116,57 C 250,90 300,108 468,110"/>
+  <path class="a" d="M66,127 C 250,127 300,80 468,72"/><path class="a" d="M116,127 C 250,127 300,118 468,120"/>
+  <path class="a" d="M166,57 C 300,57 400,60 618,60"/>
+  <path class="a" d="M166,127 C 300,127 400,112 618,112"/>
+  <!-- hash map -->
+  <text x="20" y="192" class="t">cached_block_hash_to_block (the prefix cache)</text>
+  <rect class="sh" x="20" y="202" width="330" height="26" rx="3"/><text x="185" y="219" class="k" text-anchor="middle">hash( "You are a helpful assistant." ) → block 5, 6</text>
+  <text x="20" y="256" class="k">Same prefix tokens → same hash → find_longest_cache_hit returns blocks 5 &amp; 6 → touch() bumps ref_cnt to 2.</text>
+  <text x="20" y="274" class="k">Shared blocks are FULL and immutable; each request writes only into its OWN freshly-popped tail block (9, 12). Divergence needs no copy.</text>
+  <text x="20" y="292" class="k">A finishes → ref_cnt of 5,6 drops to 1 (still B's). Both finish → ref_cnt 0 → blocks linger in the free queue, still cached, until evicted.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 4 — Prefix sharing by reference count. Two requests with the same system prompt hash to the same block ids; find_longest_cache_hit returns them and touch() raises ref_cnt to 2 — one physical copy, two readers. Here the shared prefix ends on a block boundary, so each request's divergent continuation lands in its own private tail block — this block-aligned case needs no copy (sub-block partial hits do; see below). Original diagram; per block_pool.py / single_type_kv_cache_manager.py.</span><span class="ko">그림 4 — 참조 카운트로 하는 prefix 공유. 같은 시스템 프롬프트를 가진 두 요청은 같은 block id로 해시되고, find_longest_cache_hit이 그걸 돌려주며 touch()가 ref_cnt를 2로 올린다 — 물리 사본 하나, 독자 둘. 여기선 공유 prefix가 block 경계에서 끝나 각 요청의 갈라지는 뒷부분이 자기 전용 tail block으로 가므로 이 block-정렬 경우엔 복사가 필요 없다(sub-block partial hit은 필요; 아래 참조). 직접 작성한 다이어그램; 출처 block_pool.py / single_type_kv_cache_manager.py.</span></p>
+
+<p><span class="en"><b>The hash</b> is computed the moment a block fills up, chaining the parent block's hash with this block's token ids (so position matters — the same tokens at a different offset get a different hash). Identical prefixes therefore produce identical hash chains:</span>
+<span class="ko"><b>해시</b>는 block이 꽉 차는 순간 계산되며, 부모 block 해시와 이 block의 토큰 id를 연쇄한다(그래서 위치가 중요 — 같은 토큰이라도 오프셋이 다르면 다른 해시). 따라서 동일한 prefix는 동일한 해시 사슬을 만든다:</span></p>
+<pre><code># vllm/v1/core/kv_cache_utils.py:691  (get_request_block_hasher)
+# hash(block) = hash(parent_block_hash, tuple(block_token_ids), extra_keys)</code></pre>
+<p><span class="en"><b>The lookup</b> walks the request's block hashes against the cache map and returns the longest matching run of physical blocks — the "longest cache hit":</span>
+<span class="ko"><b>조회</b>는 요청의 block 해시들을 캐시 맵과 대조해, 가장 긴 물리 block 연속을 돌려준다 — "longest cache hit":</span></p>
+<pre><code># vllm/v1/core/single_type_kv_cache_manager.py:547  (find_longest_cache_hit)
+# returns the longest common-prefix run of cached blocks (≤ max_length),
+# null-block-padded per group; used by get_computed_blocks (§4)</code></pre>
+<p><span class="en"><b>Freeing and eviction are two different moments.</b> When a request frees its blocks, each block's <code class="inl">ref_cnt</code> drops; at 0 the block returns to the free queue's <i>tail</i> — but it <b>keeps its content and its cache entry</b>. It is only truly evicted later, when the pool pops it off the head to satisfy a fresh allocation and calls <code class="inl">_maybe_evict_cached_block</code>, which drops its hash from the map:</span>
+<span class="ko"><b>반납과 축출은 다른 순간이다.</b> 요청이 block을 반납하면 각 block의 <code class="inl">ref_cnt</code>가 내려가고; 0이 되면 free 큐 <i>tail</i>로 돌아간다 — 하지만 <b>내용과 캐시 항목은 유지</b>한다. 진짜 축출은 나중에, 풀이 새 할당을 위해 head에서 pop하며 <code class="inl">_maybe_evict_cached_block</code>을 불러 해시를 맵에서 지울 때 일어난다:</span></p>
+<pre><code># vllm/v1/core/block_pool.py:679  (_maybe_evict_cached_block)
+evicted_hashes = self._remove_cached_block_hashes(block)   # forget its content
+# → the slot's KV is now free to be overwritten by the next allocation</code></pre>
+<p><span class="en">That lazy eviction is exactly why prefix caching works across requests: a finished request's blocks stay reusable in the free queue until their space is actually needed.</span>
+<span class="ko">이 지연 축출이 바로 prefix 캐싱이 요청 간에 작동하는 이유다: 끝난 요청의 block은 그 공간이 실제로 필요해질 때까지 free 큐에서 재사용 가능하게 남는다.</span></p>
+<h3><span class="en">Where copy-on-write actually comes in</span><span class="ko">copy-on-write는 정확히 어디서 나오나</span></h3>
+<p><span class="en">In the common case, a prefix hit ends on a <b>block boundary</b>: whole blocks are shared read-only and each request writes only into its own newly-popped tail block (Fig 4) — no copy. But the <b>fine-grained</b> managers (full-attention, Mamba "align") can register a hit that ends <i>inside</i> a block — a <b>partial hit</b>. Now the shared tail block is both a cached block (ref'd by others) <i>and</i> the block this request must keep writing into. Writing in place would corrupt the shared copy, so vLLM does a <b>copy-on-write</b>: it redirects that one block slot in the request's table to a private <code class="inl">cow_block</code>, queues the physical copy to run on the worker, and keeps both endpoints ref-retained until it does:</span>
+<span class="ko">흔한 경우, prefix 히트는 <b>block 경계</b>에서 끝난다: block 전체가 읽기전용으로 공유되고 각 요청은 자기 새 tail block에만 쓴다(그림 4) — 복사 없음. 하지만 <b>fine-grained</b> 매니저(full-attention, Mamba "align")는 히트가 block <i>내부</i>에서 끝나는 걸 등록할 수 있다 — <b>partial hit</b>. 이제 공유 tail block은 캐시 block(남들이 참조)이면서 <i>동시에</i> 이 요청이 계속 써야 할 block이다. 제자리에 쓰면 공유본이 오염되므로, vLLM은 <b>copy-on-write</b>를 한다: 요청 테이블의 그 block 슬롯을 사설 <code class="inl">cow_block</code>으로 재지정하고, 물리 복사를 워커에서 실행하도록 큐잉하며, 복사가 끝날 때까지 양 끝 block을 참조 유지한다:</span></p>
+<pre><code># vllm/v1/core/single_type_kv_cache_manager.py:412  (redirect partial hit → private CoW block)
+req_blocks[block_idx] = cow_block                     # request now points at its private copy
+self._pending_cow_copies.append((source_block, cow_block))
+cow_block.ref_cnt += 1                                # retained until the worker runs the copy</code></pre>
+<p><span class="en">So the accurate rule is: <b>block-aligned</b> prefix reuse is copy-free (shared read-only + refcount); a <b>sub-block partial hit</b> is where copy-on-write kicks in, and only in the fine-grained managers.</span>
+<span class="ko">그러니 정확한 규칙은: <b>block 정렬</b> prefix 재사용은 복사 없음(읽기전용 공유 + refcount); <b>sub-block partial hit</b>이 copy-on-write가 발동하는 지점이고, fine-grained 매니저에서만 그렇다.</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L691-L760">get_request_block_hasher</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/single_type_kv_cache_manager.py#L547-L591">find_longest_cache_hit</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L702-L717">touch</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L679-L700">_maybe_evict_cached_block</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/single_type_kv_cache_manager.py#L412-L424">partial-hit CoW redirect</a></li>
+</ul>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Looking blocks up — one block table per sequence, stacked across layers</span><span class="ko">block 조회 — 시퀀스마다 block table 하나, 레이어에 걸쳐 쌓임</span></h2>
+<p><span class="en">Where does a request's list of blocks actually live? In the <b><code class="inl">SingleTypeKVCacheManager</code></b>, as a plain dict from request id to a list of blocks — the <b>block table</b>. There is <b>one table per sequence per group</b>, not one per layer:</span>
+<span class="ko">요청의 block 목록은 실제로 어디 사나? <b><code class="inl">SingleTypeKVCacheManager</code></b> 안, 요청 id → block 리스트의 평범한 dict — 이게 <b>block table</b>이다. <b>시퀀스마다·그룹마다 테이블 하나</b>이지, 레이어마다가 아니다:</span></p>
+<pre><code># vllm/v1/core/single_type_kv_cache_manager.py:97
+self.req_to_blocks: defaultdict[str, list[KVCacheBlock]] = defaultdict(list)</code></pre>
+<p><span class="en">This is the crux of the "is the block table per layer?" question from the PagedAttention note. It is <b>not</b>. A single block id — say block 6 — refers to the <i>same slot</i> in <b>every layer's</b> KV tensor within its group. That's exactly why §2 divided the byte budget by <code class="inl">num_layers</code>: allocating one logical block consumes one slot in all of the group's layers at once.</span>
+<span class="ko">이게 PagedAttention 노트의 "block table이 레이어마다인가?" 질문의 핵심이다. <b>아니다.</b> 하나의 block id — 예: block 6 — 는 그 그룹 <b>모든 레이어</b> KV 텐서의 <i>같은 슬롯</i>을 가리킨다. §2에서 바이트 예산을 <code class="inl">num_layers</code>로 나눈 게 바로 이 때문: 논리 block 하나를 할당하면 그룹의 모든 레이어에서 슬롯 하나씩을 한꺼번에 쓴다.</span></p>
+
+<svg class="fig" viewBox="0 0 760 280" role="img" aria-label="One block table per sequence indexing the same slot across every layer's KV tensor">
+  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10.5px -apple-system,sans-serif;fill:var(--muted)}.tb{fill:var(--blue-bg);stroke:var(--blue-bd)}.ly{fill:var(--card);stroke:var(--line)}.hl{fill:var(--green-bg);stroke:var(--green-bd)}.a{stroke:var(--green-bd);stroke-width:1.2;fill:none;marker-end:url(#a6)}</style>
+  <defs><marker id="a6" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--green-bd)"/></marker></defs>
+  <text x="20" y="30" class="t">Req A block table (ONE, layer-agnostic)</text>
+  <rect class="tb" x="20" y="42" width="52" height="30" rx="3"/><text x="46" y="61" class="k" text-anchor="middle">blk 5</text>
+  <rect class="hl" x="76" y="42" width="52" height="30" rx="3"/><text x="102" y="61" class="k" text-anchor="middle">blk 6</text>
+  <rect class="tb" x="132" y="42" width="52" height="30" rx="3"/><text x="158" y="61" class="k" text-anchor="middle">blk 9</text>
+  <text x="20" y="96" class="k">logical position → block id (per sequence)</text>
+  <!-- layers -->
+  <text x="440" y="30" class="t">Physical KV cache tensors — one per layer</text>
+  <g>
+  <text x="440" y="60" class="k">layer 0</text>
+  <rect class="ly" x="490" y="46" width="40" height="24"/><rect class="ly" x="532" y="46" width="40" height="24"/><rect class="hl" x="574" y="46" width="40" height="24"/><rect class="ly" x="616" y="46" width="40" height="24"/><rect class="ly" x="658" y="46" width="40" height="24"/>
+  <text x="594" y="62" class="k" text-anchor="middle">6</text>
+  </g>
+  <g>
+  <text x="440" y="110" class="k">layer 1</text>
+  <rect class="ly" x="490" y="96" width="40" height="24"/><rect class="ly" x="532" y="96" width="40" height="24"/><rect class="hl" x="574" y="96" width="40" height="24"/><rect class="ly" x="616" y="96" width="40" height="24"/><rect class="ly" x="658" y="96" width="40" height="24"/>
+  <text x="594" y="112" class="k" text-anchor="middle">6</text>
+  </g>
+  <g>
+  <text x="440" y="160" class="k">layer 2</text>
+  <rect class="ly" x="490" y="146" width="40" height="24"/><rect class="ly" x="532" y="146" width="40" height="24"/><rect class="hl" x="574" y="146" width="40" height="24"/><rect class="ly" x="616" y="146" width="40" height="24"/><rect class="ly" x="658" y="146" width="40" height="24"/>
+  <text x="594" y="162" class="k" text-anchor="middle">6</text>
+  </g>
+  <path class="a" d="M102,72 C 200,140 380,80 572,58"/>
+  <path class="a" d="M102,72 C 200,160 380,120 572,108"/>
+  <path class="a" d="M102,72 C 200,180 380,170 572,158"/>
+  <text x="20" y="150" class="k">"block 6" = the same</text><text x="20" y="166" class="k">slot index in each</text><text x="20" y="182" class="k">layer's tensor →</text>
+  <text x="20" y="240" class="k">get_block_ids(req) returns one list per group; the model runner turns it into the slot mapping the attention kernel reads (§7).</text>
+  <text x="20" y="262" class="k">Multiple attention TYPES (full + sliding-window + Mamba) → multiple GROUPS → the table is a tuple, one list per group. Usually there's just one.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 5 — The block table indexes every layer. One list of block ids per sequence (per group), layer-agnostic; block id 6 selects the same physical slot in layer 0, 1, 2… of the group. Original diagram; per single_type_kv_cache_manager.py &amp; kv_cache_interface.py (KVCacheGroupSpec.layer_names).</span><span class="ko">그림 5 — block table가 모든 레이어를 인덱싱한다. 시퀀스마다(그룹마다) block id 리스트 하나, 레이어 무관; block id 6은 그룹의 layer 0·1·2…에서 같은 물리 슬롯을 고른다. 직접 작성한 다이어그램; 출처 single_type_kv_cache_manager.py &amp; kv_cache_interface.py (KVCacheGroupSpec.layer_names).</span></p>
+
+<p><span class="en">Reading it back is trivial — the manager just returns the id list (one per group):</span>
+<span class="ko">되읽기는 간단하다 — 매니저가 id 리스트(그룹마다 하나)를 돌려줄 뿐:</span></p>
+<pre><code># vllm/v1/core/kv_cache_manager.py:707
+def get_block_ids(self, request_id: str) -> tuple[list[int], ...]:
+    return self.get_blocks(request_id).get_block_ids()</code></pre>
+<p><span class="en">If a model mixes attention types — e.g. full-attention layers plus sliding-window layers plus Mamba layers — vLLM splits them into <b>KV-cache groups</b>, each with its own spec and its own block table; that's why <code class="inl">get_block_ids</code> returns a <i>tuple</i> of lists. A plain transformer has exactly one group, so the tuple has one element and the mental model is simply "one block table per sequence."</span>
+<span class="ko">모델이 어텐션 타입을 섞으면 — 예: full-attention + sliding-window + Mamba — vLLM은 이를 <b>KV-cache 그룹</b>으로 나누고, 각 그룹이 자체 spec과 자체 block table을 갖는다; 그래서 <code class="inl">get_block_ids</code>가 리스트의 <i>튜플</i>을 돌려준다. 평범한 transformer는 그룹이 정확히 하나라, 튜플 원소도 하나이고 멘탈 모델은 그냥 "시퀀스마다 block table 하나"다.</span></p>
+<ul class="srcs">
+<li><a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/single_type_kv_cache_manager.py#L97">req_to_blocks</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_manager.py#L707-L709">get_block_ids</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/kv_cache_interface.py#L950-L957">KVCacheGroupSpec.layer_names</a></li>
+</ul>
+</section>
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">The whole life of a block, start to finish</span><span class="ko">block의 일생, 처음부터 끝까지</span></h2>
+<p><span class="en">Putting the six pieces in order — from engine boot to a request finishing:</span>
+<span class="ko">여섯 조각을 순서대로 — 엔진 부팅부터 요청 종료까지:</span></p>
+<svg class="fig" viewBox="0 0 760 250" role="img" aria-label="End-to-end lifecycle: startup, request arrives, decode, finish">
+  <style>.t{font:600 11.5px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.s1{fill:var(--purple-bg);stroke:var(--purple-bd)}.s2{fill:var(--blue-bg);stroke:var(--blue-bd)}.s3{fill:var(--green-bg);stroke:var(--green-bd)}.s4{fill:var(--amber-bg);stroke:var(--amber-bd)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a7)}</style>
+  <defs><marker id="a7" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <rect class="s1" x="20" y="30" width="170" height="70" rx="6"/><text x="105" y="50" class="t" text-anchor="middle">① Startup (§2–3)</text><text x="105" y="68" class="k" text-anchor="middle">profile mem → num_blocks</text><text x="105" y="82" class="k" text-anchor="middle">build BlockPool +</text><text x="105" y="95" class="k" text-anchor="middle">free LRU queue</text>
+  <rect class="s2" x="215" y="30" width="170" height="70" rx="6"/><text x="300" y="50" class="t" text-anchor="middle">② Request in (§4–6)</text><text x="300" y="68" class="k" text-anchor="middle">get_computed_blocks</text><text x="300" y="82" class="k" text-anchor="middle">→ allocate_slots</text><text x="300" y="95" class="k" text-anchor="middle">→ block table filled</text>
+  <rect class="s3" x="410" y="30" width="170" height="70" rx="6"/><text x="495" y="50" class="t" text-anchor="middle">③ Decode step (§4)</text><text x="495" y="68" class="k" text-anchor="middle">append token; tail full?</text><text x="495" y="82" class="k" text-anchor="middle">→ pop 1 new block</text><text x="495" y="95" class="k" text-anchor="middle">→ hash &amp; cache it</text>
+  <rect class="s4" x="605" y="30" width="135" height="70" rx="6"/><text x="672" y="50" class="t" text-anchor="middle">④ Finish (§5)</text><text x="672" y="68" class="k" text-anchor="middle">free → ref_cnt−−</text><text x="672" y="82" class="k" text-anchor="middle">0 → linger in queue</text><text x="672" y="95" class="k" text-anchor="middle">(still cached)</text>
+  <path class="a" d="M190,65 L213,65"/><path class="a" d="M385,65 L408,65"/><path class="a" d="M580,65 L603,65"/>
+  <path class="a" d="M672,100 C 672,140 300,140 300,102"/><text x="486" y="135" class="k">next request with same prefix reuses these blocks (§5) — until evicted at the queue head</text>
+  <rect class="s3" x="215" y="170" width="330" height="34" rx="5"/><text x="380" y="191" class="k" text-anchor="middle">no free block at ② ? → allocate_slots returns None → scheduler preempts / waits</text>
+  <path class="a" d="M300,148 L300,168"/>
+  <text x="20" y="228" class="k">Blocks are never malloc'd/freed on the GPU per request — they're the same fixed pool of slots, endlessly handed out, reference-counted, and recycled.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 6 — The block lifecycle. A fixed pool is carved once at startup; requests borrow block ids, share them by reference count, and return them to a queue that doubles as the prefix cache. Original diagram summarizing §2–§6.</span><span class="ko">그림 6 — block 생애주기. 고정 풀을 시작 시 한 번 깎고; 요청은 block id를 빌려, 참조 카운트로 공유하고, prefix 캐시를 겸하는 큐로 반납한다. §2–§6을 요약한 직접 작성 다이어그램.</span></p>
+
+<div class="callout c-purple">
+<p><b><span class="en">Editor's note — our take (not a vLLM claim)</span><span class="ko">편집자 주 — 우리 관점 (vLLM의 주장 아님)</span></b></p>
+<p><span class="en">For our MI250 serving work, three of these knobs are the ones worth watching. (1) <b><code class="inl">num_blocks</code> is measured, not set</b> — so the same YAML on two GPUs with different free memory yields different KV capacity; if you benchmark concurrency, pin <code class="inl">gpu_memory_utilization</code> and log the resolved <code class="inl">num_gpu_blocks</code>, don't assume it. (2) <b>Prefix caching is free throughput</b> for any workload with shared system prompts or multi-turn chat — the free-queue-as-cache means it costs nothing until memory pressure forces eviction, so a low <code class="inl">gpu_memory_utilization</code> silently throws that reuse away. (3) The <b>watermark / returns-None path is where preemption lives</b> — when we see recompute-thrashing under load, this allocation refusal, not the kernel, is the thing to instrument. The block manager is pure bookkeeping on the host; none of this is on the attention hot path, which is why it can afford content hashing and an LRU on every step.</span>
+<span class="ko">우리 MI250 서빙 작업에선 이 노브 중 셋을 볼 만하다. (1) <b><code class="inl">num_blocks</code>는 설정이 아니라 측정된다</b> — 같은 YAML도 free 메모리가 다른 두 GPU에선 KV 용량이 달라진다; 동시성을 벤치할 땐 <code class="inl">gpu_memory_utilization</code>을 고정하고 결정된 <code class="inl">num_gpu_blocks</code>를 로깅하라, 가정하지 말고. (2) <b>prefix 캐싱은 공짜 처리량</b>이다 — 시스템 프롬프트 공유나 멀티턴 챗이면 free-큐-가-캐시 구조 덕에 메모리 압박으로 축출이 강제되기 전까진 비용이 0이라, 낮은 <code class="inl">gpu_memory_utilization</code>은 그 재사용을 조용히 버린다. (3) <b>워터마크 / None-반환 경로가 축출이 사는 곳</b>이다 — 부하 하에서 recompute 스래싱이 보이면, 커널이 아니라 이 할당 거부를 계측해야 한다. block 매니저는 호스트에서 순수 장부질이라 어텐션 핫패스에 없고, 그래서 매 스텝 콘텐츠 해싱과 LRU를 감당할 수 있다.</span></p>
+</div>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<p><span class="en">All line numbers pinned to vLLM commit <code class="inl">8700f86</code> (they drift across releases). Apache-2.0.</span>
+<span class="ko">모든 라인 번호는 vLLM 커밋 <code class="inl">8700f86</code> 기준(릴리스마다 달라진다). Apache-2.0.</span></p>
+<ul class="srcs">
+<li><b>Memory profiling / num_blocks</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/worker/gpu_worker.py#L544-L548">gpu_worker.py</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/worker/utils.py#L403-L405">utils.py</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/utils/mem_utils.py#L317-L326">mem_utils.py</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L1008">kv_cache_utils.py:1008</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/config/cache.py#L47">cache.py:47</a></li>
+<li><b>Per-block size</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/kv_cache_interface.py#L203-L218">kv_cache_interface.py</a></li>
+<li><b>BlockPool / free queue / block object</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L175-L191">BlockPool init</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L647-L677">get_new_blocks</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L117-L138">KVCacheBlock</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L184-L347">FreeKVCacheBlockQueue</a></li>
+<li><b>KVCacheManager allocate/lookup</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_manager.py#L229-L296">get_computed_blocks</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_manager.py#L344-L565">allocate_slots</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_manager.py#L707-L709">get_block_ids</a></li>
+<li><b>Prefix cache / hashing / eviction</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/kv_cache_utils.py#L691-L760">get_request_block_hasher</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/single_type_kv_cache_manager.py#L547-L591">find_longest_cache_hit</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L702-L717">touch</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/block_pool.py#L679-L700">_maybe_evict_cached_block</a></li>
+<li><b>Block table storage</b> — <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/core/single_type_kv_cache_manager.py#L97">req_to_blocks</a> · <a href="https://github.com/vllm-project/vllm/blob/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd/vllm/v1/kv_cache_interface.py#L950-L957">KVCacheGroupSpec</a></li>
+<li><b>Related note</b> — <a href="./vllm-paged-attention-v1-v2.html">PagedAttention v1 vs v2</a> (how the kernel reads these blocks)</li>
+</ul>
+</section>
+
+<footer class="foot">
+<p><span class="en">Code-walk of vLLM's V1 KV-cache block manager, pinned to commit <a href="https://github.com/vllm-project/vllm/tree/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd">8700f86</a> (Apache-2.0). Diagrams are original, drawn from the code paths cited above.</span><span class="ko">vLLM V1 KV-캐시 block 매니저 코드워크, 커밋 <a href="https://github.com/vllm-project/vllm/tree/8700f86a7012b2354c3f2834c1a0d2b6023b0bcd">8700f86</a> 기준(Apache-2.0). 다이어그램은 위에 인용한 코드 경로를 바탕으로 직접 작성.</span></p>
+<p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
+</footer>
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
