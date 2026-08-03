@@ -254,18 +254,66 @@ if new_token_ids and self.structured_output_manager.should_advance(request, new_
     if advance_token_ids and not grammar.accept_tokens(req_id, advance_token_ids):
         request.status = RequestStatus.FINISHED_ERROR    # grammar rejected → kill</code></pre>
 
-<div class="callout c-coral">
-<p><b><span class="en">So how does it fail? Forcing ≠ guaranteed success</span><span class="ko">그럼 언제 실패하나? 강제 ≠ 무조건 성공</span></b></p>
-<p><span class="en">Masking makes an illegal token <i>impossible</i> — but that only guarantees a valid <b>prefix</b>, not a finished, correct result. Structured output still fails when:</span>
-<span class="ko">마스킹은 불법 토큰을 <i>불가능</i>하게 하지만, 그건 유효한 <b>prefix</b>만 보장하지 완성·정확을 보장하진 않는다. 그래도 실패하는 경우:</span></p>
-<ul>
-<li><span class="en"><b>A · compile</b> — the schema/regex/grammar is unsupported (e.g. <code class="inl">multipleOf</code>, lookarounds) or the regex times out → that request errors <i>before</i> generating.</span><span class="ko"><b>A · 컴파일</b> — 스키마/regex/문법이 미지원(<code class="inl">multipleOf</code>, lookaround 등)이거나 regex 타임아웃 → 생성 <i>전에</i> 그 요청이 에러.</span></li>
-<li><span class="en"><b>B · truncation</b> — <code class="inl">max_tokens</code> is hit before the grammar closes → a <i>truncated, invalid</i> JSON. The most common failure in practice; give the schema enough token budget.</span><span class="ko"><b>B · 잘림</b> — 문법이 닫히기 전에 <code class="inl">max_tokens</code>에 걸림 → <i>잘린 무효</i> JSON. 실무에서 가장 흔함; 스키마에 넉넉한 토큰 예산을 줘라.</span></li>
-<li><span class="en"><b>C · wrong content</b> — it forces the <i>shape</i>, not the meaning: <code class="inl">{"age":0}</code> is valid but maybe nonsense, and pushing the model off its distribution can degrade quality.</span><span class="ko"><b>C · 내용 오류</b> — <i>형태</i>를 강제하지 의미를 강제하지 않음: <code class="inl">{"age":0}</code>은 유효하지만 오답일 수 있고, 분포에서 밀어내 품질이 떨어질 수도.</span></li>
-<li><span class="en"><b>D · runtime desync → kill</b> — a tokenizer mismatch or a bug makes <code class="inl">accept_tokens</code> reject a token → vLLM kills the request (above) rather than emit invalid output.</span><span class="ko"><b>D · 런타임 desync → 종료</b> — 토크나이저 불일치나 버그로 <code class="inl">accept_tokens</code>가 거부 → vLLM은 무효 출력 대신 요청을 죽임(위 코드).</span></li>
-<li><span class="en"><b>E · backend limits</b> — the unsupported combos in §3 (outlines: no grammar/structural-tag; lm-format-enforcer: no speculative decoding).</span><span class="ko"><b>E · 백엔드 한계</b> — §3의 미지원 조합(outlines: grammar/structural-tag 없음; lm-format-enforcer: spec decode 없음).</span></li>
-</ul>
-</div>
+<h3><span class="en">So how does it fail? (forcing ≠ guaranteed success)</span><span class="ko">그럼 언제 실패하나? (강제 ≠ 무조건 성공)</span></h3>
+<p><span class="en">Masking an illegal token to <code class="inl">−inf</code> guarantees a valid <b>prefix</b> — not a finished, correct result. It still fails five ways:</span>
+<span class="ko">불법 토큰을 <code class="inl">−inf</code>로 막으면 유효한 <b>prefix</b>는 보장되지만 완성·정확은 아니다. 여전히 다섯 가지로 실패한다:</span></p>
+<svg class="fig" viewBox="0 0 760 200" role="img" aria-label="Five failure modes of structured output shown with real JSON tokens and glyphs">
+  <style>
+    .fh{font:600 11.5px -apple-system,sans-serif;fill:var(--ink)}
+    .fs{font:9.5px -apple-system,sans-serif;fill:var(--muted)}
+    .fm{font:600 12px "SF Mono",Menlo,monospace;fill:var(--ink)}
+    .big{font:800 22px -apple-system,sans-serif;fill:var(--coral-ink)}
+    .x{stroke:var(--coral-ink);stroke-width:3;stroke-linecap:round}
+    .tear{fill:none;stroke:var(--coral-ink);stroke-width:2.2}
+    .div{stroke:var(--line)}
+    .pg{fill:var(--gray-bg);stroke:var(--gray-bd)}
+  </style>
+  <text x="20" y="16" class="fs">generated so far is always a valid prefix — but "prefix" is not "done" and not "right":</text>
+  <line class="div" x1="154" y1="30" x2="154" y2="196"/><line class="div" x1="306" y1="30" x2="306" y2="196"/><line class="div" x1="458" y1="30" x2="458" y2="196"/><line class="div" x1="610" y1="30" x2="610" y2="196"/>
+
+  <!-- A: compile -->
+  <text x="24" y="52" class="big">A</text>
+  <rect class="pg" x="54" y="44" width="54" height="46" rx="3"/><path d="M96,44 l12,12 l-12,0 Z" fill="var(--card)" stroke="var(--gray-bd)"/><text x="78" y="66" class="fs" text-anchor="middle">multipleOf</text><text x="78" y="80" class="fs" text-anchor="middle">pattern…</text>
+  <line class="x" x1="56" y1="46" x2="106" y2="88"/><line class="x" x1="106" y1="46" x2="56" y2="88"/>
+  <text x="78" y="128" class="fh" text-anchor="middle">won't compile</text>
+  <text x="78" y="145" class="fs" text-anchor="middle">unsupported schema</text>
+  <text x="78" y="158" class="fs" text-anchor="middle">→ 0 tokens, errors</text>
+
+  <!-- B: truncation -->
+  <text x="176" y="52" class="big">B</text>
+  <text x="182" y="72" class="fm">{"name":"Bo</text>
+  <path class="tear" d="M280,50 l8,8 l-8,8 l8,8 l-8,8 l8,8"/>
+  <text x="256" y="92" class="fs" fill="var(--coral-ink)">✂ max_tokens</text>
+  <text x="230" y="128" class="fh" text-anchor="middle">truncated → invalid</text>
+  <text x="230" y="145" class="fs" text-anchor="middle">budget ran out mid-JSON</text>
+  <text x="230" y="158" class="fs" text-anchor="middle">(the common one)</text>
+
+  <!-- C: wrong content -->
+  <text x="328" y="52" class="big">C</text>
+  <path d="M346,62 l6,7 l12,-15" fill="none" stroke="var(--green-ink)" stroke-width="3" stroke-linecap="round"/>
+  <text x="412" y="60" class="fm" fill="var(--coral-ink)" font-size="18">?</text>
+  <text x="382" y="86" class="fm" text-anchor="middle">{"age":0}</text>
+  <text x="382" y="128" class="fh" text-anchor="middle">valid, but wrong</text>
+  <text x="382" y="145" class="fs" text-anchor="middle">shape ✓ · meaning ✗</text>
+  <text x="382" y="158" class="fs" text-anchor="middle">(0 = nonsense)</text>
+
+  <!-- D: kill -->
+  <text x="480" y="52" class="big">D</text>
+  <text x="500" y="72" class="fm">…":</text>
+  <circle cx="556" cy="66" r="14" fill="none" stroke="var(--coral-ink)" stroke-width="3"/><line class="x" x1="547" y1="57" x2="565" y2="75"/>
+  <text x="534" y="128" class="fh" text-anchor="middle">killed</text>
+  <text x="534" y="145" class="fs" text-anchor="middle">FSM/token desync</text>
+  <text x="534" y="158" class="fs" text-anchor="middle">→ dropped, not invalid</text>
+
+  <!-- E: backend -->
+  <text x="632" y="52" class="big">E</text>
+  <text x="662" y="60" class="fs">outlines</text><line class="x" x1="708" y1="52" x2="722" y2="66" stroke-width="2.4"/><text x="712" y="64" class="fs">gr</text>
+  <text x="662" y="82" class="fs">lmfe</text><line class="x" x1="694" y1="74" x2="708" y2="88" stroke-width="2.4"/><text x="700" y="86" class="fs">spec</text>
+  <text x="686" y="128" class="fh" text-anchor="middle">backend can't</text>
+  <text x="686" y="145" class="fs" text-anchor="middle">unsupported combo</text>
+  <text x="686" y="158" class="fs" text-anchor="middle">(§3 table)</text>
+</svg>
+<p class="figcap"><span class="en">Fig 3 — Five ways a forced request still fails. <b>A</b> an unsupported schema/regex never compiles (errors before any token). <b>B</b> <code>max_tokens</code> cuts the JSON mid-structure → invalid — the common one, so budget generously. <b>C</b> the grammar forces the shape, not the meaning. <b>D</b> a rare tokenizer/FSM desync makes <code>accept_tokens</code> reject → the request is killed rather than left invalid. <b>E</b> a backend can't express the constraint (§3). Original diagram.</span><span class="ko">그림 3 — 강제된 요청이 그래도 실패하는 다섯 가지. <b>A</b> 미지원 스키마/regex는 애초에 컴파일 안 됨(토큰 0). <b>B</b> <code>max_tokens</code>가 JSON을 중간에 자름 → 무효 — 가장 흔하니 예산을 넉넉히. <b>C</b> 문법은 형태를 강제하지 의미를 강제 안 함. <b>D</b> 드문 토크나이저/FSM desync로 <code>accept_tokens</code>가 거부 → 무효를 내느니 요청을 죽임. <b>E</b> 백엔드가 그 제약을 표현 못 함(§3). 직접 작성한 다이어그램.</span></p>
 
 <ul class="srcs">
 <li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L114-L192">StructuredOutputManager.grammar_init</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/backend_types.py#L31-L136">backend interface</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/worker/gpu/structured_outputs.py#L85-L115">Triton −inf kernel</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/worker/gpu_model_runner.py#L4582-L4589">apply then sample</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/core/sched/scheduler.py#L1817-L1834">advance / kill</a></li>
@@ -303,7 +351,7 @@ if new_token_ids and self.structured_output_manager.should_advance(request, new_
   <text x="160" y="150" class="k" text-anchor="middle">schema uses guidance-unsupported feature</text>
   <text x="20" y="205" class="k">xgrammar rejects e.g. multipleOf, array uniqueItems/contains, unknown string "format", object patternProperties → triggers the fallback. Explicit non-auto backends never fall back.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 3 — <code>auto</code> backend resolution (sampling_params.py). Try xgrammar; if the schema uses a feature xgrammar can't handle, fall back to outlines (Mistral / guidance-unsupported) or guidance. Original diagram.</span><span class="ko">그림 3 — <code>auto</code> 백엔드 결정(sampling_params.py). xgrammar 시도; 스키마가 xgrammar 미지원 기능을 쓰면 outlines(Mistral / guidance 미지원) 또는 guidance로 fallback. 직접 작성한 다이어그램.</span></p>
+<p class="figcap"><span class="en">Fig 4 — <code>auto</code> backend resolution (sampling_params.py). Try xgrammar; if the schema uses a feature xgrammar can't handle, fall back to outlines (Mistral / guidance-unsupported) or guidance. Original diagram.</span><span class="ko">그림 4 — <code>auto</code> 백엔드 결정(sampling_params.py). xgrammar 시도; 스키마가 xgrammar 미지원 기능을 쓰면 outlines(Mistral / guidance 미지원) 또는 guidance로 fallback. 직접 작성한 다이어그램.</span></p>
 <pre><code># vllm/sampling_params.py:1043  (auto resolution, condensed)
 try:
     validate_xgrammar_grammar(self);  self._backend = "xgrammar"
@@ -406,7 +454,7 @@ except ValueError:
   <text x="300" y="372" class="lbl"><tspan font-weight="700" fill="var(--ink)">④ commit</tspan> — walk through "the" "cat" only (the 2 accepted);</text>
   <text x="300" y="385" class="lbl">"sat" was rejected, so ▼ stops before it. FSM now exactly right.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 4 — Speculative decoding + a grammar. <b>Top:</b> the draft model guesses several tokens; the target verifies them all in one pass and keeps the correct prefix. <b>Bottom:</b> the grammar's FSM is just a <i>position</i> on a state track — it ① validates without moving, ② temp-advances to read each slot's bitmask, ③ rolls back, then ④ commits only the accepted guesses, so a rejected draft can never leave it in the wrong state. Original diagram; per structured_output/__init__.py &amp; scheduler.py.</span><span class="ko">그림 4 — speculative decoding + 문법. <b>위:</b> draft 모델이 여러 토큰을 추측하고, target이 한 번에 검증해 맞는 prefix만 남긴다. <b>아래:</b> 문법 FSM은 상태 트랙 위의 <i>위치</i>일 뿐 — ① 이동 없이 검증, ② 각 슬롯 bitmask를 읽으려 임시 전진, ③ rollback, ④ 통과한 추측만 commit해서, 거부된 draft가 FSM을 잘못된 상태로 남기지 못한다. 직접 작성한 다이어그램; 출처 structured_output/__init__.py &amp; scheduler.py.</span></p>
+<p class="figcap"><span class="en">Fig 5 — Speculative decoding + a grammar. <b>Top:</b> the draft model guesses several tokens; the target verifies them all in one pass and keeps the correct prefix. <b>Bottom:</b> the grammar's FSM is just a <i>position</i> on a state track — it ① validates without moving, ② temp-advances to read each slot's bitmask, ③ rolls back, then ④ commits only the accepted guesses, so a rejected draft can never leave it in the wrong state. Original diagram; per structured_output/__init__.py &amp; scheduler.py.</span><span class="ko">그림 5 — speculative decoding + 문법. <b>위:</b> draft 모델이 여러 토큰을 추측하고, target이 한 번에 검증해 맞는 prefix만 남긴다. <b>아래:</b> 문법 FSM은 상태 트랙 위의 <i>위치</i>일 뿐 — ① 이동 없이 검증, ② 각 슬롯 bitmask를 읽으려 임시 전진, ③ rollback, ④ 통과한 추측만 commit해서, 거부된 draft가 FSM을 잘못된 상태로 남기지 못한다. 직접 작성한 다이어그램; 출처 structured_output/__init__.py &amp; scheduler.py.</span></p>
 
 <pre><code># vllm/v1/structured_output/__init__.py:324  (bitmask assembly, spec-decode path — condensed)
 for each scheduled draft token:
@@ -451,7 +499,7 @@ grammar.rollback(state_advancements)           # undo — drafts aren't confirme
   <text x="380" y="300" class="t" text-anchor="middle">The guarantee always comes from routing tools THROUGH the left plane (structured output).</text>
   <text x="380" y="320" class="k" text-anchor="middle">"auto" hopes; "required/named" forces. Same tool parser, opposite reliability.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 5 — Two tool-calling paths. (a) <code>auto</code>: the model free-generates markers and the parser tries to extract them — no guarantee. (b) <code>required</code>/named: <code>adjust_request</code> turns the tools into a JSON schema (path A) or structural tag (path B), routes generation through structured output, and the parse-back is then trivial and guaranteed. Original diagram; per parser/ &amp; tool_parsers/.</span><span class="ko">그림 5 — tool-calling 두 경로. (a) <code>auto</code>: 모델이 마커를 자유 생성하고 파서가 추출 시도 — 보장 없음. (b) <code>required</code>/named: <code>adjust_request</code>가 tool을 JSON 스키마(경로 A)나 structural tag(경로 B)로 바꿔 structured output으로 태우고, 되파싱은 사소하고 보장된다. 직접 작성한 다이어그램; 출처 parser/ &amp; tool_parsers/.</span></p>
+<p class="figcap"><span class="en">Fig 6 — Two tool-calling paths. (a) <code>auto</code>: the model free-generates markers and the parser tries to extract them — no guarantee. (b) <code>required</code>/named: <code>adjust_request</code> turns the tools into a JSON schema (path A) or structural tag (path B), routes generation through structured output, and the parse-back is then trivial and guaranteed. Original diagram; per parser/ &amp; tool_parsers/.</span><span class="ko">그림 6 — tool-calling 두 경로. (a) <code>auto</code>: 모델이 마커를 자유 생성하고 파서가 추출 시도 — 보장 없음. (b) <code>required</code>/named: <code>adjust_request</code>가 tool을 JSON 스키마(경로 A)나 structural tag(경로 B)로 바꿔 structured output으로 태우고, 되파싱은 사소하고 보장된다. 직접 작성한 다이어그램; 출처 parser/ &amp; tool_parsers/.</span></p>
 
 <p><span class="en"><b>Path A — generic JSON schema.</b> For most parsers, <code class="inl">adjust_request</code> builds a schema from the tools and attaches it as a structured-output constraint. <code class="inl">required</code> → an <b>array of <code class="inl">anyOf</code>({name enum, parameters})</b>; a <b>named</b> choice → just that one tool's <code class="inl">parameters</code> (so the whole output <i>is</i> the arguments object):</span>
 <span class="ko"><b>경로 A — 일반 JSON 스키마.</b> 대부분 파서는 <code class="inl">adjust_request</code>가 tool들에서 스키마를 만들어 structured-output 제약으로 붙인다. <code class="inl">required</code> → <b><code class="inl">anyOf</code>({name enum, parameters})의 배열</b>; <b>named</b> → 그 tool 하나의 <code class="inl">parameters</code>만(출력 전체가 인자 객체 그 자체):</span></p>
@@ -521,7 +569,7 @@ request.structured_outputs = StructuredOutputsParams(structural_tag=json.dumps(s
   <text x="20" y="208" class="k">flags = Allow.ALL &amp; ~Allow.STR while a name/string is mid-word, so a half-typed string is never streamed (find_common_prefix / extract_intermediate_diff).</text>
   <text x="20" y="228" class="k">Close-brackets and quotes are held back until confirmed complete — the client always receives incrementally-valid JSON.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 6 — Streaming a tool call as partial JSON. Each step re-parses the whole current text; fragments (an unfinished name or string) are held back, complete pieces are emitted as diffs against what was already sent. Original diagram; per tool_parsers/streaming.py &amp; utils.py.</span><span class="ko">그림 6 — tool call을 부분 JSON으로 스트리밍. 매 스텝 전체 텍스트를 다시 파싱; 조각(미완성 이름·문자열)은 보류하고 완성된 부분만 이미 보낸 것과의 diff로 낸다. 직접 작성한 다이어그램; 출처 tool_parsers/streaming.py &amp; utils.py.</span></p>
+<p class="figcap"><span class="en">Fig 7 — Streaming a tool call as partial JSON. Each step re-parses the whole current text; fragments (an unfinished name or string) are held back, complete pieces are emitted as diffs against what was already sent. Original diagram; per tool_parsers/streaming.py &amp; utils.py.</span><span class="ko">그림 7 — tool call을 부분 JSON으로 스트리밍. 매 스텝 전체 텍스트를 다시 파싱; 조각(미완성 이름·문자열)은 보류하고 완성된 부분만 이미 보낸 것과의 diff로 낸다. 직접 작성한 다이어그램; 출처 tool_parsers/streaming.py &amp; utils.py.</span></p>
 <pre><code># vllm/tool_parsers/llama_tool_parser.py:189  (canonical streaming approach)
 flags = Allow.ALL if self.current_tool_name_sent else Allow.ALL & ~Allow.STR  # don't stream a half name
 tool_call_arr = partial_json_loads(cur_arguments_text, flags)                 # parse partial JSON
@@ -572,7 +620,7 @@ for i in range(len(input_ids) - 1, -1, -1):     # scan backwards
   <path class="a" d="M572,136 C 520,150 480,158 470,168" stroke-dasharray="3 3"/>
   <text x="20" y="284" class="k">So a reasoning model that also does structured/tool output only starts obeying the grammar AFTER &lt;/think&gt; — its chain-of-thought is left completely free.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 7 — The full pipeline and the reasoning_ended gate. Grammar masking happens in the engine before sampling; detokenization in the front-end; reasoning-split then tool-parse in serving. <code>reasoning_ended</code> gates both the engine (skip the grammar while thinking) and serving (reasoning phase → tool phase). Original diagram; per structured_output/__init__.py, serving.py, reasoning/.</span><span class="ko">그림 7 — 전체 파이프라인과 reasoning_ended 게이트. 문법 마스킹은 엔진에서 sampling 전, 디코딩은 프런트엔드, reasoning 분리 후 tool 파싱은 서빙에서. <code>reasoning_ended</code>가 엔진(생각 중 문법 건너뜀)과 서빙(reasoning 단계 → tool 단계) 둘 다 게이팅. 직접 작성한 다이어그램; 출처 structured_output/__init__.py, serving.py, reasoning/.</span></p>
+<p class="figcap"><span class="en">Fig 8 — The full pipeline and the reasoning_ended gate. Grammar masking happens in the engine before sampling; detokenization in the front-end; reasoning-split then tool-parse in serving. <code>reasoning_ended</code> gates both the engine (skip the grammar while thinking) and serving (reasoning phase → tool phase). Original diagram; per structured_output/__init__.py, serving.py, reasoning/.</span><span class="ko">그림 8 — 전체 파이프라인과 reasoning_ended 게이트. 문법 마스킹은 엔진에서 sampling 전, 디코딩은 프런트엔드, reasoning 분리 후 tool 파싱은 서빙에서. <code>reasoning_ended</code>가 엔진(생각 중 문법 건너뜀)과 서빙(reasoning 단계 → tool 단계) 둘 다 게이팅. 직접 작성한 다이어그램; 출처 structured_output/__init__.py, serving.py, reasoning/.</span></p>
 
 <p><span class="en">This <code class="inl">reasoning_ended</code> gate is the elegant hinge of the whole subsystem. On the <b>engine</b> side, structured output checks it before ever filling a bitmask — so a JSON-constrained request with a reasoning model thinks in free-form prose and only starts being forced into JSON after <code class="inl">&lt;/think&gt;</code>:</span>
 <span class="ko">이 <code class="inl">reasoning_ended</code> 게이트가 전체 서브시스템의 우아한 경첩이다. <b>엔진</b> 쪽에서 structured output은 bitmask를 채우기 전에 이걸 확인한다 — JSON 제약 요청도 추론 모델이면 자유 산문으로 생각하고 <code class="inl">&lt;/think&gt;</code> 후에야 JSON으로 강제되기 시작한다:</span></p>
@@ -623,7 +671,7 @@ return True</code></pre>
   <text x="20" y="250" class="k"><tspan font-weight="700">① no reasoning parser</tspan> → bitmask ON from token 0: the whole output must be the JSON (the model can't do free-form thinking at all).</text>
   <text x="20" y="268" class="k"><tspan font-weight="700">② with reasoning parser</tspan> → the MODEL decides when to stop (it emits &lt;/think&gt;); the grammar doesn't force the marker — it just wakes up on the very next token. (include_reasoning=false seeds reasoning_ended=true → behaves like ①.)</text>
 </svg>
-<p class="figcap"><span class="en">Fig 8 — The token-level start of a constrained answer. During reasoning the bitmask is never filled and the FSM is never advanced; the model itself ends thinking by emitting <code>&lt;/think&gt;</code>; the reasoning parser detects it (<code>is_reasoning_end_streaming</code>), records the boundary index, and from the next token the grammar forces the schema. On the crossing step, <code>trim_reasoning_for_advance</code> drops the reasoning tokens and the marker so the FSM (still in its initial state) only ever consumes the answer. Original diagram; per structured_output/__init__.py.</span><span class="ko">그림 8 — 제약된 답변의 토큰 단위 시작. reasoning 동안 bitmask는 채워지지 않고 FSM은 전진하지 않는다; 모델이 스스로 <code>&lt;/think&gt;</code>를 내어 생각을 끝내고; reasoning 파서가 그걸 감지(<code>is_reasoning_end_streaming</code>)해 경계 인덱스를 기록하며, 다음 토큰부터 문법이 스키마를 강제한다. 걸친 스텝에선 <code>trim_reasoning_for_advance</code>가 reasoning 토큰과 마커를 잘라내 FSM(여전히 초기 상태)이 답변만 소비하게 한다. 직접 작성한 다이어그램; 출처 structured_output/__init__.py.</span></p>
+<p class="figcap"><span class="en">Fig 9 — The token-level start of a constrained answer. During reasoning the bitmask is never filled and the FSM is never advanced; the model itself ends thinking by emitting <code>&lt;/think&gt;</code>; the reasoning parser detects it (<code>is_reasoning_end_streaming</code>), records the boundary index, and from the next token the grammar forces the schema. On the crossing step, <code>trim_reasoning_for_advance</code> drops the reasoning tokens and the marker so the FSM (still in its initial state) only ever consumes the answer. Original diagram; per structured_output/__init__.py.</span><span class="ko">그림 9 — 제약된 답변의 토큰 단위 시작. reasoning 동안 bitmask는 채워지지 않고 FSM은 전진하지 않는다; 모델이 스스로 <code>&lt;/think&gt;</code>를 내어 생각을 끝내고; reasoning 파서가 그걸 감지(<code>is_reasoning_end_streaming</code>)해 경계 인덱스를 기록하며, 다음 토큰부터 문법이 스키마를 강제한다. 걸친 스텝에선 <code>trim_reasoning_for_advance</code>가 reasoning 토큰과 마커를 잘라내 FSM(여전히 초기 상태)이 답변만 소비하게 한다. 직접 작성한 다이어그램; 출처 structured_output/__init__.py.</span></p>
 <p><span class="en">The trim is the subtle part — without it, the FSM would try to match <code class="inl">&lt;/think&gt;</code> against the JSON grammar and reject it:</span>
 <span class="ko">trim이 미묘한 부분이다 — 없으면 FSM이 <code class="inl">&lt;/think&gt;</code>를 JSON 문법에 매칭하려다 거부한다:</span></p>
 <pre><code># vllm/v1/structured_output/__init__.py:462  (trim_reasoning_for_advance)
@@ -680,7 +728,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <rect class="f" x="374" y="28" width="30" height="30" rx="4"/><text x="389" y="48" class="tf" text-anchor="middle">}</text>
   <text x="20" y="82" class="k"><tspan fill="var(--blue-ink)" font-weight="700">blue</tspan> = grammar-forced (braces, the required keys "name"/"age", quotes, colon, comma). <tspan fill="var(--green-ink)" font-weight="700">green</tspan> = model's choice within the type (a string, an integer).</text>
 </svg>
-<p class="figcap"><span class="en">Fig 9 — <code>json_schema</code>. The whole skeleton — braces, the two required keys, punctuation — is forced by the grammar; the model only chooses the string content and the integer value. Illegal tokens (a <code>[</code>, a letter where a digit is required) were masked to −inf and never sampled.</span><span class="ko">그림 9 — <code>json_schema</code>. 골격 전체(중괄호·필수 키 둘·구두점)는 문법이 강제하고, 모델은 문자열 내용과 정수 값만 고른다. 불법 토큰(<code>[</code>, 숫자 자리의 글자)은 −inf로 마스킹돼 애초에 sampling 안 됨.</span></p>
+<p class="figcap"><span class="en">Fig 10 — <code>json_schema</code>. The whole skeleton — braces, the two required keys, punctuation — is forced by the grammar; the model only chooses the string content and the integer value. Illegal tokens (a <code>[</code>, a letter where a digit is required) were masked to −inf and never sampled.</span><span class="ko">그림 10 — <code>json_schema</code>. 골격 전체(중괄호·필수 키 둘·구두점)는 문법이 강제하고, 모델은 문자열 내용과 정수 값만 고른다. 불법 토큰(<code>[</code>, 숫자 자리의 글자)은 −inf로 마스킹돼 애초에 sampling 안 됨.</span></p>
 
 <h4>2 · json_object <span class="muted">(any valid JSON)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{
@@ -701,7 +749,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <rect class="f" x="408" y="28" width="30" height="30" rx="4"/><text x="423" y="48" class="tf" text-anchor="middle">}</text>
   <text x="20" y="82" class="k">Only structural JSON tokens are <tspan fill="var(--blue-ink)" font-weight="700">forced</tspan> (balanced braces/quotes/colons). The keys "city"/"temp" are now <tspan fill="var(--green-ink)" font-weight="700">the model's choice</tspan> too.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 10 — <code>json_object</code>. Same engine, weaker constraint: the grammar only guarantees the output parses as a JSON object; the model decides the keys and values. Use it when you want "valid JSON" but not a fixed shape.</span><span class="ko">그림 10 — <code>json_object</code>. 같은 엔진, 약한 제약: 문법은 출력이 JSON 객체로 파싱되는 것만 보장하고, 키·값은 모델이 정한다. "유효 JSON"은 원하지만 고정 형태는 아닐 때.</span></p>
+<p class="figcap"><span class="en">Fig 11 — <code>json_object</code>. Same engine, weaker constraint: the grammar only guarantees the output parses as a JSON object; the model decides the keys and values. Use it when you want "valid JSON" but not a fixed shape.</span><span class="ko">그림 11 — <code>json_object</code>. 같은 엔진, 약한 제약: 문법은 출력이 JSON 객체로 파싱되는 것만 보장하고, 키·값은 모델이 정한다. "유효 JSON"은 원하지만 고정 형태는 아닐 때.</span></p>
 
 <h4>3 · guided_regex <span class="muted">(match a pattern)</span></h4>
 <pre><code>curl .../v1/completions -d '{
@@ -721,7 +769,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <rect class="c" x="286" y="28" width="34" height="30" rx="4"/><text x="303" y="48" class="tc" text-anchor="middle">4</text>
   <text x="20" y="82" class="k"><tspan fill="var(--green-ink)" font-weight="700">green</tspan> digit slots: the model picks WHICH digit (0–9), but only digits are legal. The <tspan fill="var(--blue-ink)" font-weight="700">-</tspan> is a forced literal. No EOS until the pattern is complete.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 11 — <code>guided_regex</code>. The regex compiles to an FSM; every position exposes only its legal character class. The model still chooses among legal characters (which digit), so it's not scripted — just bounded.</span><span class="ko">그림 11 — <code>guided_regex</code>. regex가 FSM으로 컴파일되고, 각 위치는 합법 문자 클래스만 노출. 모델은 합법 문자 중에서(어느 숫자) 여전히 고르므로 각본이 아니라 경계가 지어진 것.</span></p>
+<p class="figcap"><span class="en">Fig 12 — <code>guided_regex</code>. The regex compiles to an FSM; every position exposes only its legal character class. The model still chooses among legal characters (which digit), so it's not scripted — just bounded.</span><span class="ko">그림 12 — <code>guided_regex</code>. regex가 FSM으로 컴파일되고, 각 위치는 합법 문자 클래스만 노출. 모델은 합법 문자 중에서(어느 숫자) 여전히 고르므로 각본이 아니라 경계가 지어진 것.</span></p>
 
 <h4>4 · guided_choice <span class="muted">(pick one of a list)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{
@@ -741,7 +789,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <text x="185" y="80" class="k">not taken — but were legal at step 1</text>
   <text x="185" y="110" class="k">(only tokens starting a valid choice were allowed)</text>
 </svg>
-<p class="figcap"><span class="en">Fig 12 — <code>guided_choice</code>. Compiled to an <code>a|b|c</code> grammar. At the first step all three prefixes are legal; the model's pick collapses the choice, and once the prefix is unique the remaining characters are forced. Output is always exactly one of the options.</span><span class="ko">그림 12 — <code>guided_choice</code>. <code>a|b|c</code> 문법으로 컴파일. 첫 스텝엔 세 prefix 모두 합법; 모델의 선택이 분기를 좁히고, prefix가 유일해지면 나머지 문자는 강제. 출력은 항상 옵션 중 정확히 하나.</span></p>
+<p class="figcap"><span class="en">Fig 13 — <code>guided_choice</code>. Compiled to an <code>a|b|c</code> grammar. At the first step all three prefixes are legal; the model's pick collapses the choice, and once the prefix is unique the remaining characters are forced. Output is always exactly one of the options.</span><span class="ko">그림 13 — <code>guided_choice</code>. <code>a|b|c</code> 문법으로 컴파일. 첫 스텝엔 세 prefix 모두 합법; 모델의 선택이 분기를 좁히고, prefix가 유일해지면 나머지 문자는 강제. 출력은 항상 옵션 중 정확히 하나.</span></p>
 
 <h4>5 · guided_grammar <span class="muted">(EBNF / Lark)</span></h4>
 <pre><code>curl .../v1/completions -d '{
@@ -760,7 +808,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <text x="360" y="47" class="k">← always a syntactically valid query</text>
   <text x="20" y="82" class="k"><tspan fill="var(--blue-ink)" font-weight="700">SELECT / FROM</tspan> are grammar literals (forced); <tspan fill="var(--green-ink)" font-weight="700">name</tspan> ∈ {id,name}, <tspan fill="var(--green-ink)" font-weight="700">users</tspan> ∈ {users,orders} are the model's picks. Full CFGs (JSON, code, DSLs) work the same way.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 13 — <code>guided_grammar</code>. An EBNF/Lark context-free grammar (only xgrammar &amp; guidance support this). Terminals are forced, nonterminals are choice points — so you can constrain to a whole DSL, not just JSON.</span><span class="ko">그림 13 — <code>guided_grammar</code>. EBNF/Lark 문맥자유문법(xgrammar·guidance만 지원). 종단은 강제, 비종단은 선택 지점 — JSON뿐 아니라 DSL 전체로 제약 가능.</span></p>
+<p class="figcap"><span class="en">Fig 14 — <code>guided_grammar</code>. An EBNF/Lark context-free grammar (only xgrammar &amp; guidance support this). Terminals are forced, nonterminals are choice points — so you can constrain to a whole DSL, not just JSON.</span><span class="ko">그림 14 — <code>guided_grammar</code>. EBNF/Lark 문맥자유문법(xgrammar·guidance만 지원). 종단은 강제, 비종단은 선택 지점 — JSON뿐 아니라 DSL 전체로 제약 가능.</span></p>
 
 <h4>6 · structural_tag <span class="muted">(constrain only a region)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{
@@ -778,7 +826,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <text x="20" y="82" class="k"><tspan fill="var(--gray-ink,#666)" font-weight="700">gray</tspan> = free prose (model). <tspan fill="var(--amber-ink)" font-weight="700">amber</tspan> = the trigger that opens/closes the constrained region. <tspan fill="var(--blue-ink)" font-weight="700">blue</tspan> = JSON-schema-forced bytes inside.</text>
   <text x="20" y="100" class="k">The grammar is dormant until the trigger token appears, forces valid JSON until the close tag, then goes dormant again.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 14 — <code>structural_tag</code>. A grammar that only activates inside a triggered region, leaving surrounding text unconstrained. This is exactly the mechanism behind the strict tool-calling path (§5B) — the model keeps its native markers, but the bytes between them are forced valid.</span><span class="ko">그림 14 — <code>structural_tag</code>. 트리거된 영역 안에서만 활성화되고 주변 텍스트는 제약하지 않는 문법. strict tool-calling 경로(§5B)의 바로 그 메커니즘 — 모델은 고유 마커를 유지하되 그 사이 바이트는 유효로 강제된다.</span></p>
+<p class="figcap"><span class="en">Fig 15 — <code>structural_tag</code>. A grammar that only activates inside a triggered region, leaving surrounding text unconstrained. This is exactly the mechanism behind the strict tool-calling path (§5B) — the model keeps its native markers, but the bytes between them are forced valid.</span><span class="ko">그림 15 — <code>structural_tag</code>. 트리거된 영역 안에서만 활성화되고 주변 텍스트는 제약하지 않는 문법. strict tool-calling 경로(§5B)의 바로 그 메커니즘 — 모델은 고유 마커를 유지하되 그 사이 바이트는 유효로 강제된다.</span></p>
 
 <h3><span class="en">B. Tool calling — the 4 tool_choice modes</span><span class="ko">B. Tool calling — 4가지 tool_choice 모드</span></h3>
 <p><span class="en">All four use the same <code class="inl">tools</code> list; only <code class="inl">tool_choice</code> changes. Each pipeline below shows: the request → whether a <b>constraint</b> is applied (the bridge to structured output) → the model's raw generation → the parser → the final <code class="inl">tool_calls</code>. The server is assumed started with <code class="inl">--enable-auto-tool-choice --tool-call-parser hermes</code>.</span>
@@ -802,7 +850,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <text x="20" y="118" class="k" fill="var(--coral-ink)">⚠ no validity guarantee — if the model emits malformed markers, extraction yields no tool call and the text falls through as content.</text>
   <text x="20" y="136" class="k">The model itself decided to call the tool AND what to put in it; vLLM only recognizes the markers afterward.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 15 — <code>tool_choice="auto"</code>. No constraint is applied; the model freely emits its native tool-call markers and the parser extracts them. Best-effort — the guarantee is only as good as the model's formatting.</span><span class="ko">그림 15 — <code>tool_choice="auto"</code>. 제약 없음; 모델이 고유 마커를 자유 방출하고 파서가 추출. best-effort — 보장은 모델 포맷팅 수준에 달림.</span></p>
+<p class="figcap"><span class="en">Fig 16 — <code>tool_choice="auto"</code>. No constraint is applied; the model freely emits its native tool-call markers and the parser extracts them. Best-effort — the guarantee is only as good as the model's formatting.</span><span class="ko">그림 16 — <code>tool_choice="auto"</code>. 제약 없음; 모델이 고유 마커를 자유 방출하고 파서가 추출. best-effort — 보장은 모델 포맷팅 수준에 달림.</span></p>
 
 <h4>2 · tool_choice = "required" <span class="muted">(force ≥1 valid call)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
@@ -819,7 +867,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <text x="20" y="120" class="k" fill="var(--green-ink)">✓ guaranteed ≥1 syntactically-valid tool call — the grammar made malformed output impossible, so parsing is trivial.</text>
   <text x="20" y="138" class="k">Note the shape is an ARRAY (the model may return several calls); each item is {name ∈ your tools, parameters ∈ that tool's schema}.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 16 — <code>tool_choice="required"</code>. The tools become a JSON-schema array constraint routed through structured output (§5A), so the output is guaranteed-valid and the parse is a one-line <code>validate_json</code>. This is the "auto" pipeline with the left plane switched on.</span><span class="ko">그림 16 — <code>tool_choice="required"</code>. tool들이 JSON-스키마 배열 제약이 되어 structured output(§5A)으로 태워지므로 출력은 유효 보장, 파싱은 한 줄 <code>validate_json</code>. "auto" 파이프라인에 왼쪽 평면을 켠 것.</span></p>
+<p class="figcap"><span class="en">Fig 17 — <code>tool_choice="required"</code>. The tools become a JSON-schema array constraint routed through structured output (§5A), so the output is guaranteed-valid and the parse is a one-line <code>validate_json</code>. This is the "auto" pipeline with the left plane switched on.</span><span class="ko">그림 17 — <code>tool_choice="required"</code>. tool들이 JSON-스키마 배열 제약이 되어 structured output(§5A)으로 태워지므로 출력은 유효 보장, 파싱은 한 줄 <code>validate_json</code>. "auto" 파이프라인에 왼쪽 평면을 켠 것.</span></p>
 
 <h4>3 · tool_choice = named function <span class="muted">(force exactly this tool)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
@@ -836,7 +884,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <text x="20" y="120" class="k">Because the tool name is fixed, the schema is just that one tool's parameter object — so the ENTIRE output is the arguments; the name is added back by the parser.</text>
   <text x="20" y="138" class="k" fill="var(--green-ink)">✓ guaranteed to call exactly get_weather with valid arguments. finish_reason = "stop" (named), vs "tool_calls" (required/auto).</text>
 </svg>
-<p class="figcap"><span class="en">Fig 17 — named <code>tool_choice</code>. The schema is reduced to the single named tool's <code>parameters</code>, so the model's whole output is the arguments object; the parser re-attaches the (already-known) function name. Exactly one call, guaranteed.</span><span class="ko">그림 17 — named <code>tool_choice</code>. 스키마가 지정된 tool 하나의 <code>parameters</code>로 축소돼 모델 출력 전체가 인자 객체; 파서가 (이미 아는) 함수 이름을 다시 붙인다. 정확히 한 번 호출, 보장.</span></p>
+<p class="figcap"><span class="en">Fig 18 — named <code>tool_choice</code>. The schema is reduced to the single named tool's <code>parameters</code>, so the model's whole output is the arguments object; the parser re-attaches the (already-known) function name. Exactly one call, guaranteed.</span><span class="ko">그림 18 — named <code>tool_choice</code>. 스키마가 지정된 tool 하나의 <code>parameters</code>로 축소돼 모델 출력 전체가 인자 객체; 파서가 (이미 아는) 함수 이름을 다시 붙인다. 정확히 한 번 호출, 보장.</span></p>
 
 <h4>4 · tool_choice = "none" <span class="muted">(never call — plain answer)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
@@ -852,7 +900,7 @@ return new_token_ids[num_reasoning:]                        # feed only the answ
   <path class="a" d="M164,61 L180,61"/><path class="a" d="M352,61 L368,61"/><path class="a" d="M550,61 L566,61"/>
   <text x="20" y="114" class="k"><code>--exclude-tools-when-tool-choice-none</code> controls whether the tool definitions are even shown to the model. Either way, no tool call is produced.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 18 — <code>tool_choice="none"</code>. No constraint, no tool extraction; the model just answers in prose. The tool definitions may be withheld from the prompt entirely (a server flag).</span><span class="ko">그림 18 — <code>tool_choice="none"</code>. 제약도 tool 추출도 없음; 모델은 산문으로 답할 뿐. tool 정의는 프롬프트에서 아예 제외될 수도(서버 플래그).</span></p>
+<p class="figcap"><span class="en">Fig 19 — <code>tool_choice="none"</code>. No constraint, no tool extraction; the model just answers in prose. The tool definitions may be withheld from the prompt entirely (a server flag).</span><span class="ko">그림 19 — <code>tool_choice="none"</code>. 제약도 tool 추출도 없음; 모델은 산문으로 답할 뿐. tool 정의는 프롬프트에서 아예 제외될 수도(서버 플래그).</span></p>
 
 <div class="callout c-teal">
 <p><b><span class="en">Reading the two galleries together</span><span class="ko">두 갤러리를 함께 읽기</span></b></p>
