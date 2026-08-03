@@ -85,8 +85,8 @@
     <span class="ko">vLLM structured output &amp; tool calling — 토큰을 제약하고, 텍스트를 파싱한다</span>
   </h1>
   <p class="lede">
-    <span class="en">A code-walk of how vLLM guarantees JSON-schema-valid output, calls tools, and separates a reasoning model's "thinking" from its answer — traced end-to-end on the <b>latest main</b>. The whole area splits cleanly into two halves: <b>structured/guided output</b> constrains generation at the <i>logit</i> level inside the engine (a per-step token bitmask that forces disallowed tokens to <code class="inl">−inf</code>), while <b>tool &amp; reasoning parsing</b> is pure <i>post-processing</i> of already-generated text in the serving layer. Covers the 4 grammar backends (xgrammar / guidance / outlines / lm-format-enforcer) and their auto-fallback, how the FSM survives speculative decoding (validate → advance → rollback), the newly-unified <code class="inl">Parser</code>/<code class="inl">DelegatingParser</code> layer, the 42-parser tool zoo and streaming partial-JSON diffing, the two ways <code class="inl">tool_choice="required"</code> forces valid JSON, and the single <code class="inl">reasoning_ended</code> gate that ties it all together. Pinned to vLLM commit 34bb795.</span>
-    <span class="ko">vLLM이 JSON-스키마에 맞는 출력을 보장하고, 도구를 호출하고, 추론 모델의 "생각"을 답에서 분리하는 방식을 <b>최신 main</b> 기준으로 코드까지 추적한 노트. 이 영역은 두 반쪽으로 깔끔히 나뉜다: <b>structured/guided output</b>은 엔진 안에서 <i>logit</i> 레벨로 생성을 제약하고(스텝마다 허용 토큰 bitmask로 금지 토큰을 <code class="inl">−inf</code>로), <b>tool &amp; reasoning 파싱</b>은 서빙 레이어에서 이미 생성된 텍스트를 <i>후처리</i>할 뿐이다. 4개 문법 백엔드(xgrammar / guidance / outlines / lm-format-enforcer)와 auto-fallback, FSM이 speculative decoding을 견디는 법(validate → advance → rollback), 새로 통합된 <code class="inl">Parser</code>/<code class="inl">DelegatingParser</code> 계층, 42개 tool 파서 동물원과 스트리밍 부분-JSON 디핑, <code class="inl">tool_choice="required"</code>가 유효 JSON을 강제하는 두 경로, 그리고 이 모두를 잇는 단일 <code class="inl">reasoning_ended</code> 게이트를 다룬다. vLLM 커밋 34bb795에 핀 고정.</span>
+    <span class="en">How vLLM guarantees JSON-schema-valid output, calls tools, and splits a reasoning model's thinking from its answer — a code-walk on the <b>latest main</b>. One idea organizes everything: the <b>sampler</b> divides the work into two planes. <b>Structured/guided output</b> constrains generation at the <i>logit</i> level inside the engine (a per-step token bitmask forcing illegal tokens to <code class="inl">−inf</code>); <b>tool &amp; reasoning parsing</b> is pure <i>post-processing</i> of the decoded text in the serving layer. The sections below walk each plane in order; §8 then shows every request type in action, from <code class="inl">curl</code> to tokens. Pinned to vLLM commit 34bb795 — see the TOC for the full map.</span>
+    <span class="ko">vLLM이 JSON-스키마 유효 출력을 보장하고, 도구를 호출하고, 추론 모델의 생각을 답에서 분리하는 방식을 <b>최신 main</b> 기준으로 추적한 코드워크. 하나의 아이디어가 전부를 꿴다: <b>sampler</b>를 기준으로 작업이 두 평면으로 갈린다. <b>Structured/guided output</b>은 엔진 안에서 <i>logit</i> 레벨로 생성을 제약하고(스텝마다 토큰 bitmask로 불법 토큰을 <code class="inl">−inf</code>로), <b>tool &amp; reasoning 파싱</b>은 서빙에서 디코드된 텍스트를 <i>후처리</i>할 뿐이다. 아래 섹션이 두 평면을 차례로 걷고, §8이 모든 요청 타입을 <code class="inl">curl</code>부터 토큰까지 실제로 보여준다. vLLM 커밋 34bb795에 핀 고정 — 전체 지도는 목차 참고.</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output">v1/structured_output</a></span>
@@ -311,32 +311,81 @@ except ValueError:
 <p><span class="en">Structured output and speculative decoding collide head-on. Spec decode proposes several <b>draft</b> tokens per step and only some survive verification — but the grammar is a stateful FSM that can only be advanced by tokens it's <i>sure</i> about. If you advanced it through a draft that later gets rejected, the FSM would be in the wrong state. vLLM solves this with three grammar operations working together:</span>
 <span class="ko">structured output과 speculative decoding은 정면충돌한다. spec decode는 스텝마다 여러 <b>draft</b> 토큰을 제안하고 일부만 검증을 통과한다 — 그런데 문법은 <i>확실한</i> 토큰으로만 전진할 수 있는 상태기계다. 나중에 거부될 draft로 전진시켰다면 FSM이 잘못된 상태가 된다. vLLM은 세 문법 연산의 협력으로 해결한다:</span></p>
 
-<svg class="fig" viewBox="0 0 760 280" role="img" aria-label="Speculative decoding with a grammar: validate drafts, temp-advance to build bitmasks, rollback, then advance only accepted tokens">
-  <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.mono{font:10.5px "SF Mono",Menlo,monospace}.ok{fill:var(--green-bg);stroke:var(--green-bd)}.no{fill:var(--coral-bg);stroke:var(--coral-bd)}.tmp{fill:var(--amber-bg);stroke:var(--amber-bd)}.gr{fill:var(--blue-bg);stroke:var(--blue-bd)}.a{stroke:var(--muted);stroke-width:1.2;fill:none;marker-end:url(#a4)}</style>
-  <defs><marker id="a4" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
-  <text x="20" y="20" class="t">1 spec-decode step, 3 draft tokens proposed:  d1 d2 d3</text>
-  <!-- validate -->
-  <rect class="gr" x="20" y="34" width="220" height="40" rx="6"/><text x="130" y="52" class="k" text-anchor="middle">① validate_tokens(d1,d2,d3)</text><text x="130" y="67" class="k" text-anchor="middle">check-only, NO advance → keep legal prefix</text>
-  <path class="a" d="M240,54 L272,54"/>
-  <!-- build bitmasks (temp advance) -->
-  <rect class="tmp" x="274" y="30" width="300" height="70" rx="6"/><text x="424" y="48" class="t" text-anchor="middle">② build a bitmask per draft slot</text>
-  <text x="424" y="66" class="k" text-anchor="middle">fill row → accept_tokens(d1) → fill row → accept(d2) …</text>
-  <text x="424" y="82" class="k" text-anchor="middle">(temporarily advance to know each slot's legal set)</text>
-  <text x="424" y="96" class="k" text-anchor="middle" fill="var(--amber-ink)">FSM now advanced by 3 — but these aren't confirmed!</text>
-  <path class="a" d="M574,64 L606,64"/>
-  <!-- rollback -->
-  <rect class="tmp" x="608" y="44" width="132" height="40" rx="6"/><text x="674" y="62" class="k" text-anchor="middle">③ rollback(3)</text><text x="674" y="77" class="k" text-anchor="middle">undo the temp advances</text>
-  <path class="a" d="M674,100 C 674,140 424,140 424,150"/>
-  <!-- sampler verify -->
-  <rect class="gr" x="220" y="154" width="410" height="40" rx="6"/><text x="425" y="172" class="t" text-anchor="middle">sampler + verify: which drafts survive?</text>
-  <text x="425" y="188" class="mono" text-anchor="middle">d1 ✓  d2 ✓  d3 ✗   (rejected drafts padded with −1)</text>
-  <path class="a" d="M425,194 L425,214"/>
-  <!-- confirmed advance -->
-  <rect class="ok" x="240" y="218" width="370" height="40" rx="6"/><text x="425" y="236" class="t" text-anchor="middle">④ accept_tokens([d1, d2])  — confirmed advance only</text>
-  <text x="425" y="252" class="k" text-anchor="middle">grammar ends the step advanced by exactly the accepted tokens</text>
-  <text x="20" y="274" class="k">Rollback capacity is set at compile time: max_rollback_tokens = num_speculative_tokens. lm-format-enforcer can't roll back → no spec decode.</text>
+<svg class="fig" viewBox="0 0 760 410" role="img" aria-label="Speculative decoding basics then how the grammar FSM position validates, temp-advances, rolls back and commits">
+  <style>
+    .ttl{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+    .lbl{font:10.5px -apple-system,sans-serif;fill:var(--muted)}
+    .tok{font:600 12px "SF Mono",Menlo,monospace}
+    .gl{font:600 15px -apple-system,sans-serif}
+    .draft{fill:var(--gray-bg);stroke:var(--gray-bd)}
+    .acc{fill:var(--green-bg);stroke:var(--green-bd)}
+    .rej{fill:var(--coral-bg);stroke:var(--coral-bd)}
+    .track{stroke:var(--line);stroke-width:2}
+    .dot{fill:var(--card);stroke:var(--muted);stroke-width:1.5}
+    .mv{fill:none;stroke-width:2}
+    .peek{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:3 2}
+  </style>
+  <defs>
+    <marker id="mA" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker>
+    <marker id="mAmb" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--amber-ink)"/></marker>
+    <marker id="mGrn" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--green-ink)"/></marker>
+  </defs>
+
+  <!-- ============ BAND 1: the idea ============ -->
+  <text x="20" y="18" class="ttl">① What speculative decoding does — the draft model guesses ahead, the target checks all guesses in ONE pass</text>
+  <text x="20" y="46" class="lbl">draft (fast) →</text>
+  <rect class="draft" x="120" y="32" width="60" height="26" rx="5"/><text x="150" y="50" class="tok" text-anchor="middle" fill="var(--muted)">the</text>
+  <rect class="draft" x="186" y="32" width="60" height="26" rx="5"/><text x="216" y="50" class="tok" text-anchor="middle" fill="var(--muted)">cat</text>
+  <rect class="draft" x="252" y="32" width="60" height="26" rx="5"/><text x="282" y="50" class="tok" text-anchor="middle" fill="var(--muted)">sat</text>
+  <path class="mv" stroke="var(--muted)" marker-end="url(#mA)" d="M216,62 L216,84"/>
+  <text x="330" y="80" class="lbl">the target verifies all 3 at once (1 forward pass)</text>
+  <text x="20" y="112" class="lbl">target →</text>
+  <rect class="acc" x="120" y="94" width="60" height="26" rx="5"/><text x="150" y="112" class="tok" text-anchor="middle" fill="var(--green-ink)">the</text>
+  <rect class="acc" x="186" y="94" width="60" height="26" rx="5"/><text x="216" y="112" class="tok" text-anchor="middle" fill="var(--green-ink)">cat</text>
+  <rect class="rej" x="252" y="94" width="60" height="26" rx="5"/><text x="282" y="112" class="tok" text-anchor="middle" fill="var(--coral-ink)">sat</text>
+  <text x="150" y="140" class="gl" text-anchor="middle" fill="var(--green-ink)">✓</text>
+  <text x="216" y="140" class="gl" text-anchor="middle" fill="var(--green-ink)">✓</text>
+  <text x="282" y="140" class="gl" text-anchor="middle" fill="var(--coral-ink)">✗</text>
+  <text x="330" y="128" class="lbl">accepted prefix = "the cat" (2 tokens)</text>
+  <text x="330" y="143" class="lbl">"sat" wrong → the target's own token replaces it</text>
+
+  <line x1="20" y1="158" x2="740" y2="158" stroke="var(--line)"/>
+
+  <!-- ============ BAND 2: the grammar FSM position ============ -->
+  <text x="20" y="180" class="ttl">② The grammar is a stateful FSM — a position that must NOT be corrupted by a guess that gets rejected</text>
+  <text x="20" y="196" class="lbl">read each row as the FSM position (▼) on its state track  s0 → s1 → s2 → s3  (one state per accepted token)</text>
+
+  <!-- Row 1: validate -->
+  <line class="track" x1="120" y1="228" x2="300" y2="228"/>
+  <circle class="dot" cx="120" cy="228" r="4.5"/><circle class="dot" cx="180" cy="228" r="4.5"/><circle class="dot" cx="240" cy="228" r="4.5"/><circle class="dot" cx="300" cy="228" r="4.5"/>
+  <path class="peek" d="M126,222 Q150,206 174,222"/><path class="peek" d="M186,222 Q210,206 234,222"/><path class="peek" d="M246,222 Q270,206 294,222"/>
+  <path d="M115,214 L125,214 L120,222 Z" fill="var(--blue-ink)"/>
+  <text x="330" y="226" class="lbl"><tspan font-weight="700" fill="var(--ink)">① validate</tspan> — peek: are the guesses legal? The FSM does NOT move.</text>
+
+  <!-- Row 2: temp-advance -->
+  <line class="track" x1="120" y1="270" x2="300" y2="270"/>
+  <circle class="dot" cx="120" cy="270" r="4.5"/><circle class="dot" cx="180" cy="270" r="4.5"/><circle class="dot" cx="240" cy="270" r="4.5"/><circle class="dot" cx="300" cy="270" r="4.5"/>
+  <path class="mv" stroke="var(--amber-ink)" marker-end="url(#mAmb)" d="M120,256 L296,256"/>
+  <path d="M295,262 L305,262 L300,270 Z" fill="var(--amber-ink)"/>
+  <text x="330" y="268" class="lbl"><tspan font-weight="700" fill="var(--ink)">② temp-advance</tspan> s0→s3 — step through all 3 to read each slot's allowed set (fill its bitmask).</text>
+
+  <!-- Row 3: rollback -->
+  <line class="track" x1="120" y1="312" x2="300" y2="312"/>
+  <circle class="dot" cx="120" cy="312" r="4.5"/><circle class="dot" cx="180" cy="312" r="4.5"/><circle class="dot" cx="240" cy="312" r="4.5"/><circle class="dot" cx="300" cy="312" r="4.5"/>
+  <path class="mv" stroke="var(--coral-ink)" marker-end="url(#mA)" d="M300,298 C 260,278 160,278 122,296" style="marker-end:url(#mA)"/>
+  <path d="M115,304 L125,304 L120,312 Z" fill="var(--coral-ink)"/>
+  <text x="330" y="310" class="lbl"><tspan font-weight="700" fill="var(--ink)">③ rollback</tspan> s3→s0 — the guesses aren't confirmed yet, so undo the temp moves.</text>
+
+  <!-- Row 4: commit -->
+  <line class="track" x1="120" y1="354" x2="300" y2="354"/>
+  <circle class="dot" cx="120" cy="354" r="4.5"/><circle class="dot" cx="180" cy="354" r="4.5"/><circle class="dot" cx="240" cy="354" r="4.5"/><circle class="dot" cx="300" cy="354" r="4.5"/>
+  <path class="mv" stroke="var(--green-ink)" marker-end="url(#mGrn)" d="M120,340 L236,340"/>
+  <path d="M235,346 L245,346 L240,354 Z" fill="var(--green-ink)"/>
+  <text x="330" y="352" class="lbl"><tspan font-weight="700" fill="var(--ink)">④ commit</tspan> s0→s2 — advance by the 2 ACCEPTED only. FSM now sits exactly right.</text>
+
+  <text x="20" y="392" class="lbl">Net effect: the FSM ends where the accepted tokens put it — a rejected guess never corrupts it. (Rollback budget = num_speculative_tokens; lm-format-enforcer can't roll back → no spec decode.)</text>
 </svg>
-<p class="figcap"><span class="en">Fig 4 — Grammar + speculative decoding. Drafts are ① validated without advancing, ② temporarily advanced to build a bitmask per draft slot, ③ rolled back, then ④ the grammar is advanced only by the drafts that actually survived verification. Original diagram; per structured_output/__init__.py &amp; scheduler.py.</span><span class="ko">그림 4 — 문법 + speculative decoding. draft를 ① 전진 없이 검증, ② draft 슬롯마다 bitmask를 만들려 임시 전진, ③ rollback, 그다음 ④ 실제 검증 통과한 draft로만 문법 전진. 직접 작성한 다이어그램; 출처 structured_output/__init__.py &amp; scheduler.py.</span></p>
+<p class="figcap"><span class="en">Fig 4 — Speculative decoding + a grammar. <b>Top:</b> the draft model guesses several tokens; the target verifies them all in one pass and keeps the correct prefix. <b>Bottom:</b> the grammar's FSM is just a <i>position</i> on a state track — it ① validates without moving, ② temp-advances to read each slot's bitmask, ③ rolls back, then ④ commits only the accepted guesses, so a rejected draft can never leave it in the wrong state. Original diagram; per structured_output/__init__.py &amp; scheduler.py.</span><span class="ko">그림 4 — speculative decoding + 문법. <b>위:</b> draft 모델이 여러 토큰을 추측하고, target이 한 번에 검증해 맞는 prefix만 남긴다. <b>아래:</b> 문법 FSM은 상태 트랙 위의 <i>위치</i>일 뿐 — ① 이동 없이 검증, ② 각 슬롯 bitmask를 읽으려 임시 전진, ③ rollback, ④ 통과한 추측만 commit해서, 거부된 draft가 FSM을 잘못된 상태로 남기지 못한다. 직접 작성한 다이어그램; 출처 structured_output/__init__.py &amp; scheduler.py.</span></p>
 
 <pre><code># vllm/v1/structured_output/__init__.py:324  (bitmask assembly, spec-decode path — condensed)
 for each scheduled draft token:
@@ -561,6 +610,23 @@ end_idx = structured_req.reasoning_end_token_index          # abs. index of &lt;
 first_idx = len(request.all_token_ids) - len(new_token_ids)
 num_reasoning = end_idx + 1 - first_idx                     # reasoning+marker tokens this step
 return new_token_ids[num_reasoning:]                        # feed only the answer suffix to accept_tokens</code></pre>
+
+<div class="callout c-teal">
+<p><b><span class="en">"Does the grammar wait until the model types <code class="inl">{</code>?" — No. It <i>forces</i> the start; it doesn't detect it.</span><span class="ko">"모델이 <code class="inl">{</code>를 칠 때까지 문법이 기다리나?" — 아니오. 시작을 <i>강제</i>하지, 감지하지 않는다.</span></b></p>
+<p><span class="en">There is no code that watches the output stream for a <code class="inl">{</code> and then "switches the grammar on". The grammar <b>produces</b> the <code class="inl">{</code> by masking every other token to −inf. The only thing that ever <i>delays</i> the grammar is a reasoning-end marker. So the trigger depends on the mode:</span>
+<span class="ko">출력 스트림에서 <code class="inl">{</code>를 지켜보다가 "문법을 켜는" 코드는 없다. 문법이 다른 토큰을 전부 −inf로 막아 <code class="inl">{</code>를 <b>만들어낸다</b>. 문법을 <i>지연</i>시키는 유일한 것은 reasoning-끝 마커. 그래서 트리거는 모드에 따라 다르다:</span></p>
+<table>
+<thead><tr><th><span class="en">mode</span><span class="ko">모드</span></th><th><span class="en">grammar turns on at…</span><span class="ko">문법이 켜지는 시점</span></th><th><span class="en"><code class="inl">{</code> is…</span><span class="ko"><code class="inl">{</code>는…</span></th></tr></thead>
+<tbody>
+<tr><td><span class="en">plain json/regex, no reasoning parser</span><span class="ko">일반 json/regex, reasoning 파서 없음</span></td><td><span class="en"><b>the very first output token</b></span><span class="ko"><b>첫 출력 토큰</b></span></td><td><span class="en">forced (masked)</span><span class="ko">강제(마스킹)</span></td></tr>
+<tr><td><span class="en">json + reasoning parser</span><span class="ko">json + reasoning 파서</span></td><td><span class="en">the token <b>right after <code class="inl">&lt;/think&gt;</code></b> (which the model chose to emit)</span><span class="ko"><b><code class="inl">&lt;/think&gt;</code> 바로 다음</b> 토큰(모델이 스스로 낸)</span></td><td><span class="en">forced</span><span class="ko">강제</span></td></tr>
+<tr><td><code class="inl">structural_tag</code></td><td><span class="en">when the model emits a <b>trigger</b> token (e.g. <code class="inl">&lt;tool_call&gt;</code>) — the grammar is dormant until then</span><span class="ko">모델이 <b>트리거</b> 토큰(예: <code class="inl">&lt;tool_call&gt;</code>)을 낼 때까지 잠들어 있음</span></td><td><span class="en">forced <i>inside</i> the tag only</span><span class="ko">태그 <i>안에서만</i> 강제</span></td></tr>
+</tbody>
+</table>
+<p><span class="en">So your intuition — "the grammar latches on when the JSON starts" — is exactly the <b>structural_tag</b> case (it waits for a trigger). For a plain schema there is no waiting: the grammar forces <code class="inl">{</code> immediately (from token 0, or from the token after <code class="inl">&lt;/think&gt;</code>).</span>
+<span class="ko">그러니 "JSON이 시작될 때 문법이 붙는다"는 직감은 정확히 <b>structural_tag</b> 경우다(트리거를 기다림). 일반 스키마엔 기다림이 없다: 문법이 <code class="inl">{</code>를 즉시 강제한다(토큰 0부터, 또는 <code class="inl">&lt;/think&gt;</code> 다음부터).</span></p>
+</div>
+
 <ul class="srcs">
 <li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/abs_reasoning_parsers.py#L26-L210">ReasoningParser interface</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/deepseek_r1_reasoning_parser.py#L10-L67">DeepSeek-R1 parser</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/engine/detokenizer.py#L96-L143">IncrementalDetokenizer</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/abstract_parser.py#L785-L799">DelegatingParser.parse</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L361-L437">reasoning_ended gate</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L381-L440">should_advance</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L462-L487">trim_reasoning_for_advance</a></li>
 </ul>
