@@ -95,7 +95,12 @@
     <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/34bb795ff3efee6cc08c9dd104deceefff2c4d55">code @ 34bb795</a></span>
     <span class="badge"><span class="en">Deep dive · code-walk · Apache-2.0</span><span class="ko">딥다이브 · 코드 분석 · Apache-2.0</span></span>
   </div>
-  <p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
+  <p class="post-meta">
+    <time datetime="2026-07-31">2026-07-31</time>
+    <span class="sep">·</span>
+    <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
+    <time datetime="2026-08-03">2026-08-03</time>
+  </p>
 </header>
 
 <nav class="toc">
@@ -108,8 +113,9 @@
     <li><a href="#s5"><span class="en">5. Tool calling — two ways to get valid JSON</span><span class="ko">5. Tool calling — 유효 JSON을 얻는 두 경로</span></a></li>
     <li><a href="#s6"><span class="en">6. The tool-parser zoo &amp; streaming partial-JSON</span><span class="ko">6. tool 파서 동물원과 스트리밍 부분-JSON</span></a></li>
     <li><a href="#s7"><span class="en">7. Reasoning parsers &amp; the post-processing pipeline</span><span class="ko">7. reasoning 파서와 후처리 파이프라인</span></a></li>
-    <li><a href="#s8"><span class="en">8. Usage, flags, status &amp; our take</span><span class="ko">8. 사용법·플래그·상태·우리 관점</span></a></li>
-    <li><a href="#s9"><span class="en">9. Sources</span><span class="ko">9. 출처</span></a></li>
+    <li><a href="#s8"><span class="en">8. Worked examples — from curl to tokens</span><span class="ko">8. Worked examples — curl에서 토큰까지</span></a></li>
+    <li><a href="#s9"><span class="en">9. Usage, flags, status &amp; our take</span><span class="ko">9. 사용법·플래그·상태·우리 관점</span></a></li>
+    <li><a href="#s10"><span class="en">10. Sources</span><span class="ko">10. 출처</span></a></li>
   </ol>
 </nav>
 
@@ -514,7 +520,215 @@ return True</code></pre>
 </section>
 
 <section id="s8">
-<h2><span class="num">8</span><span class="en">Usage, flags, status &amp; our take</span><span class="ko">사용법·플래그·상태·우리 관점</span></h2>
+<h2><span class="num">8</span><span class="en">Worked examples — from curl to tokens</span><span class="ko">Worked examples — curl에서 토큰까지</span></h2>
+<p><span class="en">Theory is one thing; here is <b>every request type in action</b> — the exact <code class="inl">curl</code> you'd send and how the tokens actually come out. Two colors run through all the structured-output diagrams: <span style="color:var(--blue-ink);font-weight:600">blue = grammar-forced</span> (the character/token <i>must</i> be this — the model has no choice) and <span style="color:var(--green-ink);font-weight:600">green = model's choice</span> (the model picks freely, but only among tokens the grammar still allows). That coloring <i>is</i> the mechanism: structured output shrinks the choice set, it doesn't dictate content.</span>
+<span class="ko">이론은 이론이고, 여기 <b>모든 요청 타입이 실제로 도는 모습</b> — 보낼 <code class="inl">curl</code>과 토큰이 실제로 나오는 과정. structured-output 다이어그램 전체에 두 색이 흐른다: <span style="color:var(--blue-ink);font-weight:600">파랑 = 문법 강제</span>(그 문자/토큰이어야만 함 — 모델 선택권 없음), <span style="color:var(--green-ink);font-weight:600">초록 = 모델의 선택</span>(모델이 자유롭게 고르되 문법이 아직 허용하는 토큰 중에서만). 이 색칠이 곧 메커니즘이다: structured output은 선택 집합을 줄일 뿐 내용을 지시하지 않는다.</span></p>
+<h3><span class="en">A. Structured output — the 6 request types</span><span class="ko">A. Structured output — 6가지 요청 타입</span></h3>
+
+<h4>1 · json_schema <span class="muted">(response_format)</span></h4>
+<pre><code>curl http://localhost:8000/v1/chat/completions -d '{
+  "model": "Qwen/Qwen3-8B",
+  "messages": [{"role":"user","content":"Give me a person."}],
+  "response_format": {"type":"json_schema","json_schema":{"name":"person","schema":{
+    "type":"object",
+    "properties":{"name":{"type":"string"},"age":{"type":"integer"}},
+    "required":["name","age"]}}}
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 96" role="img" aria-label="json_schema generation: structural tokens and required keys forced, values chosen">
+  <style>.f{fill:var(--blue-bg);stroke:var(--blue-bd)}.c{fill:var(--green-bg);stroke:var(--green-bd)}.tf{font:600 12px "SF Mono",Menlo,monospace;fill:var(--blue-ink)}.tc{font:600 12px "SF Mono",Menlo,monospace;fill:var(--green-ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}</style>
+  <text x="20" y="18" class="k">generated token by token  →   the grammar knows the schema, so only these were ever legal:</text>
+  <rect class="f" x="20" y="28" width="30" height="30" rx="4"/><text x="35" y="48" class="tf" text-anchor="middle">{</text>
+  <rect class="f" x="54" y="28" width="86" height="30" rx="4"/><text x="97" y="48" class="tf" text-anchor="middle">"name":</text>
+  <rect class="c" x="144" y="28" width="70" height="30" rx="4"/><text x="179" y="48" class="tc" text-anchor="middle">"Bob"</text>
+  <rect class="f" x="218" y="28" width="24" height="30" rx="4"/><text x="230" y="48" class="tf" text-anchor="middle">,</text>
+  <rect class="f" x="246" y="28" width="76" height="30" rx="4"/><text x="284" y="48" class="tf" text-anchor="middle">"age":</text>
+  <rect class="c" x="326" y="28" width="44" height="30" rx="4"/><text x="348" y="48" class="tc" text-anchor="middle">42</text>
+  <rect class="f" x="374" y="28" width="30" height="30" rx="4"/><text x="389" y="48" class="tf" text-anchor="middle">}</text>
+  <text x="20" y="82" class="k"><tspan fill="var(--blue-ink)" font-weight="700">blue</tspan> = grammar-forced (braces, the required keys "name"/"age", quotes, colon, comma). <tspan fill="var(--green-ink)" font-weight="700">green</tspan> = model's choice within the type (a string, an integer).</text>
+</svg>
+<p class="figcap"><span class="en">Fig 8 — <code>json_schema</code>. The whole skeleton — braces, the two required keys, punctuation — is forced by the grammar; the model only chooses the string content and the integer value. Illegal tokens (a <code>[</code>, a letter where a digit is required) were masked to −inf and never sampled.</span><span class="ko">그림 8 — <code>json_schema</code>. 골격 전체(중괄호·필수 키 둘·구두점)는 문법이 강제하고, 모델은 문자열 내용과 정수 값만 고른다. 불법 토큰(<code>[</code>, 숫자 자리의 글자)은 −inf로 마스킹돼 애초에 sampling 안 됨.</span></p>
+
+<h4>2 · json_object <span class="muted">(any valid JSON)</span></h4>
+<pre><code>curl .../v1/chat/completions -d '{
+  "model":"...", "messages":[{"role":"user","content":"Weather in Seoul as JSON."}],
+  "response_format": {"type":"json_object"}
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 96" role="img" aria-label="json_object generation: only JSON well-formedness forced, keys and values chosen">
+  <style>.f{fill:var(--blue-bg);stroke:var(--blue-bd)}.c{fill:var(--green-bg);stroke:var(--green-bd)}.tf{font:600 12px "SF Mono",Menlo,monospace;fill:var(--blue-ink)}.tc{font:600 12px "SF Mono",Menlo,monospace;fill:var(--green-ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}</style>
+  <text x="20" y="18" class="k">looser: no schema, so even the KEYS are the model's — only "must be valid JSON" is forced:</text>
+  <rect class="f" x="20" y="28" width="30" height="30" rx="4"/><text x="35" y="48" class="tf" text-anchor="middle">{</text>
+  <rect class="c" x="54" y="28" width="70" height="30" rx="4"/><text x="89" y="48" class="tc" text-anchor="middle">"city"</text>
+  <rect class="f" x="128" y="28" width="22" height="30" rx="4"/><text x="139" y="48" class="tf" text-anchor="middle">:</text>
+  <rect class="c" x="154" y="28" width="78" height="30" rx="4"/><text x="193" y="48" class="tc" text-anchor="middle">"Seoul"</text>
+  <rect class="f" x="236" y="28" width="24" height="30" rx="4"/><text x="248" y="48" class="tf" text-anchor="middle">,</text>
+  <rect class="c" x="264" y="28" width="70" height="30" rx="4"/><text x="299" y="48" class="tc" text-anchor="middle">"temp"</text>
+  <rect class="f" x="338" y="28" width="22" height="30" rx="4"/><text x="349" y="48" class="tf" text-anchor="middle">:</text>
+  <rect class="c" x="364" y="28" width="40" height="30" rx="4"/><text x="384" y="48" class="tc" text-anchor="middle">28</text>
+  <rect class="f" x="408" y="28" width="30" height="30" rx="4"/><text x="423" y="48" class="tf" text-anchor="middle">}</text>
+  <text x="20" y="82" class="k">Only structural JSON tokens are <tspan fill="var(--blue-ink)" font-weight="700">forced</tspan> (balanced braces/quotes/colons). The keys "city"/"temp" are now <tspan fill="var(--green-ink)" font-weight="700">the model's choice</tspan> too.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 9 — <code>json_object</code>. Same engine, weaker constraint: the grammar only guarantees the output parses as a JSON object; the model decides the keys and values. Use it when you want "valid JSON" but not a fixed shape.</span><span class="ko">그림 9 — <code>json_object</code>. 같은 엔진, 약한 제약: 문법은 출력이 JSON 객체로 파싱되는 것만 보장하고, 키·값은 모델이 정한다. "유효 JSON"은 원하지만 고정 형태는 아닐 때.</span></p>
+
+<h4>3 · guided_regex <span class="muted">(match a pattern)</span></h4>
+<pre><code>curl .../v1/completions -d '{
+  "model":"...", "prompt":"Call me at ",
+  "guided_regex": "\\d{3}-\\d{4}"
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 96" role="img" aria-label="guided_regex generation: each position constrained to the regex token class">
+  <style>.f{fill:var(--blue-bg);stroke:var(--blue-bd)}.c{fill:var(--green-bg);stroke:var(--green-bd)}.tf{font:600 13px "SF Mono",Menlo,monospace;fill:var(--blue-ink)}.tc{font:600 13px "SF Mono",Menlo,monospace;fill:var(--green-ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}</style>
+  <text x="20" y="18" class="k">pattern \d{3}-\d{4}: at each slot only the regex-legal class is allowed → a letter here is −inf:</text>
+  <rect class="c" x="20" y="28" width="34" height="30" rx="4"/><text x="37" y="48" class="tc" text-anchor="middle">5</text>
+  <rect class="c" x="58" y="28" width="34" height="30" rx="4"/><text x="75" y="48" class="tc" text-anchor="middle">5</text>
+  <rect class="c" x="96" y="28" width="34" height="30" rx="4"/><text x="113" y="48" class="tc" text-anchor="middle">5</text>
+  <rect class="f" x="134" y="28" width="34" height="30" rx="4"/><text x="151" y="48" class="tf" text-anchor="middle">-</text>
+  <rect class="c" x="172" y="28" width="34" height="30" rx="4"/><text x="189" y="48" class="tc" text-anchor="middle">1</text>
+  <rect class="c" x="210" y="28" width="34" height="30" rx="4"/><text x="227" y="48" class="tc" text-anchor="middle">2</text>
+  <rect class="c" x="248" y="28" width="34" height="30" rx="4"/><text x="265" y="48" class="tc" text-anchor="middle">3</text>
+  <rect class="c" x="286" y="28" width="34" height="30" rx="4"/><text x="303" y="48" class="tc" text-anchor="middle">4</text>
+  <text x="20" y="82" class="k"><tspan fill="var(--green-ink)" font-weight="700">green</tspan> digit slots: the model picks WHICH digit (0–9), but only digits are legal. The <tspan fill="var(--blue-ink)" font-weight="700">-</tspan> is a forced literal. No EOS until the pattern is complete.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 10 — <code>guided_regex</code>. The regex compiles to an FSM; every position exposes only its legal character class. The model still chooses among legal characters (which digit), so it's not scripted — just bounded.</span><span class="ko">그림 10 — <code>guided_regex</code>. regex가 FSM으로 컴파일되고, 각 위치는 합법 문자 클래스만 노출. 모델은 합법 문자 중에서(어느 숫자) 여전히 고르므로 각본이 아니라 경계가 지어진 것.</span></p>
+
+<h4>4 · guided_choice <span class="muted">(pick one of a list)</span></h4>
+<pre><code>curl .../v1/chat/completions -d '{
+  "model":"...", "messages":[{"role":"user","content":"Sentiment of: I love it!"}],
+  "extra_body": {"guided_choice": ["positive","negative","neutral"]}
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 130" role="img" aria-label="guided_choice generation: model picks a branch, then the rest of the word is forced">
+  <style>.f{fill:var(--blue-bg);stroke:var(--blue-bd)}.c{fill:var(--green-bg);stroke:var(--green-bd)}.dim{fill:var(--card);stroke:var(--line);opacity:.55}.tf{font:600 12px "SF Mono",Menlo,monospace;fill:var(--blue-ink)}.tc{font:600 12px "SF Mono",Menlo,monospace;fill:var(--green-ink)}.td{font:12px "SF Mono",Menlo,monospace;fill:var(--muted)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}</style>
+  <text x="20" y="18" class="k">grammar = ("positive" | "negative" | "neutral"). The model chooses a branch, then the suffix is uniquely forced:</text>
+  <!-- chosen branch -->
+  <rect class="c" x="20" y="28" width="60" height="28" rx="4"/><text x="50" y="47" class="tc" text-anchor="middle">pos</text>
+  <rect class="f" x="82" y="28" width="90" height="28" rx="4"/><text x="127" y="47" class="tf" text-anchor="middle">itive</text>
+  <text x="185" y="47" class="k">← chosen: "pos" disambiguates → "itive" forced</text>
+  <!-- other branches dimmed -->
+  <rect class="dim" x="20" y="64" width="150" height="24" rx="4"/><text x="95" y="80" class="td" text-anchor="middle">negative</text>
+  <rect class="dim" x="20" y="94" width="150" height="24" rx="4"/><text x="95" y="110" class="td" text-anchor="middle">neutral</text>
+  <text x="185" y="80" class="k">not taken — but were legal at step 1</text>
+  <text x="185" y="110" class="k">(only tokens starting a valid choice were allowed)</text>
+</svg>
+<p class="figcap"><span class="en">Fig 11 — <code>guided_choice</code>. Compiled to an <code>a|b|c</code> grammar. At the first step all three prefixes are legal; the model's pick collapses the choice, and once the prefix is unique the remaining characters are forced. Output is always exactly one of the options.</span><span class="ko">그림 11 — <code>guided_choice</code>. <code>a|b|c</code> 문법으로 컴파일. 첫 스텝엔 세 prefix 모두 합법; 모델의 선택이 분기를 좁히고, prefix가 유일해지면 나머지 문자는 강제. 출력은 항상 옵션 중 정확히 하나.</span></p>
+
+<h4>5 · guided_grammar <span class="muted">(EBNF / Lark)</span></h4>
+<pre><code>curl .../v1/completions -d '{
+  "model":"...", "prompt":"SQL: ",
+  "guided_grammar": "root ::= \"SELECT \" col \" FROM \" tbl\n
+                     col  ::= \"id\" | \"name\"\n
+                     tbl  ::= \"users\" | \"orders\""
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 96" role="img" aria-label="guided_grammar generation: keywords forced by the grammar, nonterminal choices made by the model">
+  <style>.f{fill:var(--blue-bg);stroke:var(--blue-bd)}.c{fill:var(--green-bg);stroke:var(--green-bd)}.tf{font:600 12px "SF Mono",Menlo,monospace;fill:var(--blue-ink)}.tc{font:600 12px "SF Mono",Menlo,monospace;fill:var(--green-ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}</style>
+  <text x="20" y="18" class="k">the grammar's literals are forced; at each nonterminal (col, tbl) the model picks among that rule's alternatives:</text>
+  <rect class="f" x="20" y="28" width="94" height="30" rx="4"/><text x="67" y="48" class="tf" text-anchor="middle">SELECT </text>
+  <rect class="c" x="118" y="28" width="64" height="30" rx="4"/><text x="150" y="48" class="tc" text-anchor="middle">name</text>
+  <rect class="f" x="186" y="28" width="78" height="30" rx="4"/><text x="225" y="48" class="tf" text-anchor="middle"> FROM </text>
+  <rect class="c" x="268" y="28" width="78" height="30" rx="4"/><text x="307" y="48" class="tc" text-anchor="middle">users</text>
+  <text x="360" y="47" class="k">← always a syntactically valid query</text>
+  <text x="20" y="82" class="k"><tspan fill="var(--blue-ink)" font-weight="700">SELECT / FROM</tspan> are grammar literals (forced); <tspan fill="var(--green-ink)" font-weight="700">name</tspan> ∈ {id,name}, <tspan fill="var(--green-ink)" font-weight="700">users</tspan> ∈ {users,orders} are the model's picks. Full CFGs (JSON, code, DSLs) work the same way.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 12 — <code>guided_grammar</code>. An EBNF/Lark context-free grammar (only xgrammar &amp; guidance support this). Terminals are forced, nonterminals are choice points — so you can constrain to a whole DSL, not just JSON.</span><span class="ko">그림 12 — <code>guided_grammar</code>. EBNF/Lark 문맥자유문법(xgrammar·guidance만 지원). 종단은 강제, 비종단은 선택 지점 — JSON뿐 아니라 DSL 전체로 제약 가능.</span></p>
+
+<h4>6 · structural_tag <span class="muted">(constrain only a region)</span></h4>
+<pre><code>curl .../v1/chat/completions -d '{
+  "model":"...", "messages":[{"role":"user","content":"Weather in Seoul?"}],
+  "extra_body": {"structured_outputs": {"structural_tag": "{...triggers + JSON-schema tags...}"}}
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 110" role="img" aria-label="structural_tag generation: free prose, then a grammar-forced JSON region between triggers, then free prose">
+  <style>.free{fill:var(--gray-bg);stroke:var(--gray-bd)}.trig{fill:var(--amber-bg);stroke:var(--amber-bd)}.f{fill:var(--blue-bg);stroke:var(--blue-bd)}.tf{font:600 11px "SF Mono",Menlo,monospace;fill:var(--blue-ink)}.tt{font:600 11px "SF Mono",Menlo,monospace;fill:var(--amber-ink)}.tg{font:11px "SF Mono",Menlo,monospace;fill:var(--muted)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}</style>
+  <text x="20" y="18" class="k">only the region inside the trigger is grammar-forced; the prose around it stays free (this is how marker-based tool calls, §5 path B, work):</text>
+  <rect class="free" x="20" y="28" width="150" height="32" rx="4"/><text x="95" y="48" class="tg" text-anchor="middle">Let me check…</text>
+  <rect class="trig" x="174" y="28" width="90" height="32" rx="4"/><text x="219" y="48" class="tt" text-anchor="middle">&lt;tool_call&gt;</text>
+  <rect class="f" x="268" y="28" width="180" height="32" rx="4"/><text x="358" y="48" class="tf" text-anchor="middle">{"city":"Seoul"}</text>
+  <rect class="trig" x="452" y="28" width="96" height="32" rx="4"/><text x="500" y="48" class="tt" text-anchor="middle">&lt;/tool_call&gt;</text>
+  <rect class="free" x="552" y="28" width="120" height="32" rx="4"/><text x="612" y="48" class="tg" text-anchor="middle">done!</text>
+  <text x="20" y="82" class="k"><tspan fill="var(--gray-ink,#666)" font-weight="700">gray</tspan> = free prose (model). <tspan fill="var(--amber-ink)" font-weight="700">amber</tspan> = the trigger that opens/closes the constrained region. <tspan fill="var(--blue-ink)" font-weight="700">blue</tspan> = JSON-schema-forced bytes inside.</text>
+  <text x="20" y="100" class="k">The grammar is dormant until the trigger token appears, forces valid JSON until the close tag, then goes dormant again.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 13 — <code>structural_tag</code>. A grammar that only activates inside a triggered region, leaving surrounding text unconstrained. This is exactly the mechanism behind the strict tool-calling path (§5B) — the model keeps its native markers, but the bytes between them are forced valid.</span><span class="ko">그림 13 — <code>structural_tag</code>. 트리거된 영역 안에서만 활성화되고 주변 텍스트는 제약하지 않는 문법. strict tool-calling 경로(§5B)의 바로 그 메커니즘 — 모델은 고유 마커를 유지하되 그 사이 바이트는 유효로 강제된다.</span></p>
+
+<h3><span class="en">B. Tool calling — the 4 tool_choice modes</span><span class="ko">B. Tool calling — 4가지 tool_choice 모드</span></h3>
+<p><span class="en">All four use the same <code class="inl">tools</code> list; only <code class="inl">tool_choice</code> changes. Each pipeline below shows: the request → whether a <b>constraint</b> is applied (the bridge to structured output) → the model's raw generation → the parser → the final <code class="inl">tool_calls</code>. The server is assumed started with <code class="inl">--enable-auto-tool-choice --tool-call-parser hermes</code>.</span>
+<span class="ko">넷 다 같은 <code class="inl">tools</code> 목록을 쓰고 <code class="inl">tool_choice</code>만 바뀐다. 아래 각 파이프라인: 요청 → <b>제약</b> 적용 여부(structured output로의 다리) → 모델의 raw 생성 → 파서 → 최종 <code class="inl">tool_calls</code>. 서버는 <code class="inl">--enable-auto-tool-choice --tool-call-parser hermes</code>로 시작했다고 가정.</span></p>
+
+<h4>1 · tool_choice = "auto" <span class="muted">(model decides &amp; emits markers)</span></h4>
+<pre><code>curl .../v1/chat/completions -d '{
+  "model":"...", "messages":[{"role":"user","content":"Weather in Seoul?"}],
+  "tools":[{"type":"function","function":{"name":"get_weather",
+    "parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}],
+  "tool_choice":"auto"
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 150" role="img" aria-label="auto pipeline: no constraint, model emits markers, parser extracts, no guarantee">
+  <style>.rq{fill:var(--card);stroke:var(--line)}.no{fill:var(--amber-bg);stroke:var(--amber-bd)}.gen{fill:var(--gray-bg);stroke:var(--gray-bd)}.ps{fill:var(--blue-bg);stroke:var(--blue-bd)}.res{fill:var(--amber-bg);stroke:var(--amber-bd)}.t{font:600 11px -apple-system,sans-serif;fill:var(--ink)}.m{font:10px "SF Mono",Menlo,monospace;fill:var(--muted)}.k{font:9.5px -apple-system,sans-serif;fill:var(--muted)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#at)}</style>
+  <defs><marker id="at" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <rect class="rq" x="14" y="34" width="150" height="54" rx="6"/><text x="89" y="54" class="t" text-anchor="middle">request</text><text x="89" y="70" class="k" text-anchor="middle">tool_choice: "auto"</text><text x="89" y="83" class="k" text-anchor="middle">tools: [get_weather]</text>
+  <rect class="no" x="182" y="34" width="150" height="54" rx="6"/><text x="257" y="54" class="t" text-anchor="middle">constrain?</text><text x="257" y="72" class="k" text-anchor="middle">NO — free generation</text>
+  <rect class="gen" x="350" y="28" width="200" height="66" rx="6"/><text x="450" y="46" class="t" text-anchor="middle">model generates (raw)</text><text x="450" y="63" class="m" text-anchor="middle">&lt;tool_call&gt;{"name":</text><text x="450" y="76" class="m" text-anchor="middle">"get_weather","arguments":</text><text x="450" y="89" class="m" text-anchor="middle">{"city":"Seoul"}}&lt;/tool_call&gt;</text>
+  <rect class="ps" x="568" y="34" width="180" height="54" rx="6"/><text x="658" y="52" class="t" text-anchor="middle">hermes parser</text><text x="658" y="68" class="k" text-anchor="middle">regex + json.loads</text><text x="658" y="82" class="k" text-anchor="middle">→ tool_calls[]</text>
+  <path class="a" d="M164,61 L180,61"/><path class="a" d="M332,61 L348,61"/><path class="a" d="M550,61 L566,61"/>
+  <text x="20" y="118" class="k" fill="var(--coral-ink)">⚠ no validity guarantee — if the model emits malformed markers, extraction yields no tool call and the text falls through as content.</text>
+  <text x="20" y="136" class="k">The model itself decided to call the tool AND what to put in it; vLLM only recognizes the markers afterward.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 14 — <code>tool_choice="auto"</code>. No constraint is applied; the model freely emits its native tool-call markers and the parser extracts them. Best-effort — the guarantee is only as good as the model's formatting.</span><span class="ko">그림 14 — <code>tool_choice="auto"</code>. 제약 없음; 모델이 고유 마커를 자유 방출하고 파서가 추출. best-effort — 보장은 모델 포맷팅 수준에 달림.</span></p>
+
+<h4>2 · tool_choice = "required" <span class="muted">(force ≥1 valid call)</span></h4>
+<pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
+  "tool_choice":"required"
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 150" role="img" aria-label="required pipeline: schema built, structured output forces valid JSON array, trivial parse, guaranteed">
+  <style>.rq{fill:var(--card);stroke:var(--line)}.so{fill:var(--blue-bg);stroke:var(--blue-bd)}.gen{fill:var(--green-bg);stroke:var(--green-bd)}.ps{fill:var(--card);stroke:var(--line)}.res{fill:var(--green-bg);stroke:var(--green-bd)}.t{font:600 11px -apple-system,sans-serif;fill:var(--ink)}.m{font:10px "SF Mono",Menlo,monospace;fill:var(--muted)}.k{font:9.5px -apple-system,sans-serif;fill:var(--muted)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#ar)}</style>
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <rect class="rq" x="14" y="34" width="140" height="54" rx="6"/><text x="84" y="54" class="t" text-anchor="middle">request</text><text x="84" y="72" class="k" text-anchor="middle">tool_choice: "required"</text>
+  <rect class="so" x="172" y="26" width="180" height="70" rx="6"/><text x="262" y="44" class="t" text-anchor="middle">CONSTRAIN (adjust_request)</text><text x="262" y="61" class="k" text-anchor="middle">schema = array of</text><text x="262" y="74" class="m" text-anchor="middle">anyOf{name, parameters}</text><text x="262" y="88" class="k" text-anchor="middle">→ structured output (§2)</text>
+  <rect class="gen" x="370" y="28" width="190" height="66" rx="6"/><text x="465" y="46" class="t" text-anchor="middle">forced generation</text><text x="465" y="65" class="m" text-anchor="middle">[{"name":"get_weather",</text><text x="465" y="78" class="m" text-anchor="middle">"parameters":{"city":"Seoul"}}]</text><text x="465" y="90" class="k" text-anchor="middle">valid JSON — guaranteed</text>
+  <rect class="res" x="578" y="34" width="170" height="54" rx="6"/><text x="663" y="52" class="t" text-anchor="middle">validate_json</text><text x="663" y="68" class="k" text-anchor="middle">→ tool_calls[] ✓</text><text x="663" y="82" class="k" text-anchor="middle">no marker detection</text>
+  <path class="a" d="M154,61 L170,61"/><path class="a" d="M352,61 L368,61"/><path class="a" d="M560,61 L576,61"/>
+  <text x="20" y="120" class="k" fill="var(--green-ink)">✓ guaranteed ≥1 syntactically-valid tool call — the grammar made malformed output impossible, so parsing is trivial.</text>
+  <text x="20" y="138" class="k">Note the shape is an ARRAY (the model may return several calls); each item is {name ∈ your tools, parameters ∈ that tool's schema}.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 15 — <code>tool_choice="required"</code>. The tools become a JSON-schema array constraint routed through structured output (§5A), so the output is guaranteed-valid and the parse is a one-line <code>validate_json</code>. This is the "auto" pipeline with the left plane switched on.</span><span class="ko">그림 15 — <code>tool_choice="required"</code>. tool들이 JSON-스키마 배열 제약이 되어 structured output(§5A)으로 태워지므로 출력은 유효 보장, 파싱은 한 줄 <code>validate_json</code>. "auto" 파이프라인에 왼쪽 평면을 켠 것.</span></p>
+
+<h4>3 · tool_choice = named function <span class="muted">(force exactly this tool)</span></h4>
+<pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
+  "tool_choice":{"type":"function","function":{"name":"get_weather"}}
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 150" role="img" aria-label="named pipeline: schema is that tool's parameters, output is the args object, wrapped into a tool call">
+  <style>.rq{fill:var(--card);stroke:var(--line)}.so{fill:var(--blue-bg);stroke:var(--blue-bd)}.gen{fill:var(--green-bg);stroke:var(--green-bd)}.res{fill:var(--green-bg);stroke:var(--green-bd)}.t{font:600 11px -apple-system,sans-serif;fill:var(--ink)}.m{font:10px "SF Mono",Menlo,monospace;fill:var(--muted)}.k{font:9.5px -apple-system,sans-serif;fill:var(--muted)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#an)}</style>
+  <defs><marker id="an" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <rect class="rq" x="14" y="34" width="150" height="54" rx="6"/><text x="89" y="52" class="t" text-anchor="middle">request</text><text x="89" y="69" class="k" text-anchor="middle">tool_choice = named</text><text x="89" y="82" class="k" text-anchor="middle">"get_weather"</text>
+  <rect class="so" x="182" y="30" width="170" height="62" rx="6"/><text x="267" y="48" class="t" text-anchor="middle">CONSTRAIN</text><text x="267" y="65" class="k" text-anchor="middle">schema = get_weather's</text><text x="267" y="78" class="m" text-anchor="middle">parameters ONLY</text>
+  <rect class="gen" x="370" y="32" width="180" height="58" rx="6"/><text x="460" y="50" class="t" text-anchor="middle">forced generation</text><text x="460" y="69" class="m" text-anchor="middle">{"city":"Seoul"}</text><text x="460" y="83" class="k" text-anchor="middle">output IS the arguments</text>
+  <rect class="res" x="568" y="34" width="180" height="54" rx="6"/><text x="658" y="52" class="t" text-anchor="middle">wrap as tool_call</text><text x="658" y="68" class="k" text-anchor="middle">name = get_weather</text><text x="658" y="82" class="k" text-anchor="middle">args = the output ✓</text>
+  <path class="a" d="M164,61 L180,61"/><path class="a" d="M352,61 L368,61"/><path class="a" d="M550,61 L566,61"/>
+  <text x="20" y="120" class="k">Because the tool name is fixed, the schema is just that one tool's parameter object — so the ENTIRE output is the arguments; the name is added back by the parser.</text>
+  <text x="20" y="138" class="k" fill="var(--green-ink)">✓ guaranteed to call exactly get_weather with valid arguments. finish_reason = "stop" (named), vs "tool_calls" (required/auto).</text>
+</svg>
+<p class="figcap"><span class="en">Fig 16 — named <code>tool_choice</code>. The schema is reduced to the single named tool's <code>parameters</code>, so the model's whole output is the arguments object; the parser re-attaches the (already-known) function name. Exactly one call, guaranteed.</span><span class="ko">그림 16 — named <code>tool_choice</code>. 스키마가 지정된 tool 하나의 <code>parameters</code>로 축소돼 모델 출력 전체가 인자 객체; 파서가 (이미 아는) 함수 이름을 다시 붙인다. 정확히 한 번 호출, 보장.</span></p>
+
+<h4>4 · tool_choice = "none" <span class="muted">(never call — plain answer)</span></h4>
+<pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
+  "tool_choice":"none"
+}'</code></pre>
+<svg class="fig" viewBox="0 0 760 128" role="img" aria-label="none pipeline: no constraint, tools optionally excluded from prompt, plain content, no tool parse">
+  <style>.rq{fill:var(--card);stroke:var(--line)}.no{fill:var(--gray-bg);stroke:var(--gray-bd)}.gen{fill:var(--gray-bg);stroke:var(--gray-bd)}.res{fill:var(--card);stroke:var(--line)}.t{font:600 11px -apple-system,sans-serif;fill:var(--ink)}.m{font:10px "SF Mono",Menlo,monospace;fill:var(--muted)}.k{font:9.5px -apple-system,sans-serif;fill:var(--muted)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#anone)}</style>
+  <defs><marker id="anone" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <rect class="rq" x="14" y="34" width="150" height="54" rx="6"/><text x="89" y="52" class="t" text-anchor="middle">request</text><text x="89" y="69" class="k" text-anchor="middle">tool_choice: "none"</text><text x="89" y="82" class="k" text-anchor="middle">tools: [get_weather]</text>
+  <rect class="no" x="182" y="34" width="170" height="54" rx="6"/><text x="267" y="52" class="t" text-anchor="middle">no constraint</text><text x="267" y="69" class="k" text-anchor="middle">tools optionally dropped</text><text x="267" y="82" class="k" text-anchor="middle">from the prompt</text>
+  <rect class="gen" x="370" y="34" width="180" height="54" rx="6"/><text x="460" y="52" class="t" text-anchor="middle">plain generation</text><text x="460" y="70" class="m" text-anchor="middle">"It's sunny in Seoul."</text>
+  <rect class="res" x="568" y="34" width="180" height="54" rx="6"/><text x="658" y="52" class="t" text-anchor="middle">no tool parse</text><text x="658" y="70" class="k" text-anchor="middle">content only, no tool_calls</text>
+  <path class="a" d="M164,61 L180,61"/><path class="a" d="M352,61 L368,61"/><path class="a" d="M550,61 L566,61"/>
+  <text x="20" y="114" class="k"><code>--exclude-tools-when-tool-choice-none</code> controls whether the tool definitions are even shown to the model. Either way, no tool call is produced.</text>
+</svg>
+<p class="figcap"><span class="en">Fig 17 — <code>tool_choice="none"</code>. No constraint, no tool extraction; the model just answers in prose. The tool definitions may be withheld from the prompt entirely (a server flag).</span><span class="ko">그림 17 — <code>tool_choice="none"</code>. 제약도 tool 추출도 없음; 모델은 산문으로 답할 뿐. tool 정의는 프롬프트에서 아예 제외될 수도(서버 플래그).</span></p>
+
+<div class="callout c-teal">
+<p><b><span class="en">Reading the two galleries together</span><span class="ko">두 갤러리를 함께 읽기</span></b></p>
+<p><span class="en">The structured-output examples (A) and the <code class="inl">required</code>/named tool pipelines (B2, B3) are the <i>same machine</i>: a schema/grammar → a per-step bitmask → guaranteed-valid tokens. The only difference is where the schema comes from — you write it (A) or vLLM derives it from your <code class="inl">tools</code> (B). And <code class="inl">auto</code> (B1) is the one pipeline that <i>skips</i> the left plane entirely, which is exactly why it's the only one without a guarantee.</span>
+<span class="ko">structured-output 예시(A)와 <code class="inl">required</code>/named tool 파이프라인(B2, B3)은 <i>같은 기계</i>다: 스키마/문법 → 스텝별 bitmask → 유효 보장 토큰. 유일한 차이는 스키마의 출처 — 직접 쓰거나(A) vLLM이 <code class="inl">tools</code>에서 파생(B). 그리고 <code class="inl">auto</code>(B1)만 왼쪽 평면을 <i>건너뛰는</i> 유일한 파이프라인이라, 그래서 유일하게 보장이 없다.</span></p>
+</div>
+</section>
+
+<section id="s9">
+<h2><span class="num">9</span><span class="en">Usage, flags, status &amp; our take</span><span class="ko">사용법·플래그·상태·우리 관점</span></h2>
 
 <h3><span class="en">Flags &amp; config (code-level, at 34bb795)</span><span class="ko">플래그·설정 (코드 레벨, 34bb795)</span></h3>
 <table>
@@ -548,8 +762,8 @@ return True</code></pre>
 </div>
 </section>
 
-<section id="s9">
-<h2><span class="num">9</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<section id="s10">
+<h2><span class="num">10</span><span class="en">Sources</span><span class="ko">출처</span></h2>
 <p><span class="en">All line numbers pinned to vLLM commit <code class="inl">34bb795</code> (latest main, 2026-07-31; they drift). Apache-2.0. This area is refactoring fast — the unified <code class="inl">Parser</code> layer and engine-based parsers are recent.</span>
 <span class="ko">모든 라인 번호는 vLLM 커밋 <code class="inl">34bb795</code>(최신 main, 2026-07-31; 변동됨) 기준. Apache-2.0. 이 영역은 빠르게 리팩터 중 — 통합 <code class="inl">Parser</code> 계층과 engine-based 파서는 최근이다.</span></p>
 <ul class="srcs">
