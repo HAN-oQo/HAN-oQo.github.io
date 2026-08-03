@@ -514,8 +514,55 @@ if reasoner is not None:
 return True</code></pre>
 <p><span class="en">On the <b>serving</b> side, the same signal (<code class="inl">is_reasoning_end_streaming</code>) is what flips <code class="inl">parse_delta</code> from emitting <code class="inl">reasoning</code> to emitting <code class="inl">content</code>/<code class="inl">tool_calls</code>. One concept, gating both halves. (One caveat: parsers like Granite that split on prose phrases don't implement <code class="inl">is_reasoning_end</code>, so they do content-splitting only and can't gate structured output.)</span>
 <span class="ko"><b>서빙</b> 쪽에선 같은 신호(<code class="inl">is_reasoning_end_streaming</code>)가 <code class="inl">parse_delta</code>를 <code class="inl">reasoning</code> 방출에서 <code class="inl">content</code>/<code class="inl">tool_calls</code> 방출로 뒤집는다. 하나의 개념이 두 반쪽을 게이팅. (주의: Granite처럼 산문 문구로 나누는 파서는 <code class="inl">is_reasoning_end</code>를 구현 안 해서 콘텐츠 분리만 하고 structured output을 게이팅 못 한다.)</span></p>
+
+<h3><span class="en">When exactly does the answer start? (the token-level boundary)</span><span class="ko">답변은 정확히 언제 시작하나? (토큰 단위 경계)</span></h3>
+<p><span class="en">The gate above is described per-step; zoom into the token stream and the "start point" becomes precise. Two cases — and the key insight is that <b>the grammar never parses or understands the reasoning; it is simply switched off, then woken up right after the model's own end-marker</b>:</span>
+<span class="ko">위 게이트는 스텝 단위 설명이고, 토큰 스트림으로 확대하면 "시작 지점"이 또렷해진다. 두 경우 — 핵심은 <b>문법이 reasoning을 파싱하거나 이해하는 게 절대 아니라, 그냥 꺼져 있다가 모델 자신의 끝-마커 바로 다음에 깨어난다</b>는 것:</span></p>
+
+<svg class="fig" viewBox="0 0 760 276" role="img" aria-label="Token-level boundary: grammar off during reasoning, woken up right after the model's end marker, with reasoning tokens trimmed before the FSM">
+  <style>.t{font:600 11.5px -apple-system,sans-serif;fill:var(--ink)}.k{font:9.5px -apple-system,sans-serif;fill:var(--muted)}.mono{font:600 11px "SF Mono",Menlo,monospace}.g{fill:var(--gray-bg);stroke:var(--gray-bd)}.mk{fill:var(--amber-bg);stroke:var(--amber-bd)}.f{fill:var(--blue-bg);stroke:var(--blue-bd)}.c{fill:var(--green-bg);stroke:var(--green-bd)}.off{fill:var(--gray-bg);stroke:var(--gray-bd)}.on{fill:var(--green-bg);stroke:var(--green-bd)}.bd{stroke:var(--coral-bd);stroke-width:1.6;stroke-dasharray:4 3;fill:none}</style>
+  <text x="20" y="16" class="t">one request: reasoning model + JSON-schema structured output</text>
+  <!-- token strip -->
+  <rect class="g" x="20" y="26" width="44" height="28" rx="4"/><text x="42" y="44" class="mono" text-anchor="middle" fill="var(--muted)">Let</text>
+  <rect class="g" x="66" y="26" width="42" height="28" rx="4"/><text x="87" y="44" class="mono" text-anchor="middle" fill="var(--muted)">me</text>
+  <rect class="g" x="110" y="26" width="58" height="28" rx="4"/><text x="139" y="44" class="mono" text-anchor="middle" fill="var(--muted)">think</text>
+  <rect class="g" x="170" y="26" width="28" height="28" rx="4"/><text x="184" y="44" class="mono" text-anchor="middle" fill="var(--muted)">…</text>
+  <rect class="mk" x="200" y="26" width="78" height="28" rx="4"/><text x="239" y="44" class="mono" text-anchor="middle" fill="var(--amber-ink)">&lt;/think&gt;</text>
+  <rect class="f" x="284" y="26" width="30" height="28" rx="4"/><text x="299" y="44" class="mono" text-anchor="middle" fill="var(--blue-ink)">{</text>
+  <rect class="f" x="316" y="26" width="82" height="28" rx="4"/><text x="357" y="44" class="mono" text-anchor="middle" fill="var(--blue-ink)">"name":</text>
+  <rect class="c" x="400" y="26" width="62" height="28" rx="4"/><text x="431" y="44" class="mono" text-anchor="middle" fill="var(--green-ink)">"Bob"</text>
+  <rect class="f" x="464" y="26" width="28" height="28" rx="4"/><text x="478" y="44" class="mono" text-anchor="middle" fill="var(--blue-ink)">…</text>
+  <text x="120" y="70" class="k" text-anchor="middle">model thinks freely (model chose to emit the marker)</text>
+  <text x="388" y="70" class="k" text-anchor="middle">the answer — schema-forced</text>
+  <!-- boundary -->
+  <path class="bd" d="M281,22 L281,214"/><text x="281" y="230" class="k" text-anchor="middle" fill="var(--coral-ink)">answer starts HERE — grammar wakes up on the next token</text>
+  <!-- lane: bitmask -->
+  <rect class="off" x="20" y="84" width="258" height="20" rx="3"/><text x="149" y="98" class="k" text-anchor="middle">bitmask OFF (should_fill_bitmask = false)</text>
+  <rect class="on" x="284" y="84" width="208" height="20" rx="3"/><text x="388" y="98" class="k" text-anchor="middle" fill="var(--green-ink)">bitmask ON → −inf</text>
+  <text x="500" y="98" class="k">← grammar bitmask</text>
+  <!-- lane: FSM -->
+  <rect class="off" x="20" y="110" width="258" height="20" rx="3"/><text x="149" y="124" class="k" text-anchor="middle">FSM never advanced (stays at initial state)</text>
+  <rect class="on" x="284" y="110" width="208" height="20" rx="3"/><text x="388" y="124" class="k" text-anchor="middle" fill="var(--green-ink)">accept_tokens advances</text>
+  <text x="500" y="124" class="k">← grammar FSM</text>
+  <!-- trim callout -->
+  <rect x="20" y="146" width="720" height="52" rx="8" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+  <text x="380" y="166" class="t" text-anchor="middle" fill="var(--purple-ink)">the boundary step: trim_reasoning_for_advance</text>
+  <text x="380" y="182" class="k" text-anchor="middle" fill="var(--purple-ink)">the step that emits &lt;/think&gt; still contains reasoning tokens — feeding them to accept_tokens would reject the marker as invalid JSON and kill the request (#44006).</text>
+  <text x="380" y="194" class="k" text-anchor="middle" fill="var(--purple-ink)">so the reasoning tokens + the marker are sliced off; only [ { , "name" , … ] reach the FSM. The FSM, fresh from its initial state, sees ONLY the answer.</text>
+  <!-- two cases -->
+  <text x="20" y="250" class="k"><tspan font-weight="700">① no reasoning parser</tspan> → bitmask ON from token 0: the whole output must be the JSON (the model can't do free-form thinking at all).</text>
+  <text x="20" y="268" class="k"><tspan font-weight="700">② with reasoning parser</tspan> → the MODEL decides when to stop (it emits &lt;/think&gt;); the grammar doesn't force the marker — it just wakes up on the very next token. (include_reasoning=false seeds reasoning_ended=true → behaves like ①.)</text>
+</svg>
+<p class="figcap"><span class="en">Fig 8 — The token-level start of a constrained answer. During reasoning the bitmask is never filled and the FSM is never advanced; the model itself ends thinking by emitting <code>&lt;/think&gt;</code>; the reasoning parser detects it (<code>is_reasoning_end_streaming</code>), records the boundary index, and from the next token the grammar forces the schema. On the crossing step, <code>trim_reasoning_for_advance</code> drops the reasoning tokens and the marker so the FSM (still in its initial state) only ever consumes the answer. Original diagram; per structured_output/__init__.py.</span><span class="ko">그림 8 — 제약된 답변의 토큰 단위 시작. reasoning 동안 bitmask는 채워지지 않고 FSM은 전진하지 않는다; 모델이 스스로 <code>&lt;/think&gt;</code>를 내어 생각을 끝내고; reasoning 파서가 그걸 감지(<code>is_reasoning_end_streaming</code>)해 경계 인덱스를 기록하며, 다음 토큰부터 문법이 스키마를 강제한다. 걸친 스텝에선 <code>trim_reasoning_for_advance</code>가 reasoning 토큰과 마커를 잘라내 FSM(여전히 초기 상태)이 답변만 소비하게 한다. 직접 작성한 다이어그램; 출처 structured_output/__init__.py.</span></p>
+<p><span class="en">The trim is the subtle part — without it, the FSM would try to match <code class="inl">&lt;/think&gt;</code> against the JSON grammar and reject it:</span>
+<span class="ko">trim이 미묘한 부분이다 — 없으면 FSM이 <code class="inl">&lt;/think&gt;</code>를 JSON 문법에 매칭하려다 거부한다:</span></p>
+<pre><code># vllm/v1/structured_output/__init__.py:462  (trim_reasoning_for_advance)
+end_idx = structured_req.reasoning_end_token_index          # abs. index of &lt;/think&gt;
+first_idx = len(request.all_token_ids) - len(new_token_ids)
+num_reasoning = end_idx + 1 - first_idx                     # reasoning+marker tokens this step
+return new_token_ids[num_reasoning:]                        # feed only the answer suffix to accept_tokens</code></pre>
 <ul class="srcs">
-<li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/abs_reasoning_parsers.py#L26-L210">ReasoningParser interface</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/deepseek_r1_reasoning_parser.py#L10-L67">DeepSeek-R1 parser</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/engine/detokenizer.py#L96-L143">IncrementalDetokenizer</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/abstract_parser.py#L785-L799">DelegatingParser.parse</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L361-L437">reasoning_ended gate</a></li>
+<li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/abs_reasoning_parsers.py#L26-L210">ReasoningParser interface</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/reasoning/deepseek_r1_reasoning_parser.py#L10-L67">DeepSeek-R1 parser</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/engine/detokenizer.py#L96-L143">IncrementalDetokenizer</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/parser/abstract_parser.py#L785-L799">DelegatingParser.parse</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L361-L437">reasoning_ended gate</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L381-L440">should_advance</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L462-L487">trim_reasoning_for_advance</a></li>
 </ul>
 </section>
 
@@ -546,7 +593,7 @@ return True</code></pre>
   <rect class="f" x="374" y="28" width="30" height="30" rx="4"/><text x="389" y="48" class="tf" text-anchor="middle">}</text>
   <text x="20" y="82" class="k"><tspan fill="var(--blue-ink)" font-weight="700">blue</tspan> = grammar-forced (braces, the required keys "name"/"age", quotes, colon, comma). <tspan fill="var(--green-ink)" font-weight="700">green</tspan> = model's choice within the type (a string, an integer).</text>
 </svg>
-<p class="figcap"><span class="en">Fig 8 — <code>json_schema</code>. The whole skeleton — braces, the two required keys, punctuation — is forced by the grammar; the model only chooses the string content and the integer value. Illegal tokens (a <code>[</code>, a letter where a digit is required) were masked to −inf and never sampled.</span><span class="ko">그림 8 — <code>json_schema</code>. 골격 전체(중괄호·필수 키 둘·구두점)는 문법이 강제하고, 모델은 문자열 내용과 정수 값만 고른다. 불법 토큰(<code>[</code>, 숫자 자리의 글자)은 −inf로 마스킹돼 애초에 sampling 안 됨.</span></p>
+<p class="figcap"><span class="en">Fig 9 — <code>json_schema</code>. The whole skeleton — braces, the two required keys, punctuation — is forced by the grammar; the model only chooses the string content and the integer value. Illegal tokens (a <code>[</code>, a letter where a digit is required) were masked to −inf and never sampled.</span><span class="ko">그림 9 — <code>json_schema</code>. 골격 전체(중괄호·필수 키 둘·구두점)는 문법이 강제하고, 모델은 문자열 내용과 정수 값만 고른다. 불법 토큰(<code>[</code>, 숫자 자리의 글자)은 −inf로 마스킹돼 애초에 sampling 안 됨.</span></p>
 
 <h4>2 · json_object <span class="muted">(any valid JSON)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{
@@ -567,7 +614,7 @@ return True</code></pre>
   <rect class="f" x="408" y="28" width="30" height="30" rx="4"/><text x="423" y="48" class="tf" text-anchor="middle">}</text>
   <text x="20" y="82" class="k">Only structural JSON tokens are <tspan fill="var(--blue-ink)" font-weight="700">forced</tspan> (balanced braces/quotes/colons). The keys "city"/"temp" are now <tspan fill="var(--green-ink)" font-weight="700">the model's choice</tspan> too.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 9 — <code>json_object</code>. Same engine, weaker constraint: the grammar only guarantees the output parses as a JSON object; the model decides the keys and values. Use it when you want "valid JSON" but not a fixed shape.</span><span class="ko">그림 9 — <code>json_object</code>. 같은 엔진, 약한 제약: 문법은 출력이 JSON 객체로 파싱되는 것만 보장하고, 키·값은 모델이 정한다. "유효 JSON"은 원하지만 고정 형태는 아닐 때.</span></p>
+<p class="figcap"><span class="en">Fig 10 — <code>json_object</code>. Same engine, weaker constraint: the grammar only guarantees the output parses as a JSON object; the model decides the keys and values. Use it when you want "valid JSON" but not a fixed shape.</span><span class="ko">그림 10 — <code>json_object</code>. 같은 엔진, 약한 제약: 문법은 출력이 JSON 객체로 파싱되는 것만 보장하고, 키·값은 모델이 정한다. "유효 JSON"은 원하지만 고정 형태는 아닐 때.</span></p>
 
 <h4>3 · guided_regex <span class="muted">(match a pattern)</span></h4>
 <pre><code>curl .../v1/completions -d '{
@@ -587,7 +634,7 @@ return True</code></pre>
   <rect class="c" x="286" y="28" width="34" height="30" rx="4"/><text x="303" y="48" class="tc" text-anchor="middle">4</text>
   <text x="20" y="82" class="k"><tspan fill="var(--green-ink)" font-weight="700">green</tspan> digit slots: the model picks WHICH digit (0–9), but only digits are legal. The <tspan fill="var(--blue-ink)" font-weight="700">-</tspan> is a forced literal. No EOS until the pattern is complete.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 10 — <code>guided_regex</code>. The regex compiles to an FSM; every position exposes only its legal character class. The model still chooses among legal characters (which digit), so it's not scripted — just bounded.</span><span class="ko">그림 10 — <code>guided_regex</code>. regex가 FSM으로 컴파일되고, 각 위치는 합법 문자 클래스만 노출. 모델은 합법 문자 중에서(어느 숫자) 여전히 고르므로 각본이 아니라 경계가 지어진 것.</span></p>
+<p class="figcap"><span class="en">Fig 11 — <code>guided_regex</code>. The regex compiles to an FSM; every position exposes only its legal character class. The model still chooses among legal characters (which digit), so it's not scripted — just bounded.</span><span class="ko">그림 11 — <code>guided_regex</code>. regex가 FSM으로 컴파일되고, 각 위치는 합법 문자 클래스만 노출. 모델은 합법 문자 중에서(어느 숫자) 여전히 고르므로 각본이 아니라 경계가 지어진 것.</span></p>
 
 <h4>4 · guided_choice <span class="muted">(pick one of a list)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{
@@ -607,7 +654,7 @@ return True</code></pre>
   <text x="185" y="80" class="k">not taken — but were legal at step 1</text>
   <text x="185" y="110" class="k">(only tokens starting a valid choice were allowed)</text>
 </svg>
-<p class="figcap"><span class="en">Fig 11 — <code>guided_choice</code>. Compiled to an <code>a|b|c</code> grammar. At the first step all three prefixes are legal; the model's pick collapses the choice, and once the prefix is unique the remaining characters are forced. Output is always exactly one of the options.</span><span class="ko">그림 11 — <code>guided_choice</code>. <code>a|b|c</code> 문법으로 컴파일. 첫 스텝엔 세 prefix 모두 합법; 모델의 선택이 분기를 좁히고, prefix가 유일해지면 나머지 문자는 강제. 출력은 항상 옵션 중 정확히 하나.</span></p>
+<p class="figcap"><span class="en">Fig 12 — <code>guided_choice</code>. Compiled to an <code>a|b|c</code> grammar. At the first step all three prefixes are legal; the model's pick collapses the choice, and once the prefix is unique the remaining characters are forced. Output is always exactly one of the options.</span><span class="ko">그림 12 — <code>guided_choice</code>. <code>a|b|c</code> 문법으로 컴파일. 첫 스텝엔 세 prefix 모두 합법; 모델의 선택이 분기를 좁히고, prefix가 유일해지면 나머지 문자는 강제. 출력은 항상 옵션 중 정확히 하나.</span></p>
 
 <h4>5 · guided_grammar <span class="muted">(EBNF / Lark)</span></h4>
 <pre><code>curl .../v1/completions -d '{
@@ -626,7 +673,7 @@ return True</code></pre>
   <text x="360" y="47" class="k">← always a syntactically valid query</text>
   <text x="20" y="82" class="k"><tspan fill="var(--blue-ink)" font-weight="700">SELECT / FROM</tspan> are grammar literals (forced); <tspan fill="var(--green-ink)" font-weight="700">name</tspan> ∈ {id,name}, <tspan fill="var(--green-ink)" font-weight="700">users</tspan> ∈ {users,orders} are the model's picks. Full CFGs (JSON, code, DSLs) work the same way.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 12 — <code>guided_grammar</code>. An EBNF/Lark context-free grammar (only xgrammar &amp; guidance support this). Terminals are forced, nonterminals are choice points — so you can constrain to a whole DSL, not just JSON.</span><span class="ko">그림 12 — <code>guided_grammar</code>. EBNF/Lark 문맥자유문법(xgrammar·guidance만 지원). 종단은 강제, 비종단은 선택 지점 — JSON뿐 아니라 DSL 전체로 제약 가능.</span></p>
+<p class="figcap"><span class="en">Fig 13 — <code>guided_grammar</code>. An EBNF/Lark context-free grammar (only xgrammar &amp; guidance support this). Terminals are forced, nonterminals are choice points — so you can constrain to a whole DSL, not just JSON.</span><span class="ko">그림 13 — <code>guided_grammar</code>. EBNF/Lark 문맥자유문법(xgrammar·guidance만 지원). 종단은 강제, 비종단은 선택 지점 — JSON뿐 아니라 DSL 전체로 제약 가능.</span></p>
 
 <h4>6 · structural_tag <span class="muted">(constrain only a region)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{
@@ -644,7 +691,7 @@ return True</code></pre>
   <text x="20" y="82" class="k"><tspan fill="var(--gray-ink,#666)" font-weight="700">gray</tspan> = free prose (model). <tspan fill="var(--amber-ink)" font-weight="700">amber</tspan> = the trigger that opens/closes the constrained region. <tspan fill="var(--blue-ink)" font-weight="700">blue</tspan> = JSON-schema-forced bytes inside.</text>
   <text x="20" y="100" class="k">The grammar is dormant until the trigger token appears, forces valid JSON until the close tag, then goes dormant again.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 13 — <code>structural_tag</code>. A grammar that only activates inside a triggered region, leaving surrounding text unconstrained. This is exactly the mechanism behind the strict tool-calling path (§5B) — the model keeps its native markers, but the bytes between them are forced valid.</span><span class="ko">그림 13 — <code>structural_tag</code>. 트리거된 영역 안에서만 활성화되고 주변 텍스트는 제약하지 않는 문법. strict tool-calling 경로(§5B)의 바로 그 메커니즘 — 모델은 고유 마커를 유지하되 그 사이 바이트는 유효로 강제된다.</span></p>
+<p class="figcap"><span class="en">Fig 14 — <code>structural_tag</code>. A grammar that only activates inside a triggered region, leaving surrounding text unconstrained. This is exactly the mechanism behind the strict tool-calling path (§5B) — the model keeps its native markers, but the bytes between them are forced valid.</span><span class="ko">그림 14 — <code>structural_tag</code>. 트리거된 영역 안에서만 활성화되고 주변 텍스트는 제약하지 않는 문법. strict tool-calling 경로(§5B)의 바로 그 메커니즘 — 모델은 고유 마커를 유지하되 그 사이 바이트는 유효로 강제된다.</span></p>
 
 <h3><span class="en">B. Tool calling — the 4 tool_choice modes</span><span class="ko">B. Tool calling — 4가지 tool_choice 모드</span></h3>
 <p><span class="en">All four use the same <code class="inl">tools</code> list; only <code class="inl">tool_choice</code> changes. Each pipeline below shows: the request → whether a <b>constraint</b> is applied (the bridge to structured output) → the model's raw generation → the parser → the final <code class="inl">tool_calls</code>. The server is assumed started with <code class="inl">--enable-auto-tool-choice --tool-call-parser hermes</code>.</span>
@@ -668,7 +715,7 @@ return True</code></pre>
   <text x="20" y="118" class="k" fill="var(--coral-ink)">⚠ no validity guarantee — if the model emits malformed markers, extraction yields no tool call and the text falls through as content.</text>
   <text x="20" y="136" class="k">The model itself decided to call the tool AND what to put in it; vLLM only recognizes the markers afterward.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 14 — <code>tool_choice="auto"</code>. No constraint is applied; the model freely emits its native tool-call markers and the parser extracts them. Best-effort — the guarantee is only as good as the model's formatting.</span><span class="ko">그림 14 — <code>tool_choice="auto"</code>. 제약 없음; 모델이 고유 마커를 자유 방출하고 파서가 추출. best-effort — 보장은 모델 포맷팅 수준에 달림.</span></p>
+<p class="figcap"><span class="en">Fig 15 — <code>tool_choice="auto"</code>. No constraint is applied; the model freely emits its native tool-call markers and the parser extracts them. Best-effort — the guarantee is only as good as the model's formatting.</span><span class="ko">그림 15 — <code>tool_choice="auto"</code>. 제약 없음; 모델이 고유 마커를 자유 방출하고 파서가 추출. best-effort — 보장은 모델 포맷팅 수준에 달림.</span></p>
 
 <h4>2 · tool_choice = "required" <span class="muted">(force ≥1 valid call)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
@@ -685,7 +732,7 @@ return True</code></pre>
   <text x="20" y="120" class="k" fill="var(--green-ink)">✓ guaranteed ≥1 syntactically-valid tool call — the grammar made malformed output impossible, so parsing is trivial.</text>
   <text x="20" y="138" class="k">Note the shape is an ARRAY (the model may return several calls); each item is {name ∈ your tools, parameters ∈ that tool's schema}.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 15 — <code>tool_choice="required"</code>. The tools become a JSON-schema array constraint routed through structured output (§5A), so the output is guaranteed-valid and the parse is a one-line <code>validate_json</code>. This is the "auto" pipeline with the left plane switched on.</span><span class="ko">그림 15 — <code>tool_choice="required"</code>. tool들이 JSON-스키마 배열 제약이 되어 structured output(§5A)으로 태워지므로 출력은 유효 보장, 파싱은 한 줄 <code>validate_json</code>. "auto" 파이프라인에 왼쪽 평면을 켠 것.</span></p>
+<p class="figcap"><span class="en">Fig 16 — <code>tool_choice="required"</code>. The tools become a JSON-schema array constraint routed through structured output (§5A), so the output is guaranteed-valid and the parse is a one-line <code>validate_json</code>. This is the "auto" pipeline with the left plane switched on.</span><span class="ko">그림 16 — <code>tool_choice="required"</code>. tool들이 JSON-스키마 배열 제약이 되어 structured output(§5A)으로 태워지므로 출력은 유효 보장, 파싱은 한 줄 <code>validate_json</code>. "auto" 파이프라인에 왼쪽 평면을 켠 것.</span></p>
 
 <h4>3 · tool_choice = named function <span class="muted">(force exactly this tool)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
@@ -702,7 +749,7 @@ return True</code></pre>
   <text x="20" y="120" class="k">Because the tool name is fixed, the schema is just that one tool's parameter object — so the ENTIRE output is the arguments; the name is added back by the parser.</text>
   <text x="20" y="138" class="k" fill="var(--green-ink)">✓ guaranteed to call exactly get_weather with valid arguments. finish_reason = "stop" (named), vs "tool_calls" (required/auto).</text>
 </svg>
-<p class="figcap"><span class="en">Fig 16 — named <code>tool_choice</code>. The schema is reduced to the single named tool's <code>parameters</code>, so the model's whole output is the arguments object; the parser re-attaches the (already-known) function name. Exactly one call, guaranteed.</span><span class="ko">그림 16 — named <code>tool_choice</code>. 스키마가 지정된 tool 하나의 <code>parameters</code>로 축소돼 모델 출력 전체가 인자 객체; 파서가 (이미 아는) 함수 이름을 다시 붙인다. 정확히 한 번 호출, 보장.</span></p>
+<p class="figcap"><span class="en">Fig 17 — named <code>tool_choice</code>. The schema is reduced to the single named tool's <code>parameters</code>, so the model's whole output is the arguments object; the parser re-attaches the (already-known) function name. Exactly one call, guaranteed.</span><span class="ko">그림 17 — named <code>tool_choice</code>. 스키마가 지정된 tool 하나의 <code>parameters</code>로 축소돼 모델 출력 전체가 인자 객체; 파서가 (이미 아는) 함수 이름을 다시 붙인다. 정확히 한 번 호출, 보장.</span></p>
 
 <h4>4 · tool_choice = "none" <span class="muted">(never call — plain answer)</span></h4>
 <pre><code>curl .../v1/chat/completions -d '{ ...same tools...,
@@ -718,7 +765,7 @@ return True</code></pre>
   <path class="a" d="M164,61 L180,61"/><path class="a" d="M352,61 L368,61"/><path class="a" d="M550,61 L566,61"/>
   <text x="20" y="114" class="k"><code>--exclude-tools-when-tool-choice-none</code> controls whether the tool definitions are even shown to the model. Either way, no tool call is produced.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 17 — <code>tool_choice="none"</code>. No constraint, no tool extraction; the model just answers in prose. The tool definitions may be withheld from the prompt entirely (a server flag).</span><span class="ko">그림 17 — <code>tool_choice="none"</code>. 제약도 tool 추출도 없음; 모델은 산문으로 답할 뿐. tool 정의는 프롬프트에서 아예 제외될 수도(서버 플래그).</span></p>
+<p class="figcap"><span class="en">Fig 18 — <code>tool_choice="none"</code>. No constraint, no tool extraction; the model just answers in prose. The tool definitions may be withheld from the prompt entirely (a server flag).</span><span class="ko">그림 18 — <code>tool_choice="none"</code>. 제약도 tool 추출도 없음; 모델은 산문으로 답할 뿐. tool 정의는 프롬프트에서 아예 제외될 수도(서버 플래그).</span></p>
 
 <div class="callout c-teal">
 <p><b><span class="en">Reading the two galleries together</span><span class="ko">두 갤러리를 함께 읽기</span></b></p>
