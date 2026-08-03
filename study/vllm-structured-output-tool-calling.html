@@ -121,8 +121,8 @@
 
 <div class="callout c-blue">
   <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
-  <span class="en">vLLM does two very different jobs under one banner. (1) <b>Structured output</b> = constrain <i>what token can come next</i>: a grammar/FSM (compiled by <b>xgrammar</b> by default, else <b>guidance</b>/<b>outlines</b>/<b>lm-format-enforcer</b>) emits a packed <b>token bitmask</b> each step; the engine <code class="inl">masked_fill</code>s disallowed tokens to <code class="inl">−inf</code> on the raw logits <i>before</i> the sampler. (2) <b>Tool &amp; reasoning parsing</b> = <i>post-process</i> the generated text: a unified <code class="inl">DelegatingParser</code> first splits reasoning (e.g. everything before <code class="inl">&lt;/think&gt;</code>), then extracts tool calls (regex / JSON / pythonic-AST / structural-tag). <code class="inl">tool_choice="required"</code> bridges the two — it builds a JSON schema (or structural tag) from the tools and routes it through structured output so the tool JSON is <i>guaranteed</i> valid. The one thing linking both halves is <code class="inl">reasoning_ended</code>: until the model finishes thinking, the engine skips the grammar bitmask and the serving layer stays in the "reasoning" phase.</span>
-  <span class="ko">vLLM은 한 깃발 아래 아주 다른 두 일을 한다. (1) <b>Structured output</b> = <i>다음에 올 수 있는 토큰</i>을 제약: 문법/FSM(기본 <b>xgrammar</b>, 아니면 <b>guidance</b>/<b>outlines</b>/<b>lm-format-enforcer</b>)이 스텝마다 packed <b>토큰 bitmask</b>를 내고, 엔진이 sampler <i>전에</i> raw logit에서 금지 토큰을 <code class="inl">−inf</code>로 <code class="inl">masked_fill</code>한다. (2) <b>Tool &amp; reasoning 파싱</b> = 생성된 텍스트를 <i>후처리</i>: 통합 <code class="inl">DelegatingParser</code>가 먼저 reasoning을 분리하고(예: <code class="inl">&lt;/think&gt;</code> 이전 전부), 그다음 tool call을 추출(regex / JSON / pythonic-AST / structural-tag). <code class="inl">tool_choice="required"</code>가 둘을 잇는다 — tool들에서 JSON 스키마(또는 structural tag)를 만들어 structured output으로 태워 tool JSON을 <i>보장</i>한다. 두 반쪽을 잇는 단 하나는 <code class="inl">reasoning_ended</code>: 모델이 생각을 끝낼 때까지 엔진은 문법 bitmask를 건너뛰고 서빙은 "reasoning" 단계에 머문다.</span>
+  <span class="en">Two jobs under one banner. <b>(1) Structured output</b> constrains <i>which token comes next</i>: a grammar (xgrammar by default) emits a per-step <b>token bitmask</b>, and the engine masks illegal tokens to <code class="inl">−inf</code> before the sampler. <b>(2) Tool &amp; reasoning parsing</b> post-processes the generated text: a unified <code class="inl">DelegatingParser</code> splits reasoning, then extracts tool calls. <code class="inl">tool_choice="required"</code> bridges them — it derives a schema from your tools and routes it through (1), so the tool JSON is <i>guaranteed</i> valid. <code class="inl">reasoning_ended</code> links both halves: the grammar and the tool phase each wait until the model finishes thinking.</span>
+  <span class="ko">한 깃발 아래 두 가지 일. <b>(1) Structured output</b>은 <i>다음 토큰</i>을 제약한다: 문법(기본 xgrammar)이 스텝마다 <b>토큰 bitmask</b>를 내고, 엔진이 sampler 전에 불법 토큰을 <code class="inl">−inf</code>로 마스킹한다. <b>(2) Tool &amp; reasoning 파싱</b>은 생성된 텍스트를 후처리한다: 통합 <code class="inl">DelegatingParser</code>가 reasoning을 분리하고 tool call을 추출한다. <code class="inl">tool_choice="required"</code>가 둘을 잇는다 — tool에서 스키마를 만들어 (1)로 태우니 tool JSON이 <i>보장</i>된다. <code class="inl">reasoning_ended</code>가 두 반쪽을 잇는다: 문법도 tool 단계도 모델이 생각을 끝낼 때까지 기다린다.</span>
 </div>
 
 <h3 style="margin-top:26px"><span class="en">Glossary</span><span class="ko">용어집</span></h3>
@@ -170,8 +170,8 @@
 </svg>
 <p class="figcap"><span class="en">Fig 1 — Two planes split by the sampler. Left: structured output masks logits inside the engine, before sampling. Right: tool/reasoning parsers post-process decoded text in the serving layer, after sampling. <code>tool_choice="required"</code> is the bridge (§5). Original diagram.</span><span class="ko">그림 1 — sampler로 갈린 두 평면. 왼쪽: structured output이 sampling 전 엔진 안에서 logit을 마스킹. 오른쪽: tool/reasoning 파서가 sampling 후 서빙 레이어에서 디코드된 텍스트를 후처리. <code>tool_choice="required"</code>가 다리(§5). 직접 작성한 다이어그램.</span></p>
 
-<p><span class="en">Two consequences worth internalizing up front: (1) <b>structured output cannot fix bad text after the fact</b> — it can only stop illegal tokens from being sampled in the first place, so it needs a grammar that knows the legal next-token set at every step. (2) <b>tool parsing can never guarantee validity on its own</b> — a plain <code class="inl">tool_choice="auto"</code> parser just hopes the model emitted parseable markers; the <i>guarantee</i> only appears when a request routes its tools <i>through</i> the structured-output plane (§5). The rest of this note walks the left plane (§2–4), the right plane (§6–7), and the bridge between them (§5).</span>
-<span class="ko">미리 새겨둘 두 결과: (1) <b>structured output은 나온 텍스트를 사후에 못 고친다</b> — 애초에 불법 토큰이 sampling되지 않게 막을 뿐이라, 매 스텝의 합법 다음-토큰 집합을 아는 문법이 필요하다. (2) <b>tool 파싱만으론 유효성을 절대 보장 못 한다</b> — 순수 <code class="inl">tool_choice="auto"</code> 파서는 모델이 파싱 가능한 마커를 냈길 바랄 뿐이고, <i>보장</i>은 요청이 tool들을 structured-output 평면 <i>으로</i> 태울 때만 생긴다(§5). 이 노트의 나머지는 왼쪽 평면(§2–4), 오른쪽 평면(§6–7), 그리고 그 사이의 다리(§5)를 걷는다.</span></p>
+<p><span class="en">Two consequences worth holding onto: (1) <b>structured output can't fix bad text after the fact</b> — it only stops illegal tokens from being sampled, so it needs a grammar that knows the legal next-token set at every step. (2) <b>a tool parser alone can never guarantee validity</b> — plain <code class="inl">tool_choice="auto"</code> just hopes the model emitted parseable markers; the <i>guarantee</i> appears only when a request routes its tools <i>through</i> the left plane (§5).</span>
+<span class="ko">새겨둘 두 결과: (1) <b>structured output은 나온 텍스트를 사후에 못 고친다</b> — 불법 토큰의 sampling을 막을 뿐이라 매 스텝 합법 다음-토큰 집합을 아는 문법이 필요하다. (2) <b>tool 파서만으론 유효성을 보장 못 한다</b> — 순수 <code class="inl">tool_choice="auto"</code>는 모델이 파싱 가능한 마커를 냈길 바랄 뿐이고, <i>보장</i>은 tool을 왼쪽 평면(§5)으로 태울 때만 생긴다.</span></p>
 </section>
 
 <section id="s2">
@@ -253,6 +253,20 @@ if new_token_ids and self.structured_output_manager.should_advance(request, new_
     advance_token_ids = self.structured_output_manager.trim_reasoning_for_advance(request, new_token_ids)
     if advance_token_ids and not grammar.accept_tokens(req_id, advance_token_ids):
         request.status = RequestStatus.FINISHED_ERROR    # grammar rejected → kill</code></pre>
+
+<div class="callout c-coral">
+<p><b><span class="en">So how does it fail? Forcing ≠ guaranteed success</span><span class="ko">그럼 언제 실패하나? 강제 ≠ 무조건 성공</span></b></p>
+<p><span class="en">Masking makes an illegal token <i>impossible</i> — but that only guarantees a valid <b>prefix</b>, not a finished, correct result. Structured output still fails when:</span>
+<span class="ko">마스킹은 불법 토큰을 <i>불가능</i>하게 하지만, 그건 유효한 <b>prefix</b>만 보장하지 완성·정확을 보장하진 않는다. 그래도 실패하는 경우:</span></p>
+<ul>
+<li><span class="en"><b>A · compile</b> — the schema/regex/grammar is unsupported (e.g. <code class="inl">multipleOf</code>, lookarounds) or the regex times out → that request errors <i>before</i> generating.</span><span class="ko"><b>A · 컴파일</b> — 스키마/regex/문법이 미지원(<code class="inl">multipleOf</code>, lookaround 등)이거나 regex 타임아웃 → 생성 <i>전에</i> 그 요청이 에러.</span></li>
+<li><span class="en"><b>B · truncation</b> — <code class="inl">max_tokens</code> is hit before the grammar closes → a <i>truncated, invalid</i> JSON. The most common failure in practice; give the schema enough token budget.</span><span class="ko"><b>B · 잘림</b> — 문법이 닫히기 전에 <code class="inl">max_tokens</code>에 걸림 → <i>잘린 무효</i> JSON. 실무에서 가장 흔함; 스키마에 넉넉한 토큰 예산을 줘라.</span></li>
+<li><span class="en"><b>C · wrong content</b> — it forces the <i>shape</i>, not the meaning: <code class="inl">{"age":0}</code> is valid but maybe nonsense, and pushing the model off its distribution can degrade quality.</span><span class="ko"><b>C · 내용 오류</b> — <i>형태</i>를 강제하지 의미를 강제하지 않음: <code class="inl">{"age":0}</code>은 유효하지만 오답일 수 있고, 분포에서 밀어내 품질이 떨어질 수도.</span></li>
+<li><span class="en"><b>D · runtime desync → kill</b> — a tokenizer mismatch or a bug makes <code class="inl">accept_tokens</code> reject a token → vLLM kills the request (above) rather than emit invalid output.</span><span class="ko"><b>D · 런타임 desync → 종료</b> — 토크나이저 불일치나 버그로 <code class="inl">accept_tokens</code>가 거부 → vLLM은 무효 출력 대신 요청을 죽임(위 코드).</span></li>
+<li><span class="en"><b>E · backend limits</b> — the unsupported combos in §3 (outlines: no grammar/structural-tag; lm-format-enforcer: no speculative decoding).</span><span class="ko"><b>E · 백엔드 한계</b> — §3의 미지원 조합(outlines: grammar/structural-tag 없음; lm-format-enforcer: spec decode 없음).</span></li>
+</ul>
+</div>
+
 <ul class="srcs">
 <li><a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/__init__.py#L114-L192">StructuredOutputManager.grammar_init</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/structured_output/backend_types.py#L31-L136">backend interface</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/worker/gpu/structured_outputs.py#L85-L115">Triton −inf kernel</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/worker/gpu_model_runner.py#L4582-L4589">apply then sample</a> · <a href="https://github.com/vllm-project/vllm/blob/34bb795ff3efee6cc08c9dd104deceefff2c4d55/vllm/v1/core/sched/scheduler.py#L1817-L1834">advance / kill</a></li>
 </ul>
@@ -351,39 +365,46 @@ except ValueError:
 
   <line x1="20" y1="158" x2="740" y2="158" stroke="var(--line)"/>
 
-  <!-- ============ BAND 2: the grammar FSM position ============ -->
-  <text x="20" y="180" class="ttl">② The grammar is a stateful FSM — a position that must NOT be corrupted by a guess that gets rejected</text>
-  <text x="20" y="196" class="lbl">read each row as the FSM position (▼) on its state track  s0 → s1 → s2 → s3  (one state per accepted token)</text>
+  <!-- ============ BAND 2: the grammar FSM walking the actual tokens ============ -->
+  <text x="20" y="180" class="ttl">② The grammar is a stateful FSM — it must NOT be left "advanced" by a guess that gets rejected</text>
+  <text x="20" y="196" class="lbl">same 3 guesses on every row; the ▼ marks how far the FSM has walked through them (the shaded tokens are "consumed")</text>
 
   <!-- Row 1: validate -->
-  <line class="track" x1="120" y1="228" x2="300" y2="228"/>
-  <circle class="dot" cx="120" cy="228" r="4.5"/><circle class="dot" cx="180" cy="228" r="4.5"/><circle class="dot" cx="240" cy="228" r="4.5"/><circle class="dot" cx="300" cy="228" r="4.5"/>
-  <path class="peek" d="M126,222 Q150,206 174,222"/><path class="peek" d="M186,222 Q210,206 234,222"/><path class="peek" d="M246,222 Q270,206 294,222"/>
-  <path d="M115,214 L125,214 L120,222 Z" fill="var(--blue-ink)"/>
-  <text x="330" y="226" class="lbl"><tspan font-weight="700" fill="var(--ink)">① validate</tspan> — peek: are the guesses legal? The FSM does NOT move.</text>
+  <rect class="draft" x="120" y="212" width="52" height="24" rx="5"/><text x="146" y="229" class="tok" text-anchor="middle" fill="var(--muted)">the</text>
+  <rect class="draft" x="176" y="212" width="52" height="24" rx="5"/><text x="202" y="229" class="tok" text-anchor="middle" fill="var(--muted)">cat</text>
+  <rect class="draft" x="232" y="212" width="52" height="24" rx="5"/><text x="258" y="229" class="tok" text-anchor="middle" fill="var(--muted)">sat</text>
+  <path class="peek" d="M126,244 Q150,252 172,244"/><path class="peek" d="M182,244 Q206,252 228,244"/><path class="peek" d="M238,244 Q262,252 282,244"/>
+  <path d="M113,204 L123,204 L118,212 Z" fill="var(--blue-ink)"/>
+  <text x="300" y="222" class="lbl"><tspan font-weight="700" fill="var(--ink)">① validate</tspan> — peek: are the guesses legal? The FSM</text>
+  <text x="300" y="235" class="lbl">does NOT move (▼ still before "the").</text>
 
   <!-- Row 2: temp-advance -->
-  <line class="track" x1="120" y1="270" x2="300" y2="270"/>
-  <circle class="dot" cx="120" cy="270" r="4.5"/><circle class="dot" cx="180" cy="270" r="4.5"/><circle class="dot" cx="240" cy="270" r="4.5"/><circle class="dot" cx="300" cy="270" r="4.5"/>
-  <path class="mv" stroke="var(--amber-ink)" marker-end="url(#mAmb)" d="M120,256 L296,256"/>
-  <path d="M295,262 L305,262 L300,270 Z" fill="var(--amber-ink)"/>
-  <text x="330" y="268" class="lbl"><tspan font-weight="700" fill="var(--ink)">② temp-advance</tspan> s0→s3 — step through all 3 to read each slot's allowed set (fill its bitmask).</text>
+  <rect x="120" y="264" width="52" height="24" rx="5" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="146" y="281" class="tok" text-anchor="middle" fill="var(--amber-ink)">the</text>
+  <rect x="176" y="264" width="52" height="24" rx="5" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="202" y="281" class="tok" text-anchor="middle" fill="var(--amber-ink)">cat</text>
+  <rect x="232" y="264" width="52" height="24" rx="5" fill="var(--amber-bg)" stroke="var(--amber-bd)"/><text x="258" y="281" class="tok" text-anchor="middle" fill="var(--amber-ink)">sat</text>
+  <line x1="120" y1="294" x2="284" y2="294" stroke="var(--amber-ink)" stroke-width="3"/>
+  <path d="M279,256 L289,256 L284,264 Z" fill="var(--amber-ink)"/>
+  <text x="300" y="274" class="lbl"><tspan font-weight="700" fill="var(--ink)">② temp-advance</tspan> — walk through all 3 to read each</text>
+  <text x="300" y="287" class="lbl">one's bitmask (▼ now after "sat" — but unconfirmed).</text>
 
   <!-- Row 3: rollback -->
-  <line class="track" x1="120" y1="312" x2="300" y2="312"/>
-  <circle class="dot" cx="120" cy="312" r="4.5"/><circle class="dot" cx="180" cy="312" r="4.5"/><circle class="dot" cx="240" cy="312" r="4.5"/><circle class="dot" cx="300" cy="312" r="4.5"/>
-  <path class="mv" stroke="var(--coral-ink)" marker-end="url(#mA)" d="M300,298 C 260,278 160,278 122,296" style="marker-end:url(#mA)"/>
-  <path d="M115,304 L125,304 L120,312 Z" fill="var(--coral-ink)"/>
-  <text x="330" y="310" class="lbl"><tspan font-weight="700" fill="var(--ink)">③ rollback</tspan> s3→s0 — the guesses aren't confirmed yet, so undo the temp moves.</text>
+  <rect class="draft" x="120" y="316" width="52" height="24" rx="5" opacity="0.5"/><text x="146" y="333" class="tok" text-anchor="middle" fill="var(--muted)" opacity="0.5">the</text>
+  <rect class="draft" x="176" y="316" width="52" height="24" rx="5" opacity="0.5"/><text x="202" y="333" class="tok" text-anchor="middle" fill="var(--muted)" opacity="0.5">cat</text>
+  <rect class="draft" x="232" y="316" width="52" height="24" rx="5" opacity="0.5"/><text x="258" y="333" class="tok" text-anchor="middle" fill="var(--muted)" opacity="0.5">sat</text>
+  <path class="mv" stroke="var(--coral-ink)" marker-end="url(#mA)" d="M284,310 C 240,296 160,296 120,308"/>
+  <path d="M113,340 L123,340 L118,332 Z" fill="var(--coral-ink)"/>
+  <text x="300" y="326" class="lbl"><tspan font-weight="700" fill="var(--ink)">③ rollback</tspan> — the guesses aren't confirmed, so jump</text>
+  <text x="300" y="339" class="lbl">back to before "the" (▼ home again).</text>
 
   <!-- Row 4: commit -->
-  <line class="track" x1="120" y1="354" x2="300" y2="354"/>
-  <circle class="dot" cx="120" cy="354" r="4.5"/><circle class="dot" cx="180" cy="354" r="4.5"/><circle class="dot" cx="240" cy="354" r="4.5"/><circle class="dot" cx="300" cy="354" r="4.5"/>
-  <path class="mv" stroke="var(--green-ink)" marker-end="url(#mGrn)" d="M120,340 L236,340"/>
-  <path d="M235,346 L245,346 L240,354 Z" fill="var(--green-ink)"/>
-  <text x="330" y="352" class="lbl"><tspan font-weight="700" fill="var(--ink)">④ commit</tspan> s0→s2 — advance by the 2 ACCEPTED only. FSM now sits exactly right.</text>
-
-  <text x="20" y="392" class="lbl">Net effect: the FSM ends where the accepted tokens put it — a rejected guess never corrupts it. (Rollback budget = num_speculative_tokens; lm-format-enforcer can't roll back → no spec decode.)</text>
+  <rect class="acc" x="120" y="360" width="52" height="24" rx="5"/><text x="146" y="377" class="tok" text-anchor="middle" fill="var(--green-ink)">the</text>
+  <rect class="acc" x="176" y="360" width="52" height="24" rx="5"/><text x="202" y="377" class="tok" text-anchor="middle" fill="var(--green-ink)">cat</text>
+  <rect class="rej" x="232" y="360" width="52" height="24" rx="5" opacity="0.55"/><text x="258" y="377" class="tok" text-anchor="middle" fill="var(--coral-ink)" opacity="0.7">sat</text>
+  <text x="258" y="356" class="tok" text-anchor="middle" fill="var(--coral-ink)">✗</text>
+  <line x1="120" y1="390" x2="228" y2="390" stroke="var(--green-ink)" stroke-width="3"/>
+  <path d="M223,352 L233,352 L228,360 Z" fill="var(--green-ink)"/>
+  <text x="300" y="372" class="lbl"><tspan font-weight="700" fill="var(--ink)">④ commit</tspan> — walk through "the" "cat" only (the 2 accepted);</text>
+  <text x="300" y="385" class="lbl">"sat" was rejected, so ▼ stops before it. FSM now exactly right.</text>
 </svg>
 <p class="figcap"><span class="en">Fig 4 — Speculative decoding + a grammar. <b>Top:</b> the draft model guesses several tokens; the target verifies them all in one pass and keeps the correct prefix. <b>Bottom:</b> the grammar's FSM is just a <i>position</i> on a state track — it ① validates without moving, ② temp-advances to read each slot's bitmask, ③ rolls back, then ④ commits only the accepted guesses, so a rejected draft can never leave it in the wrong state. Original diagram; per structured_output/__init__.py &amp; scheduler.py.</span><span class="ko">그림 4 — speculative decoding + 문법. <b>위:</b> draft 모델이 여러 토큰을 추측하고, target이 한 번에 검증해 맞는 prefix만 남긴다. <b>아래:</b> 문법 FSM은 상태 트랙 위의 <i>위치</i>일 뿐 — ① 이동 없이 검증, ② 각 슬롯 bitmask를 읽으려 임시 전진, ③ rollback, ④ 통과한 추측만 commit해서, 거부된 draft가 FSM을 잘못된 상태로 남기지 못한다. 직접 작성한 다이어그램; 출처 structured_output/__init__.py &amp; scheduler.py.</span></p>
 
