@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Routing an LLM request when the model name is in the body</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.75;font-size:16px}
+  .wrap{max-width:880px;margin:0 auto;padding:48px 22px 96px}
+  header.hero{margin-bottom:36px}
+  .kicker{font-size:13px;letter-spacing:.06em;color:var(--purple);font-weight:600;text-transform:uppercase}
+  h1{font-size:32px;line-height:1.25;margin:8px 0 12px;font-weight:700;letter-spacing:-0.01em}
+  .lede{font-size:17px;color:var(--muted);margin:0}
+  .post-meta{font-size:13px;color:var(--faint);margin:14px 0 0}
+  .toc{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 22px;margin:28px 0 8px}
+  .toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:.04em;text-transform:uppercase}
+  .toc ol{margin:0;padding-left:22px}
+  .toc li{margin:4px 0}
+  .toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  .toc a:hover{color:var(--purple)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px 30px;margin:22px 0}
+  h2{font-size:22px;margin:0 0 6px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--purple);border-radius:8px;padding:2px 10px;font-weight:700;flex:none;letter-spacing:.02em}
+  h3{font-size:17px;margin:24px 0 6px;font-weight:600;color:var(--ink)}
+  h4{font-size:15px;margin:18px 0 4px;font-weight:600}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  .callout{border-radius:12px;padding:14px 16px;margin:16px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg)} .c-blue .tag{color:var(--blue)}
+  .c-amber{background:var(--amber-bg)} .c-amber .tag{color:var(--amber)}
+  .c-red{background:var(--red-bg)} .c-red .tag{color:var(--red)}
+  .c-purple{background:var(--purple-bg)} .c-purple .tag{color:var(--purple)}
+  .cap{font-size:13px;color:var(--faint);margin-top:8px}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:12px;padding:14px 16px;overflow:auto;
+    font-size:13.5px;line-height:1.6;font-family:"SF Mono",Menlo,Consolas,monospace;margin:16px 0}
+  pre .cm{color:#7f8aa3} pre .kw{color:#c39bf0} pre .st{color:#9ed59a} pre .fn{color:#7fc4ff} pre .nu{color:#f1b07a}
+  code.inl{background:#eceef2;border-radius:5px;padding:1px 6px;font-size:14px;
+    font-family:"SF Mono",Menlo,Consolas,monospace;color:#b03a55}
+  .ascii{background:var(--code-bg);color:#cfd5e3;border-radius:12px;padding:14px 18px;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;line-height:1.55;white-space:pre;overflow-x:auto;margin:16px 0}
+  table.kv{width:100%;border-collapse:collapse;margin:16px 0;font-size:14.5px}
+  table.kv th,table.kv td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.kv th{color:var(--faint);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em;background:#fafbfd}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:18px 0}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .mini h4{margin:0 0 6px;font-size:14px}
+  ul{padding-left:22px} li{margin:4px 0}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:50px;border-top:1px solid var(--line);padding-top:22px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 18px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Infra</span><span class="ko">인프라</span>
+</a></p>
+
+<header class="hero">
+  <div class="kicker">Infra · Kubernetes</div>
+  <h1>
+    <span class="en">Routing an LLM request when the model name is in the body</span>
+    <span class="ko">모델 이름이 body 안에 있을 때, 요청은 어떻게 라우팅되나</span>
+  </h1>
+  <p class="lede">
+    <span class="en">Ordinary HTTP routing matches on paths and headers. An OpenAI-compatible API gives you neither — every request is <code class="inl">POST /v1/chat/completions</code> and the model name is buried in the JSON body. This note follows one request end to end through the Gateway API Inference Extension stack, names every Kubernetes object it passes, and explains what each one is actually for.</span>
+    <span class="ko">보통의 HTTP 라우팅은 path와 헤더로 판단한다. 그런데 OpenAI 호환 API는 둘 다 안 준다 — 모든 요청이 <code class="inl">POST /v1/chat/completions</code>이고 모델 이름은 JSON body 안에 묻혀 있다. 이 글은 요청 하나가 Gateway API Inference Extension 스택을 통과하는 전 과정을 따라가면서, 거쳐가는 쿠버네티스 오브젝트를 하나씩 이름으로 짚고 각각이 실제로 무슨 일을 하는지 설명한다.</span>
+  </p>
+  <p class="post-meta"><time datetime="2026-08-05">2026-08-05</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">The problem: the router cannot read the body</span><span class="ko">문제 — 라우터는 body를 못 읽는다</span></a></li>
+    <li><a href="#s2"><span class="en">The full path, end to end</span><span class="ko">전체 경로</span></a></li>
+    <li><a href="#s3"><span class="en">The resources, one by one</span><span class="ko">리소스 하나씩</span></a></li>
+    <li><a href="#s4"><span class="en">The reverse path: how the picker knows anything</span><span class="ko">역방향 경로 — picker는 어떻게 아는가</span></a></li>
+    <li><a href="#s5"><span class="en">Control path, data path, and where it breaks</span><span class="ko">control path와 data path, 그리고 깨지는 지점</span></a></li>
+  </ol>
+</nav>
+
+<section id="s1">
+  <h2><span class="num">1</span>
+    <span class="en">The problem: the router cannot read the body</span>
+    <span class="ko">문제 — 라우터는 body를 못 읽는다</span>
+  </h2>
+
+  <p>
+    <span class="en">Say you are serving eight different models on one cluster and you want a single endpoint in front of all of them. A client sends this:</span>
+    <span class="ko">한 클러스터에 모델 여덟 개를 서빙하면서 그 앞에 엔드포인트 하나만 두고 싶다고 하자. 클라이언트는 이렇게 보낸다.</span>
+  </p>
+
+<pre><span class="kw">POST</span> /v1/chat/completions
+<span class="fn">Content-Type</span>: application/json
+
+{
+  <span class="st">"model"</span>: <span class="st">"meta-llama/Llama-3.1-70B-Instruct"</span>,
+  <span class="st">"messages"</span>: [ ... ]
+}</pre>
+
+  <p>
+    <span class="en">Now look at what a proxy has to work with. The path is <code class="inl">/v1/chat/completions</code> — identical for all eight models. There is no <code class="inl">Host</code> difference, no query string, no custom header. The only thing that distinguishes one model from another is a field <b>inside the request body</b>.</span>
+    <span class="ko">이제 프록시가 가진 재료를 보자. path는 <code class="inl">/v1/chat/completions</code> — 여덟 모델 전부 똑같다. <code class="inl">Host</code>가 다른 것도 아니고, 쿼리스트링도, 커스텀 헤더도 없다. 모델을 구분해주는 유일한 정보가 <b>요청 body 안</b>에 있다.</span>
+  </p>
+
+  <p>
+    <span class="en">And Envoy — like essentially every L7 router — makes its routing decision from the request line and headers. It does not buffer and parse the body to decide where to send something. That would mean holding the whole request in memory before you know its destination, which is exactly what you do not want in front of a streaming inference workload.</span>
+    <span class="ko">그런데 Envoy는 — 사실상 모든 L7 라우터가 그렇듯 — 요청 라인과 헤더만 보고 라우팅을 결정한다. 목적지를 정하려고 body를 통째로 버퍼링해서 파싱하지 않는다. 그러면 목적지를 알기도 전에 요청 전체를 메모리에 들고 있어야 하는데, 스트리밍 추론 워크로드 앞단에서 가장 피하고 싶은 게 바로 그거다.</span>
+  </p>
+
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">The gap</span><span class="ko">간극</span></span>
+    <span class="en">The information you need to route is in a place the router structurally cannot look. Everything in the rest of this note is downstream of that one sentence.</span>
+    <span class="ko">라우팅에 필요한 정보가, 라우터가 구조적으로 볼 수 없는 곳에 있다. 이 글의 나머지는 전부 이 한 문장에서 파생된다.</span>
+  </div>
+
+  <p>
+    <span class="en">The <a href="https://github.com/kubernetes-sigs/gateway-api-inference-extension">Gateway API Inference Extension</a> solves it with a small component called <b>BBR</b> — Body-Based Routing. It is an <code class="inl">ext_proc</code> filter: Envoy streams the request to it over gRPC, BBR reads the <code class="inl">model</code> field, and sets a header:</span>
+    <span class="ko"><a href="https://github.com/kubernetes-sigs/gateway-api-inference-extension">Gateway API Inference Extension</a>은 <b>BBR</b>(Body-Based Routing)이라는 작은 컴포넌트로 이걸 푼다. <code class="inl">ext_proc</code> 필터다 — Envoy가 gRPC로 요청을 넘겨주면, BBR이 <code class="inl">model</code> 필드를 읽어서 헤더 하나를 심어준다.</span>
+  </p>
+
+<pre><span class="fn">X-Gateway-Model-Name</span>: meta-llama/Llama-3.1-70B-Instruct</pre>
+
+  <p>
+    <span class="en">That is the entire job. From that header onward, ordinary header-based routing works again, and the rest of the stack never has to think about JSON.</span>
+    <span class="ko">하는 일은 이게 전부다. 이 헤더가 생긴 순간부터는 평범한 헤더 라우팅이 다시 작동하고, 그 뒤로는 스택 어디서도 JSON을 신경 쓸 필요가 없다.</span>
+  </p>
+
+  <p>
+    <span class="en">One consequence worth noticing early: BBR is wired in with <code class="inl">INSERT_FIRST</code>, at the very front of the HTTP filter chain. It has to be. No routing decision of any kind can be made before the model is known, so nothing may run ahead of it.</span>
+    <span class="ko">일찍 짚어둘 게 하나 있다. BBR은 <code class="inl">INSERT_FIRST</code>로, HTTP 필터 체인 맨 앞에 꽂힌다. 그럴 수밖에 없다. 모델을 알기 전에는 어떤 라우팅 판단도 불가능하므로, 그 앞에 뭔가가 먼저 돌 수 없다.</span>
+  </p>
+</section>
+
+<section id="s2">
+  <h2><span class="num">2</span>
+    <span class="en">The full path, end to end</span>
+    <span class="ko">전체 경로</span>
+  </h2>
+
+  <p>
+    <span class="en">Here is the whole thing. Read it top to bottom; the one arrow that goes the other way is the interesting part, and we come back to it in section 4.</span>
+    <span class="ko">전체 그림이다. 위에서 아래로 읽으면 되고, 유일하게 거꾸로 올라가는 화살표가 재미있는 부분이다 — 4절에서 다시 다룬다.</span>
+  </p>
+
+<div class="ascii">client
+  │  POST /v1/chat/completions
+  │  body: {"model":"meta-llama/Llama-3.1-70B-Instruct", ...}
+  ▼
+Service/inference-gateway-nodeport            :32080 → :80
+  │  selector: gateway.networking.k8s.io/gateway-name=gw
+  ▼
+Gateway/gw  (istio)  = the Envoy pod          listener http:80
+  │
+  │  EnvoyFilter/body-based-router                    Deployment/body-based-router
+  │  INSERT_FIRST — first in the filter chain   ───▶   1 pod  :9004     (BBR)
+  │  request body streamed out, response not read ◀──   header injected
+  │  failure_mode_allow: false
+  │
+  │  X-Gateway-Model-Name: meta-llama/Llama-3.1-70B-Instruct
+  ▼
+HTTPRoute/epp-llama-70b               one of N, selected by that header
+  │  backendRef
+  ▼
+InferencePool/epp-llama-70b
+  │  selector: pool=epp-llama-70b       → the candidate pods
+  │  endpointPickerRef ────────▶ Service/epp-llama-70b :9002
+  │  failureMode: FailClose      Deployment/epp-llama-70b (2 replicas)  = EPP
+  │  ◀──────────────────────── "send it to this pod IP"
+  ▼
+vLLM pod :8000                        one of the Llama replicas
+  │
+  └── KV events ──zmq──▶ Service/epp-llama-70b :5557 ──▶ EPP
+        --kv-events-config      how EPP learns what each pod has cached</div>
+
+  <p class="cap">
+    <span class="en">Object names follow the convention <code class="inl">&lt;prefix&gt;-&lt;model&gt;</code>, one set per served model.</span>
+    <span class="ko">오브젝트 이름은 <code class="inl">&lt;prefix&gt;-&lt;model&gt;</code> 규칙을 따르며, 서빙하는 모델마다 한 세트씩 존재한다.</span>
+  </p>
+
+  <p>
+    <span class="en">Two decisions get made on the way down, and they are made by two different components for two different reasons:</span>
+    <span class="ko">내려가는 길에 결정이 두 번 내려지는데, 서로 다른 이유로 서로 다른 컴포넌트가 내린다.</span>
+  </p>
+
+  <div class="grid2">
+    <div class="mini">
+      <h4><span class="en">Which model?</span><span class="ko">어느 모델인가?</span></h4>
+      <p class="muted" style="font-size:14px;margin:0">
+        <span class="en">Answered by BBR, once, globally, for every model. Cheap: parse JSON, set a header.</span>
+        <span class="ko">BBR이 답한다. 전역에 하나뿐이고 모든 모델이 공유한다. 값싼 작업이다 — JSON 파싱하고 헤더 심기.</span>
+      </p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Which replica?</span><span class="ko">어느 replica인가?</span></h4>
+      <p class="muted" style="font-size:14px;margin:0">
+        <span class="en">Answered by the EPP, per model, from live engine state. Expensive, and the whole point of the stack.</span>
+        <span class="ko">EPP가 답한다. 모델마다 따로 있고, 살아있는 엔진 상태를 보고 판단한다. 비싼 작업이고, 이 스택이 존재하는 이유다.</span>
+      </p>
+    </div>
+  </div>
+
+  <p>
+    <span class="en">Note the asymmetry in cardinality — one BBR for the whole cluster, one EPP <i>per model</i>. That is not an accident, and it has a consequence we will get to in section 5.</span>
+    <span class="ko">개수의 비대칭을 눈여겨보자 — BBR은 클러스터 전체에 하나, EPP는 <i>모델마다</i> 하나. 우연이 아니고, 5절에서 다룰 결과를 낳는다.</span>
+  </p>
+</section>
+
+<section id="s3">
+  <h2><span class="num">3</span>
+    <span class="en">The resources, one by one</span>
+    <span class="ko">리소스 하나씩</span>
+  </h2>
+
+  <table class="kv">
+    <tr>
+      <th><span class="en">Kind</span><span class="ko">종류</span></th>
+      <th><span class="en">Count</span><span class="ko">개수</span></th>
+      <th><span class="en">What it does</span><span class="ko">하는 일</span></th>
+    </tr>
+    <tr>
+      <td><code class="inl">Service</code> (NodePort)</td><td>1</td>
+      <td><span class="en">The address clients actually use. Selects the gateway pod.</span>
+          <span class="ko">클라이언트가 실제로 쓰는 주소. 게이트웨이 pod를 가리킨다.</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">Gateway</code></td><td>1</td>
+      <td><span class="en">The Envoy instance. A single <code class="inl">http:80</code> listener with no hostname — everything arrives through one door.</span>
+          <span class="ko">Envoy 인스턴스. hostname 없는 <code class="inl">http:80</code> listener 하나뿐 — 전부 같은 문으로 들어온다.</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">EnvoyFilter</code></td><td>1</td>
+      <td><span class="en">Wires BBR into the filter chain as an <code class="inl">ext_proc</code> call. This is config, not a process.</span>
+          <span class="ko">BBR을 <code class="inl">ext_proc</code> 호출로 필터 체인에 꽂는 설정. 프로세스가 아니라 설정이다.</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">Deployment</code> (BBR)</td><td><b>1 pod</b></td>
+      <td><span class="en">BBR itself — the process the filter calls out to.</span>
+          <span class="ko">BBR 본체 — 위 필터가 호출하는 프로세스.</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">HTTPRoute</code></td><td>N</td>
+      <td><span class="en">A routing rule: <i>if the model header equals this, hand off to that pool.</i> One per model.</span>
+          <span class="ko">라우팅 규칙 한 장: <i>모델 헤더가 이 값이면 저 풀로 넘겨라.</i> 모델당 하나.</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">InferencePool</code></td><td>N</td>
+      <td><span class="en">Defines the candidate pod set (a label selector + a port) and names the endpoint picker to consult.</span>
+          <span class="ko">후보 pod 집합(label selector + 포트)을 정의하고, 물어볼 endpoint picker를 지정한다.</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">Deployment</code>+<code class="inl">Service</code> (EPP)</td><td>N × 2 pods</td>
+      <td><span class="en"><b>The endpoint picker.</b> Scores the candidates and returns one pod IP.</span>
+          <span class="ko"><b>endpoint picker.</b> 후보들에 점수를 매겨 pod IP 하나를 돌려준다.</span></td>
+    </tr>
+  </table>
+
+  <h3>
+    <span class="en">The name collision — read this before debugging anything</span>
+    <span class="ko">이름 충돌 — 디버깅 전에 반드시 알아둘 것</span>
+  </h3>
+
+  <p>
+    <span class="en">Everything for one model is named identically. Query that one name and four different kinds come back:</span>
+    <span class="ko">한 모델에 딸린 것들이 전부 같은 이름을 쓴다. 그 이름 하나로 조회하면 네 가지 종류가 나온다.</span>
+  </p>
+
+<div class="ascii">httproute/epp-llama-70b                 routing rule       ← NOT the picker
+inferencepool/epp-llama-70b             candidate pod set  ← NOT the picker
+service/epp-llama-70b       :9002       ┐
+deployment/epp-llama-70b    2/2         ├ this is the picker
+pod/epp-llama-70b-&lt;hash&gt;-&lt;id&gt;           ┘</div>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">Practical rule</span><span class="ko">실전 규칙</span></span>
+    <span class="en">"the <code class="inl">epp-llama-70b</code>" is ambiguous on its own and will send someone editing the wrong object. Always say the kind — <i>the <code class="inl">HTTPRoute</code></i>, <i>the <code class="inl">InferencePool</code></i>. I have watched this exact ambiguity cost real minutes in a change request review.</span>
+    <span class="ko">"<code class="inl">epp-llama-70b</code>"만으로는 어느 것인지 알 수 없고, 엉뚱한 오브젝트를 고치게 만든다. 반드시 종류를 같이 말하자 — <i><code class="inl">HTTPRoute</code></i>, <i><code class="inl">InferencePool</code></i>처럼. 변경 요청 리뷰에서 이 모호함 때문에 실제로 시간을 날리는 걸 봤다.</span>
+  </div>
+
+  <h3>
+    <span class="en">Why the picker is addressed as a Service, not a pod</span>
+    <span class="ko">picker를 pod가 아니라 Service로 가리키는 이유</span>
+  </h3>
+
+  <p>
+    <span class="en">If the split between <code class="inl">Deployment</code> and <code class="inl">Service</code> has never quite clicked, this is a good place for it to. <b>The Deployment is the thing; the Service is its stable address.</b></span>
+    <span class="ko"><code class="inl">Deployment</code>와 <code class="inl">Service</code>의 구분이 아직 헷갈린다면 여기가 이해하기 좋은 지점이다. <b>Deployment는 실물이고, Service는 그 앞에 붙은 고정 주소다.</b></span>
+  </p>
+
+<div class="ascii">Deployment/epp-llama-70b   2/2
+  ├─ pod epp-llama-70b-6bc8879976-2vr6s     IP: changes on every restart
+  └─ pod epp-llama-70b-6bc8879976-btw6z     IP: changes on every restart
+
+Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
+  └─ load-balances to the two pods above</div>
+
+  <p>
+    <span class="en">The Deployment's job is "keep two of these alive". When one dies it makes a new one — with a <b>different IP</b>. On the cluster I read this from, those two picker pods had already restarted three and two times respectively. Had anything hardcoded a pod IP, routing would have broken silently each time.</span>
+    <span class="ko">Deployment가 하는 일은 "이걸 두 개 살려둬라"다. 하나가 죽으면 새로 만드는데, 그 새 pod는 <b>IP가 다르다</b>. 내가 읽어온 클러스터에서 이 picker pod 두 개는 이미 각각 세 번, 두 번 재시작한 상태였다. 어딘가 pod IP를 박아뒀다면 그때마다 라우팅이 조용히 깨졌을 것이다.</span>
+  </p>
+
+  <p>
+    <span class="en">That is precisely why <code class="inl">InferencePool.endpointPickerRef</code> points at a <code class="inl">Service</code>. Nothing in the configuration ever names a pod.</span>
+    <span class="ko"><code class="inl">InferencePool.endpointPickerRef</code>가 <code class="inl">Service</code>를 가리키는 이유가 바로 이거다. 설정 어디에도 pod를 직접 지목하는 곳이 없다.</span>
+  </p>
+
+  <p>
+    <span class="en">And that single Service carries three ports, all backed by the same two pods:</span>
+    <span class="ko">그리고 그 Service 하나가 포트 세 개를 갖는데, 전부 같은 pod 두 개로 연결된다.</span>
+  </p>
+
+  <table class="kv">
+    <tr><th>Port</th><th><span class="en">Direction</span><span class="ko">방향</span></th><th><span class="en">Used by</span><span class="ko">사용처</span></th></tr>
+    <tr><td><code class="inl">9002</code></td><td>Envoy → EPP</td>
+      <td><code class="inl">endpointPickerRef</code> — <span class="en">"which pod should serve this?"</span><span class="ko">"이건 어느 pod가 처리하지?"</span></td></tr>
+    <tr><td><code class="inl">5557</code></td><td>vLLM → EPP</td>
+      <td><code class="inl">--kv-events-config</code> — <span class="en">prefix cache state</span><span class="ko">prefix cache 상태</span></td></tr>
+    <tr><td><code class="inl">9090</code></td><td>—</td>
+      <td><span class="en">metrics, most likely — I did not verify this one</span><span class="ko">메트릭으로 보이나, 이건 확인하지 않았다</span></td></tr>
+  </table>
+
+  <p>
+    <span class="en">The first two are the two arrows into the picker in the section&nbsp;2 diagram — same Service, same pods, opposite directions.</span>
+    <span class="ko">앞의 둘이 2절 그림에서 picker로 들어가던 화살표 두 개다 — 같은 Service, 같은 pod, 방향만 반대.</span>
+  </p>
+</section>
+
+<section id="s4">
+  <h2><span class="num">4</span>
+    <span class="en">The reverse path: how the picker knows anything</span>
+    <span class="ko">역방향 경로 — picker는 어떻게 아는가</span>
+  </h2>
+
+  <p>
+    <span class="en">Everything so far describes a request travelling down. But look at what the picker is being asked to do: given two identical replicas of the same model, choose the better one. On what basis?</span>
+    <span class="ko">여기까지는 요청이 아래로 내려가는 얘기였다. 그런데 picker가 요구받는 일을 보자 — 똑같은 모델의 replica 두 개 중 더 나은 쪽을 고르라는 것이다. 무엇을 근거로?</span>
+  </p>
+
+  <p>
+    <span class="en">Queue depth and KV-cache utilization it can scrape from engine metrics. But the decision that actually matters for latency is <b>prefix cache locality</b>: if replica A already holds the KV blocks for this conversation's prefix and replica B does not, sending it to A can skip most of the prefill. That is not a metric you can average — it is a question about specific blocks on a specific pod.</span>
+    <span class="ko">큐 길이나 KV 캐시 사용률은 엔진 메트릭에서 긁어올 수 있다. 하지만 지연에 실제로 영향을 주는 판단은 <b>prefix cache locality</b>다 — 이 대화의 prefix에 해당하는 KV 블록을 replica A가 이미 들고 있고 B는 없다면, A로 보내면 prefill 대부분을 건너뛴다. 이건 평균 낼 수 있는 메트릭이 아니다. 특정 pod에 특정 블록이 있느냐는 질문이다.</span>
+  </p>
+
+  <p>
+    <span class="en">So vLLM publishes it. Each engine is launched with a flag pointing back at the picker:</span>
+    <span class="ko">그래서 vLLM이 그걸 발행한다. 각 엔진은 picker를 가리키는 플래그를 달고 뜬다.</span>
+  </p>
+
+<pre>--kv-events-config '{
+  <span class="st">"enable_kv_cache_events"</span>: <span class="kw">true</span>,
+  <span class="st">"publisher"</span>: <span class="st">"zmq"</span>,
+  <span class="st">"endpoint"</span>: <span class="st">"tcp://epp-llama-70b:5557"</span>,
+  <span class="st">"topic"</span>: <span class="st">"kv@&lt;POD_IP&gt;:8000@meta-llama/Llama-3.1-70B-Instruct"</span>
+}'</pre>
+
+  <p>
+    <span class="en">As blocks are cached and evicted, the engine streams those events over ZeroMQ to <code class="inl">:5557</code> on the picker's Service. The picker keeps a running index of which pod holds which prefix, and scores against it.</span>
+    <span class="ko">블록이 캐시되고 축출될 때마다 엔진이 그 이벤트를 ZeroMQ로 picker Service의 <code class="inl">:5557</code>에 흘려보낸다. picker는 어느 pod가 어느 prefix를 들고 있는지 색인을 유지하면서 그걸로 점수를 매긴다.</span>
+  </p>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">The shape of it</span><span class="ko">구조의 모양</span></span>
+    <span class="en">Requests flow down; the information needed to route them flows up. The control loop is closed by the engines themselves reporting their own cache state — which means the routing quality of the whole stack depends on a flag on each vLLM process, not on anything in the gateway.</span>
+    <span class="ko">요청은 아래로 흐르고, 그 요청을 라우팅하는 데 필요한 정보는 위로 흐른다. 제어 루프를 닫는 건 엔진이 스스로 자기 캐시 상태를 보고하는 행위다 — 즉 이 스택 전체의 라우팅 품질이 게이트웨이가 아니라 <b>각 vLLM 프로세스의 플래그 하나</b>에 달려 있다.</span>
+  </div>
+
+  <p>
+    <span class="en">That last point has a sharp edge, and it is the kind of thing you only notice by reading the actual launch arguments rather than the architecture diagram. On the cluster I looked at, <b>one of the eight models was running without <code class="inl">--kv-events-config</code> at all</b>. Nothing was broken; no alert fired. It was simply being routed with no cache-locality signal — the expensive picker in front of it degraded to something much closer to round-robin, silently, for as long as anyone cared to not look.</span>
+    <span class="ko">마지막 문장에 날카로운 구석이 있는데, 아키텍처 다이어그램이 아니라 실제 실행 인자를 읽어야만 보이는 종류의 것이다. 내가 본 클러스터에서는 <b>여덟 모델 중 하나가 <code class="inl">--kv-events-config</code> 없이 돌고 있었다</b>. 아무것도 고장 나지 않았고 알럿도 없었다. 그저 캐시 지역성 신호 없이 라우팅되고 있었을 뿐이다 — 앞에 붙은 비싼 picker가 조용히 라운드로빈에 가깝게 퇴화한 채로, 아무도 들여다보지 않는 동안 계속.</span>
+  </p>
+
+  <div class="callout c-red">
+    <span class="tag"><span class="en">Failure mode with no symptom</span><span class="ko">증상 없는 장애</span></span>
+    <span class="en">A missing publisher flag does not produce an error anywhere. The engine serves correctly, the picker picks, the request succeeds. You lose only the thing you built the stack for. Worth an explicit check that every engine actually publishes, rather than trusting that it was configured once.</span>
+    <span class="ko">publisher 플래그가 빠져도 어디서도 에러가 나지 않는다. 엔진은 정상 응답하고, picker는 고르고, 요청은 성공한다. 잃는 건 이 스택을 만든 이유 딱 하나뿐이다. 한 번 설정했으니 되어 있겠지 믿는 대신, 모든 엔진이 실제로 발행하고 있는지 명시적으로 확인할 가치가 있다.</span>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="num">5</span>
+    <span class="en">Control path, data path, and where it breaks</span>
+    <span class="ko">control path와 data path, 그리고 깨지는 지점</span>
+  </h2>
+
+  <h3><span class="en">"The tokens don't pass through" is half true</span><span class="ko">"토큰은 통과하지 않는다"는 절반만 맞다</span></h3>
+
+  <p>
+    <span class="en">This stack is normally described as control-plane routing: the components decide where a request goes, and the tokens flow straight from Envoy to the engine. That framing is useful but it papers over a detail visible in the filter's own configuration:</span>
+    <span class="ko">이 스택은 보통 control-plane 라우팅이라고 설명된다 — 컴포넌트들은 요청이 어디로 갈지만 정하고, 토큰은 Envoy에서 엔진으로 직행한다는 것이다. 유용한 설명이지만, 필터 설정에 드러나는 디테일 하나를 덮는다.</span>
+  </p>
+
+  <table class="kv">
+    <tr><th></th>
+      <th><span class="en">Request body (the prompt)</span><span class="ko">요청 body (프롬프트)</span></th>
+      <th><span class="en">Response (generated tokens)</span><span class="ko">응답 (생성 토큰)</span></th></tr>
+    <tr><td><b>BBR</b></td>
+      <td><span class="en"><b>passes through</b> — <code class="inl">request_body_mode: FULL_DUPLEX_STREAMED</code></span>
+          <span class="ko"><b>통과한다</b> — <code class="inl">request_body_mode: FULL_DUPLEX_STREAMED</code></span></td>
+      <td><span class="en">no — <code class="inl">response_body_mode: NONE</code>, headers <code class="inl">SKIP</code></span>
+          <span class="ko">아니다 — <code class="inl">response_body_mode: NONE</code>, 헤더도 <code class="inl">SKIP</code></span></td></tr>
+    <tr><td><b>EPP</b></td>
+      <td><span class="en">endpoint decision only</span><span class="ko">엔드포인트 결정만</span></td>
+      <td><span class="en">no</span><span class="ko">아니다</span></td></tr>
+  </table>
+
+  <p>
+    <span class="en">So the prompt genuinely does traverse BBR. What never touches either component is the <b>response</b> stream — and that is where the token volume and the TTFT/TPOT sensitivity live. That is the honest version of the claim: this is not a data-path gateway <i>on the side that matters for latency</i>.</span>
+    <span class="ko">즉 프롬프트는 실제로 BBR을 지나간다. 두 컴포넌트 어느 쪽도 건드리지 않는 건 <b>응답</b> 스트림이고, 토큰 부피와 TTFT/TPOT 민감도가 사는 곳이 바로 거기다. 정직하게 말하면 이렇다 — <i>지연에 중요한 쪽에서는</i> data-path 게이트웨이가 아니다.</span>
+  </p>
+
+  <p>
+    <span class="en">The distinction matters the moment you consider replacing this with a true data-path gateway, where every token passes through. Such a gateway needs a sidecar on the serving pod, and attaching a sidecar means <b>restarting the engine</b>. A control-plane router can be swapped with a config change; a data-path one cannot. That single fact dictates the entire shape of a migration — you can only move a model without downtime if it has a spare replica to carry traffic while the other restarts.</span>
+    <span class="ko">이 구분은 이걸 진짜 data-path 게이트웨이로 바꾸려는 순간 의미를 갖는다. 모든 토큰이 통과하는 게이트웨이는 서빙 pod에 사이드카가 필요하고, 사이드카를 붙이려면 <b>엔진을 재시작</b>해야 한다. control-plane 라우터는 설정 변경으로 교체되지만 data-path는 그럴 수 없다. 이 사실 하나가 마이그레이션 전체의 모양을 결정한다 — 여유 replica가 있어서 한쪽이 재시작하는 동안 트래픽을 받아줄 수 있는 모델만 무중단 전환이 가능하다.</span>
+  </p>
+
+  <h3><span class="en">The blast radius is not symmetric</span><span class="ko">장애 반경은 대칭이 아니다</span></h3>
+
+  <p>
+    <span class="en">Both components fail closed — BBR with <code class="inl">failure_mode_allow: false</code>, the picker with <code class="inl">failureMode: FailClose</code>. Identical policy, very different consequences, because of the cardinality asymmetry from section 2.</span>
+    <span class="ko">두 컴포넌트 다 fail closed다 — BBR은 <code class="inl">failure_mode_allow: false</code>, picker는 <code class="inl">failureMode: FailClose</code>. 정책은 같은데 결과는 전혀 다르다. 2절에서 본 개수 비대칭 때문이다.</span>
+  </p>
+
+  <div class="grid2">
+    <div class="mini">
+      <h4 style="color:var(--red)">BBR — <span class="en">1 pod, global</span><span class="ko">pod 1개, 전역</span></h4>
+      <p class="muted" style="font-size:14px;margin:0">
+        <span class="en">If it dies, no request for <b>any</b> model can be routed — none of them get their model header. Every model goes down at once.</span>
+        <span class="ko">죽으면 <b>어떤</b> 모델의 요청도 라우팅될 수 없다 — 모델 헤더가 안 붙으니까. 전 모델이 동시에 죽는다.</span>
+      </p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">EPP — 2 pods per model</span><span class="ko">EPP — 모델당 pod 2개</span></h4>
+      <p class="muted" style="font-size:14px;margin:0">
+        <span class="en">Losing one is survivable. Losing both takes out that one model and nothing else.</span>
+        <span class="ko">하나 잃는 건 버틴다. 둘 다 잃어도 그 모델 하나만 죽고 나머지는 멀쩡하다.</span>
+      </p>
+    </div>
+  </div>
+
+  <p>
+    <span class="en">The component that is architecturally trivial — parse JSON, set a header — is the single point of failure for the entire fleet, while the component doing all the interesting work is comfortably redundant. It is worth noticing that this is an easy thing to get backwards when you reason from an architecture diagram, where BBR looks like a footnote and the picker looks like the system.</span>
+    <span class="ko">구조적으로 사소한 컴포넌트 — JSON 파싱하고 헤더 심기 — 가 전체 fleet의 단일 장애점이고, 정작 흥미로운 일을 다 하는 컴포넌트는 넉넉하게 이중화돼 있다. 아키텍처 다이어그램만 보고 판단하면 거꾸로 알기 쉬운 지점이다. 그림에서 BBR은 각주처럼 보이고 picker가 시스템처럼 보이기 때문이다.</span>
+  </p>
+
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">What I'd take from this</span><span class="ko">여기서 가져갈 것</span></span>
+    <span class="en">Two things were only visible by reading the live objects rather than the design: an engine silently publishing no cache events, and a one-replica component gating every model in the cluster. Neither shows up as an error. Both are one <code class="inl">kubectl get -o yaml</code> away.</span>
+    <span class="ko">설계 문서가 아니라 실제 오브젝트를 읽어야만 보인 게 두 가지였다 — 캐시 이벤트를 조용히 발행하지 않던 엔진 하나, 그리고 클러스터의 모든 모델을 좌우하는 replica 1짜리 컴포넌트. 둘 다 에러로는 안 나타난다. 그리고 둘 다 <code class="inl">kubectl get -o yaml</code> 한 번이면 보인다.</span>
+  </div>
+</section>
+
+
+<footer>
+  <span class="en">Written 2026-08-05 · read off a running cluster, then generalized to the upstream project's terms.</span>
+  <span class="ko">2026-08-05 작성 · 실제로 돌고 있는 클러스터에서 읽은 뒤 upstream 프로젝트 용어로 일반화했다.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
