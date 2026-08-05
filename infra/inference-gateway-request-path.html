@@ -81,10 +81,12 @@
   <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
   <ol>
     <li><a href="#s1"><span class="en">The problem: the router cannot read the body</span><span class="ko">문제 — 라우터는 body를 못 읽는다</span></a></li>
-    <li><a href="#s2"><span class="en">The full path, end to end</span><span class="ko">전체 경로</span></a></li>
-    <li><a href="#s3"><span class="en">The resources, one by one</span><span class="ko">리소스 하나씩</span></a></li>
-    <li><a href="#s4"><span class="en">The reverse path: how the picker knows anything</span><span class="ko">역방향 경로 — picker는 어떻게 아는가</span></a></li>
-    <li><a href="#s5"><span class="en">Control path, data path, and where it breaks</span><span class="ko">control path와 data path, 그리고 깨지는 지점</span></a></li>
+    <li><a href="#s2"><span class="en">Three Kubernetes words first: Service, Operator, Gateway</span><span class="ko">먼저 쿠버네티스 단어 셋 — Service, Operator, Gateway</span></a></li>
+    <li><a href="#s3"><span class="en">The full path, end to end</span><span class="ko">전체 경로</span></a></li>
+    <li><a href="#s4"><span class="en">The resources, one by one</span><span class="ko">리소스 하나씩</span></a></li>
+    <li><a href="#s5"><span class="en">The reverse path: how the picker knows anything</span><span class="ko">역방향 경로 — picker는 어떻게 아는가</span></a></li>
+    <li><a href="#s6"><span class="en">Control path, data path, and where it breaks</span><span class="ko">control path와 data path, 그리고 깨지는 지점</span></a></li>
+    <li><a href="#s7"><span class="en">The YAML, and how to read it off a cluster</span><span class="ko">YAML, 그리고 클러스터에서 직접 읽는 법</span></a></li>
   </ol>
 </nav>
 
@@ -143,49 +145,152 @@
 
 <section id="s2">
   <h2><span class="num">2</span>
+    <span class="en">Three Kubernetes words first: Service, Operator, Gateway</span>
+    <span class="ko">먼저 쿠버네티스 단어 셋 — Service, Operator, Gateway</span>
+  </h2>
+
+  <p>
+    <span class="en">These three get thrown around loosely and it makes everything after this harder than it needs to be. All three have a concrete instance in the path we are about to follow.</span>
+    <span class="ko">이 셋은 대충 섞어 쓰이는 경우가 많은데, 그러면 뒤의 내용이 필요 이상으로 어려워진다. 셋 다 곧 따라갈 경로 안에 실물이 하나씩 있다.</span>
+  </p>
+
+  <h3><span class="en">Service — a stable address in front of a moving set of pods</span><span class="ko">Service — 계속 바뀌는 pod 앞에 붙은 고정 주소</span></h3>
+
+  <p>
+    <span class="en">Pods are disposable. They get replaced, and every replacement gets a new IP. A <b>Service</b> is a fixed virtual IP and DNS name that load-balances to whichever pods currently match a label selector. In a well-formed config, nothing ever names a pod IP.</span>
+    <span class="ko">pod는 언제든 버려지는 것이다. 교체되고, 교체될 때마다 IP가 새로 붙는다. <b>Service</b>는 label selector에 현재 매칭되는 pod들에게 부하를 분산해주는, 고정된 가상 IP이자 DNS 이름이다. 제대로 된 설정이라면 어디에서도 pod IP를 직접 적지 않는다.</span>
+  </p>
+
+  <p>
+    <span class="en">The types are worth knowing precisely, because one of them shows up later as a red herring:</span>
+    <span class="ko">타입은 정확히 알아두는 게 좋다. 그중 하나가 뒤에서 헷갈리는 요소로 등장하기 때문이다.</span>
+  </p>
+
+  <table class="kv">
+    <tr><th><span class="en">Type</span><span class="ko">타입</span></th>
+        <th><span class="en">What it adds</span><span class="ko">추가되는 것</span></th>
+        <th><span class="en">Reachable from</span><span class="ko">접근 가능 범위</span></th></tr>
+    <tr><td><code class="inl">ClusterIP</code> <span class="muted">(default)</span></td>
+        <td><span class="en">a virtual IP + DNS name inside the cluster</span><span class="ko">클러스터 내부 가상 IP와 DNS 이름</span></td>
+        <td><span class="en">inside the cluster only</span><span class="ko">클러스터 내부에서만</span></td></tr>
+    <tr><td><code class="inl">NodePort</code></td>
+        <td><span class="en"><i>plus</i> a static port (30000–32767 by default) opened on <b>every node's IP</b></span><span class="ko"><i>추가로</i> <b>모든 노드의 IP</b>에 고정 포트(기본 30000–32767) 하나를 연다</span></td>
+        <td><span class="en">outside, if you can reach a node IP</span><span class="ko">노드 IP에 닿을 수 있다면 외부에서도</span></td></tr>
+    <tr><td><code class="inl">LoadBalancer</code></td>
+        <td><span class="en"><i>plus</i> an external load balancer provisioned by the cloud</span><span class="ko"><i>추가로</i> 클라우드가 프로비저닝하는 외부 로드밸런서</span></td>
+        <td><span class="en">outside, via the LB's IP</span><span class="ko">LB의 IP를 통해 외부에서</span></td></tr>
+    <tr><td><span class="en">headless</span><span class="ko">headless</span> <span class="muted">(<code class="inl">clusterIP: None</code>)</span></td>
+        <td><span class="en">no virtual IP — DNS returns the pod IPs directly</span><span class="ko">가상 IP 없음 — DNS가 pod IP를 그대로 돌려준다</span></td>
+        <td><span class="en">inside; the caller balances itself</span><span class="ko">내부. 부하 분산은 호출자가 직접</span></td></tr>
+  </table>
+
+  <p>
+    <span class="en"><b>NodePort exists as the low-tech way in from outside</b> when there is no cloud load balancer: pick a port, and every node in the cluster starts answering on it and forwards to the Service. The costs are an ugly high port number, no TLS termination, and the caller needing to know a node IP. Keep this one in mind — a cluster can have a NodePort Service sitting next to the real entry point without it being the path anything actually uses.</span>
+    <span class="ko"><b>NodePort는 클라우드 로드밸런서가 없을 때 외부에서 들어오는 저기술 통로다.</b> 포트 하나를 정하면 클러스터의 모든 노드가 그 포트로 응답하기 시작하고 Service로 넘긴다. 대가는 못생긴 고번호 포트, TLS 종료 없음, 그리고 호출자가 노드 IP를 알아야 한다는 것. 이건 기억해두자 — 실제 진입점 옆에 NodePort Service가 하나 놓여 있어도, 그게 실제로 쓰이는 경로가 아닐 수 있다.</span>
+  </p>
+
+  <h3><span class="en">Operator — a controller that keeps reality matching a custom resource</span><span class="ko">Operator — 선언한 것과 현실을 계속 맞춰주는 컨트롤러</span></h3>
+
+  <p>
+    <span class="en">Kubernetes natively understands only its built-in kinds. An <b>operator</b> extends it: you install a CRD (a new kind) plus a controller that watches those objects and continuously creates, updates and deletes real resources so the world matches what you declared. It is a loop, not a one-shot translation — delete something it manages and it puts the thing back.</span>
+    <span class="ko">쿠버네티스는 기본 제공 kind만 이해한다. <b>operator</b>는 그걸 확장한다 — CRD(새 kind)를 설치하고, 그 오브젝트를 감시하면서 선언한 대로 현실이 되도록 실제 리소스를 계속 만들고 고치고 지우는 컨트롤러를 함께 띄운다. 일회성 변환이 아니라 <b>루프</b>다. 그가 관리하는 걸 지우면 다시 만들어 놓는다.</span>
+  </p>
+
+  <p>
+    <span class="en">Two operators appear in this request path. One turns a <code class="inl">Gateway</code> into an actual proxy; the other turns a custom "inference service" resource into a Deployment of engine pods. You can trace the second one entirely through ownership links:</span>
+    <span class="ko">이 경로에는 operator가 둘 등장한다. 하나는 <code class="inl">Gateway</code>를 실제 프록시로 만들고, 다른 하나는 커스텀 "inference service" 리소스를 엔진 pod들의 Deployment로 만든다. 두 번째는 ownership 링크만 따라가도 전부 추적된다.</span>
+  </p>
+
+<div class="ascii">InferenceService/llama-70b   (spec.replicas: 2)      ← what you declare
+  └─ reconciled by the operator
+      └─ Deployment/llama-70b   2/2
+          └─ ReplicaSet/llama-70b-75fb767c7d
+              └─ pod llama-70b-75fb767c7d-dfg2x
+                 labels:  pool=epp-llama-70b            ← what InferencePool selects on</div>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">Where the two worlds join</span><span class="ko">두 세계가 만나는 지점</span></span>
+    <span class="en">That last label is the seam. The operator stamps it onto every pod it creates; the routing layer's <code class="inl">InferencePool</code> selects on it. Neither side knows about the other — they agree on a label, and that is the whole contract.</span>
+    <span class="ko">마지막 줄의 label이 이음매다. operator가 자기가 만드는 모든 pod에 그걸 찍고, 라우팅 쪽의 <code class="inl">InferencePool</code>이 그걸로 고른다. 양쪽은 서로를 모른다 — label 하나에 합의했을 뿐이고, 계약은 그게 전부다.</span>
+  </div>
+
+  <h3><span class="en">Gateway — a declaration of a proxy, not the proxy</span><span class="ko">Gateway — 프록시 그 자체가 아니라 프록시를 선언한 것</span></h3>
+
+  <p>
+    <span class="en"><code class="inl">Gateway</code> is a <a href="https://gateway-api.sigs.k8s.io/">Gateway API</a> resource. It says <i>"I want a proxy listening on these ports"</i> and names a <code class="inl">gatewayClassName</code> to say who should provide it. It is <b>intent</b>. Something has to materialize it — and that something is an operator, which is why the previous subsection comes first.</span>
+    <span class="ko"><code class="inl">Gateway</code>는 <a href="https://gateway-api.sigs.k8s.io/">Gateway API</a> 리소스다. <i>"이 포트들로 듣는 프록시가 필요하다"</i>고 말하고, <code class="inl">gatewayClassName</code>으로 누가 제공할지를 지정한다. 이건 <b>의도</b>다. 누군가 실체로 만들어줘야 하고, 그 누군가가 operator다 — 앞 절을 먼저 둔 이유가 이거다.</span>
+  </p>
+
+  <p>
+    <span class="en">With <code class="inl">gatewayClassName: istio</code>, istiod's gateway controller materializes it as <b>a Deployment of Envoy pods plus a ClusterIP Service in front of them</b> — both owned by the Gateway object:</span>
+    <span class="ko"><code class="inl">gatewayClassName: istio</code>라면 istiod의 gateway controller가 이걸 <b>Envoy pod들의 Deployment와 그 앞의 ClusterIP Service</b>로 실체화한다. 둘 다 Gateway 오브젝트가 소유한다.</span>
+  </p>
+
+<div class="ascii">Gateway/gw                                    ← the declaration
+  ├─ Deployment/gw-istio  →  3 Envoy pods     ← created by the controller
+  └─ Service/gw-istio     →  ClusterIP :80    ← created by the controller
+        metadata.ownerReferences: Gateway/gw
+        labels: gateway.istio.io/managed=istio.io-gateway-controller</div>
+
+  <p>
+    <span class="en">And the Gateway reports back where it ended up, in <code class="inl">status.addresses</code>. That field — not any Service you happen to find nearby — is the authoritative answer to "what address is this gateway on?".</span>
+    <span class="ko">그리고 Gateway는 자기가 어디에 자리 잡았는지를 <code class="inl">status.addresses</code>에 보고한다. "이 게이트웨이의 주소가 뭐냐"의 정답은 근처에서 우연히 발견한 Service가 아니라 <b>이 필드</b>다.</span>
+  </p>
+
+  <p>
+    <span class="en"><code class="inl">HTTPRoute</code>s then attach to a Gateway through <code class="inl">parentRefs</code>. That is how a routing rule finds its proxy, and it is why routes and gateways can be owned by different teams in different namespaces.</span>
+    <span class="ko"><code class="inl">HTTPRoute</code>는 <code class="inl">parentRefs</code>로 Gateway에 붙는다. 라우팅 규칙이 자기 프록시를 찾는 방법이 이거고, 덕분에 route와 gateway를 서로 다른 네임스페이스의 다른 팀이 소유할 수 있다.</span>
+  </p>
+</section>
+
+<section id="s3">
+  <h2><span class="num">3</span>
     <span class="en">The full path, end to end</span>
     <span class="ko">전체 경로</span>
   </h2>
 
   <p>
-    <span class="en">Here is the whole thing. Read it top to bottom; the one arrow that goes the other way is the interesting part, and we come back to it in section 4.</span>
-    <span class="ko">전체 그림이다. 위에서 아래로 읽으면 되고, 유일하게 거꾸로 올라가는 화살표가 재미있는 부분이다 — 4절에서 다시 다룬다.</span>
+    <span class="en">Here is the whole thing. The single most important thing this diagram has to get right is that <b>everything happens inside Envoy</b> — BBR and the picker are side-calls, not stops on the way.</span>
+    <span class="ko">전체 그림이다. 이 그림이 반드시 정확히 담아야 하는 한 가지는 <b>모든 게 Envoy 안에서 일어난다</b>는 것이다 — BBR과 picker는 지나가는 정거장이 아니라 <b>곁가지 호출</b>이다.</span>
   </p>
 
 <div class="ascii">client
   │  POST /v1/chat/completions
   │  body: {"model":"meta-llama/Llama-3.1-70B-Instruct", ...}
   ▼
-Service/inference-gateway-nodeport            :32080 → :80
+Service/gw-istio   (ClusterIP :80)                 ← Gateway.status.addresses
   │  selector: gateway.networking.k8s.io/gateway-name=gw
   ▼
-Gateway/gw  (istio)  = the Envoy pod          listener http:80
-  │
-  │  EnvoyFilter/body-based-router                    Deployment/body-based-router
-  │  INSERT_FIRST — first in the filter chain   ───▶   1 pod  :9004     (BBR)
-  │  request body streamed out, response not read ◀──   header injected
-  │  failure_mode_allow: false
-  │
-  │  X-Gateway-Model-Name: meta-llama/Llama-3.1-70B-Instruct
-  ▼
-HTTPRoute/epp-llama-70b               one of N, selected by that header
-  │  backendRef
-  ▼
-InferencePool/epp-llama-70b
-  │  selector: pool=epp-llama-70b       → the candidate pods
-  │  endpointPickerRef ────────▶ Service/epp-llama-70b :9002
-  │  failureMode: FailClose      Deployment/epp-llama-70b (2 replicas)  = EPP
-  │  ◀──────────────────────── "send it to this pod IP"
-  ▼
-vLLM pod :8000                        one of the Llama replicas
-  │
-  └── KV events ──zmq──▶ Service/epp-llama-70b :5557 ──▶ EPP
-        --kv-events-config      how EPP learns what each pod has cached</div>
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Gateway/gw  →  Deployment/gw-istio,  3 Envoy pods                        │
+│                                                                          │
+│  ① ext_proc ──▶ Deployment/body-based-router :9004    (BBR, 1 pod)       │
+│     ◀── sets  X-Gateway-Model-Name: meta-llama/Llama-3.1-70B-Instruct    │
+│                                                                          │
+│  ② match HTTPRoute/epp-llama-70b on that header                          │
+│     → backendRef: InferencePool/epp-llama-70b                            │
+│                                                                          │
+│  ③ ext_proc ──▶ Service/epp-llama-70b :9002           (EPP, 2 pods)      │
+│     ◀── replies with the chosen endpoint (a pod IP)                      │
+│                                                                          │
+│  ④ Envoy proxies the request to that pod                                 │
+└─────────────────────────────┬────────────────────────────────────────────┘
+                              ▼
+                    vLLM pod :8000              one of the Llama replicas
+                              │
+    KV events ──zmq──▶ Service/epp-llama-70b :5557 ──▶ EPP
+      --kv-events-config      how EPP learns what each pod has cached</div>
 
   <p class="cap">
     <span class="en">Object names follow the convention <code class="inl">&lt;prefix&gt;-&lt;model&gt;</code>, one set per served model.</span>
     <span class="ko">오브젝트 이름은 <code class="inl">&lt;prefix&gt;-&lt;model&gt;</code> 규칙을 따르며, 서빙하는 모델마다 한 세트씩 존재한다.</span>
   </p>
+
+  <div class="callout c-red">
+    <span class="tag"><span class="en">Two things it is easy to draw wrong</span><span class="ko">잘못 그리기 쉬운 두 가지</span></span>
+    <span class="en"><b>The picker does not forward the request.</b> <code class="inl">ext_proc</code> is a gRPC side-call: Envoy asks, the picker answers with an endpoint, control returns to Envoy, and <b>Envoy</b> proxies to the pod. Drawing the flow as continuing downward out of the picker into the engine is wrong, and it matters — it means the picker can never be the cause of a slow or truncated response body. It only ever answers one question.<br><br><b>A NodePort Service next door is not the entry point.</b> A cluster may well have one pointing at the same Envoy pods, left over or provisioned just in case. The authoritative address is whatever the Gateway itself reports in <code class="inl">status.addresses</code> — here a ClusterIP Service, meaning callers are in-cluster.</span>
+    <span class="ko"><b>picker는 요청을 넘겨주지 않는다.</b> <code class="inl">ext_proc</code>은 gRPC 곁가지 호출이다 — Envoy가 묻고, picker가 엔드포인트로 답하고, 제어는 Envoy로 돌아오고, 그다음 <b>Envoy</b>가 pod로 프록시한다. picker에서 아래로 이어져 엔진으로 들어가게 그리면 틀린 그림이고, 이건 실제로 중요하다 — picker는 응답이 느리거나 잘리는 원인이 <b>될 수 없다</b>는 뜻이기 때문이다. 질문 하나에만 답할 뿐이다.<br><br><b>옆에 있는 NodePort Service는 진입점이 아니다.</b> 같은 Envoy pod를 가리키는 NodePort가 남아 있거나 혹시 몰라 만들어져 있을 수 있다. 정답은 Gateway가 <code class="inl">status.addresses</code>에 스스로 보고하는 주소다 — 여기서는 ClusterIP Service이고, 즉 호출자가 클러스터 내부에 있다는 뜻이다.</span>
+  </div>
 
   <p>
     <span class="en">Two decisions get made on the way down, and they are made by two different components for two different reasons:</span>
@@ -210,13 +315,13 @@ vLLM pod :8000                        one of the Llama replicas
   </div>
 
   <p>
-    <span class="en">Note the asymmetry in cardinality — one BBR for the whole cluster, one EPP <i>per model</i>. That is not an accident, and it has a consequence we will get to in section 5.</span>
-    <span class="ko">개수의 비대칭을 눈여겨보자 — BBR은 클러스터 전체에 하나, EPP는 <i>모델마다</i> 하나. 우연이 아니고, 5절에서 다룰 결과를 낳는다.</span>
+    <span class="en">Note the asymmetry in cardinality — one BBR for the whole cluster, one EPP <i>per model</i>. That is not an accident, and it has a consequence we will get to in section 6.</span>
+    <span class="ko">개수의 비대칭을 눈여겨보자 — BBR은 클러스터 전체에 하나, EPP는 <i>모델마다</i> 하나. 우연이 아니고, 6절에서 다룰 결과를 낳는다.</span>
   </p>
 </section>
 
-<section id="s3">
-  <h2><span class="num">3</span>
+<section id="s4">
+  <h2><span class="num">4</span>
     <span class="en">The resources, one by one</span>
     <span class="ko">리소스 하나씩</span>
   </h2>
@@ -329,13 +434,13 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
   </table>
 
   <p>
-    <span class="en">The first two are the two arrows into the picker in the section&nbsp;2 diagram — same Service, same pods, opposite directions.</span>
-    <span class="ko">앞의 둘이 2절 그림에서 picker로 들어가던 화살표 두 개다 — 같은 Service, 같은 pod, 방향만 반대.</span>
+    <span class="en">The first two are the two arrows into the picker in the section&nbsp;3 diagram — same Service, same pods, opposite directions.</span>
+    <span class="ko">앞의 둘이 3절 그림에서 picker로 들어가던 화살표 두 개다 — 같은 Service, 같은 pod, 방향만 반대.</span>
   </p>
 </section>
 
-<section id="s4">
-  <h2><span class="num">4</span>
+<section id="s5">
+  <h2><span class="num">5</span>
     <span class="en">The reverse path: how the picker knows anything</span>
     <span class="ko">역방향 경로 — picker는 어떻게 아는가</span>
   </h2>
@@ -385,8 +490,8 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
   </div>
 </section>
 
-<section id="s5">
-  <h2><span class="num">5</span>
+<section id="s6">
+  <h2><span class="num">6</span>
     <span class="en">Control path, data path, and where it breaks</span>
     <span class="ko">control path와 data path, 그리고 깨지는 지점</span>
   </h2>
@@ -425,8 +530,8 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
   <h3><span class="en">The blast radius is not symmetric</span><span class="ko">장애 반경은 대칭이 아니다</span></h3>
 
   <p>
-    <span class="en">Both components fail closed — BBR with <code class="inl">failure_mode_allow: false</code>, the picker with <code class="inl">failureMode: FailClose</code>. Identical policy, very different consequences, because of the cardinality asymmetry from section 2.</span>
-    <span class="ko">두 컴포넌트 다 fail closed다 — BBR은 <code class="inl">failure_mode_allow: false</code>, picker는 <code class="inl">failureMode: FailClose</code>. 정책은 같은데 결과는 전혀 다르다. 2절에서 본 개수 비대칭 때문이다.</span>
+    <span class="en">Both components fail closed — BBR with <code class="inl">failure_mode_allow: false</code>, the picker with <code class="inl">failureMode: FailClose</code>. Identical policy, very different consequences, because of the cardinality asymmetry from section 3.</span>
+    <span class="ko">두 컴포넌트 다 fail closed다 — BBR은 <code class="inl">failure_mode_allow: false</code>, picker는 <code class="inl">failureMode: FailClose</code>. 정책은 같은데 결과는 전혀 다르다. 3절에서 본 개수 비대칭 때문이다.</span>
   </p>
 
   <div class="grid2">
@@ -458,6 +563,180 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
   </div>
 </section>
 
+
+<section id="s7">
+  <h2><span class="num">7</span>
+    <span class="en">The YAML, and how to read it off a cluster</span>
+    <span class="ko">YAML, 그리고 클러스터에서 직접 읽는 법</span>
+  </h2>
+
+  <p>
+    <span class="en">Trimmed to the fields that matter — managed fields, timestamps and most of <code class="inl">status</code> removed. Read in order, these five objects are the whole path.</span>
+    <span class="ko">중요한 필드만 남기고 managed fields·타임스탬프·<code class="inl">status</code> 대부분을 걷어냈다. 순서대로 읽으면 이 다섯 오브젝트가 경로 전체다.</span>
+  </p>
+
+  <h3>1. <code class="inl">Gateway</code> — <span class="en">the declaration</span><span class="ko">선언</span></h3>
+
+<pre><span class="fn">apiVersion</span>: gateway.networking.k8s.io/v1
+<span class="fn">kind</span>: Gateway
+<span class="fn">metadata</span>:
+  <span class="fn">name</span>: gw
+<span class="fn">spec</span>:
+  <span class="fn">gatewayClassName</span>: istio          <span class="cm"># who materializes this</span>
+  <span class="fn">listeners</span>:
+  - <span class="fn">name</span>: http
+    <span class="fn">port</span>: <span class="nu">80</span>
+    <span class="fn">protocol</span>: HTTP
+    <span class="fn">allowedRoutes</span>:
+      <span class="fn">namespaces</span>:
+        <span class="fn">from</span>: All             <span class="cm"># routes may attach from any namespace</span>
+<span class="fn">status</span>:
+  <span class="fn">addresses</span>:
+  - <span class="fn">type</span>: Hostname
+    <span class="fn">value</span>: gw-istio.&lt;ns&gt;.svc.cluster.local    <span class="cm"># ← the authoritative address</span></pre>
+
+  <h3>2. <code class="inl">Service</code> — <span class="en">created by the operator, not by hand</span><span class="ko">사람이 아니라 operator가 만든 것</span></h3>
+
+<pre><span class="fn">apiVersion</span>: v1
+<span class="fn">kind</span>: Service
+<span class="fn">metadata</span>:
+  <span class="fn">name</span>: gw-istio
+  <span class="fn">labels</span>:
+    gateway.istio.io/managed: istio.io-gateway-controller
+  <span class="fn">ownerReferences</span>:                  <span class="cm"># ← delete the Gateway and this goes with it</span>
+  - <span class="fn">kind</span>: Gateway
+    <span class="fn">name</span>: gw
+<span class="fn">spec</span>:
+  <span class="fn">type</span>: ClusterIP                  <span class="cm"># ← in-cluster only</span>
+  <span class="fn">selector</span>:
+    gateway.networking.k8s.io/gateway-name: gw
+  <span class="fn">ports</span>:
+  - <span class="fn">name</span>: http
+    <span class="fn">port</span>: <span class="nu">80</span>
+    <span class="fn">targetPort</span>: http</pre>
+
+  <p>
+    <span class="en">The <code class="inl">ownerReferences</code> block is the fingerprint of an operator. Nobody wrote this Service; the gateway controller derived it from the <code class="inl">Gateway</code> and will recreate it if you delete it.</span>
+    <span class="ko"><code class="inl">ownerReferences</code> 블록이 operator의 지문이다. 이 Service는 아무도 손으로 안 썼다. gateway controller가 <code class="inl">Gateway</code>에서 파생시킨 것이고, 지우면 다시 만들어 놓는다.</span>
+  </p>
+
+  <h3>3. <code class="inl">EnvoyFilter</code> — <span class="en">how BBR gets into the chain</span><span class="ko">BBR이 체인에 들어가는 방법</span></h3>
+
+<pre><span class="fn">apiVersion</span>: networking.istio.io/v1alpha3
+<span class="fn">kind</span>: EnvoyFilter
+<span class="fn">metadata</span>:
+  <span class="fn">name</span>: body-based-router
+<span class="fn">spec</span>:
+  <span class="fn">configPatches</span>:
+  - <span class="fn">applyTo</span>: HTTP_FILTER
+    <span class="fn">match</span>:
+      <span class="fn">listener</span>:
+        <span class="fn">filterChain</span>:
+          <span class="fn">filter</span>:
+            <span class="fn">name</span>: envoy.filters.network.http_connection_manager
+    <span class="fn">patch</span>:
+      <span class="fn">operation</span>: INSERT_FIRST                <span class="cm"># ← ahead of everything else</span>
+      <span class="fn">value</span>:
+        <span class="fn">name</span>: envoy.filters.http.ext_proc
+        <span class="fn">typed_config</span>:
+          <span class="fn">"@type"</span>: type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+          <span class="fn">failure_mode_allow</span>: <span class="kw">false</span>          <span class="cm"># ← BBR down = every request fails</span>
+          <span class="fn">grpc_service</span>:
+            <span class="fn">envoy_grpc</span>:
+              <span class="fn">cluster_name</span>: outbound|9004||body-based-router.&lt;ns&gt;.svc.cluster.local
+          <span class="fn">processing_mode</span>:
+            <span class="fn">request_header_mode</span>: SEND
+            <span class="fn">request_body_mode</span>: FULL_DUPLEX_STREAMED   <span class="cm"># ← the prompt does pass through</span>
+            <span class="fn">response_header_mode</span>: SKIP
+            <span class="fn">response_body_mode</span>: NONE                  <span class="cm"># ← the response does not</span></pre>
+
+  <h3>4. <code class="inl">HTTPRoute</code> — <span class="en">the rule</span><span class="ko">규칙</span></h3>
+
+<pre><span class="fn">apiVersion</span>: gateway.networking.k8s.io/v1
+<span class="fn">kind</span>: HTTPRoute
+<span class="fn">metadata</span>:
+  <span class="fn">name</span>: epp-llama-70b
+<span class="fn">spec</span>:
+  <span class="fn">parentRefs</span>:                          <span class="cm"># ← attaches to the Gateway</span>
+  - <span class="fn">kind</span>: Gateway
+    <span class="fn">name</span>: gw
+  <span class="fn">rules</span>:
+  - <span class="fn">matches</span>:
+    - <span class="fn">headers</span>:
+      - <span class="fn">name</span>: X-Gateway-Model-Name       <span class="cm"># ← the header BBR set</span>
+        <span class="fn">type</span>: Exact
+        <span class="fn">value</span>: meta-llama/Llama-3.1-70B-Instruct
+      <span class="fn">path</span>:
+        <span class="fn">type</span>: PathPrefix
+        <span class="fn">value</span>: /
+    <span class="fn">backendRefs</span>:
+    - <span class="fn">kind</span>: InferencePool               <span class="cm"># ← not a Service</span>
+      <span class="fn">name</span>: epp-llama-70b
+    <span class="fn">timeouts</span>:
+      <span class="fn">request</span>: <span class="nu">0s</span>                        <span class="cm"># ← no timeout; generations run long</span>
+      <span class="fn">backendRequest</span>: <span class="nu">0s</span></pre>
+
+  <h3>5. <code class="inl">InferencePool</code> — <span class="en">the candidates and the picker</span><span class="ko">후보와 picker</span></h3>
+
+<pre><span class="fn">apiVersion</span>: inference.networking.k8s.io/v1
+<span class="fn">kind</span>: InferencePool
+<span class="fn">metadata</span>:
+  <span class="fn">name</span>: epp-llama-70b
+<span class="fn">spec</span>:
+  <span class="fn">selector</span>:
+    <span class="fn">matchLabels</span>:
+      <span class="fn">pool</span>: epp-llama-70b            <span class="cm"># ← the label the operator stamped on the engine pods</span>
+  <span class="fn">targetPorts</span>:
+  - <span class="fn">number</span>: <span class="nu">8000</span>
+  <span class="fn">endpointPickerRef</span>:
+    <span class="fn">kind</span>: Service                   <span class="cm"># ← a Service, never a pod</span>
+    <span class="fn">name</span>: epp-llama-70b
+    <span class="fn">port</span>:
+      <span class="fn">number</span>: <span class="nu">9002</span>
+    <span class="fn">failureMode</span>: FailClose         <span class="cm"># ← picker down = this model's requests fail</span></pre>
+
+  <h3><span class="en">Reading it yourself</span><span class="ko">직접 읽어보기</span></h3>
+
+<pre><span class="cm"># what kinds exist at all, and their API groups</span>
+kubectl api-resources | grep -iE <span class="st">'gateway|route|inference'</span>
+kubectl get crd | grep -E <span class="st">'inference'</span>
+
+<span class="cm"># the schema of a kind, field by field — works for CRDs too</span>
+kubectl explain inferencepool.spec
+kubectl explain inferencepool.spec.endpointPickerRef
+
+<span class="cm"># the full object</span>
+kubectl -n <span class="st">$NS</span> get httproute epp-llama-70b -o yaml
+
+<span class="cm"># spec only, without the managedFields noise</span>
+kubectl -n <span class="st">$NS</span> get gateway gw -o yaml | sed -n <span class="st">'/^spec:/,/^status:/p'</span>
+
+<span class="cm"># one field</span>
+kubectl -n <span class="st">$NS</span> get gateway gw -o jsonpath=<span class="st">'{.status.addresses}'</span>
+kubectl -n <span class="st">$NS</span> get inferencepool epp-llama-70b -o jsonpath=<span class="st">'{.spec.endpointPickerRef}'</span>
+
+<span class="cm"># who owns an object — this is how you trace an operator's work</span>
+kubectl -n <span class="st">$NS</span> get svc gw-istio -o jsonpath=<span class="st">'{.metadata.ownerReferences}'</span>
+kubectl -n <span class="st">$NS</span> get pod <span class="st">&lt;pod&gt;</span> -o jsonpath=<span class="st">'{.metadata.ownerReferences}'</span>
+
+<span class="cm"># which pods a Service actually resolves to right now</span>
+kubectl -n <span class="st">$NS</span> get endpointslice -l kubernetes.io/service-name=gw-istio -o yaml
+
+<span class="cm"># what a running engine was actually launched with</span>
+<span class="cm"># (beats trusting the manifest — this is how the missing flag turned up)</span>
+kubectl -n <span class="st">$NS</span> exec <span class="st">&lt;engine-pod&gt;</span> -- tr <span class="st">'\0'</span> <span class="st">'\n'</span> &lt; /proc/1/cmdline</pre>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">Two gotchas</span><span class="ko">두 가지 함정</span></span>
+    <span class="en"><code class="inl">-o jsonpath</code> has <b>no conditionals</b> — <code class="inl">{if .nodePort}</code> is not valid syntax and fails with <code class="inl">unrecognized identifier if</code>. Pipe into <code class="inl">jq</code> or <code class="inl">python3 -c</code> when you need logic.<br><br><code class="inl">-o yaml</code> includes <code class="inl">managedFields</code>, which is routinely longer than the object itself. The <code class="inl">sed</code> line above is the fastest way to cut it down to something readable.</span>
+    <span class="ko"><code class="inl">-o jsonpath</code>에는 <b>조건문이 없다</b> — <code class="inl">{if .nodePort}</code>는 유효한 문법이 아니고 <code class="inl">unrecognized identifier if</code>로 실패한다. 판단이 필요하면 <code class="inl">jq</code>나 <code class="inl">python3 -c</code>로 넘기자.<br><br><code class="inl">-o yaml</code>에는 <code class="inl">managedFields</code>가 딸려 오는데, 대개 오브젝트 본문보다 길다. 위의 <code class="inl">sed</code> 한 줄이 읽을 만한 크기로 줄이는 가장 빠른 방법이다.</span>
+  </div>
+
+  <p>
+    <span class="en">That last command is worth singling out. Everything in this note came from reading live objects rather than the design docs — and the two findings in sections 5 and 6, the engine publishing nothing and the single-replica component gating the fleet, were both invisible in the architecture and one query away in the cluster.</span>
+    <span class="ko">마지막 명령은 따로 짚을 만하다. 이 글의 모든 내용은 설계 문서가 아니라 살아있는 오브젝트를 읽어서 나왔고, 5절과 6절의 발견 두 가지 — 아무것도 발행하지 않던 엔진, 그리고 fleet 전체를 좌우하는 replica 1짜리 컴포넌트 — 는 둘 다 아키텍처에서는 안 보이고 클러스터에서는 조회 한 번 거리였다.</span>
+  </p>
+</section>
 
 <footer>
   <span class="en">Written 2026-08-05 · read off a running cluster, then generalized to the upstream project's terms.</span>
