@@ -103,6 +103,13 @@
   @media (prefers-reduced-motion: reduce){
     .anim .pkt,.anim .gA,.anim .gB,.anim .gap{animation:none;opacity:1}
   }
+  /* feature-map figure — a highlight sweeps stage to stage */
+  @keyframes fmGlow{0%,1%{opacity:0}3%,17%{opacity:.62}19%,100%{opacity:0}}
+  .fmap .k{opacity:0;animation:fmGlow 15s linear infinite}
+  .fmap .k1{animation-delay:0s}.fmap .k2{animation-delay:-12s}
+  .fmap .k3{animation-delay:-9s}.fmap .k4{animation-delay:-6s}
+  .fmap .k5{animation-delay:-3s}
+  @media (prefers-reduced-motion: reduce){.fmap .k{animation:none;opacity:.3}}
 </style>
 </head>
 <body>
@@ -143,6 +150,7 @@
     <li><a href="#s4"><span class="en">How to see it working — and the traps that hide it</span><span class="ko">동작을 확인하는 법 — 그리고 그걸 가리는 함정</span></a></li>
     <li><a href="#s5"><span class="en">The customer value proposition, honestly</span><span class="ko">고객 가치 제안, 정직하게</span></a></li>
     <li><a href="#sflow"><span class="en">The whole thing in one picture — a multi-turn session across two nodes</span><span class="ko">한 장으로 보는 전체 흐름 — 두 노드에 걸친 멀티턴 세션</span></a></li>
+    <li><a href="#sfeat"><span class="en">Re-read in Mooncake's own vocabulary — which named features does vLLM use?</span><span class="ko">Mooncake 문서의 어휘로 다시 읽기 — vLLM 은 그중 무엇을 쓰는가</span></a></li>
     <li><a href="#s6"><span class="en">Sources</span><span class="ko">출처</span></a></li>
   </ol>
 </nav>
@@ -636,6 +644,14 @@ vllm serve &lt;model&gt; \
     <text x="14" y="325" font-size="11.5" fill="var(--muted)">standalone-store 로 풀을 다른 노드에 몰아두면 — 설계상 모든 전송이 IB 를 탄다.</text>
   </svg>
   <p class="figcap"><span class="en">Selection logic from <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-transfer-engine/src/multi_transport.cpp#L452-L525">multi_transport.cpp#L452-L525</a>; fabric detection from <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-transfer-engine/src/transport/nvlink_transport/nvlink_transport.cpp#L317-L340">nvlink_transport.cpp#L317</a>.</span><span class="ko">선택 로직은 <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-transfer-engine/src/multi_transport.cpp#L452-L525">multi_transport.cpp#L452-L525</a>, fabric 탐지는 <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-transfer-engine/src/transport/nvlink_transport/nvlink_transport.cpp#L317-L340">nvlink_transport.cpp#L317</a> 기준.</span></p>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">Two qualifications the tree above hides</span><span class="ko">위 트리가 감추는 단서 둘</span></span>
+    <span class="en"><b>1. "Same node" is a hostname comparison, not "same vLLM instance."</b> The engine's test is <code class="inl">isHipReachableTarget()</code>, which is literally <code class="inl">hostEquals(segmentHost(target), segmentHost(local))</code> — segment names are <code class="inl">host:port</code>, and only the host part is compared. The source comment says it outright: <i>"Two engines co-located on one host share the host portion of their segment name (they differ only in port)."</i> It is written for two <b>different</b> engines on one box. That has to be true, because GPU IPC is by definition <i>inter-process</i> — within one process you would just use the pointer. So "same node" means a TP-sibling rank, a second vLLM instance, or a <code class="inl">mooncake_client</code> — all different processes on the same host.<br><br>
+    <b>2. Reaching the fast path also needs a device buffer, and this connector does not register one.</b> Selection runs <b>per target buffer</b>, and the same source distinguishes <i>"the device KV pool via hip, the host aux/metadata buffers via rdma"</i>. For <code class="inl">MooncakeStoreConnector</code>, what gets contributed to the pool is <code class="inl">global_segment_size</code>, documented as CPU memory, and the connector validates it (<code class="inl">embedded</code> requires &gt; 0, <code class="inl">standalone-store</code> requires == 0). So the store segments are host DRAM. <b>Same host therefore still goes rdma or tcp</b> to a local peer; the hip/nvlink column describes Mooncake in general, and integrations that register a device-memory pool.</span>
+    <span class="ko"><b>1. "같은 노드" 는 호스트 이름 비교이지 "같은 vLLM 인스턴스" 가 아니다.</b> 엔진의 판정은 <code class="inl">isHipReachableTarget()</code> 이고, 내용은 말 그대로 <code class="inl">hostEquals(segmentHost(target), segmentHost(local))</code> 다 — 세그먼트 이름이 <code class="inl">host:port</code> 이고 host 부분만 비교한다. 소스 주석이 대놓고 말한다. <i>"Two engines co-located on one host share the host portion of their segment name (they differ only in port)."</i> 한 박스 안의 <b>서로 다른</b> 엔진 둘을 상정하고 쓴 코드다. 그럴 수밖에 없는 게, GPU IPC 는 정의상 <i>프로세스 간</i> 통신이다 — 한 프로세스 안이면 그냥 포인터를 쓰면 된다. 그래서 "같은 노드" 는 TP 형제 랭크, 같은 호스트의 다른 vLLM 인스턴스, <code class="inl">mooncake_client</code> — 전부 같은 호스트의 다른 프로세스를 가리킨다.<br><br>
+    <b>2. 빠른 길에 닿으려면 device 버퍼도 있어야 하는데, 이 커넥터는 그걸 등록하지 않는다.</b> 선택은 <b>타깃 버퍼 단위</b>로 돌고, 같은 소스가 <i>"the device KV pool via hip, the host aux/metadata buffers via rdma"</i> 라고 둘을 구분한다. <code class="inl">MooncakeStoreConnector</code> 가 풀에 기여하는 것은 <code class="inl">global_segment_size</code> 이고 문서상 CPU 메모리이며, 커넥터가 그걸 검증한다(<code class="inl">embedded</code> 는 &gt; 0, <code class="inl">standalone-store</code> 는 == 0 을 요구). 즉 스토어 세그먼트는 호스트 DRAM 이다. <b>그래서 같은 호스트여도 로컬 피어로 rdma 나 tcp 를 탄다.</b> hip/nvlink 칸은 Mooncake 일반론이고, device 메모리 풀을 등록하는 통합에 해당하는 이야기다.</span>
+  </div>
 
   <h4><span class="en">The two NVLink transports are not the same thing</span><span class="ko">NVLink transport 둘은 서로 다른 물건이다</span></h4>
   <table>
@@ -1654,9 +1670,9 @@ sizes = blen[None, :] * block_counts[:, None]</pre>
   <table>
     <tr><th style="width:30%"><span class="en">Where the segment lives</span><span class="ko">세그먼트 위치</span></th><th style="width:22%"><span class="en">Steps 3 &amp; 6 use</span><span class="ko">3·6 번이 쓰는 것</span></th><th><span class="en">Note</span><span class="ko">비고</span></th></tr>
     <tr>
-      <td><span class="en">Same node as the vLLM rank</span><span class="ko">vLLM 랭크와 같은 노드</span></td>
-      <td><span class="en">GPU IPC path — no NIC at all</span><span class="ko">GPU IPC 경로 — NIC 을 아예 안 거침</span></td>
-      <td><span class="en">Common in <code class="inl">embedded</code> mode, where each rank contributes a segment locally.</span><span class="ko"><code class="inl">embedded</code> 모드에서 흔하다. 각 랭크가 로컬로 세그먼트를 기여하므로.</span></td>
+      <td><span class="en">Same host as the vLLM rank</span><span class="ko">vLLM 랭크와 같은 호스트</span></td>
+      <td><b><span class="en">RDMA to a local peer</span><span class="ko">로컬 피어로의 RDMA</span></b> <span class="muted"><span class="en">— not GPU IPC</span><span class="ko">— GPU IPC 가 아니다</span></span></td>
+      <td><span class="en">Common in <code class="inl">embedded</code> mode. But the fast GPU-IPC transports are chosen <b>per target buffer</b>, and this connector's segments are <b>host DRAM</b> (<code class="inl">global_segment_size</code> is CPU memory) — so there is no device buffer for <code class="inl">hip</code>/<code class="inl">nvlink</code> to map. Same host still means the NIC, just a very short trip through it.</span><span class="ko"><code class="inl">embedded</code> 모드에서 흔하다. 그러나 GPU IPC 계열 transport 는 <b>타깃 버퍼 단위</b>로 골라지고, 이 커넥터가 기여하는 세그먼트는 <b>호스트 DRAM</b> 이다(<code class="inl">global_segment_size</code> 가 CPU 메모리다) — <code class="inl">hip</code>/<code class="inl">nvlink</code> 가 매핑할 device 버퍼 자체가 없다. 같은 호스트여도 NIC 을 타되, 아주 짧게 탈 뿐이다.</span></td>
     </tr>
     <tr>
       <td><span class="en">Another node, same NVLink domain</span><span class="ko">다른 노드, 같은 NVLink 도메인</span></td>
@@ -1762,8 +1778,346 @@ key_bytes = _estimate_disk_offload_staging_bytes(size)
   </div>
 </section>
 
-<section id="s6">
+<section id="sfeat">
   <h2><span class="num">8</span>
+    <span class="en">Re-read in Mooncake's own vocabulary — which named features does vLLM actually use?</span>
+    <span class="ko">Mooncake 문서의 어휘로 다시 읽기 — vLLM 은 그중 무엇을 쓰는가</span>
+  </h2>
+
+  <p>
+    <span class="en">Everything above described the path in my words. Mooncake's own documentation names its capabilities in a specific vocabulary — <b>Segment</b>, <b>BatchTransfer</b>, <b>Topology Aware Path Selection</b>, <b>Endpoint Management</b>, <b>Fault Handling</b>, <b>Buffer Allocator</b>, <b>AllocationStrategy</b>, <b>Lease</b>, <b>Soft Pin</b>, <b>Hard Pin</b>, <b>Eviction Policy</b>, <b>Preferred Segment Allocation</b>, <b>Object Groups</b>, <b>Tenant Quota</b>, <b>Multi-layer Storage</b>. This chapter lays the two side by side: for each name, does <code class="inl">MooncakeStoreConnector</code> exercise it, and at which call?</span>
+    <span class="ko">여기까지는 경로를 내 말로 설명했다. Mooncake 문서는 자기 기능들을 고유한 어휘로 부른다 — <b>Segment</b>, <b>BatchTransfer</b>, <b>Topology Aware Path Selection</b>, <b>Endpoint Management</b>, <b>Fault Handling</b>, <b>Buffer Allocator</b>, <b>AllocationStrategy</b>, <b>Lease</b>, <b>Soft Pin</b>, <b>Hard Pin</b>, <b>Eviction Policy</b>, <b>Preferred Segment Allocation</b>, <b>Object Groups</b>, <b>Tenant Quota</b>, <b>Multi-layer Storage</b>. 이 장은 둘을 나란히 놓는다. 각 이름에 대해 <code class="inl">MooncakeStoreConnector</code> 가 그걸 쓰는가, 쓴다면 어느 호출에서인가?</span>
+  </p>
+  <p>
+    <span class="en">The interesting half is the negative space. Several of Mooncake's strongest features are <b>never invoked by this connector</b> — and since the docs advertise them, it is easy to assume you are getting them. Knowing which ones are dark is most of the tuning headroom.</span>
+    <span class="ko">재미있는 쪽은 비어 있는 절반이다. Mooncake 의 강한 기능 몇 개는 <b>이 커넥터가 아예 부르지 않는다</b> — 문서가 광고하니 당연히 쓰고 있으려니 착각하기 쉽다. 어느 게 꺼져 있는지 아는 것이 사실상 튜닝 여지의 대부분이다.</span>
+  </p>
+
+  <figure>
+  <svg class="fmap" viewBox="0 0 880 470" width="100%" role="img"
+       aria-label="Five stages of the connector's life — setup, KV registration, lookup, load, save — with the Mooncake Store features each stage touches in the upper lane and the Transfer Engine features in the lower lane. A highlight sweeps stage to stage. Below, two grey boxes list features the connector never calls: ones you can still turn on at the master, and ones this path never reaches at all.">
+    <!-- lane backgrounds -->
+    <rect x="6" y="52" width="862" height="142" rx="10" fill="var(--purple-bg)" stroke="var(--purple-bd)" opacity="0.45"/>
+    <rect x="6" y="218" width="862" height="96" rx="10" fill="var(--teal-bg)" stroke="var(--teal-bd)" opacity="0.45"/>
+
+    <!-- sweeping highlight, one per stage -->
+    <rect class="k k1" x="6"   y="0" width="166" height="314" rx="10" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect class="k k2" x="180" y="0" width="166" height="314" rx="10" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect class="k k3" x="354" y="0" width="166" height="314" rx="10" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect class="k k4" x="528" y="0" width="166" height="314" rx="10" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <rect class="k k5" x="702" y="0" width="166" height="314" rx="10" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+
+    <!-- lane titles -->
+    <text x="14" y="46" font-size="11" font-weight="700" fill="var(--purple-ink)">Mooncake Store — 마스터가 관리하는 것 (컨트롤)</text>
+    <text x="14" y="212" font-size="11" font-weight="700" fill="var(--teal-ink)">Transfer Engine — 바이트가 실제로 움직이는 것 (데이터)</text>
+
+    <!-- stage headers -->
+    <rect x="6"   y="0" width="166" height="30" rx="8" fill="var(--card)" stroke="var(--line)"/>
+    <text x="89"  y="13" font-size="10.5" font-weight="700" fill="var(--ink)" text-anchor="middle">① setup()</text>
+    <text x="89"  y="25" font-size="8.5" fill="var(--muted)" text-anchor="middle">프로세스당 1 회</text>
+    <rect x="180" y="0" width="166" height="30" rx="8" fill="var(--card)" stroke="var(--line)"/>
+    <text x="263" y="13" font-size="10.5" font-weight="700" fill="var(--ink)" text-anchor="middle">② register_kv_caches()</text>
+    <text x="263" y="25" font-size="8.5" fill="var(--muted)" text-anchor="middle">모델 로드 직후 1 회</text>
+    <rect x="354" y="0" width="166" height="30" rx="8" fill="var(--card)" stroke="var(--line)"/>
+    <text x="437" y="13" font-size="10.5" font-weight="700" fill="var(--ink)" text-anchor="middle">③ batch_is_exist</text>
+    <text x="437" y="25" font-size="8.5" fill="var(--muted)" text-anchor="middle">요청마다 · 스케줄러</text>
+    <rect x="528" y="0" width="166" height="30" rx="8" fill="var(--card)" stroke="var(--line)"/>
+    <text x="611" y="13" font-size="10.5" font-weight="700" fill="var(--ink)" text-anchor="middle">④ batch_get_into…</text>
+    <text x="611" y="25" font-size="8.5" fill="var(--muted)" text-anchor="middle">히트일 때 · 워커</text>
+    <rect x="702" y="0" width="166" height="30" rx="8" fill="var(--card)" stroke="var(--line)"/>
+    <text x="785" y="13" font-size="10.5" font-weight="700" fill="var(--ink)" text-anchor="middle">⑤ batch_put_from…</text>
+    <text x="785" y="25" font-size="8.5" fill="var(--muted)" text-anchor="middle">프리필 후 · 워커</text>
+
+    <!-- lane A chips: stage 1 -->
+    <rect x="14" y="60" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="22" y="75" font-size="9.5" fill="var(--purple-ink)">MountSegment</text>
+    <rect x="14" y="86" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="22" y="101" font-size="9.5" fill="var(--purple-ink)">Tenant (tenant_id)</text>
+    <!-- stage 2 -->
+    <rect x="188" y="60" width="150" height="22" rx="6" fill="var(--bg)" stroke="var(--line)" stroke-dasharray="3 3"/>
+    <text x="196" y="75" font-size="9.5" fill="var(--faint)">해당 없음</text>
+    <!-- stage 3 -->
+    <rect x="362" y="60" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="370" y="75" font-size="9.5" fill="var(--purple-ink)">ExistKey</text>
+    <rect x="362" y="86" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="370" y="101" font-size="9.5" font-weight="700" fill="var(--purple-ink)">→ Lease 획득 (기본 10초)</text>
+    <rect x="362" y="112" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="370" y="127" font-size="9.5" fill="var(--purple-ink)">Object Groups lease 갱신</text>
+    <!-- stage 4 -->
+    <rect x="536" y="60" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="544" y="75" font-size="9.5" fill="var(--purple-ink)">GetReplicaList (+lease)</text>
+    <rect x="536" y="86" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="544" y="101" font-size="9.5" fill="var(--purple-ink)">Multi-layer Storage → SSD</text>
+    <!-- stage 5 -->
+    <rect x="710" y="60" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="718" y="75" font-size="9.5" fill="var(--purple-ink)">PutStart / PutEnd</text>
+    <rect x="710" y="86" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="718" y="101" font-size="9.5" fill="var(--purple-ink)">Buffer Allocator</text>
+    <rect x="710" y="112" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="718" y="127" font-size="9.5" fill="var(--purple-ink)">AllocationStrategy</text>
+    <rect x="710" y="138" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="718" y="153" font-size="9.5" font-weight="700" fill="var(--purple-ink)">preferred_segment</text>
+    <rect x="710" y="164" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--purple-bd)"/>
+    <text x="718" y="179" font-size="9.5" fill="var(--purple-ink)">Eviction Policy</text>
+
+    <!-- lane B chips: stage 1 -->
+    <rect x="14" y="226" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="22" y="241" font-size="9.5" fill="var(--teal-ink)">RAM Segment 생성</text>
+    <rect x="14" y="252" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="22" y="267" font-size="9.5" fill="var(--teal-ink)">Client Local Buffer</text>
+    <rect x="14" y="278" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="22" y="293" font-size="9.5" fill="var(--teal-ink)">protocol · device_name</text>
+    <!-- stage 2 -->
+    <rect x="188" y="226" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="196" y="241" font-size="9.5" font-weight="700" fill="var(--teal-ink)">Buffer 등록 (rkey)</text>
+    <rect x="188" y="252" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="196" y="267" font-size="9.5" fill="var(--teal-ink)">NIC affinity</text>
+    <rect x="188" y="278" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="196" y="293" font-size="9.5" fill="var(--teal-ink)">GPUDirect RDMA</text>
+    <!-- stage 3 -->
+    <rect x="362" y="226" width="150" height="22" rx="6" fill="var(--bg)" stroke="var(--line)" stroke-dasharray="3 3"/>
+    <text x="370" y="241" font-size="9.5" fill="var(--faint)">컨트롤 RPC — 데이터 0</text>
+    <!-- stage 4 -->
+    <rect x="536" y="226" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="544" y="241" font-size="9.5" font-weight="700" fill="var(--teal-ink)">BatchTransfer READ</text>
+    <rect x="536" y="252" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="544" y="267" font-size="9.5" fill="var(--teal-ink)">Topology Aware Path Sel.</text>
+    <rect x="536" y="278" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="544" y="293" font-size="9.5" fill="var(--teal-ink)">Endpoint Mgmt · Fault Hdl.</text>
+    <!-- stage 5 -->
+    <rect x="710" y="226" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="718" y="241" font-size="9.5" font-weight="700" fill="var(--teal-ink)">BatchTransfer WRITE</text>
+    <rect x="710" y="252" width="150" height="22" rx="6" fill="var(--card)" stroke="var(--teal-bd)"/>
+    <text x="718" y="267" font-size="9.5" fill="var(--teal-ink)">(같은 선택 로직)</text>
+
+    <!-- negative space -->
+    <text x="14" y="344" font-size="11.5" font-weight="700" fill="var(--ink)">커넥터가 호출하지 않는 것들 — 남은 여유는 대부분 여기 있다</text>
+    <rect x="6" y="352" width="428" height="112" rx="10" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <text x="18" y="372" font-size="10.5" font-weight="700" fill="var(--ink)">마스터·배포 설정으로는 켤 수 있다</text>
+    <text x="18" y="392" font-size="10" fill="var(--muted)">Eviction 임계값 · AllocationStrategy 선택</text>
+    <text x="18" y="410" font-size="10" fill="var(--muted)">Tenant Quota (enable_multi_tenants)</text>
+    <text x="18" y="428" font-size="10" fill="var(--muted)">High Availability — etcd 다중 마스터</text>
+    <text x="18" y="446" font-size="10" fill="var(--muted)">Snapshot &amp; Restore · SSD offload</text>
+    <rect x="442" y="352" width="426" height="112" rx="10" fill="var(--gray-bg)" stroke="var(--gray-bd)"/>
+    <text x="454" y="372" font-size="10.5" font-weight="700" fill="var(--ink)">이 경로에서는 아예 닿지 않는다</text>
+    <text x="454" y="392" font-size="10" fill="var(--red-bd)">Soft Pin / Hard Pin — 커넥터가 세팅하지 않음</text>
+    <text x="454" y="410" font-size="10" fill="var(--muted)">replica_num &gt; 1 (다중 복제)</text>
+    <text x="454" y="428" font-size="10" fill="var(--muted)">NVMeof Segment · P2P Store</text>
+    <text x="454" y="446" font-size="10" fill="var(--muted)">Upsert · RemoveByRegex</text>
+  </svg>
+  <p class="figcap"><span class="en">Feature names as written in the Mooncake docs (<a class="src" href="https://kvcache-ai.github.io/Mooncake/design/transfer-engine/">Transfer Engine</a>, <a class="src" href="https://kvcache-ai.github.io/Mooncake/design/mooncake-store.html">Mooncake Store</a>); call sites verified in vllm <code class="inl">ba1cdcf</code>, <code class="inl">mooncake/store/worker.py</code>.</span><span class="ko">기능 이름은 Mooncake 문서 표기 그대로(<a class="src" href="https://kvcache-ai.github.io/Mooncake/design/transfer-engine/">Transfer Engine</a>, <a class="src" href="https://kvcache-ai.github.io/Mooncake/design/mooncake-store.html">Mooncake Store</a>). 호출 지점은 vllm <code class="inl">ba1cdcf</code> 의 <code class="inl">mooncake/store/worker.py</code> 에서 확인.</span></p>
+  </figure>
+
+  <h3><span class="en">Transfer Engine — the data-plane vocabulary</span><span class="ko">Transfer Engine — 데이터 평면 어휘</span></h3>
+  <p>
+    <span class="en">The docs open by saying the engine is "designed around two core abstractions: <b>Segment</b> and <b>BatchTransfer</b>". Both are load-bearing here, and three more features are used <b>without ever appearing in vLLM's code</b> — the engine does them on your behalf, which is exactly why they are easy to forget you have.</span>
+    <span class="ko">문서는 엔진이 <i>"designed around two core abstractions: <b>Segment</b> and <b>BatchTransfer</b>"</i> 라는 문장으로 시작한다. 여기서 둘 다 핵심이고, 그 밖에 세 기능은 <b>vLLM 코드에 한 번도 등장하지 않은 채로</b> 쓰인다 — 엔진이 알아서 해 주기 때문이고, 그래서 갖고 있다는 걸 잊기 쉽다.</span>
+  </p>
+  <table>
+    <tr>
+      <th style="width:24%"><span class="en">Name in the docs</span><span class="ko">문서상 이름</span></th>
+      <th style="width:12%"><span class="en">Used?</span><span class="ko">쓰나</span></th>
+      <th><span class="en">Where, and what it means for you</span><span class="ko">어디서 쓰이고, 그게 무슨 뜻인가</span></th>
+    </tr>
+    <tr>
+      <td><b>RAM Segment</b> <span class="muted">(DRAM/VRAM)</span></td>
+      <td><b><span class="en">core</span><span class="ko">핵심</span></b></td>
+      <td><span class="en"><code class="inl">store.setup(local_hostname, …, global_segment_size, …)</code>. The docs are strict about this: <i>"Each process has and only has one segment."</i> Its name is <code class="inl">host:port</code>, and <code class="inl">global_segment_size</code> is the slice of it other processes may reach with <code class="inl">openSegment</code>. That single naming fact is what makes "same node" a hostname test (§2).</span><span class="ko"><code class="inl">store.setup(local_hostname, …, global_segment_size, …)</code>. 문서가 이 점은 단호하다. <i>"Each process has and only has one segment."</i> 이름은 <code class="inl">host:port</code> 이고, <code class="inl">global_segment_size</code> 는 그중 남이 <code class="inl">openSegment</code> 로 닿을 수 있는 몫이다. 이름이 그렇게 생겼다는 사실 하나가 "같은 노드" 를 호스트 이름 비교로 만든다(§2).</span></td>
+    </tr>
+    <tr>
+      <td><b>Buffer</b> <span class="muted">(segment 내부)</span></td>
+      <td><b><span class="en">core</span><span class="ko">핵심</span></b></td>
+      <td><span class="en"><code class="inl">register_buffer(base_addr, region_len)</code>, once per distinct KV storage, in <code class="inl">register_kv_caches()</code>. The docs note each Buffer carries its own permissions (RDMA <code class="inl">rkey</code>) and <b>NIC affinity</b> — "preferred NICs for different types of memory". This registration <i>is</i> the zero-copy (§0⑥).</span><span class="ko"><code class="inl">register_kv_caches()</code> 안에서 KV storage 마다 한 번씩 <code class="inl">register_buffer(base_addr, region_len)</code>. 문서는 Buffer 마다 권한(RDMA <code class="inl">rkey</code>)과 <b>NIC affinity</b> 를 따로 갖는다고 한다 — "preferred NICs for different types of memory". 이 등록이 곧 zero-copy 다(§0⑥).</span></td>
+    </tr>
+    <tr>
+      <td><b>Client Local Buffer</b></td>
+      <td><span class="en">yes</span><span class="ko">쓴다</span></td>
+      <td><span class="en"><code class="inl">local_buffer_size</code> at setup — a registered staging arena for short-lived client-side work, managed by <code class="inl">ClientBufferAllocator</code>. Separate from the shared pool; sizing it too small shows up as staging pressure, not as a miss.</span><span class="ko">setup 의 <code class="inl">local_buffer_size</code> — 클라이언트 측 단명 작업용으로 등록된 스테이징 영역이고 <code class="inl">ClientBufferAllocator</code> 가 관리한다. 공유 풀과는 별개다. 너무 작게 잡으면 미스가 아니라 스테이징 압박으로 나타난다.</span></td>
+    </tr>
+    <tr>
+      <td><b>BatchTransfer</b></td>
+      <td><b><span class="en">core</span><span class="ko">핵심</span></b></td>
+      <td><span class="en"><code class="inl">batch_get_into_multi_buffers()</code> / <code class="inl">batch_put_from_multi_buffers()</code>. The docs describe it as "an asynchronous and more flexible AllScatter/AllGather" over non-contiguous ranges — which is exactly the shape of a KV cache: hundreds of scattered blocks, one call. This is the single biggest reason the connector is not chatty.</span><span class="ko"><code class="inl">batch_get_into_multi_buffers()</code> / <code class="inl">batch_put_from_multi_buffers()</code>. 문서는 이걸 비연속 영역들에 대한 "an asynchronous and more flexible AllScatter/AllGather" 라고 설명한다 — KV 캐시의 모양 그 자체다. 흩어진 블록 수백 개를 호출 하나로. 커넥터가 수다스럽지 않은 가장 큰 이유다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Topology Aware Path Selection</b></td>
+      <td><span class="en">yes — invisibly</span><span class="ko">쓴다 — 보이지 않게</span></td>
+      <td><span class="en">Never appears in vLLM code. Each server broadcasts a topology matrix that sorts NICs into preferred/secondary lists <b>per memory type</b>, so a transfer takes the NIC on the same NUMA node or the same PCIe switch instead of crossing UPI. And: "if a single request's transfer … exceeds 64KB" it is split into slices that may take different paths — your multi-NIC bandwidth is pooled without you asking.</span><span class="ko">vLLM 코드에 등장하지 않는다. 각 서버가 토폴로지 행렬을 브로드캐스트해 <b>메모리 종류별로</b> NIC 을 preferred/secondary 로 나눠 두고, 전송이 UPI 를 건너는 대신 같은 NUMA·같은 PCIe 스위치의 NIC 을 타게 한다. 그리고 요청 하나가 64KB 를 넘으면 slice 로 쪼개져 서로 다른 경로를 탈 수 있다 — 요청하지 않아도 다중 NIC 대역폭이 모인다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Endpoint Management</b></td>
+      <td><span class="en">yes — invisibly</span><span class="ko">쓴다 — 보이지 않게</span></td>
+      <td><span class="en">RDMA queue pairs are created <b>on demand</b> at first transfer, pooled with a cap, and evicted by SIEVE. Practical consequence: your very first transfer to a new peer pays a connection-setup cost that later ones do not — do not read a cold first sample as steady state (§5).</span><span class="ko">RDMA queue pair 를 <b>첫 전송 때</b> 만들고, 개수 상한을 둔 풀로 관리하고, SIEVE 로 축출한다. 실무적 함의: 새 피어로의 첫 전송은 연결 설정 비용을 내고 그 뒤는 안 낸다 — 콜드 첫 샘플을 정상 상태로 읽으면 안 된다(§5).</span></td>
+    </tr>
+    <tr>
+      <td><b>Fault Handling</b></td>
+      <td><span class="en">yes — invisibly</span><span class="ko">쓴다 — 보이지 않게</span></td>
+      <td><span class="en">A dead NIC does not fail the transfer: the engine finds another reachable path and resubmits, and temporarily avoids the sick RDMA context or completion queue. Good for availability, awkward for measurement — a degraded fabric can look like "Mooncake got slower" with no error anywhere.</span><span class="ko">NIC 하나가 죽어도 전송이 실패하지 않는다. 엔진이 닿는 다른 경로를 찾아 재제출하고, 아픈 RDMA context·completion queue 를 한동안 피한다. 가용성에는 좋고 측정에는 곤란하다 — 패브릭이 나빠진 것이 에러 하나 없이 "Mooncake 가 느려졌다" 로 보인다.</span></td>
+    </tr>
+    <tr>
+      <td><b>NVMeof Segment</b></td>
+      <td><span class="muted"><span class="en">no</span><span class="ko">안 씀</span></span></td>
+      <td><span class="en">The connector never calls <code class="inl">openSegment</code> on an NVMe-of segment. <b>This is worth separating from SSD offload</b>, which is a Store-level tier (<code class="inl">--enable_offload</code>, <code class="inl">LOCAL_DISK</code> replicas) and a different mechanism entirely. Two ways to reach an SSD; the connector only sees one.</span><span class="ko">커넥터는 NVMe-of 세그먼트에 <code class="inl">openSegment</code> 를 하지 않는다. <b>SSD 오프로드와 구분해야 한다</b> — 그쪽은 Store 레벨 티어(<code class="inl">--enable_offload</code>, <code class="inl">LOCAL_DISK</code> 레플리카)이고 메커니즘이 완전히 다르다. SSD 에 닿는 길이 둘인데 커넥터는 하나만 본다.</span></td>
+    </tr>
+    <tr>
+      <td><b>P2P Store</b></td>
+      <td><span class="muted"><span class="en">no</span><span class="ko">안 씀</span></span></td>
+      <td><span class="en">A separate Mooncake component. vLLM's peer-to-peer story is the other connector — <code class="inl">MooncakeConnector</code>, for PD disaggregation — not this one.</span><span class="ko">별도 컴포넌트다. vLLM 쪽의 peer-to-peer 이야기는 다른 커넥터, 즉 PD 분리용 <code class="inl">MooncakeConnector</code> 이지 이쪽이 아니다.</span></td>
+    </tr>
+  </table>
+
+  <h3><span class="en">Mooncake Store — the object-lifecycle vocabulary</span><span class="ko">Mooncake Store — 객체 수명 어휘</span></h3>
+  <p>
+    <span class="en">This is where the negative space lives. The Store's docs describe a fairly rich lifecycle — leases, two kinds of pin, replica counts, five allocation strategies, tenant quotas, groups. The connector reaches maybe half of it.</span>
+    <span class="ko">비어 있는 절반은 여기 있다. Store 문서는 꽤 풍부한 수명 관리를 설명한다 — lease, 두 종류의 pin, 복제 수, 할당 전략 다섯, 테넌트 쿼터, 그룹. 커넥터가 닿는 건 그중 절반쯤이다.</span>
+  </p>
+  <table>
+    <tr>
+      <th style="width:24%"><span class="en">Name in the docs</span><span class="ko">문서상 이름</span></th>
+      <th style="width:12%"><span class="en">Used?</span><span class="ko">쓰나</span></th>
+      <th><span class="en">Where, and what it means for you</span><span class="ko">어디서 쓰이고, 그게 무슨 뜻인가</span></th>
+    </tr>
+    <tr>
+      <td><b><span class="en">Object &amp; key</span><span class="ko">Object · key</span></b></td>
+      <td><b><span class="en">core</span><span class="ko">핵심</span></b></td>
+      <td><span class="en">One object per KV chunk, keyed <code class="inl">&lt;cache_prefix&gt;@&lt;model&gt;@tp_rank:…@group:…@&lt;chunk_hash&gt;</code>. Everything about sharing and isolation is decided by that string: same key ⇒ shared, one character different ⇒ two caches. <code class="inl">cache_prefix</code> is the deliberate namespace knob; a per-request <code class="inl">cache_salt</code> is the per-tenant one.</span><span class="ko">KV 청크 하나당 객체 하나, 키는 <code class="inl">&lt;cache_prefix&gt;@&lt;model&gt;@tp_rank:…@group:…@&lt;chunk_hash&gt;</code>. 공유와 격리에 관한 모든 것이 이 문자열로 정해진다. 키가 같으면 공유, 한 글자만 달라도 캐시가 둘. 네임스페이스를 일부러 가르는 손잡이가 <code class="inl">cache_prefix</code>, 요청 단위로 가르는 것이 <code class="inl">cache_salt</code> 다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Lease</b></td>
+      <td><b><span class="en">core — and subtle</span><span class="ko">핵심 — 그리고 미묘</span></b></td>
+      <td><span class="en">Not called explicitly; it is a <i>side effect</i>. The docs: "a per-object lease is granted whenever an <code class="inl">ExistKey</code> request or a <code class="inl">GetReplicaList</code> request succeeds", protecting the object from <code class="inl">Remove</code> and eviction. So vLLM's scheduler-side <code class="inl">batch_is_exist()</code> probe is simultaneously a <b>reservation</b>. Default TTL 10 s. See the failure mode below.</span><span class="ko">명시적으로 부르지 않는다. <i>부수효과</i>다. 문서 왈, "a per-object lease is granted whenever an <code class="inl">ExistKey</code> request or a <code class="inl">GetReplicaList</code> request succeeds" 이고, 그동안 객체는 <code class="inl">Remove</code> 와 eviction 으로부터 보호된다. 즉 vLLM 스케줄러의 <code class="inl">batch_is_exist()</code> 조회는 동시에 <b>예약</b>이다. 기본 TTL 10 초. 실패 모드는 아래에.</span></td>
+    </tr>
+    <tr>
+      <td><b>PutStart / PutEnd</b></td>
+      <td><b><span class="en">core</span><span class="ko">핵심</span></b></td>
+      <td><span class="en">Inside <code class="inl">batch_put_from_multi_buffers</code>. A two-phase write: reserve space, transfer, commit. If a client dies between the two, the object becomes a "zombie" — the master reclaims it via <code class="inl">put_start_discard_timeout</code> (30 s) and <code class="inl">put_start_release_timeout</code> (10 min). A crash-looping vLLM rank therefore leaks pool space for up to ten minutes.</span><span class="ko"><code class="inl">batch_put_from_multi_buffers</code> 내부. 2단계 쓰기다 — 공간 예약, 전송, 커밋. 그 사이에 클라이언트가 죽으면 객체가 "zombie" 가 되고, 마스터가 <code class="inl">put_start_discard_timeout</code>(30초)·<code class="inl">put_start_release_timeout</code>(10분) 으로 회수한다. 크래시 루프에 빠진 vLLM 랭크는 최대 10분간 풀 공간을 새게 한다는 뜻이다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Buffer Allocator</b></td>
+      <td><span class="en">yes — indirectly</span><span class="ko">쓴다 — 간접적으로</span></td>
+      <td><span class="en">The master creates one per mounted segment. Default <code class="inl">OffsetBufferAllocator</code> (bin-based, O(1)); <code class="inl">CachelibBufferAllocator</code> is deprecated. Chosen with the master's <code class="inl">--memory-allocator</code>, never from vLLM.</span><span class="ko">마스터가 마운트된 세그먼트마다 하나씩 만든다. 기본은 <code class="inl">OffsetBufferAllocator</code>(bin 기반, O(1)) 이고 <code class="inl">CachelibBufferAllocator</code> 는 deprecated. 마스터의 <code class="inl">--memory-allocator</code> 로 고르지 vLLM 에서 고르지 않는다.</span></td>
+    </tr>
+    <tr>
+      <td><b>AllocationStrategy</b></td>
+      <td><span class="en">yes — indirectly</span><span class="ko">쓴다 — 간접적으로</span></td>
+      <td><span class="en">Five named strategies decide <i>which node's segment</i> a new object lands on: <code class="inl">random</code>, <code class="inl">free_ratio_first</code>, <code class="inl">ssd_free_ratio_first</code>, <code class="inl">cxl</code>, <code class="inl">local_first</code>. Master-side. Leaving it at <code class="inl">random</code> in a multi-node pool means most of your reads are remote by construction.</span><span class="ko">새 객체가 <i>어느 노드의 세그먼트</i>에 앉을지를 정하는 전략 다섯 — <code class="inl">random</code>, <code class="inl">free_ratio_first</code>, <code class="inl">ssd_free_ratio_first</code>, <code class="inl">cxl</code>, <code class="inl">local_first</code>. 마스터 쪽이다. 멀티노드 풀에서 <code class="inl">random</code> 으로 두면 구조적으로 읽기 대부분이 원격이 된다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Preferred Segment Allocation</b></td>
+      <td><b><span class="en">yes — explicitly</span><span class="ko">쓴다 — 명시적으로</span></b></td>
+      <td><span class="en">The one lifecycle field the connector really sets: <code class="inl">ReplicateConfig.preferred_segment</code>, from <code class="inl">kv_connector_extra_config</code>. Docs semantics: try that segment first, <b>silently fall back to random</b> if it is full or absent, up to 10 attempts. Silent fallback means a mis-set preferred segment produces no error — only worse locality.</span><span class="ko">커넥터가 실제로 세팅하는 유일한 수명 필드다 — <code class="inl">kv_connector_extra_config</code> 에서 받아 <code class="inl">ReplicateConfig.preferred_segment</code> 에 넣는다. 문서상 의미는 그 세그먼트를 먼저 시도하고, 꽉 찼거나 없으면 <b>조용히 random 으로 폴백</b>, 최대 10회 재시도. 조용하다는 게 함정이다 — 잘못 잡아도 에러가 아니라 나쁜 지역성만 남는다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Optional Object Groups</b></td>
+      <td><span class="en">opt-in</span><span class="ko">선택적</span></td>
+      <td><span class="en">Off by default; <code class="inl">enable_group_semantics: "True"</code> makes the connector fill <code class="inl">ReplicateConfig.group_ids</code> — and it checks whether the installed Mooncake package even has the field, warning and falling back if not. What it buys: lease refresh and eviction treat the members of one logical entry together instead of splitting it. The docs are careful to call this "a lifecycle hint … not a transactional guarantee".</span><span class="ko">기본 꺼짐. <code class="inl">enable_group_semantics: "True"</code> 로 켜면 커넥터가 <code class="inl">ReplicateConfig.group_ids</code> 를 채운다 — 설치된 Mooncake 패키지에 그 필드가 있는지까지 확인하고, 없으면 경고 후 폴백한다. 얻는 것은 lease 갱신과 eviction 이 한 논리 엔트리의 멤버들을 쪼개지 않고 함께 다룬다는 것. 문서는 이걸 "a lifecycle hint … not a transactional guarantee" 라고 조심스럽게 부른다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Eviction Policy</b></td>
+      <td><span class="en">yes — indirectly</span><span class="ko">쓴다 — 간접적으로</span></td>
+      <td><span class="en">Approximate LRU, triggered at a 90% high watermark, freeing 5% per pass (<code class="inl">--eviction_high_watermark_ratio</code>, <code class="inl">--eviction_ratio</code>). Objects with a live lease or an unfinished write are skipped. Entirely master-side — vLLM never asks for anything to be kept.</span><span class="ko">근사 LRU. 90% 고수위에서 발동해 한 번에 5% 를 비운다(<code class="inl">--eviction_high_watermark_ratio</code>, <code class="inl">--eviction_ratio</code>). 살아 있는 lease 가 있거나 쓰기가 안 끝난 객체는 건너뛴다. 전적으로 마스터 쪽이고 — vLLM 은 무엇을 남겨 달라고 요청하지 않는다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Soft Pin</b> · <b>Hard Pin</b></td>
+      <td><b class="muted"><span class="en">NOT used</span><span class="ko">안 씀</span></b></td>
+      <td><span class="en">The connector constructs a bare <code class="inl">ReplicateConfig()</code> and sets only <code class="inl">preferred_segment</code> (and optionally <code class="inl">group_ids</code>). <code class="inl">with_soft_pin</code> and <code class="inl">with_hard_pin</code> stay false. This is the most quietly expensive gap — see below.</span><span class="ko">커넥터는 맨 <code class="inl">ReplicateConfig()</code> 를 만들어 <code class="inl">preferred_segment</code> 만(그리고 선택적으로 <code class="inl">group_ids</code> 만) 세팅한다. <code class="inl">with_soft_pin</code>·<code class="inl">with_hard_pin</code> 은 false 그대로다. 가장 조용하게 비싼 빈틈이다 — 아래 참고.</span></td>
+    </tr>
+    <tr>
+      <td><b>replica_num</b> <span class="muted">(multi-replica)</span></td>
+      <td><b class="muted"><span class="en">NOT used</span><span class="ko">안 씀</span></b></td>
+      <td><span class="en">Left at the default 1. Reasonable for a cache — a lost replica just means recomputation — but it does mean one node leaving the pool takes its whole share of the cache with it, and your hit rate steps down until the pool refills.</span><span class="ko">기본값 1 그대로. 캐시니까 합리적이다 — 레플리카를 잃어도 재계산일 뿐이다 — 다만 노드 하나가 풀에서 빠지면 그 몫의 캐시가 통째로 사라지고, 풀이 다시 찰 때까지 히트율이 계단식으로 떨어진다는 뜻이기도 하다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Multi-layer Storage</b> <span class="muted">(SSD)</span></td>
+      <td><span class="en">partial</span><span class="ko">부분</span></td>
+      <td><span class="en">Note the asymmetry: <code class="inl">enable_offload</code> is <b>not</b> passed to <code class="inl">setup()</code> — it is a purely local flag that tells the connector "the master has offload on, so budget a disk staging buffer." Turning the tier on is a master-side decision. The connector does read the result back, classifying each key's replica as <code class="inl">memory</code> or <code class="inl">disk</code> via <code class="inl">batch_get_replica_desc()</code>. <b>Docs gotcha:</b> the legacy <code class="inl">--root_fs_dir</code> path and <code class="inl">--enable_offload=true</code> must not be combined.</span><span class="ko">비대칭에 주의. <code class="inl">enable_offload</code> 는 <code class="inl">setup()</code> 에 <b>넘어가지 않는다</b> — "마스터에 오프로드가 켜져 있으니 디스크 스테이징 버퍼를 잡아라" 고 커넥터에게 알리는 순수 로컬 플래그다. 티어를 켜는 건 마스터 쪽 결정이다. 대신 커넥터가 결과는 읽어 온다 — <code class="inl">batch_get_replica_desc()</code> 로 키마다 레플리카를 <code class="inl">memory</code>/<code class="inl">disk</code> 로 분류한다. <b>문서상 함정:</b> 레거시 <code class="inl">--root_fs_dir</code> 와 <code class="inl">--enable_offload=true</code> 를 같이 쓰면 안 된다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Tenant</b> · <b>Tenant Quota</b></td>
+      <td><span class="en">partial</span><span class="ko">부분</span></td>
+      <td><span class="en">The connector forwards <code class="inl">tenant_id</code> to <code class="inl">setup()</code> — but only when it differs from the default. And the docs say that when the master runs with <code class="inl">enable_multi_tenants=false</code> (the default) "request tenant IDs are ignored". So setting <code class="inl">tenant_id</code> in vLLM and nothing at the master buys you exactly nothing. Quota enforcement is an admin HTTP API on the master, entirely outside vLLM.</span><span class="ko">커넥터가 <code class="inl">tenant_id</code> 를 <code class="inl">setup()</code> 에 넘기긴 한다 — 기본값과 다를 때만. 그런데 문서상 마스터가 <code class="inl">enable_multi_tenants=false</code>(기본) 로 돌면 "request tenant IDs are ignored" 다. 즉 vLLM 에만 <code class="inl">tenant_id</code> 를 넣고 마스터를 안 건드리면 얻는 게 정확히 없다. 쿼터 강제는 마스터의 admin HTTP API 이고 vLLM 밖의 이야기다.</span></td>
+    </tr>
+    <tr>
+      <td><b>High Availability</b> · <b>Snapshot &amp; Restore</b></td>
+      <td><span class="muted"><span class="en">deployment-only</span><span class="ko">배포 전용</span></span></td>
+      <td><span class="en">etcd-coordinated multi-master leader election, and metadata snapshot/restore. Real features, but the connector has no knob for either — they are decided when you start <code class="inl">mooncake_master</code>. Worth knowing because "the master is a single point of failure" is only true if you deployed it that way.</span><span class="ko">etcd 로 조율하는 다중 마스터 리더 선출, 그리고 메타데이터 스냅샷·복원. 실재하는 기능이지만 커넥터에 손잡이가 없다 — <code class="inl">mooncake_master</code> 를 띄울 때 정해진다. "마스터가 SPOF" 라는 말은 그렇게 배포했을 때만 참이라는 걸 알아 둘 필요가 있다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Upsert</b> · <b>RemoveByRegex</b></td>
+      <td><span class="muted"><span class="en">no</span><span class="ko">안 씀</span></span></td>
+      <td><span class="en">The connector's whole API surface is four calls: <code class="inl">batch_is_exist</code>, <code class="inl">batch_get_into_multi_buffers</code>, <code class="inl">batch_put_from_multi_buffers</code>, and <code class="inl">remove_all(force=True)</code> for the dev-mode reset. That narrowness is a feature — it is also why the connector is easy to reason about.</span><span class="ko">커넥터의 API 면적은 통틀어 네 개다 — <code class="inl">batch_is_exist</code>, <code class="inl">batch_get_into_multi_buffers</code>, <code class="inl">batch_put_from_multi_buffers</code>, 그리고 dev 모드 리셋용 <code class="inl">remove_all(force=True)</code>. 그 좁음이 장점이다 — 커넥터를 머리로 따라가기 쉬운 이유이기도 하다.</span></td>
+    </tr>
+  </table>
+
+  <h3><span class="en">Three things that fall out of this mapping</span><span class="ko">이 대조에서 떨어져 나오는 것 세 가지</span></h3>
+
+  <h4><span class="en">1. The lease is the reason a "hit" can evaporate before it is read</span><span class="ko">1. 히트가 읽히기 전에 증발할 수 있는 이유가 lease 다</span></h4>
+  <p>
+    <span class="en">Two different processes are involved at two different times. The <b>scheduler</b> asks <code class="inl">batch_is_exist()</code> and, per the docs, that grants a lease with a default 10-second TTL. The <b>worker</b> later calls the actual read, which grants a fresh lease of its own. Between those two moments the request sits in a queue.</span>
+    <span class="ko">서로 다른 두 프로세스가 서로 다른 시점에 관여한다. <b>스케줄러</b>가 <code class="inl">batch_is_exist()</code> 로 물으면 문서상 그 순간 기본 10초짜리 lease 가 부여된다. <b>워커</b>는 나중에 실제 읽기를 하고 거기서 또 새 lease 를 받는다. 그 두 시점 사이에 요청은 큐에 앉아 있다.</span>
+  </p>
+  <p>
+    <span class="en">Under load that gap can exceed the TTL. If the pool is also above its eviction watermark, the object can be gone by the time the worker asks — the scheduler counted a hit that never materialised. The docs add a second, narrower case: "if the lease expires before a <code class="inl">Get</code> operation finishes reading the data, the operation will be considered failed" — a very large or very slow read can time out mid-transfer.</span>
+    <span class="ko">부하가 걸리면 그 간격이 TTL 을 넘길 수 있다. 풀이 축출 수위 위에 있기까지 하면, 워커가 물을 때쯤 객체가 사라져 있을 수 있다 — 스케줄러는 실현되지 않은 히트를 하나 센 것이다. 문서는 더 좁은 경우를 하나 더 든다. "if the lease expires before a <code class="inl">Get</code> operation finishes reading the data, the operation will be considered failed" — 아주 크거나 아주 느린 읽기는 전송 도중에 만료될 수 있다.</span>
+  </p>
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">The signature</span><span class="ko">증상의 모양</span></span>
+    <span class="en">Hit rate that is fine on a quiet cluster and sags <b>only</b> under load, with no errors anywhere. This is exactly why §5 insists on reading the scheduler-side and worker-side counters <i>separately</i> — a single blended number cannot show you this. The lever is the <code class="inl">master_service</code> lease-TTL parameter, and secondarily the eviction watermark; the cheaper fix is usually reducing queue time.</span>
+    <span class="ko">한산할 땐 멀쩡하다가 <b>부하가 걸릴 때만</b> 히트율이 처지고, 어디에도 에러가 없다. §5 가 스케줄러 쪽 카운터와 워커 쪽 카운터를 <i>따로</i> 보라고 고집한 이유가 정확히 이것이다 — 하나로 섞은 숫자로는 이게 안 보인다. 레버는 <code class="inl">master_service</code> 의 lease TTL 파라미터, 그다음이 축출 수위다. 더 싼 해법은 대개 큐 대기시간을 줄이는 쪽이다.</span>
+  </div>
+
+  <h4><span class="en">2. Soft Pin is unused — and the docs' own example is your workload</span><span class="ko">2. Soft Pin 을 안 쓴다 — 그런데 문서가 든 예시가 바로 당신의 워크로드다</span></h4>
+  <p>
+    <span class="en">The Store docs introduce soft pin like this: <i>"For important and frequently used objects, such as system prompts, Mooncake Store provides a soft pin mechanism."</i> Soft-pinned objects are skipped by eviction until nothing else is eligible, and the pin lapses on its own after 30 minutes of no access.</span>
+    <span class="ko">Store 문서는 soft pin 을 이렇게 소개한다. <i>"For important and frequently used objects, such as system prompts, Mooncake Store provides a soft pin mechanism."</i> soft pin 된 객체는 다른 후보가 없을 때까지 축출에서 제외되고, 30분간 접근이 없으면 핀이 알아서 풀린다.</span>
+  </p>
+  <p>
+    <span class="en">That is a precise description of a long shared system prompt — the single highest-value thing in most offload deployments, because every request pays for it. The connector never sets the flag, so those blocks sit in the same approximate-LRU queue as a one-off 200-token chat. On a pool that cycles hard, the block worth the most is evicted on exactly the same terms as the block worth the least.</span>
+    <span class="ko">이건 길게 공유되는 시스템 프롬프트에 대한 정확한 묘사다 — 모든 요청이 그 값을 치르니 대개 오프로드 배포에서 가장 값이 큰 대상이다. 커넥터는 그 플래그를 세팅하지 않으므로, 그 블록들은 일회성 200토큰 채팅과 똑같은 근사 LRU 큐에 놓인다. 회전이 빠른 풀에서는 가장 값비싼 블록이 가장 값싼 블록과 정확히 같은 조건으로 축출된다.</span>
+  </p>
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">Editor's note — not a claim by either project</span><span class="ko">편집자 주 — 두 프로젝트의 주장이 아님</span></span>
+    <span class="en">Whether this matters is an empirical question, and it depends on how hard your pool cycles: if you never hit the 90% watermark, nothing is being evicted and the pin would change nothing. The reason to know about it is that it is a <b>one-field change</b> in the connector (<code class="inl">with_soft_pin</code> on the shared-prefix puts) with an obvious owner, so it is a cheap thing to propose upstream if you can show the eviction pressure. I have not measured this.</span>
+    <span class="ko">이게 실제로 문제인지는 경험적 질문이고, 풀이 얼마나 빠르게 도는지에 달렸다. 90% 수위에 닿은 적이 없다면 축출 자체가 없으니 핀을 켜도 달라질 게 없다. 알아 둘 가치가 있는 이유는 이게 커넥터에서 <b>필드 하나짜리 변경</b>(공유 프리픽스 put 에 <code class="inl">with_soft_pin</code>)이고 주인이 분명해서, 축출 압박을 보일 수만 있다면 업스트림에 제안하기 싼 건이라서다. 나는 이걸 측정해 보지 않았다.</span>
+  </div>
+
+  <h4><span class="en">3. The connector's own warning logs are the configuration guide</span><span class="ko">3. 커넥터가 찍는 경고 로그가 곧 설정 가이드다</span></h4>
+  <p>
+    <span class="en">Three combinations of <code class="inl">mode</code>, <code class="inl">preferred_segment</code> and <code class="inl">enable_offload</code> are legal but self-defeating, and the connector says so out loud at startup. If you are configuring this for the first time, read these three lines as the manual:</span>
+    <span class="ko"><code class="inl">mode</code>·<code class="inl">preferred_segment</code>·<code class="inl">enable_offload</code> 의 조합 세 가지는 합법이지만 자기모순이고, 커넥터가 시작할 때 그걸 대놓고 말해 준다. 처음 설정한다면 이 세 줄을 매뉴얼로 읽으면 된다.</span>
+  </p>
+  <table>
+    <tr>
+      <th style="width:30%"><span class="en">Combination</span><span class="ko">조합</span></th>
+      <th style="width:34%"><span class="en">What it logs</span><span class="ko">찍히는 경고</span></th>
+      <th><span class="en">What it is telling you</span><span class="ko">무슨 말인가</span></th>
+    </tr>
+    <tr>
+      <td><code class="inl">embedded</code> + <code class="inl">preferred_segment</code></td>
+      <td><code class="inl">rank-contributed segments will be idle</code></td>
+      <td><span class="en">You asked every rank to donate memory, then told them all to write somewhere else. The donated memory sits empty. Pick one model or the other.</span><span class="ko">랭크마다 메모리를 내놓게 해 놓고, 전부 다른 데 쓰라고 지시한 것이다. 내놓은 메모리는 빈 채로 있는다. 둘 중 하나만 골라야 한다.</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">embedded</code> + <code class="inl">enable_offload</code>, <span class="en">no preferred segment</span><span class="ko">preferred segment 없음</span></td>
+      <td><code class="inl">SSD tier will only see puts that happen to land on the owner segment</code></td>
+      <td><span class="en">The SSD tier belongs to one node. With random allocation across many rank segments, only the fraction that lands on that node reaches disk — your SSD tier is silently a small sample of the cache.</span><span class="ko">SSD 티어는 한 노드의 것이다. 여러 랭크 세그먼트에 무작위로 흩뿌리면 그 노드에 떨어진 몫만 디스크에 닿는다 — SSD 티어가 조용히 캐시의 일부 표본이 되어 버린다.</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">standalone-store</code>, <span class="en">no offload</span><span class="ko">오프로드 없음</span></td>
+      <td><code class="inl">large prefills may exceed the owner DirectIO budget</code></td>
+      <td><span class="en">A single long prefill's staging can blow the disk budget — and the code aborts the <b>whole</b> load for that request when it does, not the overflowing part. A long-context request quietly gets zero reuse.</span><span class="ko">긴 프리필 하나의 스테이징이 디스크 예산을 넘길 수 있고, 그러면 코드는 넘치는 부분이 아니라 그 요청의 <b>로드 전체</b>를 포기한다. 롱컨텍스트 요청이 조용히 재사용률 0 이 된다.</span></td>
+    </tr>
+  </table>
+
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">What this chapter is for</span><span class="ko">이 장의 쓸모</span></span>
+    <span class="en">If you only remember one thing: the two features doing nearly all the work are <b>BatchTransfer</b> on the data plane and <b>the key string</b> on the control plane. Everything else is either automatic (topology, endpoints, faults — you have it and cannot break it) or dormant (pins, replicas, tenants — you do not have it and probably think you do). Configuration effort spent anywhere other than "does the key match" and "where does the segment live" is usually effort spent on the wrong thing.</span>
+    <span class="ko">하나만 기억한다면 — 일의 거의 전부를 하는 기능은 데이터 평면의 <b>BatchTransfer</b> 와 컨트롤 평면의 <b>키 문자열</b> 둘이다. 나머지는 자동이거나(토폴로지·엔드포인트·장애 — 갖고 있고 망가뜨릴 수도 없다) 잠들어 있다(pin·복제·테넌트 — 안 갖고 있는데 갖고 있다고 생각하기 쉽다). "키가 맞는가" 와 "세그먼트가 어디 있는가" 밖에 쏟는 설정 노력은 대개 잘못된 데 쓰는 노력이다.</span>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="num">9</span>
     <span class="en">Sources</span>
     <span class="ko">출처</span>
   </h2>
@@ -1773,6 +2127,7 @@ key_bytes = _estimate_disk_offload_staging_bytes(size)
     <li>vLLM docs — MooncakeConnector (P2P) usage: <a href="https://docs.vllm.ai/en/stable/features/mooncake_connector_usage/">docs.vllm.ai</a></li>
     <li><span class="en">vLLM blog (first-party) "Mooncake Store in vLLM", 2026-05-06 — all §6 reported numbers: <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vllm.ai/blog/2026-05-06-mooncake-store</a></span><span class="ko">vLLM 블로그(1차 당사자) "Mooncake Store in vLLM", 2026-05-06 — §6 의 보고 수치 전부: <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vllm.ai/blog/2026-05-06-mooncake-store</a></span></li>
     <li><span class="en">Mooncake project site (first-party) — architecture, FAST'25: <a href="https://kvcache-ai.github.io/Mooncake/">kvcache-ai.github.io/Mooncake</a></span><span class="ko">Mooncake 프로젝트 사이트(1차 당사자) — 아키텍처, FAST'25: <a href="https://kvcache-ai.github.io/Mooncake/">kvcache-ai.github.io/Mooncake</a></span></li>
+    <li><span class="en">Mooncake design docs — every feature name quoted in §8: <a href="https://kvcache-ai.github.io/Mooncake/design/transfer-engine/">Transfer Engine</a> (Segment, BatchTransfer, Topology Aware Path Selection, Endpoint Management, Fault Handling) · <a href="https://kvcache-ai.github.io/Mooncake/design/mooncake-store.html">Mooncake Store</a> (Lease, Soft/Hard Pin, Eviction Policy, AllocationStrategy, Preferred Segment Allocation, Object Groups, Tenant Quota, Multi-layer Storage) · <a href="https://kvcache-ai.github.io/Mooncake/deployment/kv-cache-sharing-and-isolation.html">KV Cache Sharing and Isolation</a> (<code class="inl">cache_prefix</code>, <code class="inl">cache_salt</code>)</span><span class="ko">Mooncake 설계 문서 — §8 이 인용한 기능 이름 전부: <a href="https://kvcache-ai.github.io/Mooncake/design/transfer-engine/">Transfer Engine</a> (Segment, BatchTransfer, Topology Aware Path Selection, Endpoint Management, Fault Handling) · <a href="https://kvcache-ai.github.io/Mooncake/design/mooncake-store.html">Mooncake Store</a> (Lease, Soft/Hard Pin, Eviction Policy, AllocationStrategy, Preferred Segment Allocation, Object Groups, Tenant Quota, Multi-layer Storage) · <a href="https://kvcache-ai.github.io/Mooncake/deployment/kv-cache-sharing-and-isolation.html">KV Cache Sharing and Isolation</a> (<code class="inl">cache_prefix</code>, <code class="inl">cache_salt</code>)</span></li>
     <li><span class="en">Mooncake source @ <code class="inl">f8c9667</code> — transport backends, selection logic, NVLink fabric handles, and the store's file tier: <a href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280">github.com/kvcache-ai/Mooncake</a></span><span class="ko">Mooncake 소스 @ <code class="inl">f8c9667</code> — transport 백엔드, 선택 로직, NVLink fabric 핸들, 스토어의 파일 티어: <a href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280">github.com/kvcache-ai/Mooncake</a></span></li>
     <li><span class="en">Hardware figures (vendor-published) — <a href="https://www.nvidia.com/en-us/data-center/gb200-nvl72/">NVIDIA GB200 NVL72</a>, <a href="https://developer.nvidia.com/blog/nvidia-gb200-nvl72-delivers-trillion-parameter-llm-training-and-real-time-inference/">NVIDIA GB200 NVL72 technical blog</a>, <a href="https://docs.nvidia.com/multi-node-nvlink-systems">Multi-Node NVLink Systems</a>, <a href="https://www.nvidia.com/en-us/networking/infiniband-adapters/">ConnectX InfiniBand adapters</a></span><span class="ko">하드웨어 수치(벤더 발표) — <a href="https://www.nvidia.com/en-us/data-center/gb200-nvl72/">NVIDIA GB200 NVL72</a>, <a href="https://developer.nvidia.com/blog/nvidia-gb200-nvl72-delivers-trillion-parameter-llm-training-and-real-time-inference/">NVIDIA GB200 NVL72 기술 블로그</a>, <a href="https://docs.nvidia.com/multi-node-nvlink-systems">Multi-Node NVLink Systems</a>, <a href="https://www.nvidia.com/en-us/networking/infiniband-adapters/">ConnectX InfiniBand 어댑터</a></span></li>
     <li><span class="en">Companion note — the design in more depth and the LMCache contrast: <a href="mooncake-store-vllm.html">Mooncake in vLLM — design, code flow, and how it differs from LMCache</a></span><span class="ko">함께 보는 노트 — 설계 상세와 LMCache 대조: <a href="mooncake-store-vllm.html">Mooncake in vLLM — design, code flow, and how it differs from LMCache</a></span></li>
