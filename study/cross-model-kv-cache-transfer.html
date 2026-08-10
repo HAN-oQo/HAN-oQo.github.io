@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cross-Model KV Cache Transfer in LLM Families — paper note</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:880px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:28px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;line-height:1.55;margin:12px 0}
+  .eq{background:var(--gray-bg);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:14px 0;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13.5px;color:var(--ink);overflow-x:auto;text-align:center}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber)} .c-amber .tag{color:var(--amber)}
+  .c-teal{background:var(--teal-bg);color:var(--teal)} .c-teal .tag{color:var(--teal)}
+  .c-purple{background:var(--purple-bg);color:var(--purple)} .c-purple .tag{color:var(--purple)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.good td{background:var(--teal-bg)}
+  tr.bad td{background:var(--coral-bg)}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13.5px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13.5px;color:var(--muted)}
+  /* 논문 원문 인용 — verbatim quote + 원문 위치 링크 */
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">Cross-Model KV Cache Transfer in LLM Families — paper note</span>
+    <span class="ko">Cross-Model KV Cache Transfer in LLM Families — 논문 정리</span>
+  </h1>
+  <p class="lede">
+    <span class="en">NVIDIA asks a blunt question: when a router hands a conversation from Qwen3-14B up to Qwen3-32B, does the 32B really have to re-read the whole prompt? Or can we just <i>translate</i> the 14B's KV cache into 32B-shaped KV? It turns out a plain ridge regression — no backprop, fit on 500 short documents — gets you 73–98% of the accuracy on four of six model pairs, at 2.7–25× less prefill latency. On the other two pairs it falls apart, and the reason why is the most interesting part of the paper.</span>
+    <span class="ko">NVIDIA가 던지는 단순한 질문: 라우터가 대화를 Qwen3-14B에서 Qwen3-32B로 넘길 때, 32B가 정말 프롬프트를 처음부터 다시 읽어야 하나? 아니면 14B의 KV 캐시를 32B 모양으로 <i>번역</i>하면 되지 않나? 놀랍게도 평범한 릿지 회귀 하나로 — 역전파 없이, 짧은 문서 500개로 피팅해서 — 6개 모델 쌍 중 4개에서 정확도의 73~98%를 유지하고, prefill 지연은 2.7~25배 줄어든다. 나머지 2개에서는 무너지는데, 그 이유가 이 논문에서 가장 재미있는 부분이다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://arxiv.org/abs/2608.03893">arXiv:2608.03893</a></span>
+    <span class="badge"><a href="https://arxiv.org/html/2608.03893v1">HTML full text</a></span>
+    <span class="badge">cs.LG · 2026-08-04</span>
+    <span class="badge">Heo, Shafipour, Zhao et al. · NVIDIA</span>
+  </div>
+  <p class="post-meta"><time datetime="2026-08-10">2026-08-10</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">Problem — every model swap makes the receiver re-read the whole prompt</span><span class="ko">문제 정의 — 모델을 바꿀 때마다 받는 쪽이 프롬프트를 처음부터 다시 읽는다</span></a></li>
+    <li><a href="#s2"><span class="en">Method — the cross-model KV relationship is mostly linear, so fit it in closed form</span><span class="ko">해결 방법 — 모델 간 KV 관계는 대체로 선형이다, 그러면 닫힌 형태로 풀자</span></a></li>
+    <li><a href="#s3"><span class="en">Implementation — 500 documents, one hour, 4–12 GB of matrices per pair</span><span class="ko">구현 방법 — 문서 500개, 1시간, 쌍마다 4~12 GB의 행렬</span></a></li>
+    <li><a href="#s4"><span class="en">Results — two tiers, and why R² was the wrong yardstick all along</span><span class="ko">결과 — 두 개의 티어, 그리고 R²이 애초에 틀린 잣대였던 이유</span></a></li>
+    <li><a href="#s5"><span class="en">Discussion — what the authors leave open, and what it means for a serving stack</span><span class="ko">Discussion — 저자들이 남긴 숙제, 그리고 서빙 스택 관점의 의미</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">Within one model family, a small model's KV cache and a big model's KV cache are related <b>almost linearly</b>. Fit a per-head ridge regression on 500 short documents (no gradients, ~1 hour on one 8×H100 node) and the big model can decode <b>straight from the small model's cache</b>, skipping prefill entirely — 2.7–25× faster, keeping 73–98% of accuracy on four of six pairs. On two Ministral pairs it collapses to ~42%. The decisive factor is <b>not how large the mapping error is, but where it lands</b>: error that falls in directions the target's attention actually reads is fatal; error in directions attention ignores is free.</span>
+  <span class="ko">같은 모델 패밀리 안에서는 작은 모델의 KV 캐시와 큰 모델의 KV 캐시가 <b>거의 선형 관계</b>다. 짧은 문서 500개로 head별 릿지 회귀를 피팅하면(역전파 없이, 8×H100 노드 하나로 약 1시간) 큰 모델이 <b>작은 모델의 캐시에서 바로 디코딩</b>할 수 있다 — prefill을 통째로 건너뛰어 2.7~25배 빠르고, 6개 쌍 중 4개에서 정확도의 73~98%를 유지한다. Ministral 2개 쌍에서는 ~42%로 무너진다. 승부를 가르는 건 <b>매핑 오차의 크기가 아니라 오차가 떨어지는 위치</b>다: 타깃의 어텐션이 실제로 읽는 방향에 떨어진 오차는 치명적이고, 어텐션이 무시하는 방향의 오차는 공짜다.</span>
+</div>
+
+<div class="grid3">
+  <div class="mini">
+    <h4><span class="en">📖 Prefill vs. decode</span><span class="ko">📖 Prefill vs. decode</span></h4>
+    <p><span class="en"><b>Prefill</b> = one big forward pass over the whole prompt, whose only lasting output is the KV cache. <b>Decode</b> = generating tokens one at a time on top of that cache. Prefill cost grows with prompt length × model size; it is the bill this paper is trying not to pay twice.</span><span class="ko"><b>Prefill</b> = 프롬프트 전체를 한 번에 통과시키는 forward pass. 남는 결과물은 KV 캐시뿐이다. <b>Decode</b> = 그 캐시 위에서 토큰을 하나씩 뽑는 단계. prefill 비용은 프롬프트 길이 × 모델 크기로 커지는데, 이 논문은 그 비용을 두 번 내지 않으려 한다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 KV cache</span><span class="ko">📖 KV 캐시</span></h4>
+    <p><span class="en">For every token, every layer, every KV head, the model stores a <b>key</b> vector and a <b>value</b> vector. Attention scores the query against the keys and reads out a weighted mix of the values. The cache is just "what the model already worked out about this prompt", frozen in the model's own private format.</span><span class="ko">모든 토큰 · 모든 레이어 · 모든 KV head마다 <b>key</b> 벡터와 <b>value</b> 벡터를 저장해 둔 것. 어텐션은 query를 key들과 대조해 점수를 매기고, 그 가중치로 value를 섞어 읽는다. 캐시는 결국 "이 프롬프트에 대해 모델이 이미 계산해 둔 것"이며, 모델마다 다른 사적인 포맷으로 얼어 있다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 "Matched KV"</span><span class="ko">📖 "Matched KV"</span></h4>
+    <p><span class="en">The paper's precondition: source and target have the <b>same number of KV heads</b> and the <b>same per-head dimension</b> (here, always 8 heads × 128 dims). Layer count, hidden size and parameter count may differ freely. Modern GQA families often keep these two axes fixed across scales — which is exactly why this trick has room to work.</span><span class="ko">논문의 전제 조건: 소스와 타깃의 <b>KV head 개수</b>와 <b>head당 차원</b>이 같을 것(여기선 항상 8 heads × 128 dims). 레이어 수, hidden size, 파라미터 수는 달라도 된다. 요즘 GQA 패밀리는 스케일이 달라도 이 두 축을 고정하는 경우가 많은데, 그래서 이 트릭이 통할 여지가 생긴다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 RoPE</span><span class="ko">📖 RoPE</span></h4>
+    <p><span class="en">Rotary position embedding: before caching, each key is <b>rotated by an angle that depends on its position</b>. So a stored key mixes two things — what the token means, and where it sat. The paper undoes the rotation, maps the meaning, then re-rotates with the target's angles.</span><span class="ko">회전식 위치 임베딩. 캐시에 넣기 전에 각 key를 <b>그 토큰의 위치에 따라 정해지는 각도만큼 회전</b>시킨다. 그래서 저장된 key에는 두 가지가 섞여 있다 — 토큰의 의미, 그리고 그 토큰이 앉아 있던 자리. 논문은 회전을 풀어 의미만 매핑한 뒤, 타깃의 각도로 다시 회전시킨다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 Ridge regression · R²</span><span class="ko">📖 릿지 회귀 · R²</span></h4>
+    <p><span class="en">Least squares with a small penalty on the weights, solvable by <b>one matrix inverse</b> — no training loop. <b>R²</b> = the fraction of the target's variance the fit explains: 1.0 is perfect, 0 is "no better than predicting the average", negative means "worse than the average".</span><span class="ko">가중치에 작은 페널티를 얹은 최소제곱법. <b>행렬 역행렬 한 번</b>으로 풀린다 — 학습 루프가 없다. <b>R²</b>는 타깃 분산 중 이 피팅이 설명한 비율: 1.0이면 완벽, 0이면 "평균값 예측과 다를 바 없음", 음수면 "평균보다 못함".</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 Retention (the paper's main metric)</span><span class="ko">📖 Retention (논문의 주 지표)</span></h4>
+    <p><span class="en">transfer accuracy ÷ target's own standalone accuracy × 100%. 100% = "the mapped cache is as good as the target's own". Because benchmarks have different chance floors, they also report <b>floor-normalized</b> retention, which puts random guessing at 0%.</span><span class="ko">전이 정확도 ÷ 타깃 자체 정확도 × 100%. 100%면 "매핑된 캐시가 타깃 본인의 캐시만큼 좋다"는 뜻. 벤치마크마다 찍기 정답률(chance floor)이 달라서, 찍기를 0%로 놓는 <b>floor-normalized</b> retention도 함께 보고한다.</span></p>
+  </div>
+</div>
+
+<!-- ============ 1. PROBLEM ============ -->
+<section id="s1">
+  <h2><span class="num">1</span>
+    <span class="en">Problem — every model swap makes the receiver re-read the whole prompt</span>
+    <span class="ko">문제 정의 — 모델을 바꿀 때마다 받는 쪽이 프롬프트를 처음부터 다시 읽는다</span>
+  </h2>
+
+  <p class="en">Two things are true of production LLM serving in 2026, and they compound badly. First, sessions are long: agentic workloads accumulate context turn after turn, so the prompt keeps growing. Second, a single request no longer belongs to a single model — routers, cost-quality cascades and mid-conversation upgrades move a conversation between different-sized members of the same family.</p>
+  <p class="ko">2026년 프로덕션 LLM 서빙에는 두 가지 사실이 있고, 이 둘이 겹치면 문제가 커집니다. 첫째, 세션이 깁니다. 에이전트 워크로드는 턴마다 컨텍스트를 쌓기 때문에 프롬프트가 계속 자랍니다. 둘째, 요청 하나가 더 이상 모델 하나에 속하지 않습니다 — 라우터, 비용-품질 캐스케이딩, 대화 도중 업그레이드가 같은 패밀리의 서로 다른 크기 모델 사이로 대화를 옮깁니다.</p>
+
+  <blockquote class="q">
+    <p>"Production LLM serving increasingly involves long agentic sessions, where context accumulates across many turns. It also relies on multi-model orchestration for cost-quality cascading, mid-conversation switching, and routing… Both trends compound prefill cost. Long sessions stretch the prompt, and each model swap re-prefills the accumulated context on the receiver."</p>
+    <cite>— §1, ¶1 · <a href="https://arxiv.org/html/2608.03893v1#S1">원문 보기 (§1)</a></cite>
+  </blockquote>
+
+  <p class="en">And the standard mitigation does not help here. <b>Prefix caching reuses KV only within one model</b> — the moment you hand the conversation to a different model, its cache is written in a format the receiver cannot read, so the receiver re-runs the entire prefill. On a 32K-token prompt, that is ~7 seconds of Qwen3-32B forward pass, paid again, for context the fleet already computed once.</p>
+  <p class="ko">그런데 표준 완화책이 여기선 안 통합니다. <b>prefix caching은 같은 모델 안에서만 KV를 재사용</b>합니다 — 대화를 다른 모델에 넘기는 순간, 기존 캐시는 받는 쪽이 읽을 수 없는 포맷이므로 받는 쪽은 prefill 전체를 다시 돌립니다. 32K 토큰 프롬프트라면 Qwen3-32B forward pass 약 7초를, 이미 한 번 계산한 컨텍스트에 대해 또 내는 셈입니다.</p>
+
+  <svg class="fig" viewBox="0 0 880 372" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="A conversation served by Qwen3-14B is handed to Qwen3-32B; the top branch re-prefills the whole prompt through 64 transformer layers taking 6975 ms, the bottom branch maps the existing KV cache through one matrix per layer in 278 ms">
+    <defs>
+      <marker id="aB" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0c447c"/></marker>
+      <marker id="aR" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6f2a12"/></marker>
+      <marker id="aG" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#27500a"/></marker>
+    </defs>
+
+    <!-- LEFT: source session -->
+    <text x="16" y="20" font-size="11.5" font-weight="700" fill="#0c447c">Qwen3-14B has been serving this session</text>
+    <g>
+      <text x="16" y="46" font-size="10" fill="#6b6a63">32K-token context</text>
+      <g fill="#85b7eb">
+        <rect x="16" y="54" width="9" height="13" rx="2"/><rect x="28" y="54" width="9" height="13" rx="2"/>
+        <rect x="40" y="54" width="9" height="13" rx="2"/><rect x="52" y="54" width="9" height="13" rx="2"/>
+        <rect x="64" y="54" width="9" height="13" rx="2"/><rect x="76" y="54" width="9" height="13" rx="2"/>
+        <rect x="88" y="54" width="9" height="13" rx="2"/><rect x="100" y="54" width="9" height="13" rx="2"/>
+        <rect x="112" y="54" width="9" height="13" rx="2"/><rect x="124" y="54" width="9" height="13" rx="2"/>
+        <rect x="136" y="54" width="9" height="13" rx="2"/><rect x="148" y="54" width="9" height="13" rx="2"/>
+      </g>
+      <text x="164" y="65" font-size="10" fill="#8a8f98">…</text>
+    </g>
+    <rect x="16" y="86" width="160" height="88" rx="10" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.8"/>
+    <text x="96" y="106" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">KV cache (14B)</text>
+    <g fill="#85b7eb" opacity="0.85">
+      <rect x="30" y="118" width="132" height="7" rx="3"/><rect x="30" y="129" width="132" height="7" rx="3"/>
+      <rect x="30" y="140" width="132" height="7" rx="3"/><rect x="30" y="151" width="132" height="7" rx="3"/>
+    </g>
+    <text x="96" y="190" text-anchor="middle" font-size="9.5" fill="#6b6a63">40 layers × 8 KV heads × 128</text>
+
+    <!-- swap arrow -->
+    <line x1="182" y1="130" x2="236" y2="130" stroke="#3a3934" stroke-width="1.8" stroke-dasharray="5 3"/>
+    <text x="209" y="120" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3a3934">router</text>
+    <text x="209" y="148" text-anchor="middle" font-size="9.5" fill="#6b6a63">swap → 32B</text>
+
+    <!-- TOP BRANCH: re-prefill -->
+    <line x1="240" y1="122" x2="290" y2="74" stroke="#6f2a12" stroke-width="1.8" marker-end="url(#aR)"/>
+    <rect x="296" y="20" width="330" height="104" rx="10" fill="#fce6dd" stroke="#ef9f86" stroke-width="1.8"/>
+    <text x="312" y="41" font-size="11.5" font-weight="700" fill="#6f2a12">Today — re-prefill on the 32B</text>
+    <g fill="#ef9f86">
+      <rect x="312" y="52" width="292" height="8" rx="3"/><rect x="312" y="63" width="292" height="8" rx="3"/>
+      <rect x="312" y="74" width="292" height="8" rx="3"/><rect x="312" y="85" width="292" height="8" rx="3"/>
+      <rect x="312" y="96" width="292" height="8" rx="3"/>
+    </g>
+    <text x="458" y="116" text-anchor="middle" font-size="9.5" fill="#6f2a12">every one of 64 layers recomputed over all 32K tokens</text>
+    <line x1="630" y1="72" x2="676" y2="72" stroke="#6f2a12" stroke-width="1.8" marker-end="url(#aR)"/>
+    <text x="768" y="58" text-anchor="middle" font-size="26" font-weight="700" fill="#6f2a12">6,975 ms</text>
+    <text x="768" y="78" text-anchor="middle" font-size="10.5" fill="#6f2a12">Qwen3-32B prefill @ 32K</text>
+    <text x="768" y="96" text-anchor="middle" font-size="10" fill="#8a8f98">paid again, for context already computed</text>
+
+    <!-- BOTTOM BRANCH: transfer -->
+    <line x1="240" y1="140" x2="290" y2="214" stroke="#27500a" stroke-width="1.8" marker-end="url(#aG)"/>
+    <rect x="296" y="176" width="330" height="104" rx="10" fill="#eaf3de" stroke="#97c459" stroke-width="1.8"/>
+    <text x="312" y="197" font-size="11.5" font-weight="700" fill="#27500a">This paper — map the cache instead</text>
+    <g>
+      <rect x="330" y="210" width="52" height="52" rx="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.5"/>
+      <text x="356" y="240" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0c447c">K,V</text>
+      <text x="356" y="253" text-anchor="middle" font-size="8.5" fill="#0c447c">14B</text>
+      <line x1="388" y1="236" x2="416" y2="236" stroke="#27500a" stroke-width="1.6" marker-end="url(#aG)"/>
+      <rect x="422" y="212" width="46" height="48" rx="6" fill="#f1e8fb" stroke="#bfa0eb" stroke-width="1.6"/>
+      <text x="445" y="242" text-anchor="middle" font-size="15" font-weight="700" fill="#3f1f72">W</text>
+      <line x1="474" y1="236" x2="502" y2="236" stroke="#27500a" stroke-width="1.6" marker-end="url(#aG)"/>
+      <rect x="508" y="210" width="52" height="52" rx="6" fill="#eaf3de" stroke="#97c459" stroke-width="1.5"/>
+      <text x="534" y="240" text-anchor="middle" font-size="10.5" font-weight="700" fill="#27500a">K,V</text>
+      <text x="534" y="253" text-anchor="middle" font-size="8.5" fill="#27500a">32B</text>
+    </g>
+    <text x="458" y="274" text-anchor="middle" font-size="9.5" fill="#27500a">one batched matmul per target layer — no transformer body at all</text>
+    <line x1="630" y1="228" x2="676" y2="228" stroke="#27500a" stroke-width="1.8" marker-end="url(#aG)"/>
+    <text x="768" y="216" text-anchor="middle" font-size="26" font-weight="700" fill="#27500a">278 ms</text>
+    <text x="768" y="236" text-anchor="middle" font-size="10.5" fill="#27500a">mapper @ 32K · <tspan font-weight="700">25× faster</tspan></text>
+    <text x="768" y="254" text-anchor="middle" font-size="10" fill="#8a8f98">then the 32B decodes normally</text>
+
+    <!-- bottom note -->
+    <line x1="16" y1="304" x2="864" y2="304" stroke="#e3e1d8" stroke-width="1"/>
+    <text x="440" y="326" text-anchor="middle" font-size="11" fill="#6b6a63">Prefix caching already skips this work — but only when the <tspan font-weight="700">same</tspan> model sees the prompt again.</text>
+    <text x="440" y="346" text-anchor="middle" font-size="11" fill="#6b6a63">Cross-model transfer asks whether the cache can be translated between two <tspan font-weight="700">different</tspan> members of one family.</text>
+    <text x="440" y="364" text-anchor="middle" font-size="9.5" fill="#8a8f98">Latencies: Table 5 (§4.7), Qwen3 14B→32B, 8×H100 bf16</text>
+  </svg>
+  <p class="figcap"><span class="en">The setup. Numbers from Table 5 (§4.7); the "one matmul per layer" description is from §4.7.</span><span class="ko">문제 설정. 수치는 Table 5 (§4.7), "레이어당 matmul 하나"라는 설명은 §4.7.</span></p>
+
+  <h3><span class="en">1.1 — Reframing: prefill's only output <i>is</i> the cache</span>
+      <span class="ko">1.1 — 문제 재정의: prefill의 결과물은 결국 캐시 하나뿐이다</span></h3>
+  <p class="en">The paper's opening move is a reframe. If the entire lasting output of prefill is the KV cache, then "skip the receiver's prefill" is not a scheduling problem or a caching problem — it is a <b>representation</b> problem. You have a tensor in model A's format; you need the same information in model B's format.</p>
+  <p class="ko">논문의 첫 수는 문제를 다시 정의하는 것입니다. prefill이 남기는 게 KV 캐시뿐이라면, "받는 쪽 prefill을 건너뛰기"는 스케줄링 문제도 캐싱 문제도 아니고 <b>표현(representation)</b> 문제입니다. 모델 A 포맷의 텐서가 있고, 같은 정보를 모델 B 포맷으로 만들면 됩니다.</p>
+
+  <blockquote class="q">
+    <p>"Since prefill's output is the KV cache, reusing it across models reduces to a representation problem of transforming one model's KV cache into another's expected format. We call this cross-model KV cache transfer and restrict the present study to within-family transfer. The mapping is bidirectional. Small-to-large transfer upgrades quality, and large-to-small reduces cost."</p>
+    <cite>— §1, ¶2 · <a href="https://arxiv.org/html/2608.03893v1#S1">원문 보기 (§1)</a></cite>
+  </blockquote>
+
+  <p class="en">Note that both directions are useful, for different reasons. <b>Small → large</b> is the cascade upgrade: a cheap model handled the conversation, the request turns out to be hard, and you want the big model to take over without paying its (larger) prefill. <b>Large → small</b> is the cost move: hand the tail of a conversation down to a cheaper model. The paper's headline numbers are small → large; large → small is evaluated on HellaSwag and in the multi-turn and latency sections.</p>
+  <p class="ko">두 방향 모두 쓸모가 있는데 이유가 다릅니다. <b>작은 → 큰</b>은 캐스케이드 업그레이드입니다. 싼 모델이 대화를 처리하다가 어려운 요청이라는 게 드러나면, 큰 모델의 (더 비싼) prefill을 내지 않고 넘겨받게 하는 것. <b>큰 → 작은</b>은 비용 절감입니다. 대화 후반부를 더 싼 모델로 내려보내는 것. 논문의 대표 수치는 작은 → 큰이고, 큰 → 작은은 HellaSwag과 멀티턴·지연 절에서 평가됩니다.</p>
+
+  <h3><span class="en">1.2 — Why this is hard, and what everyone else did about it</span>
+      <span class="ko">1.2 — 왜 어려운가, 그리고 남들은 어떻게 풀었나</span></h3>
+  <p class="en">Two models in one family are not two versions of the same object. Qwen3-14B has 40 layers, Qwen3-32B has 64. Hidden sizes differ. Depth ratios run from 1.2× to 2.5× across the pairs studied. So there is no natural "layer 12 of A ↔ layer 12 of B" correspondence to exploit, and no shared coordinate system to fall back on.</p>
+  <p class="ko">같은 패밀리의 두 모델은 같은 물건의 두 버전이 아닙니다. Qwen3-14B는 40 레이어, Qwen3-32B는 64 레이어입니다. hidden size도 다릅니다. 이 논문이 다루는 쌍들의 깊이 비는 1.2배에서 2.5배까지 퍼져 있습니다. 그러니 "A의 12층 ↔ B의 12층" 같은 자연스러운 대응도 없고, 기댈 공통 좌표계도 없습니다.</p>
+  <p class="en">Prior work handles this with machinery that has to be <i>trained</i>, or with assumptions that shrink the problem:</p>
+  <p class="ko">기존 연구들은 이 문제를 <i>학습이 필요한</i> 장치로 풀거나, 문제를 줄이는 가정을 붙여서 풀었습니다:</p>
+
+  <table>
+    <thead><tr>
+      <th><span class="en">Method</span><span class="ko">방법</span></th>
+      <th><span class="en">Gradient-free</span><span class="ko">학습 불필요</span></th>
+      <th><span class="en">Cross-scale</span><span class="ko">크기 달라도 OK</span></th>
+      <th><span class="en">Transfers KV values</span><span class="ko">KV 값 자체를 전달</span></th>
+      <th><span class="en">Closed-form</span><span class="ko">닫힌 해</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td>C2C <span class="muted">(Fu et al., 2026)</span><br><span class="muted" style="font-size:12.5px"><span class="en">trains per-pair neural fusers</span><span class="ko">쌍마다 신경망 fuser를 학습</span></span></td><td>—</td><td>✓</td><td>✓</td><td>—</td></tr>
+      <tr><td>LatentAlign <span class="muted">(Dery et al., 2026)</span><br><span class="muted" style="font-size:12.5px"><span class="en">learns per-model adapters into a shared latent space</span><span class="ko">모델별 어댑터를 학습해 공유 잠재 공간으로</span></span></td><td>—</td><td>✓</td><td>✓</td><td>—</td></tr>
+      <tr><td>IAM <span class="muted">(Zhao et al., 2025)</span><br><span class="muted" style="font-size:12.5px"><span class="en">substitutes attention <i>patterns</i>, not KV values</span><span class="ko">KV 값이 아니라 어텐션 <i>패턴</i>을 대체</span></span></td><td>✓</td><td>✓</td><td>—</td><td>—</td></tr>
+      <tr><td>DroidSpeak <span class="muted">(Liu et al., 2026)</span><br><span class="muted" style="font-size:12.5px"><span class="en">KV sharing between architecturally identical fine-tunes</span><span class="ko">구조가 완전히 동일한 파인튜닝 변종 사이의 KV 공유</span></span></td><td>✓</td><td>—</td><td>✓</td><td>—</td></tr>
+      <tr class="good"><td><b><span class="en">This paper</span><span class="ko">이 논문</span></b><br><span class="muted" style="font-size:12.5px"><span class="en">per-head ridge, fit once by a matrix inverse</span><span class="ko">head별 릿지, 역행렬 한 번으로 피팅</span></span></td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Table 6 (Appendix A) reconstructed. DroidSpeak's "—" marks are inapplicable rather than absent: it transfers KV only between models with identical hidden size, layer count and head configuration.</span><span class="ko">Table 6 (Appendix A) 재구성. DroidSpeak의 "—"는 "못 한다"가 아니라 "해당 없음"이다 — hidden size·레이어 수·head 구성이 완전히 같은 모델 사이에서만 KV를 옮기기 때문.</span></p>
+
+  <p class="en">The gap the paper claims is not "these methods are bad". It is that <b>nobody checked whether the problem needed them</b>:</p>
+  <p class="ko">논문이 주장하는 빈자리는 "기존 방법들이 나쁘다"가 아닙니다. <b>이 문제에 그런 장치가 정말 필요한지 아무도 확인해 보지 않았다</b>는 것입니다:</p>
+
+  <blockquote class="q">
+    <p>"To the best of our knowledge, none investigates whether the cross-model KV relationship is simple enough for a closed-form, training-free mapping."</p>
+    <cite>— §2.2, ¶1 · <a href="https://arxiv.org/html/2608.03893v1#S2.SS2">원문 보기 (§2.2)</a></cite>
+  </blockquote>
+
+  <p class="en">Three neighbouring lines of work are explicitly called out as <i>orthogonal</i> — they compose with this rather than compete: intra-model cross-layer KV reuse (CLA, xKV, Layer-Condensed KV), prefill acceleration (SpecPrefill, SwiftKV), and the linear cross-LLM representation-alignment literature (the Platonic Representation Hypothesis and model stitching), which is where the intuition that a <i>linear</i> map might suffice comes from in the first place.</p>
+  <p class="ko">인접한 세 갈래 연구는 <i>직교한다</i>고 명시합니다 — 경쟁이 아니라 함께 쓸 수 있다는 뜻입니다: 모델 내부의 레이어 간 KV 재사용(CLA, xKV, Layer-Condensed KV), prefill 가속(SpecPrefill, SwiftKV), 그리고 LLM 간 <i>선형</i> 표현 정렬 문헌(Platonic Representation Hypothesis, model stitching) — 애초에 "선형 매핑으로 될지도 모른다"는 직관이 나온 곳이 바로 세 번째입니다.</p>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">the precondition that does the heavy lifting</span><span class="ko">실제로 일을 하는 전제 조건</span></span>
+    <span class="en">Every pair in this paper is <b>matched-KV</b>: 8 KV heads × 128 dims on both sides. That is not a coincidence of the families chosen — it is what makes a <i>per-head</i> map well-posed, since source head <i>h</i> and target head <i>h</i> then live in spaces of the same shape. The authors are honest that this is an empirical convenience, not a requirement of the method (Limitation 3, §5) — they never test a mismatched-KV pair.</span>
+    <span class="ko">이 논문의 모든 쌍은 <b>matched-KV</b>입니다: 양쪽 다 KV head 8개 × 128차원. 고른 패밀리들의 우연이 아니라, <i>head별</i> 매핑이 잘 정의되게 만드는 조건입니다 — 그래야 소스의 head <i>h</i>와 타깃의 head <i>h</i>가 같은 모양의 공간에 살거든요. 저자들도 이게 방법론의 요구사항이 아니라 실험상의 편의였다고 솔직히 적어 뒀습니다(Limitation 3, §5) — mismatched-KV 쌍은 한 번도 테스트하지 않았습니다.</span>
+  </div>
+
+  <h3><span class="en">1.3 — The formal statement, in words</span>
+      <span class="ko">1.3 — 문제의 형식적 정의를 말로 풀면</span></h3>
+  <p class="en">Source model 𝒮 has L<sub>s</sub> layers; target 𝒯 has L<sub>t</sub>. Both use grouped-query attention, with n<sub>kv</sub> KV heads of per-head dimension d<sub>h</sub>. For a prompt of T tokens, each (layer, head) of the source produces a key matrix and a value matrix of shape T × d<sub>h</sub>. The whole collection is the cache 𝒞<sub>𝒮</sub>. The goal is a map f that turns 𝒞<sub>𝒮</sub> into something the target can decode from:</p>
+  <p class="ko">소스 모델 𝒮는 L<sub>s</sub>개 레이어, 타깃 𝒯는 L<sub>t</sub>개 레이어를 갖습니다. 둘 다 grouped-query attention을 쓰고, KV head는 n<sub>kv</sub>개, head당 차원은 d<sub>h</sub>입니다. T개 토큰짜리 프롬프트에 대해 소스의 각 (레이어, head)는 T × d<sub>h</sub> 모양의 key 행렬과 value 행렬을 만듭니다. 이 전체 묶음이 캐시 𝒞<sub>𝒮</sub>입니다. 목표는 𝒞<sub>𝒮</sub>를 타깃이 디코딩할 수 있는 무언가로 바꾸는 매핑 f입니다:</p>
+
+  <div class="eq">m( 𝒯(x ; <b>Ĉ</b><sub>𝒯</sub>) )  ≈  m( 𝒯(x ; 𝒞<sub>𝒯</sub>) )     <span class="muted">— Eq. 1</span></div>
+
+  <p class="en">Read that as: <i>whatever score m you care about, the target running on the mapped cache should score about the same as the target running on its own cache.</i> Two things are worth noticing. First, the criterion is <b>downstream accuracy, not reconstruction error</b> — the paper is explicit that it does not judge the mapper by how close the numbers are. That decision turns out to be the pivot of the whole paper (§4.5). Second, because source and target share a tokenizer within a family, the sequence length T is identical on both sides, so the map is token-aligned for free — one row in, one row out.</p>
+  <p class="ko">읽는 법: <i>내가 신경 쓰는 어떤 점수 m을 재든, 매핑된 캐시로 돌린 타깃이 자기 캐시로 돌린 타깃과 비슷한 점수를 내야 한다.</i> 두 가지를 짚어둘 만합니다. 첫째, 기준이 <b>복원 오차가 아니라 다운스트림 정확도</b>입니다 — 숫자가 얼마나 가까운지로 매퍼를 평가하지 않겠다고 논문이 명시합니다. 이 선택이 결국 논문 전체의 축이 됩니다(§4.5). 둘째, 같은 패밀리는 토크나이저를 공유하므로 시퀀스 길이 T가 양쪽에서 동일합니다. 덕분에 토큰 정렬이 공짜로 됩니다 — 한 행 들어가고 한 행 나옵니다.</p>
+</section>
+
+<!-- ============ 2. METHOD ============ -->
+<section id="s2">
+  <h2><span class="num">2</span>
+    <span class="en">Method — the cross-model KV relationship is mostly linear, so fit it in closed form</span>
+    <span class="ko">해결 방법 — 모델 간 KV 관계는 대체로 선형이다, 그러면 닫힌 형태로 풀자</span>
+  </h2>
+
+  <p class="en">The paper does something I wish more systems papers did: <b>before choosing an architecture, it measures how hard the problem actually is.</b> §2.3 is a probe, not a method — and everything in §3 is a direct consequence of what the probe found.</p>
+  <p class="ko">이 논문은 시스템 논문들이 더 자주 했으면 하는 일을 합니다: <b>아키텍처를 고르기 전에, 문제가 실제로 얼마나 어려운지를 먼저 잽니다.</b> §2.3은 방법이 아니라 탐침(probe)이고, §3의 모든 것은 그 탐침이 발견한 것의 직접적인 귀결입니다.</p>
+
+  <h3><span class="en">2.1 — The probe: can one linear regression predict the target's cache?</span>
+      <span class="ko">2.1 — 탐침: 선형 회귀 하나로 타깃의 캐시를 예측할 수 있나?</span></h3>
+  <p class="en">Take every combination of (source layer <i>l′</i>, target layer <i>l</i>, head <i>h</i>). Run the same 128K calibration tokens through both models. Now fit the simplest possible thing — one ordinary least-squares regression from the source's 128-dim per-token vector to the target's 128-dim per-token vector:</p>
+  <p class="ko">(소스 레이어 <i>l′</i>, 타깃 레이어 <i>l</i>, head <i>h</i>)의 모든 조합을 잡습니다. 같은 128K개 캘리브레이션 토큰을 두 모델에 통과시킵니다. 그리고 생각할 수 있는 가장 단순한 것을 피팅합니다 — 소스의 토큰당 128차원 벡터에서 타깃의 토큰당 128차원 벡터로 가는 최소제곱 회귀 하나:</p>
+
+  <div class="eq">Ĉ<sub>t</sub><sup>l,h</sup> = C<sub>s</sub><sup>l′,h</sup> <b>W</b> + <b>b</b>,   <b>W</b> ∈ ℝ<sup>128×128</sup>, <b>b</b> ∈ ℝ<sup>128</sup>     <span class="muted">— Eq. 2</span></div>
+
+  <p class="en">Each of the ~128,000 calibration tokens is one training example. The score is <b>R²</b>, averaged over the target's heads. Recall what R² means here in concrete terms: R² = 0.81 says <i>"81% of the variation in the 32B's keys at this layer is explained by a fixed linear function of the 14B's keys at that layer"</i> — the remaining 19% is whatever the linear map can't see. Three cache types are probed separately: raw keys (<code class="inl">K_rope</code>, as stored), RoPE-stripped keys (<code class="inl">K_stripped</code>), and values (<code class="inl">V</code>, which carry no positional encoding at all).</p>
+  <p class="ko">약 128,000개의 캘리브레이션 토큰 하나하나가 학습 예제 하나입니다. 점수는 <b>R²</b>이고, 타깃의 head들에 대해 평균 냅니다. R²이 여기서 뜻하는 바를 구체적으로 다시 새기면: R² = 0.81은 <i>"이 레이어에서 32B가 만든 key들의 변동 중 81%가, 저 레이어의 14B key들에 대한 고정된 선형 함수로 설명된다"</i>는 말입니다 — 남은 19%는 선형 매핑이 볼 수 없는 무엇입니다. 캐시 종류 세 가지를 따로 잽니다: 원본 key(<code class="inl">K_rope</code>, 저장된 그대로), RoPE를 벗겨낸 key(<code class="inl">K_stripped</code>), 그리고 위치 인코딩이 아예 없는 value(<code class="inl">V</code>).</p>
+
+  <blockquote class="q">
+    <p>"(1) High linear fit: a single linear regression already captures a large fraction of cross-model KV variance on the most predictable target layers. Head-averaged R² is well above zero along the diagonal, and the best single source–target cell reaches K<sub>stripped</sub> R²=0.81 on Qwen3 14B→32B and 0.65 on the weaker 8B→32B at the heatmap peaks."</p>
+    <cite>— §2.3, ¶3 · <a href="https://arxiv.org/html/2608.03893v1#S2.SS3">원문 보기 (§2.3)</a></cite>
+  </blockquote>
+
+  <p class="en">Four qualitative patterns come out of the R² heatmaps (Figure 2 in the paper), and each one turns directly into a design decision:</p>
+  <p class="ko">R² 히트맵(논문 Figure 2)에서 네 가지 정성적 패턴이 나오고, 각각이 곧바로 설계 결정으로 이어집니다:</p>
+
+  <div class="grid2">
+    <div class="mini">
+      <h4>① <span class="en">High linear fit</span><span class="ko">선형 적합도가 높다</span></h4>
+      <p><span class="en">R² is well above zero along the diagonal; the peak cell hits 0.81. <b>→ A linear mapper is worth trying at all.</b></span><span class="ko">대각선을 따라 R²이 0보다 한참 높고, 최고 셀은 0.81. <b>→ 애초에 선형 매퍼를 시도해 볼 값어치가 있다.</b></span></p>
+    </div>
+    <div class="mini">
+      <h4>② <span class="en">Closer models, sharper diagonal</span><span class="ko">가까운 모델일수록 대각선이 선명</span></h4>
+      <p><span class="en">Bigger architectural and depth gaps smear the pattern out. <b>→ Expect per-pair variation; don't assume one recipe fits all.</b></span><span class="ko">구조·깊이 격차가 클수록 패턴이 번진다. <b>→ 쌍마다 결과가 다를 것이다. 하나의 레시피가 전부에 맞을 거라 가정하지 말 것.</b></span></p>
+    </div>
+    <div class="mini">
+      <h4>③ <span class="en">RoPE contaminates the fit</span><span class="ko">RoPE가 피팅을 오염시킨다</span></h4>
+      <p><span class="en">Stripping the positional rotation generally sharpens the diagonal. <b>→ Map in content space (§2.4).</b></span><span class="ko">위치 회전을 벗겨내면 대각선이 대체로 선명해진다. <b>→ content space에서 매핑하자 (§2.4).</b></span></p>
+    </div>
+    <div class="mini">
+      <h4>④ <span class="en">K is more predictable than V</span><span class="ko">K가 V보다 예측하기 쉽다</span></h4>
+      <p><span class="en">A ~0.2 gap in head-averaged R², consistently. <b>→ Fit K and V separately; share nothing between them.</b></span><span class="ko">head 평균 R²에서 일관되게 ~0.2 차이. <b>→ K와 V를 따로 피팅하고, 둘 사이에 아무것도 공유하지 말 것.</b></span></p>
+    </div>
+  </div>
+
+  <h3><span class="en">2.2 — How many source layers does one target layer need?</span>
+      <span class="ko">2.2 — 타깃 레이어 하나에는 소스 레이어가 몇 개나 필요한가?</span></h3>
+  <p class="en">The probe used a single source layer. The obvious follow-up: is one enough? They answer with <b>greedy forward selection</b> — start from the best single source layer, then repeatedly add whichever remaining source layer raises joint R² the most, and watch the curve.</p>
+  <p class="ko">탐침은 소스 레이어 하나만 썼습니다. 자연스러운 후속 질문: 하나로 충분한가? 저자들은 <b>greedy forward selection</b>으로 답합니다 — 가장 좋은 소스 레이어 하나에서 시작해, 남은 것 중 결합 R²을 가장 많이 올리는 레이어를 계속 추가하면서 곡선을 봅니다.</p>
+
+  <blockquote class="q">
+    <p>"Complementary information is distributed across multiple source layers. On Qwen3 14B→32B, k=1 captures only 66% of the k=all R² for K<sub>stripped</sub> and 42% for V, with the largest gain from k=1 to k=4 and R² close to its k=all value by k=6."</p>
+    <cite>— §2.3 ("How many source layers…") · <a href="https://arxiv.org/html/2608.03893v1#S2.SS3">원문 보기 (§2.3)</a></cite>
+  </blockquote>
+
+  <p class="en">Plainly: <b>no single layer of the small model contains everything a given layer of the big model needs.</b> The information is spread out, and the spread is worse for values than for keys (42% vs 66% at k=1). This is the finding that produces the mapper's most important component — and, per the ablation in §4, its single largest contributor to accuracy.</p>
+  <p class="ko">쉽게 말하면: <b>작은 모델의 어떤 레이어 하나도 큰 모델의 특정 레이어가 필요로 하는 정보를 전부 갖고 있지 않습니다.</b> 정보가 흩어져 있고, 그 흩어짐은 key(66%)보다 value(42%)에서 더 심합니다. 이 발견이 매퍼의 가장 중요한 구성요소를 만들어 내고 — §4의 ablation에 따르면 — 정확도에 가장 크게 기여하는 단일 요소가 됩니다.</p>
+
+  <h3><span class="en">2.3 — Component 1 &amp; 2: per-head ridge, fed by the top-k source layers</span>
+      <span class="ko">2.3 — 구성요소 1 &amp; 2: top-k 소스 레이어를 먹는 head별 릿지</span></h3>
+
+  <svg class="fig" viewBox="0 0 880 344" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="For one target layer, the top-8 source layers are selected by R-squared, all their KV heads are concatenated into an 8192-dimensional per-token feature vector, and one ridge matrix per target head projects it to that head's 128-dimensional key or value vector">
+    <defs>
+      <marker id="m2b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0c447c"/></marker>
+      <marker id="m2p" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3f1f72"/></marker>
+    </defs>
+
+    <!-- source stack -->
+    <text x="14" y="18" font-size="11" font-weight="700" fill="#3a3934">Source: Qwen3-14B</text>
+    <text x="14" y="33" font-size="9.5" fill="#8a8f98">40 layers</text>
+    <g>
+      <rect x="14" y="42" width="96" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="14" y="54" width="96" height="9" rx="3" fill="#85b7eb"/>
+      <rect x="14" y="66" width="96" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="14" y="78" width="96" height="9" rx="3" fill="#85b7eb"/>
+      <rect x="14" y="90" width="96" height="9" rx="3" fill="#85b7eb"/>
+      <rect x="14" y="102" width="96" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="14" y="114" width="96" height="9" rx="3" fill="#85b7eb"/>
+      <rect x="14" y="126" width="96" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="14" y="138" width="96" height="9" rx="3" fill="#85b7eb"/>
+      <rect x="14" y="150" width="96" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="14" y="162" width="96" height="9" rx="3" fill="#85b7eb"/>
+      <rect x="14" y="174" width="96" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="14" y="186" width="96" height="9" rx="3" fill="#85b7eb"/>
+      <rect x="14" y="198" width="96" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="14" y="210" width="96" height="9" rx="3" fill="#85b7eb"/>
+      <rect x="14" y="222" width="96" height="9" rx="3" fill="#e3e1d8"/>
+    </g>
+    <text x="14" y="242" font-size="10" font-weight="700" fill="#0c447c">■ top-k = 8 picked by R²</text>
+    <text x="14" y="256" font-size="9.5" fill="#8a8f98">chosen per target layer,</text>
+    <text x="14" y="268" font-size="9.5" fill="#8a8f98">shared by all its heads</text>
+
+    <!-- concat -->
+    <line x1="116" y1="132" x2="152" y2="132" stroke="#0c447c" stroke-width="1.7" marker-end="url(#m2b)"/>
+    <text x="134" y="122" text-anchor="middle" font-size="9" fill="#0c447c">concat</text>
+
+    <text x="158" y="60" font-size="10.5" font-weight="700" fill="#0c447c">one token's feature vector</text>
+    <g>
+      <rect x="158" y="70" width="46" height="26" rx="4" fill="#e6f1fb" stroke="#85b7eb"/>
+      <rect x="206" y="70" width="46" height="26" rx="4" fill="#e6f1fb" stroke="#85b7eb"/>
+      <rect x="254" y="70" width="46" height="26" rx="4" fill="#e6f1fb" stroke="#85b7eb"/>
+      <rect x="302" y="70" width="46" height="26" rx="4" fill="#e6f1fb" stroke="#85b7eb"/>
+      <text x="181" y="87" text-anchor="middle" font-size="9" fill="#0c447c">L7 · 8h</text>
+      <text x="229" y="87" text-anchor="middle" font-size="9" fill="#0c447c">L11 · 8h</text>
+      <text x="277" y="87" text-anchor="middle" font-size="9" fill="#0c447c">L14 · 8h</text>
+      <text x="325" y="87" text-anchor="middle" font-size="9" fill="#0c447c">…×8</text>
+    </g>
+    <line x1="158" y1="104" x2="348" y2="104" stroke="#0c447c" stroke-width="1.2"/>
+    <line x1="158" y1="100" x2="158" y2="108" stroke="#0c447c" stroke-width="1.2"/>
+    <line x1="348" y1="100" x2="348" y2="108" stroke="#0c447c" stroke-width="1.2"/>
+    <text x="253" y="120" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">8 layers × 8 heads × 128 = 8,192 numbers</text>
+    <text x="253" y="134" text-anchor="middle" font-size="9.5" fill="#6b6a63">all heads pooled → the map can move info between heads</text>
+
+    <!-- ridge -->
+    <line x1="253" y1="146" x2="253" y2="176" stroke="#3f1f72" stroke-width="1.7" marker-end="url(#m2p)"/>
+    <rect x="150" y="180" width="206" height="62" rx="10" fill="#f1e8fb" stroke="#bfa0eb" stroke-width="1.8"/>
+    <text x="253" y="202" text-anchor="middle" font-size="12" font-weight="700" fill="#3f1f72">ridge  W = (XᵀX + λI)⁻¹XᵀY</text>
+    <text x="253" y="219" text-anchor="middle" font-size="10" fill="#3f1f72">8,192 × 128 · one matrix inverse</text>
+    <text x="253" y="234" text-anchor="middle" font-size="9.5" fill="#6b6a63">λ = 0.01 · no gradients, no epochs</text>
+
+    <!-- output -->
+    <line x1="362" y1="211" x2="404" y2="211" stroke="#3f1f72" stroke-width="1.7" marker-end="url(#m2p)"/>
+    <rect x="410" y="196" width="118" height="30" rx="5" fill="#eaf3de" stroke="#97c459" stroke-width="1.6"/>
+    <text x="469" y="216" text-anchor="middle" font-size="10.5" font-weight="700" fill="#27500a">target K (l, h) · 128</text>
+    <text x="469" y="243" text-anchor="middle" font-size="9.5" fill="#6b6a63">a second, independent ridge does V</text>
+
+    <!-- target stack -->
+    <text x="592" y="18" font-size="11" font-weight="700" fill="#3a3934">Target: Qwen3-32B</text>
+    <text x="592" y="33" font-size="9.5" fill="#8a8f98">64 layers × 8 KV heads</text>
+    <g>
+      <rect x="592" y="42" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="54" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="66" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="78" width="120" height="9" rx="3" fill="#97c459"/>
+      <rect x="592" y="90" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="102" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="114" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="126" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="138" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="150" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="162" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="174" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="186" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="198" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="210" width="120" height="9" rx="3" fill="#e3e1d8"/>
+      <rect x="592" y="222" width="120" height="9" rx="3" fill="#e3e1d8"/>
+    </g>
+    <line x1="534" y1="205" x2="586" y2="86" stroke="#27500a" stroke-width="1.6" stroke-dasharray="4 3"/>
+    <text x="726" y="86" font-size="9.5" font-weight="700" fill="#27500a">◀ layer l, head h</text>
+    <text x="726" y="102" font-size="9.5" fill="#8a8f98">filled by this one ridge</text>
+
+    <!-- repeat note -->
+    <rect x="592" y="240" width="272" height="52" rx="9" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.4"/>
+    <text x="606" y="259" font-size="10.5" font-weight="700" fill="#6b4a06">Repeat for every target head</text>
+    <text x="606" y="275" font-size="9.5" fill="#6b4a06">64 layers × 8 heads × {K,V} = 1,024 ridges</text>
+    <text x="606" y="288" font-size="9.5" fill="#6b4a06">nothing shared across heads or between K and V</text>
+
+    <line x1="14" y1="308" x2="866" y2="308" stroke="#e3e1d8"/>
+    <text x="440" y="328" text-anchor="middle" font-size="10.5" fill="#6b6a63">1,024 ridges × (8,192 × 128) = <tspan font-weight="700">1.07 B parameters ≈ 4 GB</tspan> — the whole mapper for this pair.</text>
+    <text x="440" y="340" text-anchor="middle" font-size="9.5" fill="#8a8f98">Structure from Figure 3 (§3); sizes from Table 12 (Appendix D). Selected source layers drawn illustratively.</text>
+  </svg>
+  <p class="figcap"><span class="en">The mapper for Qwen3 14B→32B at k=8. Redrawn from Figure 3 (§3) with the parameter arithmetic of Table 12 (Appendix D).</span><span class="ko">k=8일 때 Qwen3 14B→32B의 매퍼. Figure 3 (§3) 구조에 Table 12 (Appendix D)의 파라미터 산수를 붙여 다시 그림.</span></p>
+
+  <h4><span class="en">The regression, symbol by symbol</span><span class="ko">회귀식을 기호 하나씩</span></h4>
+  <div class="eq">K̂<sub>t</sub><sup>l,h</sup> = <b>X</b><sub>K</sub><sup>l</sup> <b>W</b><sub>K</sub><sup>l,h</sup> + <b>b</b><sub>K</sub><sup>l,h</sup>,    V̂<sub>t</sub><sup>l,h</sup> = <b>X</b><sub>V</sub><sup>l</sup> <b>W</b><sub>V</sub><sup>l,h</sup> + <b>b</b><sub>V</sub><sup>l,h</sup>     <span class="muted">— Eq. 3</span></div>
+  <ul class="en">
+    <li><b>X<sub>K</sub><sup>l</sup></b> — the input. For target layer <i>l</i>, take the top-<i>k</i> source layers, and from each take <i>all</i> its KV heads, concatenated. Shape: T tokens × (k · n<sub>kv</sub><sup>s</sup> · d<sub>h</sub><sup>s</sup>). Note the superscript is only <i>l</i>: <b>the input is shared by every head of target layer l</b>.</li>
+    <li><b>W<sub>K</sub><sup>l,h</sup></b> — the weights, one matrix per (target layer, head). Shape: (k · n<sub>kv</sub><sup>s</sup> · d<sub>h</sub><sup>s</sup>) × d<sub>h</sub><sup>t</sup>. For Qwen3 14B→32B at k=8: <b>8·8·128 = 8,192 in → 128 out</b>.</li>
+    <li><b>b<sub>K</sub><sup>l,h</sup></b> — the intercept, d<sub>h</sub><sup>t</sup> numbers.</li>
+    <li>K and V get entirely separate fits (pattern ④ above), and no weights are shared across heads.</li>
+  </ul>
+  <ul class="ko">
+    <li><b>X<sub>K</sub><sup>l</sup></b> — 입력. 타깃 레이어 <i>l</i>에 대해 top-<i>k</i> 소스 레이어를 고르고, 각 레이어에서 KV head <i>전부</i>를 이어 붙인 것. 모양: T 토큰 × (k · n<sub>kv</sub><sup>s</sup> · d<sub>h</sub><sup>s</sup>). 위첨자가 <i>l</i>뿐인 점에 주목 — <b>입력은 타깃 레이어 l의 모든 head가 공유</b>합니다.</li>
+    <li><b>W<sub>K</sub><sup>l,h</sup></b> — 가중치. (타깃 레이어, head)마다 행렬 하나. 모양: (k · n<sub>kv</sub><sup>s</sup> · d<sub>h</sub><sup>s</sup>) × d<sub>h</sub><sup>t</sup>. Qwen3 14B→32B, k=8이면 <b>8·8·128 = 8,192 입력 → 128 출력</b>.</li>
+    <li><b>b<sub>K</sub><sup>l,h</sup></b> — 절편, d<sub>h</sub><sup>t</sup>개의 수.</li>
+    <li>K와 V는 완전히 별개로 피팅하고(위의 패턴 ④), head 사이에도 가중치를 공유하지 않습니다.</li>
+  </ul>
+
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">why pool all source heads into one input?</span><span class="ko">왜 소스 head를 전부 한 입력으로 모으나?</span></span>
+    <span class="en">Because head <i>h</i> of the big model is not necessarily the descendant of head <i>h</i> of the small model. By feeding <i>every</i> source head of the selected layers into <i>every</i> target head's regression, the fit is free to discover that target head 3 is best explained by source heads 1 and 6. The paper calls this "enabling cross-head information flow" (§3.2). It also explains why the feature dimension gets so large — 8,192 at k=8, 20,480 at k=20.</span>
+    <span class="ko">큰 모델의 head <i>h</i>가 작은 모델의 head <i>h</i>의 후손이라는 보장이 없기 때문입니다. 선택된 레이어의 <i>모든</i> 소스 head를 <i>모든</i> 타깃 head의 회귀에 넣어 주면, 피팅이 "타깃 head 3은 소스 head 1과 6으로 가장 잘 설명된다"를 스스로 찾아낼 수 있습니다. 논문은 이를 "cross-head information flow를 가능하게 한다"고 표현합니다(§3.2). 특징 차원이 그렇게 커지는 이유이기도 합니다 — k=8이면 8,192, k=20이면 20,480.</span>
+  </div>
+
+  <h4><span class="en">Why ridge and not plain least squares</span><span class="ko">왜 순수 최소제곱이 아니라 릿지인가</span></h4>
+  <div class="eq"><b>W</b>* = (<b>X</b>ᵀ<b>X</b> + λ<b>I</b>)<sup>−1</sup> <b>X</b>ᵀ<b>Y</b>,   λ = 0.01     <span class="muted">— Eq. 4</span></div>
+  <p class="en">Ordinary least squares would be the same formula with λ = 0. The problem is <b>X</b>ᵀ<b>X</b>: it is an 8,192 × 8,192 matrix built from features that are, by construction, highly correlated — the top-<i>k</i> source layers were selected <i>because</i> they all predict the same target well, so they necessarily resemble each other. A matrix like that is near-singular, and inverting it amplifies numerical noise wildly. Adding λ<b>I</b> nudges every diagonal entry up by 0.01, which is enough to make the inverse well-behaved while barely moving the solution.</p>
+  <p class="ko">순수 최소제곱은 λ = 0인 같은 식입니다. 문제는 <b>X</b>ᵀ<b>X</b>입니다. 8,192 × 8,192 행렬인데, 그 재료가 되는 특징들이 구조적으로 서로 강하게 상관돼 있습니다 — top-<i>k</i> 소스 레이어는 <i>같은</i> 타깃을 잘 예측한다는 이유로 뽑힌 것이니, 서로 닮을 수밖에 없죠. 이런 행렬은 거의 특이(near-singular)해서, 역행렬을 구하면 수치 잡음이 크게 증폭됩니다. λ<b>I</b>를 더하면 대각 성분이 전부 0.01씩 올라가고, 그것만으로 역행렬이 얌전해지면서 해는 거의 움직이지 않습니다.</p>
+  <blockquote class="q">
+    <p>"We use ridge with λ=0.01 rather than pure OLS for numerical conditioning. The feature dimension can reach tens of thousands at large k and the top-k selected source layers are by construction correlated, so <b>X</b><sup>⊤</sup><b>X</b> is near-singular. The Tikhonov term stabilizes the inverse with negligible fit bias."</p>
+    <cite>— §3.1 ("Fitting.") · <a href="https://arxiv.org/html/2608.03893v1#S3.SS1">원문 보기 (§3.1)</a></cite>
+  </blockquote>
+  <p class="en">One implementation detail with a clean justification: <b>X</b> and <b>Y</b> are centred (mean-subtracted) before the solve, so Eq. 4 estimates only the slope. The intercept is then recovered arithmetically as <b>b</b> = Ȳ − X̄<b>W</b>*, which is exact and costs nothing. And note what "fitting" means here — <b>there is no training loop</b>: accumulate <b>X</b>ᵀ<b>X</b> and <b>X</b>ᵀ<b>Y</b> over the calibration tokens, invert once, done.</p>
+  <p class="ko">깔끔한 근거가 있는 구현 디테일 하나: <b>X</b>와 <b>Y</b>를 풀기 전에 중심화(평균 빼기)하므로 Eq. 4는 기울기만 추정합니다. 절편은 <b>b</b> = Ȳ − X̄<b>W</b>*로 산술적으로 복원되는데, 정확하고 비용이 0입니다. 그리고 여기서 "피팅"이 뜻하는 바를 새겨 두면 — <b>학습 루프가 없습니다</b>: 캘리브레이션 토큰에 대해 <b>X</b>ᵀ<b>X</b>와 <b>X</b>ᵀ<b>Y</b>를 누적하고, 한 번 역행렬을 취하면 끝입니다.</p>
+
+  <h4><span class="en">Selecting the top-k source layers</span><span class="ko">top-k 소스 레이어 고르기</span></h4>
+  <div class="eq"><b>X</b><sub>K</sub><sup>l</sup> = [ K̄<sub>s</sub><sup>l₁</sup> ‖ K̄<sub>s</sub><sup>l₂</sup> ‖ ⋯ ‖ K̄<sub>s</sub><sup>l<sub>k</sub></sup> ]     <span class="muted">— Eq. 5</span></div>
+  <p class="en">For each target layer, rank all source layers by the head-averaged R² from the §2.1 probe (averaged over RoPE-stripped keys and values), take the top <i>k</i>, concatenate. All heads within a target layer share the same selected source layers. <i>k</i> is one hyperparameter per pair, swept over {1, 2, 4, 6, 8, 10, 12, 16, 20, 24, all}.</p>
+  <p class="ko">각 타깃 레이어마다 §2.1 탐침의 head 평균 R²(RoPE를 벗긴 key와 value에 대해 평균)으로 소스 레이어들의 순위를 매기고, 상위 <i>k</i>개를 이어 붙입니다. 한 타깃 레이어 안의 모든 head는 같은 소스 레이어 집합을 씁니다. <i>k</i>는 쌍마다 하나인 하이퍼파라미터로 {1, 2, 4, 6, 8, 10, 12, 16, 20, 24, all}을 훑습니다.</p>
+  <p class="en">Note the small inconsistency the authors flag themselves: the <i>analysis</i> in §2.2 used greedy forward selection (which accounts for redundancy between chosen layers), but the <i>production</i> mapper uses fixed top-<i>k</i> by single-source R² "for tractability" (Appendix B). Greedy selection would pick a more complementary set; the paper argues both support the same conclusion.</p>
+  <p class="ko">저자들이 스스로 밝히는 작은 불일치 하나: §2.2의 <i>분석</i>은 greedy forward selection(고른 레이어들 사이의 중복까지 고려)을 썼지만, <i>실제</i> 매퍼는 "다루기 쉽도록" 단일 소스 R² 기준 고정 top-<i>k</i>를 씁니다(Appendix B). greedy 쪽이 더 상보적인 집합을 고르겠지만, 논문은 둘이 같은 결론을 뒷받침한다고 봅니다.</p>
+
+  <h3><span class="en">2.4 — Component 3: map in content space, not in RoPE space</span>
+      <span class="ko">2.4 — 구성요소 3: RoPE 공간이 아니라 content space에서 매핑하기</span></h3>
+  <p class="en">This is the most elegant piece. A cached key is <b>not</b> a pure representation of the token's meaning — RoPE has already rotated it by an angle that depends on the token's position:</p>
+  <p class="ko">가장 우아한 부분입니다. 캐시된 key는 토큰의 의미를 담은 순수한 표현이 <b>아닙니다</b> — RoPE가 이미 그 토큰의 위치에 따라 정해지는 각도만큼 회전시켜 놨거든요:</p>
+  <div class="eq">k<sub>RoPE</sub>(t) = <b>R</b><sub>Θ</sub>(t) · k<sub>content</sub></div>
+  <p class="en">So if you fit a mapping on raw cached keys, you are also fitting the position distribution you happened to calibrate on — here, positions 0–1023. The fix is to undo the rotation, map the position-free content, and re-apply the <i>target's</i> rotation:</p>
+  <p class="ko">그러니 캐시된 원본 key 위에서 매핑을 피팅하면, 마침 캘리브레이션에 쓴 위치 분포까지 같이 피팅하게 됩니다 — 여기선 0~1023번 위치. 해법은 회전을 되돌리고, 위치가 제거된 content를 매핑한 뒤, <i>타깃의</i> 회전을 다시 적용하는 것입니다:</p>
+  <div class="eq">K̂<sub>t</sub> = ( K<sub>s</sub> · <b>R</b><sub>Θs</sub><sup>−1</sup>(t) · <b>W</b><sub>K</sub> + <b>b</b><sub>K</sub> ) · <b>R</b><sub>Θt</sub>(t)</div>
+
+  <svg class="fig" viewBox="0 0 880 220" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="A cached key is a content vector rotated by a position-dependent angle; the mapper rotates it back to angle zero, applies the ridge matrix in that position-free space, then rotates it forward by the target model's angle for the same position">
+    <defs>
+      <marker id="m3g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b6a63"/></marker>
+    </defs>
+    <!-- stage 1 -->
+    <circle cx="96" cy="106" r="52" fill="none" stroke="#e3e1d8" stroke-width="1.4"/>
+    <line x1="96" y1="106" x2="148" y2="106" stroke="#e3e1d8" stroke-width="1.2" stroke-dasharray="3 3"/>
+    <line x1="96" y1="106" x2="130" y2="66" stroke="#0c447c" stroke-width="3"/>
+    <polygon points="130,66 120,66 130,76" fill="#0c447c"/>
+    <path d="M126,106 A30,30 0 0,0 118,84" fill="none" stroke="#8a8f98" stroke-width="1.2"/>
+    <text x="136" y="98" font-size="10" fill="#8a8f98">θ(t)</text>
+    <text x="96" y="180" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">source key, as cached</text>
+    <text x="96" y="195" text-anchor="middle" font-size="9.5" fill="#6b6a63">meaning ⊗ position t</text>
+
+    <line x1="164" y1="106" x2="212" y2="106" stroke="#6b6a63" stroke-width="1.6" marker-end="url(#m3g)"/>
+    <text x="188" y="96" text-anchor="middle" font-size="10" font-weight="700" fill="#3a3934">R⁻¹</text>
+    <text x="188" y="124" text-anchor="middle" font-size="9" fill="#8a8f98">exact, free</text>
+
+    <!-- stage 2 -->
+    <circle cx="288" cy="106" r="52" fill="none" stroke="#e3e1d8" stroke-width="1.4"/>
+    <line x1="288" y1="106" x2="340" y2="106" stroke="#0c447c" stroke-width="3"/>
+    <polygon points="340,106 330,101 330,111" fill="#0c447c"/>
+    <text x="288" y="180" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">content space</text>
+    <text x="288" y="195" text-anchor="middle" font-size="9.5" fill="#6b6a63">position stripped — angle 0</text>
+
+    <line x1="356" y1="106" x2="404" y2="106" stroke="#3f1f72" stroke-width="1.6" marker-end="url(#m3g)"/>
+    <text x="380" y="96" text-anchor="middle" font-size="11" font-weight="700" fill="#3f1f72">W</text>
+    <text x="380" y="124" text-anchor="middle" font-size="9" fill="#8a8f98">ridge fit here</text>
+
+    <!-- stage 3 -->
+    <circle cx="480" cy="106" r="52" fill="none" stroke="#e3e1d8" stroke-width="1.4"/>
+    <line x1="480" y1="106" x2="528" y2="106" stroke="#e3e1d8" stroke-width="1.2" stroke-dasharray="3 3"/>
+    <line x1="480" y1="106" x2="524" y2="88" stroke="#27500a" stroke-width="3"/>
+    <polygon points="524,88 514,86 517,96" fill="#27500a"/>
+    <text x="480" y="180" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">target content</text>
+    <text x="480" y="195" text-anchor="middle" font-size="9.5" fill="#6b6a63">still position-free</text>
+
+    <line x1="548" y1="106" x2="596" y2="106" stroke="#6b6a63" stroke-width="1.6" marker-end="url(#m3g)"/>
+    <text x="572" y="96" text-anchor="middle" font-size="10" font-weight="700" fill="#3a3934">R<tspan font-size="8">Θt</tspan></text>
+    <text x="572" y="124" text-anchor="middle" font-size="9" fill="#8a8f98">target's angles</text>
+
+    <!-- stage 4 -->
+    <circle cx="672" cy="106" r="52" fill="none" stroke="#e3e1d8" stroke-width="1.4"/>
+    <line x1="672" y1="106" x2="724" y2="106" stroke="#e3e1d8" stroke-width="1.2" stroke-dasharray="3 3"/>
+    <line x1="672" y1="106" x2="700" y2="62" stroke="#27500a" stroke-width="3"/>
+    <polygon points="700,62 690,64 697,72" fill="#27500a"/>
+    <path d="M702,106 A30,30 0 0,0 688,80" fill="none" stroke="#8a8f98" stroke-width="1.2"/>
+    <text x="712" y="96" font-size="10" fill="#8a8f98">θ′(t)</text>
+    <text x="672" y="180" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">target key, ready to cache</text>
+    <text x="672" y="195" text-anchor="middle" font-size="9.5" fill="#6b6a63">meaning ⊗ position t, target's way</text>
+
+    <rect x="742" y="56" width="126" height="100" rx="9" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.4"/>
+    <text x="805" y="78" text-anchor="middle" font-size="10.5" font-weight="700" fill="#6b4a06">Why bother</text>
+    <text x="756" y="97" font-size="9.5" fill="#6b4a06">W never sees position,</text>
+    <text x="756" y="111" font-size="9.5" fill="#6b4a06">so a fit on 1K tokens</text>
+    <text x="756" y="125" font-size="9.5" fill="#6b4a06">still works at 32K —</text>
+    <text x="756" y="139" font-size="9.5" fill="#6b4a06">and across models with</text>
+    <text x="756" y="150" font-size="9.5" fill="#6b4a06">different RoPE settings.</text>
+  </svg>
+  <p class="figcap"><span class="en">RoPE factoring (§3.3). R<sub>Θ</sub> is a rotation, hence orthogonal, so R<sup>−1</sup> = R<sup>⊤</sup> — the inversion is exact and costs essentially nothing. Values carry no positional encoding and are mapped directly.</span><span class="ko">RoPE factoring (§3.3). R<sub>Θ</sub>는 회전이라 직교행렬이므로 R<sup>−1</sup> = R<sup>⊤</sup> — 역변환이 정확하고 비용도 사실상 0. value는 위치 인코딩이 없어 그대로 매핑한다.</span></p>
+
+  <p class="en">Here is the honest part, and it matters for how you read the ablation later: <b>on the benchmarks in this paper, the RoPE-coupled variant works just as well.</b> The decoupled formulation is preferred for a structural reason, not an empirical one.</p>
+  <p class="ko">솔직한 대목이고, 뒤의 ablation을 읽을 때 중요합니다: <b>이 논문의 벤치마크에서는 RoPE를 결합한 채로 피팅해도 성능이 같습니다.</b> 분리된 형태를 택한 건 실험 결과 때문이 아니라 구조적인 이유 때문입니다.</p>
+  <blockquote class="q">
+    <p>"Fitting the mapper directly on RoPE-coupled keys also works within noise on short-context benchmarks (Table 2), but ties the weights to the 1024-token position distribution seen at fit. The decoupled formulation extends to longer contexts by construction, which matters for serving prompts up to 32k tokens (§4.7)."</p>
+    <cite>— §3.3, ¶2 · <a href="https://arxiv.org/html/2608.03893v1#S3.SS3">원문 보기 (§3.3)</a></cite>
+  </blockquote>
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">read the ablation carefully</span><span class="ko">ablation을 정확히 읽기</span></span>
+    <span class="en">Table 2 has two different "RoPE" rows, and they mean opposite things. "<b>− all RoPE</b>" (coupled at both fit and inference — a self-consistent alternative design) lands within noise of the full pipeline. "<b>− inference RoPE</b>" (fit in content space but forget to re-rotate at inference — simply a bug) collapses MMLU to 25.8 and GSM8K to 4.2. So the ablation's dramatic RoPE number measures the cost of a mismatch, not the value of content-space mapping.</span>
+    <span class="ko">Table 2에는 "RoPE" 행이 두 개인데 뜻이 정반대입니다. "<b>− all RoPE</b>"(피팅·추론 둘 다 결합 — 그 자체로 일관된 대안 설계)는 풀 파이프라인과 노이즈 범위 안입니다. "<b>− inference RoPE</b>"(content space에서 피팅해 놓고 추론 때 다시 회전시키는 걸 빼먹은 것 — 그냥 버그)는 MMLU를 25.8로, GSM8K를 4.2로 무너뜨립니다. 즉 ablation의 극적인 RoPE 수치는 content-space 매핑의 가치가 아니라 불일치의 대가를 잰 것입니다.</span>
+  </div>
+</section>
+
+<!-- ============ 3. IMPLEMENTATION ============ -->
+<section id="s3">
+  <h2><span class="num">3</span>
+    <span class="en">Implementation — 500 documents, one hour, 4–12 GB of matrices per pair</span>
+    <span class="ko">구현 방법 — 문서 500개, 1시간, 쌍마다 4~12 GB의 행렬</span>
+  </h2>
+
+  <h3><span class="en">3.1 — The six pairs, and what makes them comparable</span>
+      <span class="ko">3.1 — 여섯 개의 쌍, 그리고 이들이 비교 가능한 이유</span></h3>
+  <p class="en">Three families, six small→large pairs. The column that matters is the middle one: <b>every pair has 8 KV heads × 128 dims on both sides</b>. Parameter ratios span 1.8× to 8.8×, depth ratios 1.2× to 2.5× — so the pairs differ a lot in everything <i>except</i> the axis the method needs held fixed.</p>
+  <p class="ko">패밀리 셋, 작은→큰 쌍 여섯. 중요한 건 가운데 열입니다: <b>모든 쌍이 양쪽 다 KV head 8개 × 128차원</b>입니다. 파라미터 비는 1.8배~8.8배, 깊이 비는 1.2배~2.5배로 — 이 방법이 고정해야 하는 축 <i>말고는</i> 모든 게 크게 다릅니다.</p>
+
+  <table>
+    <thead><tr>
+      <th><span class="en">Family</span><span class="ko">패밀리</span></th>
+      <th><span class="en">Source → Target</span><span class="ko">소스 → 타깃</span></th>
+      <th class="num"><span class="en">Param ratio</span><span class="ko">파라미터 비</span></th>
+      <th><span class="en">KV heads</span><span class="ko">KV head</span></th>
+      <th><span class="en">Head dim</span><span class="ko">head 차원</span></th>
+      <th class="num"><span class="en">Depth ratio</span><span class="ko">깊이 비</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td>Qwen3</td><td>8B, 14B → 32B</td><td class="num">2.3–4×</td><td>8 → 8 <span class="muted">(matched)</span></td><td>128 → 128</td><td class="num">1.6–1.8×</td></tr>
+      <tr><td>Llama 3.1</td><td>8B → 70B</td><td class="num">8.8×</td><td>8 → 8 <span class="muted">(matched)</span></td><td>128 → 128</td><td class="num">2.5×</td></tr>
+      <tr><td>Ministral 3</td><td>3B, 8B → 8B, 14B</td><td class="num">1.8–4.7×</td><td>8 → 8 <span class="muted">(matched)</span></td><td>128 → 128</td><td class="num">1.2–1.5×</td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Table 10 (Appendix D) reconstructed. All families are dense full-attention, so every target layer receives mapped KV — no sliding-window or SSM layers to special-case.</span><span class="ko">Table 10 (Appendix D) 재구성. 모든 패밀리가 dense full-attention이라 타깃의 모든 레이어가 매핑된 KV를 받는다 — 예외 처리해야 할 sliding-window나 SSM 레이어가 없다.</span></p>
+  <p class="en">Qwen3 and Ministral 3 are used post-trained, Llama 3.1 as a base model; all are evaluated in completion mode.</p>
+  <p class="ko">Qwen3와 Ministral 3는 post-training된 모델을, Llama 3.1은 base 모델을 씁니다. 모두 completion 모드로 평가합니다.</p>
+
+  <h3><span class="en">3.2 — Calibration: what "training" amounts to here</span>
+      <span class="ko">3.2 — 캘리브레이션: 여기서 "학습"이란 무엇인가</span></h3>
+  <p class="en">This is the part that surprises. The entire fitting procedure consumes <b>500 documents</b>.</p>
+  <p class="ko">놀라운 대목입니다. 피팅 절차 전체가 소비하는 것은 <b>문서 500개</b>입니다.</p>
+
+  <table>
+    <thead><tr><th><span class="en">Knob</span><span class="ko">항목</span></th><th><span class="en">Value</span><span class="ko">값</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="en">Calibration data</span><span class="ko">캘리브레이션 데이터</span></td><td>FineWeb-Edu · 500 sequences × 1,024 tokens · stride-4 subsampled → <b>~128K token-level observations per target head</b></td></tr>
+      <tr><td><span class="en">Ridge</span><span class="ko">릿지</span></td><td>λ = 0.01</td></tr>
+      <tr><td><span class="en">Precision</span><span class="ko">정밀도</span></td><td>bf16 (forward) · fp32 (covariance) · fp64 (analysis)</td></tr>
+      <tr><td><span class="en">Source feature dim</span><span class="ko">소스 특징 차원</span></td><td>d<sub>s</sub> = k · n<sub>kv</sub><sup>s</sup> · d<sub>h</sub><sup>s</sup> <span class="muted">(cross-head concatenation)</span></td></tr>
+      <tr><td><span class="en">Fitting hardware</span><span class="ko">피팅 하드웨어</span></td><td><span class="en">a single 8×H100 node · <b>47–87 min per pair</b>, end to end</span><span class="ko">8×H100 노드 하나 · 쌍당 <b>47~87분</b>, 처음부터 끝까지</span></td></tr>
+      <tr><td><span class="en">Gradient steps</span><span class="ko">그래디언트 스텝</span></td><td><b><span class="en">zero</span><span class="ko">0</span></b></td></tr>
+      <tr><td><span class="en">MLP baseline (§4.4)</span><span class="ko">MLP 베이스라인 (§4.4)</span></td><td>per (target layer, head, K|V): Linear(d<sub>s</sub>, 1024) → ReLU → Linear(1024, 1024) → ReLU → Linear(1024, d<sub>h</sub><sup>t</sup>) · Adam, lr 1e-3, 20 epochs, MSE, batch 4,096</td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Appendix E reconstructed. Per-pair fit times: Qwen3 8B→32B ~47 min, 14B→32B ~52, Llama 3.1 8B→70B ~50, Ministral 3B→8B ~75, 3B→14B ~84, 8B→14B ~87.</span><span class="ko">Appendix E 재구성. 쌍별 피팅 시간: Qwen3 8B→32B ~47분, 14B→32B ~52, Llama 3.1 8B→70B ~50, Ministral 3B→8B ~75, 3B→14B ~84, 8B→14B ~87.</span></p>
+
+  <p class="en">Why does fitting scale <i>sub</i>-linearly in the number of target heads? Because the expensive step is forming <b>X</b>ᵀ<b>X</b> — an O(N·d<sub>s</sub>²) accumulation over the calibration tokens — and <b>X</b> depends only on the target <i>layer</i>, not the head. So that matrix is built once per target layer and reused by all 8 of its heads; only the cheap <b>X</b>ᵀ<b>Y</b> and the solve are per-head.</p>
+  <p class="ko">피팅 시간이 타깃 head 수에 대해 왜 <i>선형 이하</i>로 스케일할까요? 비싼 단계가 <b>X</b>ᵀ<b>X</b>를 만드는 것 — 캘리브레이션 토큰에 대한 O(N·d<sub>s</sub>²) 누적 — 인데, <b>X</b>는 타깃 <i>레이어</i>에만 의존하고 head에는 의존하지 않기 때문입니다. 그래서 이 행렬은 타깃 레이어당 한 번만 만들어 그 레이어의 head 8개가 전부 재사용하고, head마다 따로 하는 건 값싼 <b>X</b>ᵀ<b>Y</b>와 solve뿐입니다.</p>
+
+  <h3><span class="en">3.3 — Evaluation protocol</span>
+      <span class="ko">3.3 — 평가 프로토콜</span></h3>
+  <p class="en">Five accuracy benchmarks plus a perplexity measurement, scored with lm-evaluation-harness defaults. ARC-C and HellaSwag use <code class="inl">acc_norm</code>; WinoGrande and MMLU use <code class="inl">acc</code>; MMLU is 5-shot, GSM8K is 8-shot with chain-of-thought, the rest zero-shot. CoQA (100 conversations, ~15 turns each, five domains) is used only for the multi-turn handoff test.</p>
+  <p class="ko">정확도 벤치마크 5개 + 퍼플렉시티 1개를 lm-evaluation-harness 기본값으로 채점합니다. ARC-C와 HellaSwag은 <code class="inl">acc_norm</code>, WinoGrande와 MMLU는 <code class="inl">acc</code>. MMLU는 5-shot, GSM8K는 8-shot chain-of-thought, 나머지는 zero-shot. CoQA(대화 100개, 각 ~15턴, 5개 도메인)는 멀티턴 핸드오프 테스트에만 씁니다.</p>
+
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">the perplexity protocol is worth stealing</span><span class="ko">이 퍼플렉시티 프로토콜은 훔쳐 쓸 만하다</span></span>
+    <span class="en">Standard sliding-window perplexity would mix two things: the quality of the prefix cache, and the target's own forward pass over the scored tokens. So they split WikiText-2 into non-overlapping 2,048-token chunks and score <b>only the second 1,024 tokens</b>, conditioned on a 1,024-token prefix cache that comes either from the target's own forward pass (standalone) or from the source via the mapper (transfer). Both modes score identical continuation tokens — the only difference is where the prefix KV came from. That isolates exactly the quantity under test.</span>
+    <span class="ko">표준 sliding-window 퍼플렉시티는 두 가지를 섞어 버립니다: prefix 캐시의 품질, 그리고 채점 대상 토큰에 대한 타깃 자신의 forward pass. 그래서 WikiText-2를 겹치지 않는 2,048 토큰 청크로 자르고, 1,024 토큰짜리 prefix 캐시를 조건으로 <b>뒤쪽 1,024 토큰만</b> 채점합니다. 그 prefix 캐시는 타깃 자신의 forward pass(standalone)에서 오거나 매퍼를 거친 소스(transfer)에서 옵니다. 두 모드가 정확히 같은 continuation 토큰을 채점하고, 차이는 prefix KV의 출처뿐입니다 — 재려는 양만 딱 분리됩니다.</span>
+  </div>
+
+  <p class="en">One coverage caveat: transfer perplexity is reported for Qwen3 and Llama 3.1 only. Ministral 3 is reasoning-tuned and its standalone WikiText-2 perplexity is orders of magnitude above the other families', so a prefix-KV perplexity comparison would not be meaningful for it.</p>
+  <p class="ko">커버리지 관련 단서 하나: transfer 퍼플렉시티는 Qwen3와 Llama 3.1에만 보고합니다. Ministral 3는 추론(reasoning) 튜닝된 모델이라 자체 WikiText-2 퍼플렉시티가 다른 두 패밀리보다 수십~수백 배 높아서, prefix-KV 퍼플렉시티 비교가 의미를 갖지 못합니다.</p>
+
+  <h4><span class="en">How k is chosen — and what is held out</span><span class="ko">k를 고르는 법 — 그리고 무엇을 홀드아웃했나</span></h4>
+  <p class="en">For each pair, sweep k over the 11 values and take the k that maximizes the arithmetic mean of the log-likelihood benchmark accuracies. Nominally that criterion covers ARC-C, HellaSwag, WinoGrande and MMLU, but WinoGrande is missing at most k values, so in practice the argmax is over ARC-C, HellaSwag and MMLU. Near-ties break toward larger k. <b>GSM8K, CoQA multi-turn and prefill latency never enter selection</b> — they are holdouts by construction.</p>
+  <p class="ko">쌍마다 11개 값에 대해 k를 훑고, log-likelihood 벤치마크 정확도들의 산술평균을 최대화하는 k를 고릅니다. 명목상 기준은 ARC-C, HellaSwag, WinoGrande, MMLU지만 WinoGrande가 대부분의 k에서 빠져 있어서 실제 argmax는 ARC-C, HellaSwag, MMLU 셋 위에서 계산됩니다. 근소한 차이면 큰 k 쪽으로 깹니다. <b>GSM8K, CoQA 멀티턴, prefill 지연은 선택에 전혀 들어가지 않습니다</b> — 구조적으로 홀드아웃입니다.</p>
+  <p class="en">This is a real methodological weakness and the authors treat it as one: k is selected on benchmarks they also report. Appendix H bounds the damage with leave-one-benchmark-out re-selection — k is unchanged in 12 of 18 folds, and a benchmark's own inclusion raises its reported accuracy by <b>at most 2.49 pp</b> (mean 0.30 pp), always downward when it moves. On the four best pairs the worst case is 1.45 pp.</p>
+  <p class="ko">이건 실제 방법론적 약점이고 저자들도 그렇게 다룹니다: k를 보고 대상 벤치마크 위에서 골랐습니다. Appendix H가 leave-one-benchmark-out 재선택으로 피해 규모를 한정합니다 — 18개 fold 중 12개에서 k가 그대로였고, 어떤 벤치마크가 선택 기준에 포함된 덕에 자기 점수가 올라간 폭은 <b>최대 2.49 pp</b>(평균 0.30 pp), 움직일 땐 항상 아래로였습니다. 상위 4개 쌍에서는 최악이 1.45 pp입니다.</p>
+
+  <h3><span class="en">3.4 — What you actually have to ship: 4–12 GB of matrices per direction</span>
+      <span class="ko">3.4 — 실제로 배포해야 하는 것: 방향당 4~12 GB의 행렬</span></h3>
+  <p class="en">The mapper's size follows straight from the shapes:</p>
+  <p class="ko">매퍼 크기는 모양들에서 바로 따라 나옵니다:</p>
+  <div class="eq">params = 2 · L<sub>t</sub> · n<sub>kv</sub><sup>t</sup> · (k · n<sub>kv</sub><sup>s</sup> · d<sub>h</sub><sup>s</sup>) · d<sub>h</sub><sup>t</sup></div>
+  <p class="en">Reading it left to right: the leading <b>2</b> is K and V; <b>L<sub>t</sub> · n<sub>kv</sub><sup>t</sup></b> is how many independent ridges you fit; the bracket is each one's input width; <b>d<sub>h</sub><sup>t</sup></b> is its output width. Worked example, Qwen3 14B→32B at k=8: 2 × 64 × 8 × (8·8·128) × 128 = <b>1.07 B parameters</b>, which at fp32 is ~4 GB — matching the table below. The crucial property: <b>it does not grow with sequence length or cache size</b>, only with target depth, head count and k.</p>
+  <p class="ko">왼쪽부터 읽으면: 앞의 <b>2</b>는 K와 V, <b>L<sub>t</sub> · n<sub>kv</sub><sup>t</sup></b>는 독립적으로 피팅하는 릿지의 개수, 괄호 안은 각각의 입력 폭, <b>d<sub>h</sub><sup>t</sup></b>는 출력 폭입니다. 계산 예로 Qwen3 14B→32B, k=8: 2 × 64 × 8 × (8·8·128) × 128 = <b>10.7억 파라미터</b>, fp32로 약 4 GB — 아래 표와 맞습니다. 중요한 성질: <b>시퀀스 길이나 캐시 크기에 따라 커지지 않습니다.</b> 타깃 깊이·head 수·k에만 좌우됩니다.</p>
+
+  <table>
+    <thead><tr>
+      <th><span class="en">Transfer</span><span class="ko">전이</span></th>
+      <th class="num">k</th>
+      <th class="num"><span class="en">Params (K+V)</span><span class="ko">파라미터 (K+V)</span></th>
+      <th class="num"><span class="en">Storage</span><span class="ko">저장 용량</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td>Qwen3 8B → 32B</td><td class="num">12</td><td class="num">1.61 B</td><td class="num">6 GB</td></tr>
+      <tr><td>Qwen3 14B → 32B</td><td class="num">8</td><td class="num">1.07 B</td><td class="num">4 GB</td></tr>
+      <tr><td>Llama 3.1 8B → 70B</td><td class="num">20</td><td class="num">3.36 B</td><td class="num">12 GB</td></tr>
+      <tr><td>Ministral 3 3B → 8B</td><td class="num">all (26)</td><td class="num">1.85 B</td><td class="num">7 GB</td></tr>
+      <tr><td>Ministral 3 8B → 14B</td><td class="num">12</td><td class="num">1.01 B</td><td class="num">4 GB</td></tr>
+      <tr><td>Ministral 3 3B → 14B</td><td class="num">20</td><td class="num">1.68 B</td><td class="num">6 GB</td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Table 12 (Appendix D) reconstructed, at each pair's selected k.</span><span class="ko">Table 12 (Appendix D) 재구성. 각 쌍의 선택된 k 기준.</span></p>
+
+  <p class="en">The serving-cost discussion (Appendix D) is short but it is the part an infra reader will care about most:</p>
+  <p class="ko">서빙 비용 논의(Appendix D)는 짧지만, 인프라 관점의 독자가 가장 신경 쓸 부분입니다:</p>
+  <blockquote class="q">
+    <p>"Mappers need not be GPU-resident: inference is one batched matmul per target layer, so a serving stack can hold them on CPU memory or disk and page in the active pair. At an assumed 25–50 GB/s host-to-device link (PCIe Gen4/Gen5), that is ~80–480 ms across the 4–12 GB range, paid once when a pair becomes active and amortized over its requests. These figures are computed from size and bandwidth, not measured."</p>
+    <cite>— Appendix D ("Serving cost.") · <a href="https://arxiv.org/html/2608.03893v1#A4">원문 보기 (Appendix D)</a></cite>
+  </blockquote>
+  <p class="en">And the fleet-level arithmetic, which is the real constraint: <b>the ridge fit is directional</b>, so 14B→32B and 32B→14B are two separate mappers. A router over P models covers up to P(P−1) ordered pairs. At the ~6.5 GB average, that is roughly <b>39 GB for 3 models, 79 GB for 4, and 131 GB for 5</b>. Quadratic — but in disk or host memory, not VRAM.</p>
+  <p class="ko">그리고 진짜 제약이 되는 플릿 단위 산수: <b>릿지 피팅은 방향성이 있어서</b> 14B→32B와 32B→14B는 별개의 매퍼입니다. 모델 P개짜리 라우터는 최대 P(P−1)개의 순서쌍을 커버해야 합니다. 평균 ~6.5 GB로 잡으면 대략 <b>모델 3개에 39 GB, 4개에 79 GB, 5개에 131 GB</b>입니다. 제곱으로 늘지만, VRAM이 아니라 디스크나 호스트 메모리 예산입니다.</p>
+
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">no public code</span><span class="ko">공개 코드 없음</span></span>
+    <span class="en">I looked for an official implementation — the paper, its abstract, its footnotes and its reference list contain <b>no repository link</b> (the only external URL in the whole paper is OpenAI's GPT-5 announcement), and a web search surfaced nothing beyond the arXiv entry itself. As of this note there is <b>no released code, no released mappers, and no project page</b>. Everything above is reconstructed from the paper's text and tables; anyone wanting to reproduce this has to reimplement the calibration harness from §3 and Appendix E.</span>
+    <span class="ko">공식 구현을 찾아봤습니다 — 논문 본문, 초록, 각주, 참고문헌 어디에도 <b>레포지토리 링크가 없습니다</b>(논문 전체에서 유일한 외부 URL은 OpenAI의 GPT-5 발표 페이지입니다). 웹 검색으로도 arXiv 항목 외에는 아무것도 나오지 않았습니다. 이 노트를 쓰는 시점에 <b>공개된 코드도, 공개된 매퍼 가중치도, 프로젝트 페이지도 없습니다.</b> 위의 모든 내용은 논문 본문과 표에서 재구성한 것이고, 재현하려면 §3과 Appendix E의 캘리브레이션 하네스를 직접 다시 구현해야 합니다.</span>
+  </div>
+</section>
+
+<!-- ============ 4. RESULTS ============ -->
+<section id="s4">
+  <h2><span class="num">4</span>
+    <span class="en">Results — two tiers, and why R² was the wrong yardstick all along</span>
+    <span class="ko">결과 — 두 개의 티어, 그리고 R²이 애초에 틀린 잣대였던 이유</span>
+  </h2>
+
+  <h3><span class="en">4.1 — Main result: it works, on four pairs out of six</span>
+      <span class="ko">4.1 — 주요 결과: 여섯 쌍 중 네 쌍에서 작동한다</span></h3>
+  <p class="en">All six pairs, small→large, at each pair's selected k, full pipeline. Retention is transfer accuracy as a percentage of the target's own standalone accuracy. Outcomes span <b>42% to 98%</b> — and the spread is the story.</p>
+  <p class="ko">여섯 쌍 전부, 작은→큰 방향, 각 쌍의 선택된 k, 전체 파이프라인. retention은 타깃 자체 정확도 대비 전이 정확도의 백분율입니다. 결과는 <b>42%에서 98%</b>까지 퍼지고, 그 퍼짐 자체가 이야기의 핵심입니다.</p>
+
+  <table>
+    <thead><tr>
+      <th><span class="en">Pair (k)</span><span class="ko">쌍 (k)</span></th>
+      <th class="num">Avg</th>
+      <th class="num">Avg<sub>fn</sub></th>
+      <th class="num">ARC-C</th>
+      <th class="num">HellaSwag</th>
+      <th class="num">WinoGrande</th>
+      <th class="num">MMLU</th>
+      <th class="num">GSM8K</th>
+    </tr></thead>
+    <tbody>
+      <tr><td class="muted"><span class="en">chance floor</span><span class="ko">찍기 정답률</span></td><td class="num">—</td><td class="num">—</td><td class="num">25%</td><td class="num">25%</td><td class="num">50%</td><td class="num">25%</td><td class="num">≈0%</td></tr>
+      <tr class="good"><td>Qwen3 14B → 32B (8)</td><td class="num"><b>97.6%</b></td><td class="num">96.3%</td><td class="num">101.0%</td><td class="num">97.6%</td><td class="num">98.5%</td><td class="num">95.0%</td><td class="num">95.6%</td></tr>
+      <tr class="good"><td>Qwen3 8B → 32B (12)</td><td class="num"><b>87.5%</b></td><td class="num">80.7%</td><td class="num">94.0%</td><td class="num">95.2%</td><td class="num">91.0%</td><td class="num">88.5%</td><td class="num">68.8%</td></tr>
+      <tr class="good"><td>Ministral 3 3B → 8B (all)</td><td class="num"><b>76.2%</b></td><td class="num">65.9%</td><td class="num">90.6%</td><td class="num">93.3%</td><td class="num">91.3%</td><td class="num">69.4%</td><td class="num">36.6%</td></tr>
+      <tr class="good"><td>Llama 3.1 8B → 70B (20)</td><td class="num"><b>72.8%</b></td><td class="num">62.9%</td><td class="num">90.9%</td><td class="num">94.4%</td><td class="num">87.1%</td><td class="num">73.3%</td><td class="num">18.2%</td></tr>
+      <tr class="bad"><td>Ministral 3 3B → 14B (20)</td><td class="num"><b>44.2%</b></td><td class="num">14.7%</td><td class="num">43.6%</td><td class="num">68.0%</td><td class="num">74.0%</td><td class="num">32.0%</td><td class="num">3.2%</td></tr>
+      <tr class="bad"><td>Ministral 3 8B → 14B (12)</td><td class="num"><b>41.6%</b></td><td class="num">11.1%</td><td class="num">40.7%</td><td class="num">58.7%</td><td class="num">74.2%</td><td class="num">32.7%</td><td class="num">1.6%</td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Table 1 (§4.2) reconstructed. Avg<sub>fn</sub> is the floor-normalized mean, from Table 15 (Appendix F). Green = Tier 1, red = Tier 2.</span><span class="ko">Table 1 (§4.2) 재구성. Avg<sub>fn</sub>은 floor-normalized 평균으로 Table 15 (Appendix F). 초록 = Tier 1, 빨강 = Tier 2.</span></p>
+
+  <svg class="fig" viewBox="0 0 880 372" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Bar chart of average retention for six transfer pairs; four Tier-1 pairs range from 73 to 98 percent while two Ministral pairs sit near 42 percent, and the floor-normalized numbers widen the gap from 96 percent down to 11 percent">
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Average retention across five benchmarks (% of the target's own accuracy)</text>
+    <!-- grid -->
+    <g stroke="#e3e1d8" stroke-width="1">
+      <line x1="250" y1="34" x2="250" y2="306"/><line x1="390" y1="34" x2="390" y2="306"/>
+      <line x1="530" y1="34" x2="530" y2="306"/><line x1="670" y1="34" x2="670" y2="306"/>
+    </g>
+    <line x1="810" y1="34" x2="810" y2="306" stroke="#8a8f98" stroke-width="1.2" stroke-dasharray="4 3"/>
+    <g font-size="9.5" fill="#8a8f98" text-anchor="middle">
+      <text x="250" y="46">0</text><text x="390" y="46">25</text><text x="530" y="46">50</text><text x="670" y="46">75</text>
+      <text x="810" y="46">100% = target's own</text>
+    </g>
+
+    <!-- rows -->
+    <g font-size="11" fill="#3a3934">
+      <text x="14" y="70">Qwen3 14B → 32B</text>
+      <text x="14" y="116">Qwen3 8B → 32B</text>
+      <text x="14" y="162">Ministral 3B → 8B</text>
+      <text x="14" y="208">Llama 3.1 8B → 70B</text>
+      <text x="14" y="254">Ministral 3B → 14B</text>
+      <text x="14" y="300">Ministral 8B → 14B</text>
+    </g>
+    <g font-size="9" fill="#8a8f98">
+      <text x="14" y="82">k=8 · 1.6× deeper</text>
+      <text x="14" y="128">k=12 · 4× params</text>
+      <text x="14" y="174">k=all · 1.2× deeper</text>
+      <text x="14" y="220">k=20 · 8.8× params</text>
+      <text x="14" y="266">k=20</text>
+      <text x="14" y="312">k=12</text>
+    </g>
+
+    <!-- Tier 1 bars -->
+    <g>
+      <rect x="250" y="58" width="546.6" height="13" rx="3" fill="#97c459"/>
+      <rect x="250" y="73" width="539.3" height="9" rx="3" fill="#eaf3de" stroke="#97c459" stroke-width="1"/>
+      <text x="806" y="69" font-size="11.5" font-weight="700" fill="#27500a">97.6%</text>
+      <text x="799" y="81" font-size="9.5" fill="#27500a">96.3</text>
+
+      <rect x="250" y="104" width="490.0" height="13" rx="3" fill="#97c459"/>
+      <rect x="250" y="119" width="451.9" height="9" rx="3" fill="#eaf3de" stroke="#97c459" stroke-width="1"/>
+      <text x="750" y="115" font-size="11.5" font-weight="700" fill="#27500a">87.5%</text>
+      <text x="712" y="127" font-size="9.5" fill="#27500a">80.7</text>
+
+      <rect x="250" y="150" width="426.7" height="13" rx="3" fill="#97c459"/>
+      <rect x="250" y="165" width="369.0" height="9" rx="3" fill="#eaf3de" stroke="#97c459" stroke-width="1"/>
+      <text x="687" y="161" font-size="11.5" font-weight="700" fill="#27500a">76.2%</text>
+      <text x="629" y="173" font-size="9.5" fill="#27500a">65.9</text>
+
+      <rect x="250" y="196" width="407.7" height="13" rx="3" fill="#97c459"/>
+      <rect x="250" y="211" width="352.2" height="9" rx="3" fill="#eaf3de" stroke="#97c459" stroke-width="1"/>
+      <text x="668" y="207" font-size="11.5" font-weight="700" fill="#27500a">72.8%</text>
+      <text x="612" y="219" font-size="9.5" fill="#27500a">62.9</text>
+    </g>
+    <!-- Tier 2 bars -->
+    <g>
+      <rect x="250" y="242" width="247.5" height="13" rx="3" fill="#ef9f86"/>
+      <rect x="250" y="257" width="82.3" height="9" rx="3" fill="#fce6dd" stroke="#ef9f86" stroke-width="1"/>
+      <text x="508" y="253" font-size="11.5" font-weight="700" fill="#6f2a12">44.2%</text>
+      <text x="343" y="265" font-size="9.5" fill="#6f2a12">14.7</text>
+
+      <rect x="250" y="288" width="233.0" height="13" rx="3" fill="#ef9f86"/>
+      <rect x="250" y="303" width="62.2" height="9" rx="3" fill="#fce6dd" stroke="#ef9f86" stroke-width="1"/>
+      <text x="493" y="299" font-size="11.5" font-weight="700" fill="#6f2a12">41.6%</text>
+      <text x="323" y="311" font-size="9.5" fill="#6f2a12">11.1</text>
+    </g>
+
+    <!-- tier brackets -->
+    <path d="M232,58 L226,58 L226,220 L232,220" fill="none" stroke="#27500a" stroke-width="1.4"/>
+    <text x="220" y="144" text-anchor="end" font-size="10" font-weight="700" fill="#27500a" transform="rotate(-90 220 144)">TIER 1</text>
+    <path d="M232,242 L226,242 L226,312 L232,312" fill="none" stroke="#6f2a12" stroke-width="1.4"/>
+    <text x="220" y="278" text-anchor="end" font-size="10" font-weight="700" fill="#6f2a12" transform="rotate(-90 220 278)">TIER 2</text>
+
+    <!-- legend -->
+    <line x1="14" y1="328" x2="866" y2="328" stroke="#e3e1d8"/>
+    <rect x="14" y="340" width="26" height="10" rx="3" fill="#97c459"/>
+    <text x="48" y="349" font-size="10" fill="#6b6a63">retention</text>
+    <rect x="120" y="340" width="26" height="10" rx="3" fill="#eaf3de" stroke="#97c459"/>
+    <text x="154" y="349" font-size="10" fill="#6b6a63">floor-normalized (random guessing = 0)</text>
+    <text x="866" y="349" text-anchor="end" font-size="9.5" fill="#8a8f98">Tables 1 (§4.2) and 15 (Appendix F)</text>
+    <text x="14" y="366" font-size="10" fill="#8a8f98">Floor normalization is what separates the tiers: 96.3 vs 11.1, not 97.6 vs 41.6. Tier 2's raw score is mostly credit for guessing.</text>
+  </svg>
+  <p class="figcap"><span class="en">Retention across the six pairs. Data: Table 1 (§4.2) and Table 15 (Appendix F).</span><span class="ko">여섯 쌍의 retention. 데이터: Table 1 (§4.2), Table 15 (Appendix F).</span></p>
+
+  <p class="en">Two things jump out. First, the pair with the <b>most extreme parameter ratio</b> — Llama 3.1 8B→70B, 8.8× — is in Tier 1, while two of the <i>closest</i> pairs (Ministral, 1.2–1.5× depth ratio) are in Tier 2. Size gap does not predict success. Second, floor normalization is doing real work: Tier 2's 42–44% looks like "partially works" until you subtract the chance floor and it becomes 11–15%, i.e. <b>barely above random guessing</b>.</p>
+  <p class="ko">두 가지가 눈에 띕니다. 첫째, <b>파라미터 비가 가장 극단적인</b> 쌍 — Llama 3.1 8B→70B, 8.8배 — 이 Tier 1에 있고, 오히려 가장 <i>가까운</i> 쌍들(Ministral, 깊이 비 1.2~1.5배) 둘이 Tier 2에 있습니다. 크기 격차는 성공을 예측하지 못합니다. 둘째, floor normalization이 실제로 일을 합니다: Tier 2의 42~44%는 "부분적으로는 된다"처럼 보이지만, 찍기 정답률을 빼면 11~15%, 즉 <b>거의 무작위 추측 수준</b>이 됩니다.</p>
+
+  <blockquote class="q">
+    <p>"Together, the two tiers show that matched KV correlates with success but does not guarantee it."</p>
+    <cite>— §4.2, ¶4 · <a href="https://arxiv.org/html/2608.03893v1#S4.SS2">원문 보기 (§4.2)</a></cite>
+  </blockquote>
+
+  <p class="en">A per-benchmark note worth carrying forward: <b>GSM8K is where every pair suffers most</b>, even Tier 1. Qwen3 14B→32B holds 95.6%, but Qwen3 8B→32B drops to 68.8% and Llama 3.1 8B→70B to 18.2% (14.78 absolute, against the 70B's 81.12). Multi-step chain-of-thought generation compounds small per-token errors in a way that single-token log-likelihood classification does not — and GSM8K was a holdout from k selection, so this is an out-of-sample view of the mapper.</p>
+  <p class="ko">앞으로 계속 기억할 만한 벤치마크별 관찰: <b>GSM8K에서 모든 쌍이 가장 크게 무너집니다</b>. Tier 1도 예외가 아닙니다. Qwen3 14B→32B는 95.6%를 지키지만, Qwen3 8B→32B는 68.8%, Llama 3.1 8B→70B는 18.2%(절대값 14.78, 70B의 81.12 대비)까지 떨어집니다. 여러 단계를 생성하는 chain-of-thought는 토큰마다의 작은 오차를 누적시키는데, 단일 토큰 log-likelihood 분류는 그렇지 않습니다 — 그리고 GSM8K는 k 선택에서 홀드아웃이었으므로, 이건 매퍼의 out-of-sample 모습입니다.</p>
+
+  <h3><span class="en">4.2 — Ablation: which component actually earns its place</span>
+      <span class="ko">4.2 — Ablation: 어느 구성요소가 제 몫을 하는가</span></h3>
+  <p class="en">Run on Qwen3 14B→32B, the highest-retention pair, where any damage is most visible. Cells are raw accuracy, not retention.</p>
+  <p class="ko">retention이 가장 높은 쌍인 Qwen3 14B→32B에서 수행합니다 — 손상이 가장 잘 보이는 조건이죠. 셀 값은 retention이 아니라 원본 정확도입니다.</p>
+
+  <table>
+    <thead><tr>
+      <th><span class="en">Configuration</span><span class="ko">구성</span></th>
+      <th class="num">ARC-C</th><th class="num">HellaSwag</th><th class="num">WinoGrande</th><th class="num">MMLU</th><th class="num">GSM8K</th><th class="num">PPL ↓</th>
+    </tr></thead>
+    <tbody>
+      <tr class="good"><td><b><span class="en">Full</span><span class="ko">전체</span></b> (k=8, ridge, content-space)</td><td class="num">61.60</td><td class="num">80.70</td><td class="num">68.98</td><td class="num">78.09</td><td class="num">90.98</td><td class="num">7.33</td></tr>
+      <tr class="bad"><td>− <span class="en">inference RoPE</span><span class="ko">추론 시 RoPE</span> <span class="muted">(fit/eval mismatch)</span></td><td class="num">44.97</td><td class="num">75.39</td><td class="num">56.59</td><td class="num">25.79</td><td class="num">4.17</td><td class="num">7.70</td></tr>
+      <tr><td>− <span class="en">all RoPE</span><span class="ko">RoPE 전부</span> <span class="muted">(coupled at fit + inference)</span></td><td class="num">61.09</td><td class="num">80.73</td><td class="num">68.59</td><td class="num">77.70</td><td class="num">90.98</td><td class="num">7.35</td></tr>
+      <tr class="bad"><td>− RoPE − <span class="en">cross-layer</span><span class="ko">레이어 간 선택</span> (k=1)</td><td class="num">27.65</td><td class="num">44.81</td><td class="num">51.78</td><td class="num">26.07</td><td class="num">0.38</td><td class="num">22.73</td></tr>
+      <tr><td>− RoPE − <span class="en">cross-layer</span><span class="ko">레이어 간 선택</span> − <span class="en">ridge</span><span class="ko">릿지</span></td><td class="num">36.43</td><td class="num">62.26</td><td class="num">51.22</td><td class="num">51.26</td><td class="num">1.44</td><td class="num">9.86</td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Table 2 (§4.3) reconstructed, verbatim values. Worth noticing: dropping ridge from the already-crippled k=1 mapper <i>improves every cell</i>. Not discussed in the paper — my reading is that at k=1 the feature dimension is only 1·8·128 = 1,024, so XᵀX is far better conditioned and the penalty now costs more than it buys, consistent with the λ sweep where λ=0 also edges out λ=0.01.</span><span class="ko">Table 2 (§4.3) 원문 값 그대로 재구성. 눈여겨볼 점: 이미 망가진 k=1 매퍼에서 릿지를 빼면 <i>모든 셀이 좋아진다</i>. 논문이 언급하지 않는 부분인데, 내 해석은 이렇다 — k=1에서는 특징 차원이 1·8·128 = 1,024뿐이라 XᵀX의 조건수가 훨씬 좋고, 그래서 페널티가 얻는 것보다 잃는 게 커진다. λ=0이 λ=0.01보다 근소하게 나은 λ 스윕 결과와도 일관된다.</span></p>
+
+  <p class="en"><b>Cross-layer source selection is the single biggest contributor.</b> Dropping k from 8 to 1 takes K R² from 0.79 to 0.56 and collapses downstream accuracy across the board — ARC-C to 27.65 against a 25% floor, GSM8K to 0.38, perplexity from 7.33 to 22.73. That is the §2.2 finding cashing out: one source layer genuinely does not contain enough.</p>
+  <p class="ko"><b>레이어 간 소스 선택이 단일 최대 기여 요소입니다.</b> k를 8에서 1로 낮추면 K R²이 0.79에서 0.56으로 떨어지고 다운스트림 정확도가 전면적으로 무너집니다 — ARC-C가 25% 바닥 대비 27.65, GSM8K가 0.38, 퍼플렉시티가 7.33에서 22.73으로. §2.2의 발견이 현금화되는 지점입니다: 소스 레이어 하나로는 정말로 부족합니다.</p>
+
+  <blockquote class="q">
+    <p>"(2) Content-space mapping is benchmark-specific. Disabling inference-time RoPE handling collapses MMLU and GSM8K to near random while HellaSwag falls only ~5 pp."</p>
+    <cite>— §4.3, ¶2 · <a href="https://arxiv.org/html/2608.03893v1#S4.SS3">원문 보기 (§4.3)</a></cite>
+  </blockquote>
+
+  <p class="en">And a corollary about the k sweep more broadly (Figure 6): <b>k=1 is uniformly insufficient</b> — every pair drops sharply on at least one benchmark — and closer pairs saturate earlier. Qwen3 14B→32B is within 0.3 pp of its peak HellaSwag by k=8, whereas the more distant Llama 3.1 8B→70B keeps improving until k=24.</p>
+  <p class="ko">그리고 k 스윕 전반에 대한 따름 결과(Figure 6): <b>k=1은 예외 없이 불충분</b>하고 — 모든 쌍이 최소 한 벤치마크에서 급락 — 가까운 쌍일수록 일찍 포화합니다. Qwen3 14B→32B는 k=8에서 이미 HellaSwag 최고점의 0.3 pp 이내인데, 더 먼 Llama 3.1 8B→70B는 k=24까지 계속 좋아집니다.</p>
+
+  <h3><span class="en">4.3 — How fragile is the calibration? Mostly, it isn't</span>
+      <span class="ko">4.3 — 캘리브레이션은 얼마나 취약한가? 대체로 안 취약하다</span></h3>
+  <p class="en">Three knobs swept on Qwen3 14B→32B / HellaSwag (Table 8). Two of them barely matter; one does.</p>
+  <p class="ko">Qwen3 14B→32B / HellaSwag에서 세 가지 손잡이를 훑었습니다(Table 8). 둘은 거의 영향이 없고, 하나는 있습니다.</p>
+  <div class="grid3">
+    <div class="mini">
+      <h4>λ <span class="muted">(0 → 1)</span></h4>
+      <p><span class="en">Flat across four orders of magnitude: λ=0 gives +0.13 pp, λ=1e-4 gives +0.15, λ=0.1 costs −0.98. Only <b>λ=1 collapses (−15.79 pp)</b>, where the penalty finally overwhelms the least-squares objective.</span><span class="ko">네 자릿수 범위에서 평탄합니다: λ=0은 +0.13 pp, λ=1e-4는 +0.15, λ=0.1은 −0.98. <b>λ=1에서만 무너집니다(−15.79 pp)</b> — 페널티가 마침내 최소제곱 목적함수를 압도하는 지점.</span></p>
+    </div>
+    <div class="mini">
+      <h4>N <span class="muted">(50 → 1000 seqs)</span></h4>
+      <p><span class="en">Flattens after 200 sequences. Even <b>N=50 is within 1.6 pp</b> of the production N=500; N=1000 buys +0.16. The per-head system is heavily over-determined, so more data adds little.</span><span class="ko">시퀀스 200개 이후로 평탄해집니다. <b>N=50도 프로덕션 N=500의 1.6 pp 이내</b>이고, N=1000은 +0.16을 벌 뿐입니다. head별 연립방정식이 크게 과잉결정돼 있어서 데이터를 더 넣어도 얻는 게 적습니다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Domain</span><span class="ko">도메인</span></h4>
+      <p><span class="en"><b>The one axis with a real cost.</b> Wikipedia −1.05 pp, <b>CodeAlpaca −5.24 pp</b> on HellaSwag. Calibrate on prose that looks nothing like your traffic and you pay for it.</span><span class="ko"><b>실제 비용이 발생하는 유일한 축.</b> HellaSwag에서 Wikipedia는 −1.05 pp, <b>CodeAlpaca는 −5.24 pp</b>. 실제 트래픽과 전혀 다른 글로 캘리브레이션하면 대가를 치릅니다.</span></p>
+    </div>
+  </div>
+  <p class="en">The domain sweep is extended across seven benchmarks in Table 9, and the shape of the cost is more interesting than the size. <b>Wikipedia is uniformly mild</b> — 99.4% mean retention, varying little benchmark to benchmark. <b>CodeAlpaca averages 95.9% but ranges over 11.1 pp</b>: it matches FineWeb-Edu exactly on MMLU (100.1%) and BoolQ (101.4%), while costing the most on WinoGrande coreference (90.3%) and ARC-Challenge hard-science QA (91.3%). So an off-domain calibration set doesn't degrade things evenly; it knocks out specific capabilities.</p>
+  <p class="ko">도메인 스윕은 Table 9에서 벤치마크 7개로 확장되는데, 비용의 크기보다 <i>모양</i>이 더 흥미롭습니다. <b>Wikipedia는 균일하게 온건</b>합니다 — 평균 retention 99.4%, 벤치마크 간 편차도 작습니다. <b>CodeAlpaca는 평균 95.9%지만 편차가 11.1 pp</b>입니다: MMLU(100.1%)와 BoolQ(101.4%)에서는 FineWeb-Edu와 똑같은데, WinoGrande 상호참조(90.3%)와 ARC-Challenge 고난도 과학 QA(91.3%)에서 가장 크게 손해를 봅니다. 즉 도메인이 어긋난 캘리브레이션 세트는 성능을 고르게 깎는 게 아니라, 특정 능력을 골라 무너뜨립니다.</p>
+  <h3><span class="en">4.4 — Swapping ridge for an MLP rescues exactly the pairs that failed</span>
+      <span class="ko">4.4 — 릿지를 MLP로 바꾸면 실패한 쌍만 정확히 살아난다</span></h3>
+  <p class="en">The obvious follow-up to Tier 2: is the relationship simply not linear on those pairs? They train a per-(target layer, head, K|V) MLP on the same MSE loss and drop it in as a replacement — same calibration data, same evaluation pipeline, only the functional form changes.</p>
+  <p class="ko">Tier 2에 대한 당연한 후속 질문: 그 쌍들에서는 관계가 아예 선형이 아닌 걸까? 저자들은 같은 MSE 손실로 (타깃 레이어, head, K|V)마다 MLP를 학습시켜 그대로 갈아 끼웁니다 — 캘리브레이션 데이터도 평가 파이프라인도 같고, 함수 형태만 바뀝니다.</p>
+
+  <table>
+    <thead><tr><th><span class="en">Pair</span><span class="ko">쌍</span></th><th class="num"><span class="en">Ridge</span><span class="ko">릿지</span></th><th class="num">MLP</th><th class="num">Δ</th></tr></thead>
+    <tbody>
+      <tr><td>Qwen3 14B → 32B</td><td class="num">97.6%</td><td class="num">97.3%</td><td class="num">−0.3 pp</td></tr>
+      <tr><td>Ministral 3 3B → 8B</td><td class="num">93.3%</td><td class="num">91.8%</td><td class="num">−1.5 pp</td></tr>
+      <tr class="good"><td>Ministral 3 3B → 14B</td><td class="num">68.0%</td><td class="num">92.3%</td><td class="num"><b>+24.3 pp</b></td></tr>
+      <tr class="good"><td>Ministral 3 8B → 14B</td><td class="num">58.7%</td><td class="num">95.5%</td><td class="num"><b>+36.8 pp</b></td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Table 3 (§4.4) reconstructed — HellaSwag retention only.</span><span class="ko">Table 3 (§4.4) 재구성 — HellaSwag retention 기준.</span></p>
+
+  <p class="en">The MLP puts all four pairs above 90%, and it does <i>not</i> dominate: on the pairs ridge already handles, it is slightly worse. That asymmetry is the finding, not a footnote.</p>
+  <p class="ko">MLP는 네 쌍을 전부 90% 위로 올리지만, 전면적으로 우월하지는 <i>않습니다</i>: 릿지가 이미 잘 하던 쌍에서는 오히려 조금 나쁩니다. 이 비대칭이 각주가 아니라 발견 그 자체입니다.</p>
+  <blockquote class="q">
+    <p>"Linear ridge is sufficient where the cross-model KV relationship is already linear, and the MLP helps only where ridge falls short rather than dominating ridge across the board."</p>
+    <cite>— §4.4, ¶3 · <a href="https://arxiv.org/html/2608.03893v1#S4.SS4">원문 보기 (§4.4)</a></cite>
+  </blockquote>
+
+  <h3><span class="en">4.5 — The best part: R² is the wrong yardstick, and here's the right one</span>
+      <span class="ko">4.5 — 백미: R²은 틀린 잣대다, 그리고 맞는 잣대는 이것이다</span></h3>
+  <p class="en">If you were deploying this, the metric you'd reach for is calibration R² — fit the mapper, check the fit, decide whether to enable the pair. The paper shows this doesn't work, with a clean counterexample:</p>
+  <p class="ko">이걸 실제로 배포한다면 손이 가는 지표는 캘리브레이션 R²일 겁니다 — 매퍼를 피팅하고, 적합도를 보고, 이 쌍을 켤지 결정. 논문은 그게 안 된다는 걸 깔끔한 반례로 보여 줍니다:</p>
+  <div class="grid2">
+    <div class="mini">
+      <h4>Llama 3.1 8B ↔ 70B</h4>
+      <p><span class="en">Calibration R²<sub>K</sub> = <b>0.84</b>. Retains <b>94%</b> HellaSwag small→large, but only <b>37%</b> large→small.</span><span class="ko">캘리브레이션 R²<sub>K</sub> = <b>0.84</b>. HellaSwag에서 작은→큰은 <b>94%</b>를 유지하지만, 큰→작은은 <b>37%</b>뿐입니다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>Ministral 3 3B ↔ 8B</h4>
+      <p><span class="en">Calibration R²<sub>K</sub> = <b>0.84</b> — identical. Retains <b>93% in both directions</b>.</span><span class="ko">캘리브레이션 R²<sub>K</sub> = <b>0.84</b> — 완전히 동일. 그런데 <b>양방향 모두 93%</b>를 유지합니다.</span></p>
+    </div>
+  </div>
+  <p class="en">Same fit quality, wildly different downstream outcomes. So what <i>does</i> R² miss? The answer is almost obvious once stated:</p>
+  <p class="ko">적합도는 같은데 다운스트림 결과는 크게 다릅니다. 그렇다면 R²이 놓치는 건 뭘까요? 말로 표현하고 나면 거의 자명합니다:</p>
+  <blockquote class="q">
+    <p>"R² measures how closely the mapper reconstructs each K and V channel on average, weighting all dimensions equally. Attention does not. It scores K against the target's queries <b>Q</b> and weights V by the resulting attention pattern. The quantity that decides whether downstream behavior is preserved is the attention output the target would have computed."</p>
+    <cite>— §4.5 ("Attention-output cosine.") · <a href="https://arxiv.org/html/2608.03893v1#S4.SS5">원문 보기 (§4.5)</a></cite>
+  </blockquote>
+  <p class="en">R² treats all 128 dimensions of a key as equally important. Attention doesn't: it only ever looks at a key <i>through</i> the queries. If your reconstruction error sits in a direction no query ever points at, it is invisible; if it sits along the directions queries live in, it changes every attention score. So the paper measures the thing that actually matters — <b>cosine similarity between the attention output computed from mapped KV and from ground-truth KV</b>, averaged over layers and heads. Across 12 pair-direction evaluations from three families:</p>
+  <p class="ko">R²은 key의 128개 차원을 전부 똑같이 중요하게 취급합니다. 어텐션은 그렇지 않습니다. 어텐션은 언제나 query를 <i>통해서만</i> key를 봅니다. 복원 오차가 어떤 query도 향하지 않는 방향에 있으면 그 오차는 보이지 않고, query들이 사는 방향에 놓이면 모든 어텐션 점수를 바꿉니다. 그래서 논문은 실제로 중요한 것을 잽니다 — <b>매핑된 KV로 계산한 어텐션 출력과 정답 KV로 계산한 어텐션 출력 사이의 코사인 유사도</b>를 레이어·head에 대해 평균한 값. 세 패밀리, 12개 쌍-방향 평가에서:</p>
+  <div class="grid2">
+    <div class="mini"><h4><span class="en">Attention-output cosine</span><span class="ko">어텐션 출력 코사인</span></h4><p><span class="en">Pearson <b>r = +0.57</b> with HellaSwag retention.</span><span class="ko">HellaSwag retention과 Pearson <b>r = +0.57</b>.</span></p></div>
+    <div class="mini"><h4><span class="en">Calibration R²<sub>K</sub></span><span class="ko">캘리브레이션 R²<sub>K</sub></span></h4><p><span class="en">Pearson <b>r = −0.20</b> — essentially no signal, and pointing the wrong way.</span><span class="ko">Pearson <b>r = −0.20</b> — 사실상 신호가 없고, 방향까지 반대입니다.</span></p></div>
+  </div>
+  <p class="en">R² is still useful <i>within</i> a pair — that is exactly what picks the top-k source layers. It just isn't the right scalar for comparing pairs.</p>
+  <p class="ko">R²은 <i>한 쌍 안에서는</i> 여전히 유용합니다 — top-k 소스 레이어를 고르는 게 바로 그 용도죠. 다만 쌍끼리 비교하는 스칼라로는 맞지 않을 뿐입니다.</p>
+
+  <h4><span class="en">Error concentration: measuring <i>where</i> the error lands</span><span class="ko">오차 집중도: 오차가 <i>어디에</i> 떨어지는지 재기</span></h4>
+  <p class="en">Cosine is a pair-level summary. To explain <i>why</i> two mappers with the same R² produce different cosine, they define a per-head <b>concentration</b>:</p>
+  <p class="ko">코사인은 쌍 단위 요약값입니다. R²이 같은 두 매퍼가 왜 다른 코사인을 내는지 설명하려고, 저자들은 head별 <b>집중도(concentration)</b>를 정의합니다:</p>
+  <ul class="en">
+    <li><b>K-concentration.</b> Take the target's per-head query matrix <b>Q</b><sub>h</sub> and its right singular vectors — these are the directions the queries actually point in, and the matching squared singular value says how much query mass lies along each. Project the mapper's per-token K error onto those directions, weight each component by that squared singular value, and divide by the mean error across all components.</li>
+    <li><b>V-concentration.</b> Same idea, simpler: weight each position's V error by the squared ground-truth attention weight at that position, divide by the mean per-position error. Error on a token nobody attends to is cheap.</li>
+    <li>Both averaged across heads. Read it as a ratio: <b>1.0 = the error is spread evenly with respect to what attention cares about.</b></li>
+  </ul>
+  <ul class="ko">
+    <li><b>K-집중도.</b> 타깃의 head별 query 행렬 <b>Q</b><sub>h</sub>의 right singular vector를 구합니다 — 이게 query들이 실제로 향하는 방향들이고, 대응하는 특잇값의 제곱이 각 방향에 query가 얼마나 실려 있는지를 알려 줍니다. 매퍼의 토큰별 K 오차를 그 방향들에 사영하고, 각 성분을 그 특잇값 제곱으로 가중한 뒤, 전체 성분의 평균 오차로 나눕니다.</li>
+    <li><b>V-집중도.</b> 같은 발상인데 더 단순합니다: 각 위치의 V 오차를 그 위치의 정답 어텐션 가중치 제곱으로 가중하고, 위치별 평균 오차로 나눕니다. 아무도 주목하지 않는 토큰에서 난 오차는 싸게 먹힙니다.</li>
+    <li>둘 다 head에 대해 평균. 비율로 읽으면 됩니다: <b>1.0 = 어텐션이 신경 쓰는 것에 대해 오차가 고르게 퍼져 있음.</b></li>
+  </ul>
+  <blockquote class="q">
+    <p>"Concentration above 1 means the error concentrates where attention reads, while below 1 means it lands where attention ignores."</p>
+    <cite>— §4.5 ("Where the mapper's error lands.") · <a href="https://arxiv.org/html/2608.03893v1#S4.SS5">원문 보기 (§4.5)</a></cite>
+  </blockquote>
+
+  <svg class="fig" viewBox="0 0 880 336" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Two panels showing a key vector space as a circle with a shaded wedge marking the few directions the target's queries probe; ridge's error arrow lands inside the wedge and costs accuracy, while the MLP's error arrow of similar magnitude lands outside it and is nearly free">
+    <defs>
+      <marker id="e1" markerWidth="10" markerHeight="10" refX="8" refY="3.4" orient="auto"><path d="M0,0 L8,3.4 L0,6.8 Z" fill="#6f2a12"/></marker>
+      <marker id="e2" markerWidth="10" markerHeight="10" refX="8" refY="3.4" orient="auto"><path d="M0,0 L8,3.4 L0,6.8 Z" fill="#27500a"/></marker>
+    </defs>
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Same amount of error. Different place. Ministral 8B → 14B.</text>
+
+    <!-- panel 1 -->
+    <text x="200" y="46" text-anchor="middle" font-size="11.5" font-weight="700" fill="#6f2a12">Ridge — error lands where attention reads</text>
+    <circle cx="200" cy="152" r="100" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.4"/>
+    <path d="M200,152 L284.8,99 A100,100 0 0,1 284.8,205 Z" fill="#fce6dd" stroke="#ef9f86" stroke-width="1.2"/>
+    <text x="316" y="150" font-size="9.5" font-weight="700" fill="#6f2a12">directions</text>
+    <text x="316" y="162" font-size="9.5" font-weight="700" fill="#6f2a12">the queries</text>
+    <text x="316" y="174" font-size="9.5" font-weight="700" fill="#6f2a12">actually probe</text>
+    <text x="200" y="268" text-anchor="middle" font-size="9.5" fill="#8a8f98">the 128-dim key space of one head</text>
+    <line x1="200" y1="152" x2="285" y2="140" stroke="#6f2a12" stroke-width="4" marker-end="url(#e1)"/>
+    <circle cx="200" cy="152" r="4" fill="#3a3934"/>
+    <text x="228" y="128" font-size="10.5" font-weight="700" fill="#6f2a12">error</text>
+    <text x="200" y="292" text-anchor="middle" font-size="10.5" fill="#6f2a12">every attention score shifts</text>
+    <text x="200" y="308" text-anchor="middle" font-size="13" font-weight="700" fill="#6f2a12">HellaSwag 58.7%</text>
+
+    <!-- divider -->
+    <line x1="440" y1="40" x2="440" y2="316" stroke="#e3e1d8" stroke-dasharray="5 4"/>
+
+    <!-- panel 2 -->
+    <text x="640" y="46" text-anchor="middle" font-size="11.5" font-weight="700" fill="#27500a">MLP — same error, pushed somewhere harmless</text>
+    <circle cx="640" cy="152" r="100" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.4"/>
+    <path d="M640,152 L724.8,99 A100,100 0 0,1 724.8,205 Z" fill="#fce6dd" stroke="#ef9f86" stroke-width="1.2"/>
+    <line x1="640" y1="152" x2="600" y2="76" stroke="#27500a" stroke-width="4" marker-end="url(#e2)"/>
+    <circle cx="640" cy="152" r="4" fill="#3a3934"/>
+    <text x="556" y="104" font-size="10.5" font-weight="700" fill="#27500a">error</text>
+    <text x="640" y="268" text-anchor="middle" font-size="9.5" fill="#8a8f98">arrow drawn the same length as on the left</text>
+    <text x="640" y="292" text-anchor="middle" font-size="10.5" fill="#27500a">attention barely notices</text>
+    <text x="640" y="308" text-anchor="middle" font-size="13" font-weight="700" fill="#27500a">HellaSwag 95.5%  (+36.8 pp)</text>
+
+    <!-- deltas -->
+    <rect x="368" y="118" width="144" height="72" rx="9" fill="#ffffff" stroke="#c2c0b6" stroke-width="1.3"/>
+    <text x="440" y="136" text-anchor="middle" font-size="10" font-weight="700" fill="#3a3934">MLP − ridge</text>
+    <text x="440" y="153" text-anchor="middle" font-size="10.5" fill="#3a3934">K-conc  <tspan font-weight="700" fill="#27500a">−2.71</tspan></text>
+    <text x="440" y="169" text-anchor="middle" font-size="10.5" fill="#3a3934">V-conc  <tspan font-weight="700" fill="#27500a">−0.23</tspan></text>
+    <text x="440" y="185" text-anchor="middle" font-size="10.5" fill="#3a3934">cosine  <tspan font-weight="700" fill="#27500a">+0.48</tspan></text>
+  </svg>
+  <p class="figcap"><span class="en">Why the MLP wins on the failure pairs — conceptual redraw of the mechanism in §4.5, with the Δ values and HellaSwag retentions from Table 4 (§4.5) and Table 3 (§4.4). The wedge and arrows are illustrative; the paper reports no absolute concentration values.</span><span class="ko">실패 쌍에서 MLP가 이기는 이유 — §4.5의 메커니즘을 개념적으로 다시 그린 것. Δ 값과 HellaSwag retention은 Table 4 (§4.5)와 Table 3 (§4.4). 부채꼴과 화살표는 설명용이며, 논문은 집중도의 절대값을 보고하지 않는다.</span></p>
+
+  <p class="en">One more number that reframes everything: on the failure pairs, ridge's R²<sub>K</sub> measured <b>on HellaSwag tokens</b> is deeply negative — <b>−3.22</b> for Ministral 8B→14B, <b>−7.81</b> for 3B→14B. Negative R² means "worse than predicting the mean". So the calibration-domain fit (R²≈0.84 on FineWeb-Edu) <b>simply does not extrapolate</b> to evaluation tokens on those pairs. The MLP lifts it by +3.08 and +7.62 — to roughly −0.14 and −0.19, still below zero, but close enough that placement takes over.</p>
+  <p class="ko">모든 걸 다시 보게 만드는 숫자 하나 더: 실패 쌍에서 <b>HellaSwag 토큰 위에서 잰</b> 릿지의 R²<sub>K</sub>는 깊은 음수입니다 — Ministral 8B→14B가 <b>−3.22</b>, 3B→14B가 <b>−7.81</b>. 음수 R²은 "평균값 예측보다 못하다"는 뜻입니다. 즉 캘리브레이션 도메인의 적합도(FineWeb-Edu에서 R²≈0.84)가 그 쌍들에서는 평가 토큰으로 <b>전혀 외삽되지 않습니다</b>. MLP는 이를 각각 +3.08, +7.62만큼 끌어올려 대략 −0.14, −0.19로 만듭니다 — 여전히 0보다 아래지만, 이제부터는 오차의 위치가 승부를 가릅니다.</p>
+
+  <blockquote class="q">
+    <p>"Redistributing error is therefore not sufficient on its own. It changes downstream accuracy only where the misplaced error was large enough to bind, which is why linear ridge is enough wherever the cross-model KV relationship is already linear."</p>
+    <cite>— §4.5 ("MLP intervention.") · <a href="https://arxiv.org/html/2608.03893v1#S4.SS5">원문 보기 (§4.5)</a></cite>
+  </blockquote>
+  <p class="en">The control case makes this precise: Ministral 3B→8B improves on <i>both</i> concentration and cosine under the MLP and still <i>loses</i> 1.5 pp on HellaSwag. Better placement only pays when the misplaced error was large enough to be binding in the first place.</p>
+  <p class="ko">대조군이 이 점을 정확하게 만들어 줍니다: Ministral 3B→8B는 MLP에서 집중도와 코사인이 <i>둘 다</i> 좋아지는데도 HellaSwag에서 1.5 pp를 <i>잃습니다</i>. 오차 배치를 개선하는 게 이득이 되는 건, 애초에 잘못 놓인 오차가 발목을 잡을 만큼 컸을 때뿐입니다.</p>
+
+  <h3><span class="en">4.6 — Does it survive a real conversation? (multi-turn handoff)</span>
+      <span class="ko">4.6 — 실제 대화에서 버티는가? (멀티턴 핸드오프)</span></h3>
+  <p class="en">The mid-conversation switching scenario alternates between source and target turn after turn — so the worry is <b>drift</b>: does mapped-cache error compound? Measured on Qwen3 14B ↔ 32B with CoQA, 100 conversations of ~15 turns across five domains, scoring each turn's answer by F1 against ground truth. Drift at turn t = the F1 gap between the target's standalone accuracy and the mapper's at that turn.</p>
+  <p class="ko">대화 도중 전환 시나리오는 턴마다 소스와 타깃을 오갑니다 — 그래서 걱정되는 건 <b>드리프트</b>입니다. 매핑된 캐시의 오차가 누적될까요? Qwen3 14B ↔ 32B에서 CoQA로, 5개 도메인에 걸친 ~15턴짜리 대화 100개에 대해 매 턴 답변을 정답 대비 F1로 채점해 측정합니다. 턴 t의 드리프트 = 그 턴에서 타깃 자체 정확도와 매퍼 정확도의 F1 격차.</p>
+  <div class="grid2">
+    <div class="mini">
+      <h4><span class="en">Small → large</span><span class="ko">작은 → 큰</span></h4>
+      <p><span class="en">Gap widens by just <b>1.7 pp from turn 1 to turn 10</b> — and the mechanism is benign: the mapper holds steady while the 32B's own ceiling rises.</span><span class="ko">턴 1에서 10까지 격차가 <b>1.7 pp</b>만 벌어집니다 — 그리고 그 메커니즘이 온건합니다. 매퍼는 그대로인데 32B 자신의 천장이 올라가는 것.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Large → small</span><span class="ko">큰 → 작은</span></h4>
+      <p><span class="en">Grows <b>linearly at 0.33 pp/turn</b>. Fine for ten turns; a genuinely linear accumulation over a very long session is not.</span><span class="ko"><b>턴당 0.33 pp로 선형</b>으로 증가합니다. 10턴까지는 괜찮지만, 아주 긴 세션에서 선형으로 계속 쌓이는 건 얘기가 다릅니다.</span></p>
+    </div>
+  </div>
+  <blockquote class="q">
+    <p>"Both slopes are too small for cascading failure within ten turns on this single-pair evaluation, though linear large-to-small drift would still accumulate over very long sessions."</p>
+    <cite>— §4.6, ¶2 · <a href="https://arxiv.org/html/2608.03893v1#S4.SS6">원문 보기 (§4.6)</a></cite>
+  </blockquote>
+  <p class="en">Also reassuring: re-tuning k specifically on the multi-turn task changes drift by at most 2.0 pp, so the single-turn-selected k is not leaving much on the table. Note the scope, though — <b>one pair, ten turns</b>.</p>
+  <p class="ko">또 하나 안심되는 점: 멀티턴 과제에 맞춰 k를 다시 튜닝해도 드리프트는 최대 2.0 pp만 바뀝니다. 단일 턴 기준으로 고른 k가 크게 손해 보고 있지 않다는 뜻이죠. 다만 범위는 분명히 해 둘 것 — <b>쌍 하나, 10턴</b>입니다.</p>
+
+  <h3><span class="en">4.7 — The payoff: 2.7–25× less prefill latency</span>
+      <span class="ko">4.7 — 보상: prefill 지연 2.7~25배 감소</span></h3>
+  <blockquote class="q">
+    <p>"The mapper replaces the target's transformer body with a per-layer batched matrix multiply, letting the receiver decode directly from the mapped cache."</p>
+    <cite>— §4.7, ¶2 · <a href="https://arxiv.org/html/2608.03893v1#S4.SS7">원문 보기 (§4.7)</a></cite>
+  </blockquote>
+  <table>
+    <thead><tr>
+      <th class="num"><span class="en">Seq len</span><span class="ko">시퀀스 길이</span></th>
+      <th class="num"><span class="en">Mapper</span><span class="ko">매퍼</span> S→L</th><th class="num"><span class="en">Re-prefill</span><span class="ko">재-prefill</span></th><th class="num"><span class="en">Speedup</span><span class="ko">가속</span></th>
+      <th class="num"><span class="en">Mapper</span><span class="ko">매퍼</span> L→S</th><th class="num"><span class="en">Re-prefill</span><span class="ko">재-prefill</span></th><th class="num"><span class="en">Speedup</span><span class="ko">가속</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td class="num">64</td><td class="num">14.0 ms</td><td class="num">61.7 ms</td><td class="num">4×</td><td class="num">11.6 ms</td><td class="num">39.2 ms</td><td class="num">3×</td></tr>
+      <tr><td class="num">8K</td><td class="num">67.8 ms</td><td class="num">1,154.8 ms</td><td class="num">17×</td><td class="num">101.9 ms</td><td class="num">501.0 ms</td><td class="num">5×</td></tr>
+      <tr class="good"><td class="num">32K</td><td class="num">277.6 ms</td><td class="num">6,975.3 ms</td><td class="num"><b>25×</b></td><td class="num">427.1 ms</td><td class="num">2,952.7 ms</td><td class="num"><b>7×</b></td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Table 5 (§4.7) reconstructed. Qwen3 14B ↔ 32B, k=8 for S→L and k=20 for L→S, 8×H100 NVLink, bf16.</span><span class="ko">Table 5 (§4.7) 재구성. Qwen3 14B ↔ 32B, S→L은 k=8, L→S는 k=20, 8×H100 NVLink, bf16.</span></p>
+  <p class="en">The pattern is structural: re-prefill grows with sequence length <i>and</i> model depth, while the mapper's cost grows with sequence length only — so the advantage widens with context. Across seven pairs in both directions (Table 16), <b>the mapper is faster in every one of the 70 measured cells</b>, from 2.7× (Ministral 3B→8B, short) to 25.1× (Qwen3 14B→32B at 32K). At short sequences the mapper is near-flat because a fixed floor from Python dispatch and cross-GPU transfers dominates (14.0 ms for the Qwen3 14B→32B mapper).</p>
+  <p class="ko">이 패턴은 구조적입니다: 재-prefill은 시퀀스 길이 <i>와</i> 모델 깊이에 따라 커지지만, 매퍼 비용은 시퀀스 길이에만 좌우됩니다 — 그래서 컨텍스트가 길어질수록 격차가 벌어집니다. 양방향 7개 쌍(Table 16)에 걸쳐 <b>측정한 70개 셀 전부에서 매퍼가 빠릅니다</b>. 2.7배(Ministral 3B→8B, 짧은 길이)에서 25.1배(Qwen3 14B→32B, 32K)까지. 짧은 시퀀스에서 매퍼가 거의 평평한 건 Python 디스패치와 GPU 간 전송의 고정 비용이 지배하기 때문입니다(Qwen3 14B→32B 매퍼 기준 14.0 ms).</p>
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">read the caveats before quoting the 25×</span><span class="ko">25배를 인용하기 전에 볼 단서들</span></span>
+    <span class="en">The measurement is deliberately narrow, and the authors say so (Appendix G). Both conditions run on <b>synthetic inputs</b>, isolating compute. Re-prefill uses <code class="inl">flash_attention_2</code> and excludes the LM head; the mapper runs in <b>eager mode with no <code class="inl">torch.compile</code> and no CUDA graphs</b> (so it is, if anything, under-optimized). Ministral 3 re-prefill times the language-model decoder body only, excluding the vision tower. And crucially: <i>"End-to-end transfer would also include shipping the mapped cache to the target process, which we do not measure."</i> (<a href="https://arxiv.org/html/2608.03893v1#A7">Appendix G</a>) In a disaggregated deployment that transfer is exactly the cost a KV-connector layer would have to bear.</span>
+    <span class="ko">측정 범위가 의도적으로 좁고, 저자들도 그렇게 밝힙니다(Appendix G). 두 조건 모두 <b>합성 입력</b>으로 돌려 연산만 분리합니다. 재-prefill은 <code class="inl">flash_attention_2</code>를 쓰고 LM head는 제외하며, 매퍼는 <b><code class="inl">torch.compile</code>도 CUDA graph도 없이 eager 모드</b>로 돕니다(즉 오히려 덜 최적화된 상태). Ministral 3의 재-prefill은 비전 타워를 뺀 언어모델 디코더 본체만 잰 것입니다. 그리고 결정적으로: <i>"End-to-end transfer would also include shipping the mapped cache to the target process, which we do not measure."</i> (<a href="https://arxiv.org/html/2608.03893v1#A7">Appendix G</a>) 분리(disaggregated) 배포에서는 바로 그 전송이 KV 커넥터 계층이 떠안아야 할 비용입니다.</span>
+  </div>
+
+  <h3><span class="en">4.8 — Out-of-sample check, and what the authors admit</span>
+      <span class="ko">4.8 — Out-of-sample 확인, 그리고 저자들이 인정하는 것</span></h3>
+  <p class="en">Three benchmarks that played no part in selecting k — PIQA, BoolQ, ARC-Easy — evaluated at each pair's selected k (Table 18). The tier structure reappears cleanly: the four Tier 1 pairs mean <b>96.8–99.9%</b>, the two Tier 2 pairs <b>59.3–63.7%</b>. Retention is at or above the in-sample level for every pair, though PIQA and ARC-Easy are easier benchmarks so absolute levels aren't comparable across the two sets.</p>
+  <p class="ko">k 선택에 전혀 관여하지 않은 벤치마크 셋 — PIQA, BoolQ, ARC-Easy — 을 각 쌍의 선택된 k에서 평가합니다(Table 18). 티어 구조가 깔끔하게 재현됩니다: Tier 1 네 쌍은 평균 <b>96.8~99.9%</b>, Tier 2 두 쌍은 <b>59.3~63.7%</b>. 모든 쌍에서 in-sample 수준 이상이지만, PIQA와 ARC-Easy가 더 쉬운 벤치마크라 두 세트 간 절대 수치를 비교할 수는 없습니다.</p>
+  <p class="en">The four stated limitations (§5), in the authors' own framing:</p>
+  <p class="ko">저자들이 스스로 정리한 네 가지 한계(§5):</p>
+  <div class="grid2">
+    <div class="mini"><h4>① <span class="en">Single-domain calibration</span><span class="ko">단일 도메인 캘리브레이션</span></h4><p><span class="en">Only FineWeb-Edu. The Wikipedia/CodeAlpaca sweep doesn't separate subject matter from register, so it does <b>not</b> bound what happens if you calibrate on one narrow field like medicine or law.</span><span class="ko">FineWeb-Edu뿐입니다. Wikipedia/CodeAlpaca 스윕은 주제와 문체(register)를 분리하지 못하므로, 의학이나 법률 같은 좁은 한 분야로 캘리브레이션했을 때 어떻게 되는지는 <b>한정하지 못합니다</b>.</span></p></div>
+    <div class="mini"><h4>② k <span class="en">selection</span><span class="ko">선택</span></h4><p><span class="en">k is picked on the same log-likelihood benchmarks that are then reported. Appendix H bounds the effect at ≤2.49 pp and adds held-out evaluation, but neither substitutes for out-of-sample selection.</span><span class="ko">k를 보고 대상과 같은 log-likelihood 벤치마크 위에서 골랐습니다. Appendix H가 효과를 ≤2.49 pp로 한정하고 홀드아웃 평가를 붙였지만, 둘 다 out-of-sample 선택을 대신하지는 못합니다.</span></p></div>
+    <div class="mini"><h4>③ <span class="en">Matched-KV is empirical</span><span class="ko">matched-KV는 경험적 조건</span></h4><p><span class="en">The mapper imposes no structural requirement on dimensions, but all six pairs are matched-KV by construction. <b>Mismatched-KV is never tested.</b></span><span class="ko">매퍼 자체는 차원에 구조적 제약을 걸지 않지만, 여섯 쌍 전부가 설계상 matched-KV입니다. <b>mismatched-KV는 한 번도 테스트하지 않았습니다.</b></span></p></div>
+    <div class="mini"><h4>④ <span class="en">Scope</span><span class="ko">적용 범위</span></h4><p><span class="en">Within-family transfer over dense full-attention models only. Hybrid attention (sliding-window/local) and attention-recurrent architectures are out of scope.</span><span class="ko">같은 패밀리 안, dense full-attention 모델에 한정합니다. 하이브리드 어텐션(sliding-window/local)과 어텐션-순환 구조는 범위 밖입니다.</span></p></div>
+  </div>
+</section>
+
+<!-- ============ 5. DISCUSSION ============ -->
+<section id="s5">
+  <h2><span class="num">5</span>
+    <span class="en">Discussion — what the authors leave open, and what it means for a serving stack</span>
+    <span class="ko">Discussion — 저자들이 남긴 숙제, 그리고 서빙 스택 관점의 의미</span>
+  </h2>
+
+  <h3><span class="en">5.1 — What the paper concludes</span>
+      <span class="ko">5.1 — 논문의 결론</span></h3>
+  <blockquote class="q">
+    <p>"Cross-model KV cache transfer within an LLM family admits a closed-form, training-free fit… Per-pair retention is determined by where the residual error lands relative to the target's attention-sensitive subspaces, not by its magnitude. […] These results shift evaluation criteria for cross-model mappers from raw reconstruction metrics to subspace-aware diagnostics, and motivate attention-aligned objectives for future cross-model mappers."</p>
+    <cite>— §6 · <a href="https://arxiv.org/html/2608.03893v1#S6">원문 보기 (§6)</a></cite>
+  </blockquote>
+  <p class="en">There are really two results here, and the second is the durable one. The engineering result is "a ridge regression is enough, often". The scientific result is <b>"stop scoring cross-model mappers with MSE/R², score them with attention-output fidelity"</b> — which applies to any method in this space, including the trained ones the paper is competing with.</p>
+  <p class="ko">사실 여기엔 결과가 둘 있고, 오래 남을 건 두 번째입니다. 공학적 결과는 "릿지 회귀로도 자주 충분하다"입니다. 과학적 결과는 <b>"모델 간 매퍼를 MSE/R²로 채점하지 말고 어텐션 출력 충실도로 채점하라"</b>이고, 이건 이 논문이 경쟁하는 학습 기반 방법들을 포함해 이 분야의 모든 방법에 적용됩니다.</p>
+  <p class="en">On broader impact the authors are measured: skipping the receiver's prefill reduces serving cost, energy and tail latency for agentic workloads with frequent model swaps — cost-quality cascading, mid-conversation switching, routing. No claims beyond that.</p>
+  <p class="ko">broader impact에 대해서는 절제된 서술입니다: 받는 쪽의 prefill을 건너뛰면 모델 전환이 잦은 에이전트 워크로드 — 비용-품질 캐스케이딩, 대화 중 전환, 라우팅 — 의 서빙 비용·에너지·tail latency가 줄어든다. 그 이상의 주장은 없습니다.</p>
+
+  <h3><span class="en">5.2 — Future work the authors name</span>
+      <span class="ko">5.2 — 저자들이 지목한 후속 과제</span></h3>
+  <div class="grid2">
+    <div class="mini"><h4>① <span class="en">Trained mapper alternatives</span><span class="ko">학습형 매퍼 대안</span></h4><p><span class="en">Ridge was the practical starting point precisely because it needs no backprop. Now that the MLP result exists, systematically compare MLP, MoE, and <b>objectives that directly optimize attention-output cosine</b> rather than MSE.</span><span class="ko">릿지는 역전파가 필요 없다는 이유로 실용적 출발점이었습니다. MLP 결과가 나온 지금은 MLP·MoE, 그리고 MSE 대신 <b>어텐션 출력 코사인을 직접 최적화하는 목적함수</b>를 체계적으로 비교할 차례입니다.</span></p></div>
+    <div class="mini"><h4>② <span class="en">Predictive transferability</span><span class="ko">전이 가능성 사전 예측</span></h4><p><span class="en">Attention-output cosine is a <b>post-hoc</b> diagnostic — you must fit the mapper first. A signal that estimates transferability <i>before</i> fitting would make deployment screening cheap.</span><span class="ko">어텐션 출력 코사인은 <b>사후</b> 진단입니다 — 매퍼를 먼저 피팅해야 하죠. 피팅 <i>전에</i> 전이 가능성을 추정하는 신호가 있으면 배포 심사가 싸집니다.</span></p></div>
+    <div class="mini"><h4>③ <span class="en">Cross-family transfer</span><span class="ko">패밀리 간 전이</span></h4><p><span class="en">Qwen3 → Llama 3.1 is entirely open. Different families may share enough representation structure, or may need different machinery.</span><span class="ko">Qwen3 → Llama 3.1은 완전히 미개척입니다. 서로 다른 패밀리도 충분한 표현 구조를 공유할 수도 있고, 전혀 다른 장치가 필요할 수도 있습니다.</span></p></div>
+    <div class="mini"><h4>④ <span class="en">Hidden factors</span><span class="ko">숨은 요인</span></h4><p><span class="en">Beyond architecture: training-data overlap, fine-tuning recipe, and other non-architectural factors may drive transferability. (Note that all three Tier-2 failures involve Ministral 14B specifically.)</span><span class="ko">구조 너머: 학습 데이터 중복, 파인튜닝 레시피 등 비구조적 요인이 전이 가능성을 좌우할 수 있습니다. (Tier 2 실패가 전부 Ministral 14B와 얽혀 있다는 점도 눈에 띕니다.)</span></p></div>
+    <div class="mini"><h4>⑤ <span class="en">Hybrid architectures</span><span class="ko">하이브리드 구조</span></h4><p><span class="en">Extend to attention-restricted hybrids (sliding-window, local) and to attention-recurrent hybrids such as Nemotron 3, which carry <b>SSM state alongside KV</b> — a cache that isn't a KV cache at all.</span><span class="ko">어텐션이 제한된 하이브리드(sliding-window, local)와, KV 옆에 <b>SSM 상태</b>를 함께 들고 다니는 Nemotron 3 같은 어텐션-순환 하이브리드로 확장 — 아예 KV 캐시가 아닌 캐시가 있는 경우입니다.</span></p></div>
+  </div>
+
+  <h3><span class="en">5.3 — Our read (not the paper's claims)</span>
+      <span class="ko">5.3 — 우리 관점의 해석 (논문의 주장 아님)</span></h3>
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">editor's note — implications for a routed serving stack</span><span class="ko">편집자 주 — 라우팅되는 서빙 스택 관점의 함의</span></span>
+    <span class="en">① <b>Check the precondition before getting excited.</b> Matched KV means <code class="inl">num_key_value_heads</code> × <code class="inl">head_dim</code> identical across scales — 8×128 for all six pairs here. It is a config-file check, and plenty of real fleets fail it (families whose GQA grouping changes with scale, or that mix dense and MoE members). This is the first gate, not the accuracy numbers.<br>
+    ② <b>This is a router-layer feature, not an engine feature.</b> The mapper is a 4–12 GB per-<i>ordered</i>-pair artifact you page in from host memory or disk — architecturally it belongs next to the KV connector, not inside the model runtime (see <a class="src" href="vllm-kv-connectors.html">vLLM KV connectors</a> and <a class="src" href="vllm_pd_disagg_flow.html">P/D disaggregation</a>). A 5-model fleet is 20 ordered pairs ≈ 131 GB of mappers and ~20 hours of 8×H100 fitting. That is the honest deployment bill.<br>
+    ③ <b>The unmeasured cost is the one our stack would pay.</b> Appendix G excludes shipping the mapped cache to the target process. In a disaggregated deployment the 32K cache itself is the bulk transfer — the same problem <a class="src" href="nvidia-cmx-kv-cache-nvme.html">CMX</a> and NIXL exist to solve. The 25× is a compute-only figure.<br>
+    ④ <b>Watch GSM8K, not HellaSwag.</b> Log-likelihood classification flatters this method; multi-step generation is where it bleeds (Llama 3.1 8B→70B: 94% HellaSwag, <b>18% GSM8K</b>). Agentic workloads — the exact motivation in §1 — are generation workloads. The headline "73–98% retention" is an average over benchmark types that behave very differently.<br>
+    ⑤ <b>The transferable lesson is bigger than this paper.</b> "Error placement, not error magnitude" applies wherever we perturb a KV cache — quantization, eviction, compression, cross-layer sharing. All of those are routinely tuned against reconstruction error. This paper is a concrete demonstration that two mappers with identical R² can differ by 37 pp downstream, and that attention-output cosine catches what R² cannot. That's a diagnostic worth borrowing for our own KV-cache work.<br>
+    ⑥ <b>Where I'd want more evidence.</b> Multi-turn drift is one pair, ten turns, on the paper's <i>best</i> pair; the linear 0.33 pp/turn large→small slope is the number I'd want extended before trusting long sessions. And the screening story is currently circular — you must fit the mapper to learn whether the mapper will work.</span>
+    <span class="ko">① <b>흥분하기 전에 전제 조건부터 확인.</b> matched KV란 <code class="inl">num_key_value_heads</code> × <code class="inl">head_dim</code>이 스케일에 상관없이 동일하다는 뜻입니다 — 여기 여섯 쌍은 전부 8×128. config 파일만 보면 되는 확인이고, 실제 플릿 중에는 여기서 탈락하는 경우가 많습니다(스케일에 따라 GQA 그룹핑이 바뀌는 패밀리, dense와 MoE가 섞인 구성 등). 정확도 수치보다 이게 먼저 통과해야 할 관문입니다.<br>
+    ② <b>이건 엔진 기능이 아니라 라우터 계층 기능입니다.</b> 매퍼는 <i>순서쌍</i>마다 4~12 GB짜리 산출물이고 호스트 메모리나 디스크에서 페이징해 옵니다 — 구조적으로 모델 런타임 안이 아니라 KV 커넥터 옆에 놓일 물건입니다(<a class="src" href="vllm-kv-connectors.html">vLLM KV connectors</a>, <a class="src" href="vllm_pd_disagg_flow.html">P/D 분리</a> 참고). 모델 5개 플릿이면 순서쌍 20개 ≈ 매퍼 131 GB에 8×H100 피팅 ~20시간. 그게 정직한 배포 청구서입니다.<br>
+    ③ <b>측정되지 않은 비용이 하필 우리 스택이 내야 할 비용입니다.</b> Appendix G는 매핑된 캐시를 타깃 프로세스로 옮기는 비용을 제외합니다. 분리 배포에서는 32K 캐시 자체가 대용량 전송이고, <a class="src" href="nvidia-cmx-kv-cache-nvme.html">CMX</a>나 NIXL이 존재하는 이유가 바로 그 문제입니다. 25배는 연산만 따진 수치입니다.<br>
+    ④ <b>HellaSwag 말고 GSM8K를 보세요.</b> log-likelihood 분류는 이 방법을 실제보다 좋아 보이게 하고, 피가 나는 곳은 다단계 생성입니다(Llama 3.1 8B→70B: HellaSwag 94%, <b>GSM8K 18%</b>). §1이 동기로 든 에이전트 워크로드가 바로 생성 워크로드입니다. 대표 문구인 "73~98% retention"은 성질이 크게 다른 벤치마크 종류들을 평균 낸 값입니다.<br>
+    ⑤ <b>가져갈 교훈은 이 논문보다 큽니다.</b> "오차의 크기가 아니라 위치"는 KV 캐시를 건드리는 모든 곳에 적용됩니다 — 양자화, eviction, 압축, 레이어 간 공유. 전부 관행적으로 복원 오차를 기준으로 튜닝하는 것들이죠. 이 논문은 R²이 동일한 두 매퍼가 다운스트림에서 37 pp 차이 날 수 있고, R²이 못 잡는 것을 어텐션 출력 코사인이 잡는다는 걸 구체적으로 보여 줍니다. 우리 KV 캐시 작업에 빌려 쓸 만한 진단법입니다.<br>
+    ⑥ <b>더 많은 근거를 보고 싶은 지점.</b> 멀티턴 드리프트는 쌍 하나, 10턴, 그것도 논문의 <i>최고</i> 쌍에서만 측정했습니다. 큰→작은 방향의 턴당 0.33 pp 선형 기울기는 긴 세션을 믿기 전에 더 길게 확장해 보고 싶은 숫자입니다. 그리고 사전 심사 이야기는 현재 순환 논리입니다 — 매퍼가 통할지 알려면 매퍼를 먼저 피팅해야 합니다.</span>
+  </div>
+</section>
+
+<!-- ============ SOURCES ============ -->
+<section id="sources">
+  <h2>📚
+    <span class="en">Sources</span>
+    <span class="ko">출처</span>
+  </h2>
+  <h4><span class="en">Primary</span><span class="ko">1차 자료</span></h4>
+  <ul>
+    <li>Taekyung Heo, Rasoul Shafipour, Ritchie Zhao, Maximilian Golub, Mohammad Mahdi Kamani, Ritika Borkar, Makesh Tarun Chandran, Pantea Zardoshti, Bita Darvish Rouhani (NVIDIA). <i>Cross-Model KV Cache Transfer in LLM Families: A Closed-Form Linear Mapping for Prefill Reuse.</i> <a class="src" href="https://arxiv.org/abs/2608.03893">arXiv:2608.03893</a> · <a class="src" href="https://arxiv.org/html/2608.03893v1">HTML full text (v1)</a> · cs.LG, 04 Aug 2026, CC BY 4.0. <span class="muted"><span class="en">All quotes verbatim from the arXiv HTML v1; all tables reconstructed from the same.</span><span class="ko">모든 인용은 arXiv HTML v1 원문 그대로, 모든 표는 같은 문서에서 재구성.</span></span></li>
+  </ul>
+  <h4><span class="en">Code availability</span><span class="ko">코드 공개 여부</span></h4>
+  <ul>
+    <li><span class="en"><b>No official repository exists.</b> The paper contains no repository link in its body, abstract, footnotes or references (its only external URL is OpenAI's GPT-5 announcement), and a web search for an implementation returned nothing beyond the arXiv entry. Checked 2026-08-10.</span><span class="ko"><b>공식 레포지토리가 없습니다.</b> 논문 본문·초록·각주·참고문헌 어디에도 레포 링크가 없고(유일한 외부 URL은 OpenAI의 GPT-5 발표), 구현을 찾는 웹 검색에서도 arXiv 항목 외에는 나오지 않았습니다. 2026-08-10 확인.</span></li>
+  </ul>
+  <h4><span class="en">Prior work referenced above (as cited by the paper)</span><span class="ko">위에서 언급한 선행 연구 (논문의 인용 기준)</span></h4>
+  <ul>
+    <li>Fu et al., <i>Cache-to-Cache: Direct Semantic Communication Between Large Language Models</i> (C2C), ICLR 2026 — <span class="muted"><span class="en">trained per-pair neural fusers.</span><span class="ko">쌍마다 학습하는 신경망 fuser.</span></span></li>
+    <li>Dery et al., <i>Latent Space Communication via K-V Cache Alignment</i> (LatentAlign), <a class="src" href="https://arxiv.org/abs/2601.06123">arXiv:2601.06123</a>.</li>
+    <li>Zhao, Li &amp; Zhao, <i>IAM: Efficient Inference through Attention Mapping between Different-scale LLMs</i>, ACL 2025.</li>
+    <li>Liu et al., <i>DroidSpeak: KV Cache Sharing Across Fine-tuned Model Variants</i>, NSDI 2026.</li>
+    <li>Chang et al., <i>xKV: Cross-Layer SVD for KV-Cache Compression</i>, <a class="src" href="https://arxiv.org/abs/2503.18893">arXiv:2503.18893</a>; Brandon et al., <i>Cross-Layer Attention</i>, NeurIPS 2024; Wu &amp; Tu, <i>Layer-Condensed KV Cache</i>, ACL 2024.</li>
+    <li>Huh et al., <i>The Platonic Representation Hypothesis</i>, ICML 2024; Bello et al., <i>Linear Representation Transferability Hypothesis</i>, <a class="src" href="https://arxiv.org/abs/2506.00653">arXiv:2506.00653</a> — <span class="muted"><span class="en">the line of work the "a linear map might suffice" intuition comes from.</span><span class="ko">"선형 매핑으로 충분할지도 모른다"는 직관이 나온 계열.</span></span></li>
+    <li>Blakeman et al., <i>NVIDIA Nemotron 3: Efficient and Open Intelligence</i>, <a class="src" href="https://arxiv.org/abs/2512.20856">arXiv:2512.20856</a> — <span class="muted"><span class="en">the attention-recurrent hybrid named in future work.</span><span class="ko">future work에서 지목된 어텐션-순환 하이브리드.</span></span></li>
+    <li>Yang et al., <i>Qwen3 Technical Report</i>, <a class="src" href="https://arxiv.org/abs/2505.09388">arXiv:2505.09388</a>; Grattafiori et al., <i>The Llama 3 Herd of Models</i>, <a class="src" href="https://arxiv.org/abs/2407.21783">arXiv:2407.21783</a>.</li>
+  </ul>
+  <h4><span class="en">Related notes in this repo</span><span class="ko">이 레포의 관련 노트</span></h4>
+  <ul>
+    <li><a class="src" href="nvidia-cmx-kv-cache-nvme.html">NVIDIA CMX — tiering the KV cache down to NVMe</a> · <a class="src" href="vllm-kv-connectors.html">vLLM KV connectors</a> · <a class="src" href="vllm_pd_disagg_flow.html">vLLM P/D disaggregation flow</a> · <a class="src" href="prefix-cache-routing.html">Prefix-cache routing</a> · <a class="src" href="vllm-kv-cache-block-management.html">KV-cache block management</a></li>
+  </ul>
+</section>
+
+<footer>
+  <span class="en">Paper: <a href="https://arxiv.org/abs/2608.03893">arXiv:2608.03893</a> (Heo et al., NVIDIA) · All quotes verbatim from the arXiv HTML v1 · Note written 2026-08-10.</span>
+  <span class="ko">논문: <a href="https://arxiv.org/abs/2608.03893">arXiv:2608.03893</a> (Heo et al., NVIDIA) · 모든 인용은 arXiv HTML v1 원문 그대로 · 노트 작성 2026-08-10.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
