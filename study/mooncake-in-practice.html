@@ -110,6 +110,7 @@
   <ol>
     <li><a href="#s0"><span class="en">Zero background: what a KV cache is and why anyone offloads it</span><span class="ko">배경 0 — KV 캐시가 뭐고 왜 밖으로 빼는가</span></a></li>
     <li><a href="#s1"><span class="en">What you actually run — the process map</span><span class="ko">실제로 띄우는 것 — 프로세스 지도</span></a></li>
+    <li><a href="#scomm"><span class="en">The communication stack — which wire carries what</span><span class="ko">통신 스택 — 어느 선이 무엇을 나르는가</span></a></li>
     <li><a href="#s2"><span class="en">One request, step by step through the code</span><span class="ko">요청 하나, 코드로 한 단계씩</span></a></li>
     <li><a href="#s3"><span class="en">Which Mooncake asset each step uses, and why it is good</span><span class="ko">각 단계가 쓰는 Mooncake 자산과 그게 좋은 이유</span></a></li>
     <li><a href="#s4"><span class="en">How to see it working — and the traps that hide it</span><span class="ko">동작을 확인하는 법 — 그리고 그걸 가리는 함정</span></a></li>
@@ -237,8 +238,185 @@ vllm serve &lt;model&gt; \
   </p>
 </section>
 
-<section id="s2">
+<section id="scomm">
   <h2><span class="num">2</span>
+    <span class="en">The communication stack — which wire carries what</span>
+    <span class="ko">통신 스택 — 어느 선이 무엇을 나르는가</span>
+  </h2>
+
+  <p>
+    <span class="en">"Mooncake uses RDMA" is true but useless on its own, because a running deployment has <b>four separate channels</b> and only one of them is the RDMA one. Confusing them is the source of most setup failures — in particular, the config file names <i>two different services</i> that people routinely think are the same.</span>
+    <span class="ko">"Mooncake 는 RDMA 를 쓴다" 는 맞는 말이지만 그 자체로는 쓸모가 없다. 돌아가는 배포에는 <b>서로 다른 채널이 넷</b> 있고 그중 하나만 RDMA 이기 때문이다. 이걸 뭉뚱그리는 게 셋업 실패의 주원인이고, 특히 설정 파일에 <i>서로 다른 두 서비스</i> 이름이 들어 있는데 사람들이 습관적으로 같은 것으로 안다.</span>
+  </p>
+
+  <h3><span class="en">The four channels of an offload deployment</span><span class="ko">오프로드 배포의 네 채널</span></h3>
+  <table>
+    <tr>
+      <th style="width:20%"><span class="en">Channel</span><span class="ko">채널</span></th>
+      <th style="width:22%"><span class="en">Protocol</span><span class="ko">프로토콜</span></th>
+      <th style="width:26%"><span class="en">When it fires</span><span class="ko">언제 흐르나</span></th>
+      <th><span class="en">Volume &amp; reach</span><span class="ko">양과 도달 범위</span></th>
+    </tr>
+    <tr>
+      <td><b><span class="en">① scheduler ↔ worker</span><span class="ko">① 스케줄러 ↔ 워커</span></b></td>
+      <td><span class="en">ZMQ <code class="inl">REQ</code>/<code class="inl">REP</code> over a <b>Unix socket</b><br><code class="inl">ipc://…/lookup_rpc_port_&lt;p&gt;_host_&lt;h&gt;_dp_rank&lt;n&gt;</code></span><span class="ko">Unix 소켓 위의 ZMQ <code class="inl">REQ</code>/<code class="inl">REP</code><br><code class="inl">ipc://…/lookup_rpc_port_&lt;p&gt;_host_&lt;h&gt;_dp_rank&lt;n&gt;</code></span></td>
+      <td><span class="en">Every request, at the lookup step (§3 step 1)</span><span class="ko">매 요청, lookup 단계에서(§3 단계 1)</span></td>
+      <td><span class="en">Tiny — a list of hashes. <b>Same node by construction</b>: it is a filesystem socket, so scheduler and worker cannot be split across machines.</span><span class="ko">아주 작음 — 해시 목록. <b>구조상 같은 노드</b>다. 파일시스템 소켓이라 스케줄러와 워커를 다른 머신에 둘 수 없다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">② client ↔ master</span><span class="ko">② 클라이언트 ↔ master</span></b></td>
+      <td><span class="en">Mooncake RPC to <code class="inl">master_server_address</code> (default port 50051)</span><span class="ko"><code class="inl">master_server_address</code> 로의 Mooncake RPC (기본 포트 50051)</span></td>
+      <td><span class="en">Key existence checks, space allocation, liveness</span><span class="ko">키 존재 확인, 공간 할당, 생존 확인</span></td>
+      <td><span class="en">Small and roughly constant-size regardless of KV volume. This is why one master serves many instances.</span><span class="ko">KV 양과 무관하게 작고 크기가 거의 일정. master 한 대가 여러 인스턴스를 감당하는 이유.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">③ transfer engine ↔ metadata service</span><span class="ko">③ 전송 엔진 ↔ 메타데이터 서비스</span></b></td>
+      <td><span class="en"><code class="inl">metadata_server</code> — <code class="inl">P2PHANDSHAKE</code>, or etcd / Redis / HTTP</span><span class="ko"><code class="inl">metadata_server</code> — <code class="inl">P2PHANDSHAKE</code>, 또는 etcd / Redis / HTTP</span></td>
+      <td><span class="en">When two peers first need to talk — exchanging the RDMA connection info</span><span class="ko">두 피어가 처음 통신해야 할 때 — RDMA 연결 정보 교환</span></td>
+      <td><span class="en">Small, bursty at connection setup. <b>Not the master.</b></span><span class="ko">작고, 연결 수립 시에만 몰림. <b>master 가 아니다.</b></span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">④ client ↔ segment owner</span><span class="ko">④ 클라이언트 ↔ 세그먼트 소유자</span></b><br><span class="muted">= data plane</span></td>
+      <td><span class="en"><code class="inl">protocol</code>: <b>rdma</b> (design point) / <b>tcp</b> (fallback), plus NVMe-oF in the wider engine</span><span class="ko"><code class="inl">protocol</code>: <b>rdma</b>(설계 전제) / <b>tcp</b>(폴백), 엔진 전체로는 NVMe-oF 도</span></td>
+      <td><span class="en">Every KV block get and put (§3 steps 4–5)</span><span class="ko">모든 KV 블록 get/put(§3 단계 4–5)</span></td>
+      <td><span class="en"><b>Effectively all the bytes.</b> Gigabytes per second when the cache is working. This is the only channel whose bandwidth you need to size.</span><span class="ko"><b>사실상 모든 바이트.</b> 캐시가 일할 때 초당 기가바이트 단위. 대역폭을 산정해야 하는 유일한 채널이다.</span></td>
+    </tr>
+  </table>
+  <p class="figcap">
+    <span class="en">① from <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L1900-L1995">store/worker.py#L1900-L1995</a> and <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L2056-L2069">#L2056</a>; ②③④ from the <code class="inl">store.setup(...)</code> arguments at <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L1260-L1275">#L1260-L1275</a>.</span>
+    <span class="ko">① 은 <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L1900-L1995">store/worker.py#L1900-L1995</a> 와 <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L2056-L2069">#L2056</a>, ②③④ 는 <code class="inl">store.setup(...)</code> 인자 <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L1260-L1275">#L1260-L1275</a> 기준.</span>
+  </p>
+
+  <svg class="fig" viewBox="0 0 880 320" xmlns="http://www.w3.org/2000/svg"
+       font-family="-apple-system,sans-serif" role="img"
+       aria-label="Four channels: a local unix socket between scheduler and worker, small RPC to the master, connection-setup traffic to the metadata service, and the RDMA data plane carrying all the bytes to the segment owner.">
+    <text x="0" y="15" font-size="13" font-weight="700" fill="var(--ink)">굵기 = 실제로 흐르는 데이터 양</text>
+
+    <rect x="0" y="34" width="230" height="120" rx="11" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <text x="16" y="56" font-size="12.5" font-weight="700" fill="var(--blue-ink)">vLLM 노드</text>
+    <rect x="16" y="66" width="198" height="34" rx="7" fill="var(--card)" stroke="var(--blue-bd)"/>
+    <text x="115" y="88" font-size="11.5" fill="var(--blue-ink)" text-anchor="middle">스케줄러 프로세스</text>
+    <rect x="16" y="112" width="198" height="34" rx="7" fill="var(--card)" stroke="var(--blue-bd)"/>
+    <text x="115" y="134" font-size="11.5" fill="var(--blue-ink)" text-anchor="middle">워커 (GPU · KV 캐시)</text>
+    <path d="M115,100 L115,110" stroke="var(--muted)" stroke-width="1.4"/>
+    <text x="128" y="109" font-size="9.5" fill="var(--muted)">① ipc://</text>
+
+    <rect x="600" y="34" width="280" height="52" rx="11" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+    <text x="740" y="56" font-size="12" font-weight="700" fill="var(--purple-ink)" text-anchor="middle">② master :50051</text>
+    <text x="740" y="74" font-size="10.5" fill="var(--purple-ink)" text-anchor="middle">"이 키 있어? 공간 줘"</text>
+
+    <rect x="600" y="98" width="280" height="52" rx="11" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <text x="740" y="120" font-size="12" font-weight="700" fill="var(--amber-ink)" text-anchor="middle">③ metadata service</text>
+    <text x="740" y="138" font-size="10.5" fill="var(--amber-ink)" text-anchor="middle">P2PHANDSHAKE / etcd / Redis</text>
+
+    <rect x="600" y="180" width="280" height="70" rx="11" fill="var(--teal-bg)" stroke="var(--teal-bd)"/>
+    <text x="740" y="204" font-size="12" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">④ 세그먼트 소유자</text>
+    <text x="740" y="222" font-size="10.5" fill="var(--teal-ink)" text-anchor="middle">DRAM 풀 (+ SSD)</text>
+    <text x="740" y="239" font-size="10.5" fill="var(--muted)" text-anchor="middle">KV 바이트가 실제로 눕는 곳</text>
+
+    <path d="M230,72 L596,58" stroke="var(--purple-bd)" stroke-width="1.4"/>
+    <path d="M590,54 L599,58 L590,63 Z" fill="var(--purple-bd)"/>
+    <text x="400" y="62" font-size="10" fill="var(--purple-ink)" text-anchor="middle">작은 RPC</text>
+
+    <path d="M230,96 L596,120" stroke="var(--amber-bd)" stroke-width="1.4" stroke-dasharray="5 3"/>
+    <path d="M590,116 L599,121 L589,125 Z" fill="var(--amber-bd)"/>
+    <text x="400" y="106" font-size="10" fill="var(--amber-ink)" text-anchor="middle">연결 수립 시에만</text>
+
+    <path d="M230,138 L596,208" stroke="var(--teal-bd)" stroke-width="7"/>
+    <path d="M586,201 L600,209 L584,214 Z" fill="var(--teal-bd)"/>
+    <text x="400" y="188" font-size="11.5" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">RDMA — 전체 바이트의 거의 100%</text>
+
+    <rect x="0" y="266" width="880" height="50" rx="10" fill="var(--gray-bg)" stroke="var(--line)"/>
+    <text x="14" y="286" font-size="11.5" font-weight="700" fill="var(--ink)">읽는 법: ②③ 이 죽으면 캐시가 멈추지만 대역폭 문제는 아니다. ④ 가 느리면 그게 곧 TTFT 다.</text>
+    <text x="14" y="304" font-size="11" fill="var(--muted)">튜닝·NIC 선정·QoS 를 고민할 대상은 ④ 하나뿐이고, ①②③ 은 "붙었나 안 붙었나" 의 문제다.</text>
+  </svg>
+
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">The confusion that costs an afternoon</span><span class="ko">반나절을 잡아먹는 혼동</span></span>
+    <span class="en"><code class="inl">master_server_address</code> and <code class="inl">metadata_server</code> are <b>different services with different jobs</b>, and both live in the same small JSON file. The master tracks <i>which key is where</i>. The metadata service exists so two transfer engines can discover each other's RDMA connection parameters. Setting <code class="inl">metadata_server: "P2PHANDSHAKE"</code> means "skip the external directory — peers hand each other their connection info directly", which is why most single-cluster setups need no etcd at all. Pointing <code class="inl">metadata_server</code> at the master's address is a classic and confusing failure.</span>
+    <span class="ko"><code class="inl">master_server_address</code> 와 <code class="inl">metadata_server</code> 는 <b>하는 일이 다른 별개의 서비스</b>인데 같은 작은 JSON 파일 안에 나란히 있다. master 는 <i>어느 키가 어디 있는지</i>를 추적한다. metadata service 는 전송 엔진 둘이 서로의 RDMA 연결 파라미터를 발견하기 위해 존재한다. <code class="inl">metadata_server: "P2PHANDSHAKE"</code> 는 "외부 디렉터리를 건너뛰고 피어끼리 연결 정보를 직접 주고받는다" 는 뜻이고, 그래서 단일 클러스터 구성 대부분은 etcd 가 아예 필요 없다. <code class="inl">metadata_server</code> 에 master 주소를 넣는 것이 전형적이고 헷갈리는 실패다.</span>
+  </div>
+
+  <h3><span class="en">Two more channels appear in PD disaggregation</span><span class="ko">PD 분리를 하면 채널이 둘 더 생긴다</span></h3>
+  <p>
+    <span class="en">If you also run <code class="inl">MooncakeConnector</code> (the point-to-point one, for handing a request from a prefiller to a decoder), it brings its own control plane on top of the four above:</span>
+    <span class="ko"><code class="inl">MooncakeConnector</code>(프리필러가 디코더에게 요청을 넘기는 P2P 쪽)까지 돌리면, 위 넷 위에 자체 컨트롤 플레인이 얹힌다.</span>
+  </p>
+  <table>
+    <tr><th style="width:24%"><span class="en">Channel</span><span class="ko">채널</span></th><th style="width:28%"><span class="en">Protocol</span><span class="ko">프로토콜</span></th><th><span class="en">Purpose</span><span class="ko">목적</span></th></tr>
+    <tr>
+      <td><b><span class="en">⑤ bootstrap</span><span class="ko">⑤ bootstrap</span></b></td>
+      <td><span class="en">ZMQ over a fixed port — <code class="inl">VLLM_MOONCAKE_BOOTSTRAP_PORT</code> (default 8998), endpoints <code class="inl">/register</code> and <code class="inl">/query</code></span><span class="ko">고정 포트 위 ZMQ — <code class="inl">VLLM_MOONCAKE_BOOTSTRAP_PORT</code>(기본 8998), 엔드포인트 <code class="inl">/register</code> · <code class="inl">/query</code></span></td>
+      <td><span class="en">A decoder asks the prefiller "who are you and where do I reach your workers?". Launched on global rank 0 only.</span><span class="ko">디코더가 프리필러에게 "너 누구고 네 워커들은 어디로 닿느냐" 를 묻는다. global rank 0 에서만 뜬다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">⑥ worker side channel</span><span class="ko">⑥ 워커 사이드 채널</span></b></td>
+      <td><span class="en">ZMQ <code class="inl">ROUTER</code>/<code class="inl">DEALER</code> over TCP</span><span class="ko">TCP 위 ZMQ <code class="inl">ROUTER</code>/<code class="inl">DEALER</code></span></td>
+      <td><span class="en">Per-transfer coordination and completion notices between the two engines' workers. Control only — the KV itself still rides the transfer engine.</span><span class="ko">두 엔진 워커 사이의 전송 조율과 완료 통지. 컨트롤 전용이고, KV 자체는 여전히 전송 엔진을 탄다.</span></td>
+    </tr>
+  </table>
+  <p>
+    <span class="en">Practical consequence: PD disaggregation needs the bootstrap port reachable between instances and consistent across headless replicas, which is a firewall/service-discovery concern that plain offload does not have.</span>
+    <span class="ko">실무적 귀결: PD 분리는 인스턴스 사이에 bootstrap 포트가 닿아야 하고 headless replica 들 간에 값이 일치해야 한다. 순수 오프로드에는 없는 방화벽·서비스 디스커버리 이슈다.</span>
+  </p>
+
+  <h3><span class="en">Who else is on the same wire</span><span class="ko">같은 선을 누가 또 쓰는가</span></h3>
+  <p>
+    <span class="en">Worth stating because it is easy to forget when sizing a fabric: the KV data plane is <b>not</b> the only heavy traffic on those NICs.</span>
+    <span class="ko">패브릭을 산정할 때 잊기 쉬워서 짚는다 — 그 NIC 위의 무거운 트래픽이 KV 데이터 평면 <b>하나뿐이 아니다</b>.</span>
+  </p>
+  <div class="grid3">
+    <div class="mini">
+      <h4><span class="en">Model parallel collectives</span><span class="ko">모델 병렬 collective</span></h4>
+      <p><span class="en">TP/PP/EP all-reduce and all-to-all traffic between GPUs of the same instance. Latency-critical and bursty, synchronised to every layer.</span><span class="ko">같은 인스턴스 GPU 들 사이의 TP/PP/EP all-reduce·all-to-all. 지연에 민감하고 레이어마다 몰린다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">KV data plane (④)</span><span class="ko">KV 데이터 평면(④)</span></h4>
+      <p><span class="en">Large, bulk, latency-tolerant-ish. Runs on a background thread precisely so it can be scheduled around the model's needs.</span><span class="ko">크고, 벌크성이고, 지연에 상대적으로 관대하다. 모델 사정에 맞춰 스케줄되라고 일부러 백그라운드 스레드에서 돈다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Everything else</span><span class="ko">그 밖에</span></h4>
+      <p><span class="en">API traffic, weight loading at startup, metrics scraping, and the small control channels above.</span><span class="ko">API 트래픽, 기동 시 가중치 적재, 메트릭 수집, 그리고 위의 작은 컨트롤 채널들.</span></p>
+    </div>
+  </div>
+  <p>
+    <span class="en">If collectives and KV transfer share one NIC, a big offload burst and an all-reduce can land on top of each other. That is the argument for choosing <code class="inl">device_name</code> deliberately on multi-NIC nodes rather than letting it default — and for treating "which NIC does KV use" as a design decision, not a detail.</span>
+    <span class="ko">collective 와 KV 전송이 NIC 하나를 공유하면, 큰 오프로드 버스트와 all-reduce 가 겹칠 수 있다. 멀티 NIC 노드에서 <code class="inl">device_name</code> 을 기본값에 맡기지 말고 의도적으로 고르라는 논거이고, "KV 가 어느 NIC 을 쓰는가" 를 디테일이 아니라 설계 결정으로 다루라는 이유다.</span>
+  </p>
+
+  <h3><span class="en">Which transport when — the short version</span><span class="ko">언제 어떤 전송인가 — 짧은 버전</span></h3>
+  <table>
+    <tr><th style="width:26%"><span class="en">Situation</span><span class="ko">상황</span></th><th style="width:20%"><span class="en">Set</span><span class="ko">설정</span></th><th><span class="en">Notes</span><span class="ko">비고</span></th></tr>
+    <tr>
+      <td><span class="en">RDMA fabric, NIC can register GPU memory</span><span class="ko">RDMA 패브릭, NIC 이 GPU 메모리 등록 가능</span></td>
+      <td><code class="inl">"protocol": "rdma"</code><br><code class="inl">"device_name": "&lt;nic&gt;"</code></td>
+      <td><span class="en">The design point — this is the configuration every zero-copy claim in this note assumes.</span><span class="ko">설계 전제. 이 글의 zero-copy 주장은 전부 이 구성을 가정한다.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">No RDMA, or bring-up / functional testing</span><span class="ko">RDMA 없음, 또는 기동·기능 확인</span></td>
+      <td><code class="inl">"protocol": "tcp"</code></td>
+      <td><span class="en">The docs call this a fallback. It works, and it is the right choice to prove the plumbing before chasing performance — but the transport copies through the host, so the zero-copy property is gone.</span><span class="ko">문서가 폴백이라 부른다. 동작하고, 성능을 쫓기 전에 배선을 검증하기엔 옳은 선택이다. 다만 전송이 호스트를 경유해 복사하므로 zero-copy 속성은 사라진다.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">Single cluster, no external directory wanted</span><span class="ko">단일 클러스터, 외부 디렉터리 불필요</span></td>
+      <td><code class="inl">"metadata_server": "P2PHANDSHAKE"</code></td>
+      <td><span class="en">Peers exchange connection info directly. No etcd/Redis to run or fail.</span><span class="ko">피어끼리 연결 정보를 직접 교환. 띄우거나 장애날 etcd/Redis 가 없다.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">Multi-NIC node</span><span class="ko">멀티 NIC 노드</span></td>
+      <td><code class="inl">device_name</code></td>
+      <td><span class="en">Pick explicitly. Leaving it empty lets the engine choose, which may put KV traffic on the same port as collectives.</span><span class="ko">명시적으로 고를 것. 비워 두면 엔진이 고르고, KV 트래픽이 collective 와 같은 포트에 얹힐 수 있다.</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">Several deployments, one master</span><span class="ko">여러 배포, 하나의 master</span></td>
+      <td><code class="inl">cache_prefix</code> / <code class="inl">tenant_id</code></td>
+      <td><span class="en">Namespace them apart. Keys do not encode KV dtype, so identical names across differently-configured deployments are a real hazard (§3 step 2).</span><span class="ko">네임스페이스를 분리할 것. 키에 KV dtype 이 안 들어가므로, 설정이 다른 배포들 사이에서 같은 이름이 실제 위험이다(§3 단계 2).</span></td>
+    </tr>
+  </table>
+</section>
+
+<section id="s2">
+  <h2><span class="num">3</span>
     <span class="en">One request, step by step through the code</span>
     <span class="ko">요청 하나, 코드로 한 단계씩</span>
   </h2>
@@ -401,7 +579,7 @@ sizes = blen[None, :] * block_counts[:, None]</pre>
 </section>
 
 <section id="s3">
-  <h2><span class="num">3</span>
+  <h2><span class="num">4</span>
     <span class="en">Which Mooncake asset each step uses, and why it is good</span>
     <span class="ko">각 단계가 쓰는 Mooncake 자산과 그게 좋은 이유</span>
   </h2>
@@ -487,7 +665,7 @@ sizes = blen[None, :] * block_counts[:, None]</pre>
 </section>
 
 <section id="s4">
-  <h2><span class="num">4</span>
+  <h2><span class="num">5</span>
     <span class="en">How to see it working — and the traps that hide it</span>
     <span class="ko">동작을 확인하는 법 — 그리고 그걸 가리는 함정</span>
   </h2>
@@ -588,7 +766,7 @@ sizes = blen[None, :] * block_counts[:, None]</pre>
     </tr>
     <tr>
       <td><span class="en">Confirm the transport actually negotiated RDMA</span><span class="ko">전송이 실제로 RDMA 로 붙었는지 확인</span></td>
-      <td><span class="en">A silent fall back to TCP means you measured the degraded path (§3). Check the store side logs at startup, not just that the config file says <code class="inl">rdma</code>.</span><span class="ko">조용한 TCP 폴백이면 열화 경로를 잰 것이다(§3). 설정 파일에 <code class="inl">rdma</code> 라고 적힌 것 말고, 기동 시 스토어 쪽 로그를 확인해야 한다.</span></td>
+      <td><span class="en">A silent fall back to TCP means you measured the degraded path (§4). Check the store side logs at startup, not just that the config file says <code class="inl">rdma</code>.</span><span class="ko">조용한 TCP 폴백이면 열화 경로를 잰 것이다(§4). 설정 파일에 <code class="inl">rdma</code> 라고 적힌 것 말고, 기동 시 스토어 쪽 로그를 확인해야 한다.</span></td>
     </tr>
     <tr>
       <td><span class="en">Vary one variable at a time</span><span class="ko">한 번에 변수 하나만</span></td>
@@ -612,7 +790,7 @@ sizes = blen[None, :] * block_counts[:, None]</pre>
 </section>
 
 <section id="s5">
-  <h2><span class="num">5</span>
+  <h2><span class="num">6</span>
     <span class="en">The customer value proposition, honestly</span>
     <span class="ko">고객 가치 제안, 정직하게</span>
   </h2>
@@ -687,7 +865,7 @@ sizes = blen[None, :] * block_counts[:, None]</pre>
     </tr>
     <tr>
       <td><span class="en">"Will all instances run the same model at the same TP/PP layout?"</span><span class="ko">"모든 인스턴스가 같은 모델을 같은 TP/PP 레이아웃으로 돌립니까?"</span></td>
-      <td><span class="en">Mixed layouts do not share cache (§2 step 2). A fleet that autoscales between shapes will see a hit rate far below the demo.</span><span class="ko">레이아웃이 섞이면 캐시를 공유하지 않는다(§2 단계 2). 형태를 바꿔가며 오토스케일하는 fleet 은 데모보다 훨씬 낮은 히트율을 본다.</span></td>
+      <td><span class="en">Mixed layouts do not share cache (§3 step 2). A fleet that autoscales between shapes will see a hit rate far below the demo.</span><span class="ko">레이아웃이 섞이면 캐시를 공유하지 않는다(§3 단계 2). 형태를 바꿔가며 오토스케일하는 fleet 은 데모보다 훨씬 낮은 히트율을 본다.</span></td>
     </tr>
     <tr>
       <td><span class="en">"How much DRAM per node is genuinely spare, and is anyone else planning to use it?"</span><span class="ko">"노드당 DRAM 이 실제로 얼마나 남고, 다른 데서 쓸 계획은 없습니까?"</span></td>
@@ -741,7 +919,7 @@ sizes = blen[None, :] * block_counts[:, None]</pre>
 </section>
 
 <section id="s6">
-  <h2><span class="num">6</span>
+  <h2><span class="num">7</span>
     <span class="en">Sources</span>
     <span class="ko">출처</span>
   </h2>
@@ -749,7 +927,7 @@ sizes = blen[None, :] * block_counts[:, None]</pre>
     <li>vLLM source @ <code class="inl">ba1cdcf</code> (2026-08-09) — every code reference above: <a href="https://github.com/vllm-project/vllm/tree/ba1cdcfcf05f581d1f58cc911644fed62317c8c6">github.com/vllm-project/vllm</a></li>
     <li>vLLM in-tree doc — MooncakeStoreConnector usage (<code class="inl">mode</code>, <code class="inl">enable_offload</code>, <code class="inl">tenant_id</code>): <a href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/docs/features/mooncake_store_connector_usage.md">docs/features/mooncake_store_connector_usage.md</a></li>
     <li>vLLM docs — MooncakeConnector (P2P) usage: <a href="https://docs.vllm.ai/en/stable/features/mooncake_connector_usage/">docs.vllm.ai</a></li>
-    <li><span class="en">vLLM blog (first-party) "Mooncake Store in vLLM", 2026-05-06 — all §5 reported numbers: <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vllm.ai/blog/2026-05-06-mooncake-store</a></span><span class="ko">vLLM 블로그(1차 당사자) "Mooncake Store in vLLM", 2026-05-06 — §5 의 보고 수치 전부: <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vllm.ai/blog/2026-05-06-mooncake-store</a></span></li>
+    <li><span class="en">vLLM blog (first-party) "Mooncake Store in vLLM", 2026-05-06 — all §6 reported numbers: <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vllm.ai/blog/2026-05-06-mooncake-store</a></span><span class="ko">vLLM 블로그(1차 당사자) "Mooncake Store in vLLM", 2026-05-06 — §6 의 보고 수치 전부: <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vllm.ai/blog/2026-05-06-mooncake-store</a></span></li>
     <li><span class="en">Mooncake project site (first-party) — architecture, FAST'25: <a href="https://kvcache-ai.github.io/Mooncake/">kvcache-ai.github.io/Mooncake</a></span><span class="ko">Mooncake 프로젝트 사이트(1차 당사자) — 아키텍처, FAST'25: <a href="https://kvcache-ai.github.io/Mooncake/">kvcache-ai.github.io/Mooncake</a></span></li>
     <li><span class="en">Companion note — the design in more depth and the LMCache contrast: <a href="mooncake-store-vllm.html">Mooncake in vLLM — design, code flow, and how it differs from LMCache</a></span><span class="ko">함께 보는 노트 — 설계 상세와 LMCache 대조: <a href="mooncake-store-vllm.html">Mooncake in vLLM — design, code flow, and how it differs from LMCache</a></span></li>
     <li><span class="en">Broader connector map: <a href="vllm-kv-connectors.html">vLLM KV-cache connectors — transfer-direction map</a></span><span class="ko">커넥터 전체 지도: <a href="vllm-kv-connectors.html">vLLM KV-cache 커넥터 — 전송 방향 지도</a></span></li>
