@@ -2067,6 +2067,46 @@ key_bytes = _estimate_disk_offload_staging_bytes(size)
   </div>
 
   <h4><span class="en">2. Soft Pin is unused — and the docs' own example is your workload</span><span class="ko">2. Soft Pin 을 안 쓴다 — 그런데 문서가 든 예시가 바로 당신의 워크로드다</span></h4>
+
+  <div class="callout c-green">
+    <span class="tag"><span class="en">In plain words — a pin is one of three ways to say "don't delete this"</span><span class="ko">쉽게 말하면 — pin 은 "이건 지우지 마" 라고 말하는 세 방법 중 하나다</span></span>
+    <span class="en">When the pool crosses 90% full, the master's approximate-LRU eviction frees about 5% of it. A <b>pin</b> is how an object asks to be spared. There are three levels of asking, and they differ in <b>how long they last</b> and <b>how hard they push</b> — which is the whole point.</span>
+    <span class="ko">풀이 90% 를 넘으면 마스터의 근사 LRU 축출이 5% 정도를 비운다. <b>pin</b> 은 객체가 거기서 빼 달라고 요청하는 방법이다. 요청의 단계가 셋이고, <b>얼마나 오래 가느냐</b>와 <b>얼마나 세게 미느냐</b>가 다르다 — 그게 전부다.</span>
+  </div>
+
+  <table>
+    <tr>
+      <th style="width:16%"><span class="en">Level</span><span class="ko">단계</span></th>
+      <th style="width:24%"><span class="en">Who turns it on</span><span class="ko">누가 켜나</span></th>
+      <th style="width:26%"><span class="en">How long it lasts</span><span class="ko">얼마나 오래</span></th>
+      <th><span class="en">How hard it pushes</span><span class="ko">얼마나 센가</span></th>
+    </tr>
+    <tr>
+      <td><b>Lease</b></td>
+      <td><span class="en">Automatic — granted whenever <code class="inl">ExistKey</code> or <code class="inl">GetReplicaList</code> succeeds</span><span class="ko">자동 — <code class="inl">ExistKey</code> 나 <code class="inl">GetReplicaList</code> 가 성공하면 부여</span></td>
+      <td><span class="en">~10 s by default</span><span class="ko">기본 10초쯤</span></td>
+      <td><span class="en">Blocks <code class="inl">Remove</code>, <code class="inl">RemoveAll</code> and eviction outright while it is alive. It exists to stop an object vanishing mid-read.</span><span class="ko">살아 있는 동안 <code class="inl">Remove</code>·<code class="inl">RemoveAll</code>·축출을 아예 막는다. 읽는 도중에 객체가 사라지는 걸 막으려고 있는 것.</span></td>
+    </tr>
+    <tr>
+      <td><b>Soft Pin</b></td>
+      <td><span class="en"><code class="inl">with_soft_pin</code> at put time</span><span class="ko">put 할 때 <code class="inl">with_soft_pin</code></span></td>
+      <td><span class="en">Lapses after ~30 min of no access (<code class="inl">default_kv_soft_pin_ttl</code>); re-applies automatically on the next access</span><span class="ko">30분쯤 무접근이면 자동 해제(<code class="inl">default_kv_soft_pin_ttl</code>), 다시 접근하면 자동으로 다시 붙음</span></td>
+      <td><span class="en"><b>A priority, not a guarantee.</b> Unpinned objects are evicted first; a soft-pinned one still goes when nothing else is eligible — <code class="inl">allow_evict_soft_pinned_objects</code> defaults to <code class="inl">true</code>. Set it <code class="inl">false</code> and the pin becomes absolute while it holds.</span><span class="ko"><b>보장이 아니라 우선순위다.</b> 핀 없는 객체부터 지우고, 다른 후보가 없으면 soft pin 된 것도 결국 지운다 — <code class="inl">allow_evict_soft_pinned_objects</code> 기본값이 <code class="inl">true</code> 다. <code class="inl">false</code> 로 두면 핀이 붙어 있는 동안은 절대적이 된다.</span></td>
+    </tr>
+    <tr>
+      <td><b>Hard Pin</b></td>
+      <td><span class="en"><code class="inl">with_hard_pin</code> at creation — <b>immutable afterwards</b></span><span class="ko">생성 시 <code class="inl">with_hard_pin</code> — <b>이후 변경 불가</b></span></td>
+      <td><span class="en">Forever. Never expires.</span><span class="ko">영구. 만료가 없다.</span></td>
+      <td><span class="en">Never becomes an eviction candidate at all, at any memory pressure. Removable only by an explicit <code class="inl">Remove</code> (with force) or <code class="inl">RemoveAll</code>.</span><span class="ko">메모리 압박이 어떻든 축출 후보에 아예 오르지 않는다. 명시적 <code class="inl">Remove</code>(force) 나 <code class="inl">RemoveAll</code> 로만 지운다.</span></td>
+    </tr>
+  </table>
+
+  <div class="callout c-red">
+    <span class="tag"><span class="en">Hard pin is almost always the wrong tool for a KV cache</span><span class="ko">KV 캐시에 hard pin 은 대개 틀린 도구다</span></span>
+    <span class="en">Look at the examples the docs choose for it: <i>"model weights, critical metadata"</i> — things that are supposed to live for the process's whole lifetime. Hard-pin a KV chunk and that space never comes back; do it at scale and the pool fills permanently until <code class="inl">PutStart</code> starts failing for everything else. <b>Soft pin is the cache-shaped one</b>: it expires on its own if the object stops being useful, and re-arms itself if it becomes useful again. That self-healing behaviour is exactly what you want for a prefix whose popularity changes with traffic.</span>
+    <span class="ko">문서가 hard pin 예시로 고른 것들을 보라 — <i>"model weights, critical metadata"</i>. 프로세스가 사는 내내 있어야 할 것들이다. KV 청크에 hard pin 을 걸면 그 공간은 영영 안 돌아오고, 규모 있게 걸면 풀이 영구히 차서 결국 다른 모든 것의 <code class="inl">PutStart</code> 가 실패하기 시작한다. <b>캐시 모양에 맞는 건 soft pin</b> 이다 — 객체가 쓸모없어지면 알아서 풀리고, 다시 쓸모 있어지면 알아서 다시 걸린다. 트래픽에 따라 인기가 변하는 프리픽스에는 그 자가 치유가 정확히 원하는 동작이다.</span>
+  </div>
+
   <p>
     <span class="en">The Store docs introduce soft pin like this: <i>"For important and frequently used objects, such as system prompts, Mooncake Store provides a soft pin mechanism."</i> Soft-pinned objects are skipped by eviction until nothing else is eligible, and the pin lapses on its own after 30 minutes of no access.</span>
     <span class="ko">Store 문서는 soft pin 을 이렇게 소개한다. <i>"For important and frequently used objects, such as system prompts, Mooncake Store provides a soft pin mechanism."</i> soft pin 된 객체는 다른 후보가 없을 때까지 축출에서 제외되고, 30분간 접근이 없으면 핀이 알아서 풀린다.</span>
