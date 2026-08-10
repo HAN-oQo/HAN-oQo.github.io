@@ -245,8 +245,8 @@ vllm serve &lt;model&gt; \
   </h2>
 
   <p>
-    <span class="en">"Mooncake uses RDMA" is true but useless on its own, because a running deployment has <b>four separate channels</b> and only one of them is the RDMA one. Confusing them is the source of most setup failures — in particular, the config file names <i>two different services</i> that people routinely think are the same.</span>
-    <span class="ko">"Mooncake 는 RDMA 를 쓴다" 는 맞는 말이지만 그 자체로는 쓸모가 없다. 돌아가는 배포에는 <b>서로 다른 채널이 넷</b> 있고 그중 하나만 RDMA 이기 때문이다. 이걸 뭉뚱그리는 게 셋업 실패의 주원인이고, 특히 설정 파일에 <i>서로 다른 두 서비스</i> 이름이 들어 있는데 사람들이 습관적으로 같은 것으로 안다.</span>
+    <span class="en">"Mooncake uses RDMA" is true but useless on its own, because a running deployment has <b>four main channels plus two that are easy to miss</b>, and only one of them is the RDMA one. Confusing them is the source of most setup failures — in particular, the config file names <i>two different services</i> that people routinely think are the same.</span>
+    <span class="ko">"Mooncake 는 RDMA 를 쓴다" 는 맞는 말이지만 그 자체로는 쓸모가 없다. 돌아가는 배포에는 <b>주 채널 넷에 놓치기 쉬운 둘</b>이 더 있고, 그중 하나만 RDMA 이기 때문이다. 이걸 뭉뚱그리는 게 셋업 실패의 주원인이고, 특히 설정 파일에 <i>서로 다른 두 서비스</i> 이름이 들어 있는데 사람들이 습관적으로 같은 것으로 안다.</span>
   </p>
 
   <h3><span class="en">The four channels of an offload deployment</span><span class="ko">오프로드 배포의 네 채널</span></h3>
@@ -265,7 +265,7 @@ vllm serve &lt;model&gt; \
     </tr>
     <tr>
       <td><b><span class="en">② client ↔ master</span><span class="ko">② 클라이언트 ↔ master</span></b></td>
-      <td><span class="en">Mooncake RPC to <code class="inl">master_server_address</code> (default port 50051)</span><span class="ko"><code class="inl">master_server_address</code> 로의 Mooncake RPC (기본 포트 50051)</span></td>
+      <td><span class="en"><code class="inl">coro_rpc</code> (yalantinglibs) to <code class="inl">master_server_address</code>, default port 50051 — <b>not</b> gRPC</span><span class="ko"><code class="inl">master_server_address</code> 로의 <code class="inl">coro_rpc</code>(yalantinglibs), 기본 포트 50051 — gRPC 가 <b>아니다</b></span></td>
       <td><span class="en">Key existence checks, space allocation, liveness</span><span class="ko">키 존재 확인, 공간 할당, 생존 확인</span></td>
       <td><span class="en">Small and roughly constant-size regardless of KV volume. This is why one master serves many instances.</span><span class="ko">KV 양과 무관하게 작고 크기가 거의 일정. master 한 대가 여러 인스턴스를 감당하는 이유.</span></td>
     </tr>
@@ -337,6 +337,73 @@ vllm serve &lt;model&gt; \
     <span class="ko"><code class="inl">master_server_address</code> 와 <code class="inl">metadata_server</code> 는 <b>하는 일이 다른 별개의 서비스</b>인데 같은 작은 JSON 파일 안에 나란히 있다. master 는 <i>어느 키가 어디 있는지</i>를 추적한다. metadata service 는 전송 엔진 둘이 서로의 RDMA 연결 파라미터를 발견하기 위해 존재한다. <code class="inl">metadata_server: "P2PHANDSHAKE"</code> 는 "외부 디렉터리를 건너뛰고 피어끼리 연결 정보를 직접 주고받는다" 는 뜻이고, 그래서 단일 클러스터 구성 대부분은 etcd 가 아예 필요 없다. <code class="inl">metadata_server</code> 에 master 주소를 넣는 것이 전형적이고 헷갈리는 실패다.</span>
   </div>
 
+  <h3><span class="en">Opening up channel ④ — the transport engine is not just "RDMA or TCP"</span><span class="ko">④ 를 열어보면 — 전송 엔진은 "RDMA 아니면 TCP" 가 아니다</span></h3>
+  <p>
+    <span class="en">The <code class="inl">protocol</code> knob in the config makes it look like a binary choice. The engine itself ships <b>thirteen</b> transport backends, and which ones are compiled in depends on your build. Knowing the list matters because it tells you what "Mooncake works on our hardware" can mean.</span>
+    <span class="ko">설정의 <code class="inl">protocol</code> 노브만 보면 양자택일처럼 보인다. 엔진 자체에는 transport 백엔드가 <b>열세 개</b> 들어 있고, 그중 무엇이 컴파일되는지는 빌드에 달렸다. 목록을 알아둘 가치가 있다 — "우리 하드웨어에서 Mooncake 가 된다" 가 무슨 뜻일 수 있는지를 알려주기 때문이다.</span>
+  </p>
+  <table>
+    <tr><th style="width:24%"><span class="en">Group</span><span class="ko">계열</span></th><th style="width:30%"><span class="en">Transports</span><span class="ko">transport</span></th><th><span class="en">Where it applies</span><span class="ko">어디에 해당하나</span></th></tr>
+    <tr>
+      <td><b><span class="en">General network</span><span class="ko">일반 네트워크</span></b></td>
+      <td><code class="inl">rdma</code>, <code class="inl">tcp</code></td>
+      <td><span class="en">The two you configure by name. <code class="inl">rdma</code> is the design point; <code class="inl">tcp</code> is the documented fallback.</span><span class="ko">이름으로 설정하는 둘. <code class="inl">rdma</code> 가 설계 전제, <code class="inl">tcp</code> 는 문서상 폴백.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Vendor fabrics</span><span class="ko">벤더 패브릭</span></b></td>
+      <td><code class="inl">efa</code>, <code class="inl">cxi</code>, <code class="inl">barex</code></td>
+      <td><span class="en">AWS Elastic Fabric Adapter; Cray/HPE Slingshot (CXI). These exist so "we have RDMA" can be true on clouds and HPC fabrics that are not stock InfiniBand.</span><span class="ko">AWS EFA, Cray/HPE Slingshot(CXI). 표준 InfiniBand 가 아닌 클라우드·HPC 패브릭에서도 "RDMA 된다" 가 성립하게 하려고 있다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Accelerator-native</span><span class="ko">가속기 고유</span></b></td>
+      <td><code class="inl">hip</code>, <code class="inl">ascend</code>, <code class="inl">maca</code>, <code class="inl">kunpeng</code></td>
+      <td><span class="en"><b><code class="inl">hip</code> is the ROCm/AMD path.</b> The others are Huawei Ascend NPU and domestic Chinese accelerators. Their presence is why Mooncake is not a CUDA-only story.</span><span class="ko"><b><code class="inl">hip</code> 이 ROCm/AMD 경로다.</b> 나머지는 화웨이 Ascend NPU 와 중국계 가속기들. 이것들이 있어서 Mooncake 가 CUDA 전용 이야기가 아니다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Same-node shortcuts</span><span class="ko">노드 내 지름길</span></b></td>
+      <td><code class="inl">nvlink</code>, <code class="inl">intranode_nvlink</code>, <code class="inl">cxl</code></td>
+      <td><span class="en">When the peer is on the same machine, going out to a NIC is wasteful — these move over the interconnect instead.</span><span class="ko">피어가 같은 머신에 있으면 NIC 까지 나갈 이유가 없다. 이것들은 인터커넥트로 옮긴다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Storage</span><span class="ko">스토리지</span></b></td>
+      <td><code class="inl">nvmeof</code></td>
+      <td><span class="en">NVMe over Fabrics. Note this is a <i>transfer engine</i> transport; it is a separate question from whether the store's SSD tier uses it.</span><span class="ko">NVMe over Fabrics. 이건 <i>전송 엔진</i> 쪽 transport 이고, 스토어의 SSD 티어가 이걸 쓰느냐는 별개 문제다.</span></td>
+    </tr>
+  </table>
+  <p class="figcap"><span class="en">Directory listing of <code class="inl">mooncake-transfer-engine/src/transport/</code> at Mooncake <a class="src" href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-transfer-engine/src/transport">f8c9667</a>.</span><span class="ko">Mooncake <a class="src" href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-transfer-engine/src/transport">f8c9667</a> 의 <code class="inl">mooncake-transfer-engine/src/transport/</code> 디렉터리 목록.</span></p>
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">The practical reading</span><span class="ko">실무적으로 읽으면</span></span>
+    <span class="en">A transport existing in the tree is <b>not</b> the same as it being enabled in the wheel you installed. Several are behind build flags. So "does Mooncake support our fabric?" has two answers — one in the source, one in your binary — and only the second one matters. Verify at runtime from the store-side startup logs, not from this table.</span>
+    <span class="ko">트리에 transport 가 있다는 것과 당신이 설치한 wheel 에 켜져 있다는 것은 <b>다르다</b>. 여럿이 빌드 플래그 뒤에 있다. 그래서 "우리 패브릭을 Mooncake 가 지원하나?" 에는 답이 둘이다 — 소스에 하나, 당신 바이너리에 하나. 그리고 중요한 건 두 번째다. 이 표가 아니라 스토어 쪽 기동 로그로 런타임에 확인해야 한다.</span>
+  </div>
+
+  <h3><span class="en">Two channels I left out of the table — and both matter operationally</span><span class="ko">표에서 뺐던 두 채널 — 둘 다 운영상 중요하다</span></h3>
+
+  <h4><span class="en">⑤ KV events — outbound, for whoever routes your traffic</span><span class="ko">⑤ KV 이벤트 — 바깥으로 나가는, 라우팅하는 쪽을 위한 채널</span></h4>
+  <p>
+    <span class="en">The connector can publish <b>cache events</b> — "these blocks were stored", "these were removed" — through vLLM's KV event bus. The default publisher is a ZMQ <code class="inl">PUB</code> socket on <code class="inl">tcp://*:5557</code> with an optional replay endpoint and topic filter. Nothing in the serving path consumes these; they exist for <b>an external router that wants to send a request to the instance most likely to hit</b>.</span>
+    <span class="ko">커넥터는 <b>캐시 이벤트</b> — "이 블록들이 저장됨", "이것들이 제거됨" — 를 vLLM 의 KV 이벤트 버스로 발행할 수 있다. 기본 발행자는 <code class="inl">tcp://*:5557</code> 의 ZMQ <code class="inl">PUB</code> 소켓이고, replay 엔드포인트와 토픽 필터가 선택적으로 붙는다. 서빙 경로에서 이걸 소비하는 건 없다. <b>히트할 가능성이 가장 높은 인스턴스로 요청을 보내고 싶은 외부 라우터</b>를 위해 존재한다.</span>
+  </p>
+  <p>
+    <span class="en">Worth knowing because it changes the value story: with a content-addressed shared store you do <i>not need</i> a cache-aware router to get hits (§4). But if you have one, these events are how it learns. Cache-aware routing plus a shared pool is strictly better than either alone — the router raises the local hit rate, the store catches what the router misses.</span>
+    <span class="ko">가치 이야기를 바꾸기 때문에 알아둘 만하다. 내용 기반 공유 스토어가 있으면 히트를 얻는 데 캐시를 아는 라우터가 <i>필요하지 않다</i>(§4). 그런데 라우터가 있다면, 그게 배우는 통로가 이 이벤트다. 캐시 인지 라우팅과 공유 풀을 같이 쓰는 게 둘 중 하나만 쓰는 것보다 엄격히 낫다 — 라우터가 로컬 히트율을 올리고, 스토어가 라우터가 놓친 걸 잡는다.</span>
+  </p>
+
+  <h4><span class="en">⑥ The admin / reset path — piggybacks on channel ①</span><span class="ko">⑥ admin·reset 경로 — 채널 ① 에 얹혀 간다</span></h4>
+  <p>
+    <span class="en">There is a control path for wiping the store entirely. It does not get its own socket: it <b>reuses the same ZMQ lookup channel</b> to worker rank 0, which owns the store handle and issues <code class="inl">remove_all(force=True)</code> to the master. This is what <code class="inl">POST /reset_prefix_cache?reset_external=true</code> ends up calling, and it is the mechanism that makes RL-style workflows viable — after a weight update every cached KV is stale and must go in one shot.</span>
+    <span class="ko">스토어를 통째로 비우는 컨트롤 경로가 있다. 자기 소켓을 따로 갖지 않고 <b>워커 rank 0 로 가는 같은 ZMQ lookup 채널을 재사용</b>한다. rank 0 가 스토어 핸들을 갖고 있고 master 에 <code class="inl">remove_all(force=True)</code> 를 날린다. <code class="inl">POST /reset_prefix_cache?reset_external=true</code> 가 결국 호출하는 게 이것이고, RL 류 워크플로를 가능하게 하는 장치다 — 가중치를 갱신하면 캐시된 KV 가 전부 stale 이라 한 번에 날려야 한다.</span>
+  </p>
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">Ordering requirement, stated in the source</span><span class="ko">소스에 명시된 순서 요구사항</span></span>
+    <span class="en">The docstring is explicit: the caller <b>must</b> ensure there are no in-flight lookups or transfers before triggering the reset. Pause generation, let the queue drain, then reset. <i>"Violating this can allow stale KV to be served on the next request, defeating the hard-reset guarantee."</i> If you script a reset between benchmark runs (§5), respect this or your "clean" run is not clean.</span>
+    <span class="ko">독스트링이 명시한다 — 호출자가 리셋 전에 진행 중인 lookup 이나 전송이 없음을 <b>보장해야</b> 한다. 생성을 멈추고, 큐를 비우고, 그다음 리셋. <i>"Violating this can allow stale KV to be served on the next request, defeating the hard-reset guarantee."</i> 벤치마크 런 사이에 리셋을 스크립트로 넣는다면(§5) 이걸 지켜야 한다. 아니면 "깨끗한" 런이 깨끗하지 않다.</span>
+  </div>
+  <p class="figcap">
+    <span class="en">⑤ from <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_events.py#L290-L340">kv_events.py#L290-L340</a>; ⑥ from <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/scheduler.py#L423-L440">store/scheduler.py#L423-L440</a> and <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/connector.py#L226-L241">store/connector.py#L226-L241</a>.</span>
+    <span class="ko">⑤ 는 <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_events.py#L290-L340">kv_events.py#L290-L340</a>, ⑥ 은 <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/scheduler.py#L423-L440">store/scheduler.py#L423-L440</a> 와 <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/connector.py#L226-L241">store/connector.py#L226-L241</a> 기준.</span>
+  </p>
+
   <h3><span class="en">Two more channels appear in PD disaggregation</span><span class="ko">PD 분리를 하면 채널이 둘 더 생긴다</span></h3>
   <p>
     <span class="en">If you also run <code class="inl">MooncakeConnector</code> (the point-to-point one, for handing a request from a prefiller to a decoder), it brings its own control plane on top of the four above:</span>
@@ -345,12 +412,12 @@ vllm serve &lt;model&gt; \
   <table>
     <tr><th style="width:24%"><span class="en">Channel</span><span class="ko">채널</span></th><th style="width:28%"><span class="en">Protocol</span><span class="ko">프로토콜</span></th><th><span class="en">Purpose</span><span class="ko">목적</span></th></tr>
     <tr>
-      <td><b><span class="en">⑤ bootstrap</span><span class="ko">⑤ bootstrap</span></b></td>
+      <td><b><span class="en">⑦ bootstrap</span><span class="ko">⑦ bootstrap</span></b></td>
       <td><span class="en">ZMQ over a fixed port — <code class="inl">VLLM_MOONCAKE_BOOTSTRAP_PORT</code> (default 8998), endpoints <code class="inl">/register</code> and <code class="inl">/query</code></span><span class="ko">고정 포트 위 ZMQ — <code class="inl">VLLM_MOONCAKE_BOOTSTRAP_PORT</code>(기본 8998), 엔드포인트 <code class="inl">/register</code> · <code class="inl">/query</code></span></td>
       <td><span class="en">A decoder asks the prefiller "who are you and where do I reach your workers?". Launched on global rank 0 only.</span><span class="ko">디코더가 프리필러에게 "너 누구고 네 워커들은 어디로 닿느냐" 를 묻는다. global rank 0 에서만 뜬다.</span></td>
     </tr>
     <tr>
-      <td><b><span class="en">⑥ worker side channel</span><span class="ko">⑥ 워커 사이드 채널</span></b></td>
+      <td><b><span class="en">⑧ worker side channel</span><span class="ko">⑧ 워커 사이드 채널</span></b></td>
       <td><span class="en">ZMQ <code class="inl">ROUTER</code>/<code class="inl">DEALER</code> over TCP</span><span class="ko">TCP 위 ZMQ <code class="inl">ROUTER</code>/<code class="inl">DEALER</code></span></td>
       <td><span class="en">Per-transfer coordination and completion notices between the two engines' workers. Control only — the KV itself still rides the transfer engine.</span><span class="ko">두 엔진 워커 사이의 전송 조율과 완료 통지. 컨트롤 전용이고, KV 자체는 여전히 전송 엔진을 탄다.</span></td>
     </tr>
