@@ -564,6 +564,33 @@ vllm serve &lt;model&gt; \
     <span class="ko">전송마다 당신이 고르는 게 아니라 엔진이 고른다. 판단 기준은 <b>타깃 세그먼트가 나를 기준으로 어디 있느냐</b> 하나다. 이 규칙을 보고 나면 transport 목록이 더 이상 자의적으로 보이지 않는다.</span>
   </p>
 
+  <div class="plain">
+    <span class="tag"><span class="en">In plain words — IPC, and why it keeps coming up</span><span class="ko">쉽게 말하면 — IPC, 그리고 왜 자꾸 나오나</span></span>
+    <span class="en"><b>IPC = inter-process communication.</b> The starting fact is that the OS deliberately isolates programs: process A cannot see process B's memory, even on the same machine. IPC is the set of sanctioned ways to punch a hole in that wall on purpose.<br><br>
+    <b>GPU IPC</b> is the same idea applied to GPU memory. A allocates some, calls <code class="inl">cudaIpcGetMemHandle()</code> and gets back a small opaque token; it passes that token to B by any ordinary means; B calls <code class="inl">cudaIpcOpenMemHandle()</code> and now holds a pointer into A's GPU memory. From then on B reads and writes it as if it were its own — <b>no copy and no network, because nothing was transferred.</b> The memory was mapped, not moved. The hard limit is that a handle is meaningless on another machine, which is exactly why the engine drops these transports for a cross-host target.</span>
+    <span class="ko"><b>IPC = inter-process communication, 프로세스 간 통신.</b> 출발점은 OS 가 프로그램들을 일부러 격리한다는 사실이다 — 같은 기계 안이라도 프로세스 A 는 B 의 메모리를 볼 수 없다. IPC 는 그 벽에 의도적으로 구멍을 내는 공인된 방법들이다.<br><br>
+    <b>GPU IPC</b> 는 같은 발상을 GPU 메모리에 적용한 것이다. A 가 메모리를 할당하고 <code class="inl">cudaIpcGetMemHandle()</code> 을 부르면 작은 불투명 토큰이 나온다. 그걸 아무 방법으로나 B 에게 건네고, B 가 <code class="inl">cudaIpcOpenMemHandle()</code> 을 부르면 이제 B 는 A 의 GPU 메모리를 가리키는 포인터를 쥔다. 그 뒤로 B 는 그걸 자기 것처럼 읽고 쓴다 — <b>복사도 네트워크도 없다. 아무것도 전송되지 않았으니까.</b> 메모리가 옮겨진 게 아니라 매핑된 것이다. 결정적 한계는 핸들이 다른 기계에서는 의미가 없다는 것이고, 엔진이 cross-host 타깃에서 이 transport 들을 후보에서 빼는 이유가 정확히 그것이다.</span>
+  </div>
+  <p>
+    <span class="en">Seen that way the whole transport list is <b>one idea widening in scope</b>:</span>
+    <span class="ko">그렇게 보면 transport 목록 전체가 <b>하나의 발상이 범위를 넓혀가는 것</b>이다.</span>
+  </p>
+  <table>
+    <tr><th style="width:30%"><span class="en">Peer is…</span><span class="ko">상대가…</span></th><th style="width:26%"><span class="en">Mechanism</span><span class="ko">메커니즘</span></th><th><span class="en">In the analogy of §1⑤</span><span class="ko">§1⑤ 의 비유로</span></th></tr>
+    <tr><td><span class="en">the same process</span><span class="ko">같은 프로세스</span></td><td><span class="en">just a pointer</span><span class="ko">그냥 포인터</span></td>
+        <td><span class="en">your own shelf</span><span class="ko">내 선반</span></td></tr>
+    <tr><td><span class="en">another process, same machine</span><span class="ko">같은 기계의 다른 프로세스</span></td><td><b>GPU IPC</b> <span class="muted">(handle)</span></td>
+        <td><span class="en">a housemate — no delivery needed, just say which shelf</span><span class="ko">같은 집 사람 — 배달이 필요 없고 어느 선반인지만 말하면 된다</span></td></tr>
+    <tr><td><span class="en">another machine, same NVLink domain</span><span class="ko">같은 NVLink 도메인의 다른 기계</span></td><td><b><span class="en">fabric handle</span><span class="ko">fabric 핸들</span></b></td>
+        <td><span class="en">the house got bigger — a whole rack counts as one house</span><span class="ko">집이 커진 것 — 랙 하나가 한 집으로 친다</span></td></tr>
+    <tr><td><span class="en">anywhere else</span><span class="ko">그 밖의 어디든</span></td><td><b>RDMA</b> <span class="muted">(IB / RoCE)</span></td>
+        <td><span class="en">you hold their key and walk over to place it yourself</span><span class="ko">남의 집 열쇠를 들고 직접 가서 놓고 온다</span></td></tr>
+  </table>
+  <p>
+    <span class="en">One naming caution: this note uses "IPC" for two different things. Channel ① is a <b>unix-socket</b> IPC — the scheduler and worker exchanging small messages through a filesystem socket. GPU IPC is the memory-mapping mechanism above. They share a name and nothing else.</span>
+    <span class="ko">이름에 관한 주의 하나 — 이 글에서 "IPC" 가 두 가지를 가리킨다. 채널 ① 은 <b>유닉스 소켓</b> IPC 로, 스케줄러와 워커가 파일시스템 소켓으로 작은 메시지를 주고받는 것이다. GPU IPC 는 위의 메모리 매핑 메커니즘이다. 이름만 같고 나머지는 다르다.</span>
+  </p>
+
   <svg class="fig" viewBox="0 0 880 336" xmlns="http://www.w3.org/2000/svg"
        font-family="-apple-system,sans-serif" role="img"
        aria-label="Decision tree: same node uses GPU IPC over NVLink or HIP, an NVLink fabric domain uses fabric handles, and anything outside falls to IB RDMA or TCP.">
@@ -738,6 +765,142 @@ dest_addr = dest_addr - entry.addr + (uint64_t)shm_addr;   <span class="cm">// �
     <span class="tag"><span class="en">Failure modes differ, and that is useful</span><span class="ko">장애 모드가 다르다는 게 쓸모 있다</span></span>
     <span class="en">Every control channel is TCP or a unix socket; only the data plane is IB. So <b>losing IB does not take the service down</b> — lookups still answer, loads fail per block, and those blocks are recomputed (§3 step 4). You lose the cache benefit, not correctness or availability. Losing the <i>master</i> is the opposite: lookups stop, so the cache goes dark even though the fabric is perfectly healthy. Worth knowing which alarm means which.</span>
     <span class="ko">컨트롤 채널은 전부 TCP 아니면 유닉스 소켓이고, IB 를 타는 건 데이터 평면뿐이다. 그래서 <b>IB 가 끊겨도 서비스가 내려가지 않는다</b> — 조회는 계속 답하고, 로드는 블록 단위로 실패하며, 그 블록들은 재계산된다(§3 단계 4). 잃는 건 캐시 이득이지 정확성이나 가용성이 아니다. <i>master</i> 가 죽으면 반대다 — 패브릭은 멀쩡한데 조회가 멈춰서 캐시가 통째로 어두워진다. 어느 알람이 어느 쪽인지 알아두면 좋다.</span>
+  </div>
+
+  <h3><span class="en">The whole stack, layer by layer</span><span class="ko">스택 전체를 층별로</span></h3>
+  <p>
+    <span class="en">Everything above in one grid: for each channel, what it is doing, which library implements it, what carries it, and which physical wire it ends up on. The bottom row is the one to scan first — <b>only three columns are wide, and they are all the same channel</b>.</span>
+    <span class="ko">위 내용 전부를 격자 하나로. 채널마다 무슨 일을 하는지, 어느 라이브러리가 구현하는지, 무엇이 나르는지, 결국 어느 물리 선에 앉는지. 맨 아랫줄을 먼저 훑는 게 좋다 — <b>굵은 칸은 셋뿐이고, 셋 다 같은 채널이다.</b></span>
+  </p>
+
+  <svg class="fig" viewBox="0 0 880 330" xmlns="http://www.w3.org/2000/svg"
+       font-family="-apple-system,sans-serif" role="img"
+       aria-label="A grid of every channel against four stack layers plus data volume. Control channels ride unix sockets or TCP and carry little; the data plane appears in three variants — GPU IPC on the same node, NVLink fabric within a domain, and RDMA over IB elsewhere — and carries nearly all bytes.">
+    <text x="0" y="14" font-size="12.5" font-weight="700" fill="var(--ink)">채널 × 스택 계층</text>
+
+    <!-- column headers -->
+    <rect x="92" y="24" width="294" height="40" rx="6" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+    <text x="239" y="40" font-size="10" font-weight="700" fill="var(--purple-ink)" text-anchor="middle">컨트롤 — 판단하는 채널</text>
+    <rect x="388" y="24" width="294" height="40" rx="6" fill="var(--teal-bg)" stroke="var(--teal-bd)"/>
+    <text x="535" y="40" font-size="10" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">데이터 평면 ④ — 같은 채널의 세 갈래</text>
+    <rect x="684" y="24" width="196" height="40" rx="6" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+    <text x="782" y="40" font-size="10" font-weight="700" fill="var(--purple-ink)" text-anchor="middle">컨트롤 (계속)</text>
+
+    <text x="141" y="58" font-size="9.5" font-weight="700" fill="var(--ink)" text-anchor="middle">① 스케줄러↔워커</text>
+    <text x="239" y="58" font-size="9.5" font-weight="700" fill="var(--ink)" text-anchor="middle">② master</text>
+    <text x="337" y="58" font-size="9.5" font-weight="700" fill="var(--ink)" text-anchor="middle">③ metadata</text>
+    <text x="437" y="58" font-size="9.5" font-weight="700" fill="var(--ink)" text-anchor="middle">같은 노드</text>
+    <text x="535" y="58" font-size="9.5" font-weight="700" fill="var(--ink)" text-anchor="middle">NVLink 도메인</text>
+    <text x="633" y="58" font-size="9.5" font-weight="700" fill="var(--ink)" text-anchor="middle">그 밖</text>
+    <text x="733" y="58" font-size="9.5" font-weight="700" fill="var(--ink)" text-anchor="middle">⑤ KV 이벤트</text>
+    <text x="831" y="58" font-size="9.5" font-weight="700" fill="var(--ink)" text-anchor="middle">⑥ admin</text>
+
+    <!-- row labels -->
+    <text x="86" y="86" font-size="10" font-weight="700" fill="var(--muted)" text-anchor="end">무엇을</text>
+    <text x="86" y="132" font-size="10" font-weight="700" fill="var(--muted)" text-anchor="end">라이브러리</text>
+    <text x="86" y="178" font-size="10" font-weight="700" fill="var(--muted)" text-anchor="end">전송</text>
+    <text x="86" y="224" font-size="10" font-weight="700" fill="var(--muted)" text-anchor="end">물리 선</text>
+    <text x="86" y="268" font-size="10" font-weight="700" fill="var(--muted)" text-anchor="end">데이터량</text>
+
+    <!-- grid rows -->
+    <rect x="92" y="68" width="788" height="36" fill="var(--card)" stroke="var(--line)"/>
+    <rect x="92" y="114" width="788" height="36" fill="var(--card)" stroke="var(--line)"/>
+    <rect x="92" y="160" width="788" height="36" fill="var(--card)" stroke="var(--line)"/>
+    <rect x="92" y="206" width="788" height="36" fill="var(--card)" stroke="var(--line)"/>
+    <rect x="388" y="68" width="294" height="174" fill="var(--teal-bg)" opacity="0.45"/>
+    <rect x="388" y="68" width="294" height="174" fill="none" stroke="var(--teal-bd)" stroke-width="1.5"/>
+
+    <!-- col separators -->
+    <line x1="190" y1="68" x2="190" y2="242" stroke="var(--line)"/>
+    <line x1="288" y1="68" x2="288" y2="242" stroke="var(--line)"/>
+    <line x1="388" y1="68" x2="388" y2="242" stroke="var(--line)"/>
+    <line x1="486" y1="68" x2="486" y2="242" stroke="var(--line)"/>
+    <line x1="584" y1="68" x2="584" y2="242" stroke="var(--line)"/>
+    <line x1="682" y1="68" x2="682" y2="242" stroke="var(--line)"/>
+    <line x1="782" y1="68" x2="782" y2="242" stroke="var(--line)"/>
+
+    <!-- row 1: what -->
+    <text x="141" y="83" font-size="9" fill="var(--ink)" text-anchor="middle">lookup 질의</text>
+    <text x="141" y="95" font-size="9" fill="var(--muted)" text-anchor="middle">해시 목록</text>
+    <text x="239" y="83" font-size="9" fill="var(--ink)" text-anchor="middle">batch_is_exist</text>
+    <text x="239" y="95" font-size="9" fill="var(--muted)" text-anchor="middle">공간 할당</text>
+    <text x="337" y="83" font-size="9" fill="var(--ink)" text-anchor="middle">연결 정보 교환</text>
+    <text x="337" y="95" font-size="9" fill="var(--muted)" text-anchor="middle">QP·LID·GID</text>
+    <text x="437" y="83" font-size="9" fill="var(--ink)" text-anchor="middle">batch_get /</text>
+    <text x="437" y="95" font-size="9" fill="var(--ink)" text-anchor="middle">batch_put</text>
+    <text x="535" y="83" font-size="9" fill="var(--ink)" text-anchor="middle">batch_get /</text>
+    <text x="535" y="95" font-size="9" fill="var(--ink)" text-anchor="middle">batch_put</text>
+    <text x="633" y="83" font-size="9" fill="var(--ink)" text-anchor="middle">batch_get /</text>
+    <text x="633" y="95" font-size="9" fill="var(--ink)" text-anchor="middle">batch_put</text>
+    <text x="733" y="83" font-size="9" fill="var(--ink)" text-anchor="middle">KVCacheEvent</text>
+    <text x="733" y="95" font-size="9" fill="var(--muted)" text-anchor="middle">저장·제거 알림</text>
+    <text x="831" y="83" font-size="9" fill="var(--ink)" text-anchor="middle">remove_all</text>
+    <text x="831" y="95" font-size="9" fill="var(--muted)" text-anchor="middle">전체 리셋</text>
+
+    <!-- row 2: library -->
+    <text x="141" y="129" font-size="9" fill="var(--ink)" text-anchor="middle">ZMQ REQ/REP</text>
+    <text x="141" y="141" font-size="9" fill="var(--muted)" text-anchor="middle">msgpack</text>
+    <text x="239" y="129" font-size="9" fill="var(--ink)" text-anchor="middle">coro_rpc</text>
+    <text x="239" y="141" font-size="9" fill="var(--muted)" text-anchor="middle">yalantinglibs</text>
+    <text x="337" y="129" font-size="9" fill="var(--ink)" text-anchor="middle">transfer engine</text>
+    <text x="337" y="141" font-size="9" fill="var(--muted)" text-anchor="middle">P2PHANDSHAKE</text>
+    <text x="437" y="129" font-size="9" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">CUDA / HIP IPC</text>
+    <text x="437" y="141" font-size="9" fill="var(--muted)" text-anchor="middle">MemHandle</text>
+    <text x="535" y="129" font-size="9" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">CUmemFabric</text>
+    <text x="535" y="141" font-size="9" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">Handle</text>
+    <text x="633" y="129" font-size="9" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">libibverbs</text>
+    <text x="633" y="141" font-size="9" fill="var(--muted)" text-anchor="middle">ibv_reg_mr</text>
+    <text x="733" y="129" font-size="9" fill="var(--ink)" text-anchor="middle">ZMQ PUB</text>
+    <text x="733" y="141" font-size="9" fill="var(--muted)" text-anchor="middle">topic·replay</text>
+    <text x="831" y="129" font-size="9" fill="var(--ink)" text-anchor="middle">① 재사용</text>
+    <text x="831" y="141" font-size="9" fill="var(--muted)" text-anchor="middle">전용 소켓 없음</text>
+
+    <!-- row 3: transport -->
+    <text x="141" y="181" font-size="9" fill="var(--ink)" text-anchor="middle">unix socket</text>
+    <text x="141" y="193" font-size="9" fill="var(--muted)" text-anchor="middle">ipc://</text>
+    <text x="239" y="181" font-size="9" fill="var(--ink)" text-anchor="middle">TCP :50051</text>
+    <text x="337" y="181" font-size="9" fill="var(--ink)" text-anchor="middle">TCP</text>
+    <text x="337" y="193" font-size="9" fill="var(--muted)" text-anchor="middle">또는 etcd/Redis</text>
+    <text x="437" y="181" font-size="9" fill="var(--ink)" text-anchor="middle">메모리 매핑</text>
+    <text x="437" y="193" font-size="9" fill="var(--muted)" text-anchor="middle">전송 아님</text>
+    <text x="535" y="181" font-size="9" fill="var(--ink)" text-anchor="middle">메모리 매핑</text>
+    <text x="535" y="193" font-size="9" fill="var(--muted)" text-anchor="middle">전송 아님</text>
+    <text x="633" y="181" font-size="9" fill="var(--ink)" text-anchor="middle">RDMA verbs</text>
+    <text x="633" y="193" font-size="9" fill="var(--muted)" text-anchor="middle">QP · zero-copy</text>
+    <text x="733" y="181" font-size="9" fill="var(--ink)" text-anchor="middle">TCP :5557</text>
+    <text x="831" y="181" font-size="9" fill="var(--ink)" text-anchor="middle">unix socket</text>
+
+    <!-- row 4: physical -->
+    <text x="141" y="227" font-size="9" fill="var(--muted)" text-anchor="middle">선 없음 (커널)</text>
+    <text x="239" y="227" font-size="9" fill="var(--ink)" text-anchor="middle">이더넷 / IB</text>
+    <text x="337" y="227" font-size="9" fill="var(--ink)" text-anchor="middle">이더넷 / IB</text>
+    <text x="437" y="227" font-size="9" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">NVLink / PCIe</text>
+    <text x="535" y="227" font-size="9" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">NVLink 스위치</text>
+    <text x="633" y="227" font-size="9" font-weight="700" fill="var(--blue-ink)" text-anchor="middle">IB / RoCE</text>
+    <text x="733" y="227" font-size="9" fill="var(--ink)" text-anchor="middle">이더넷</text>
+    <text x="831" y="227" font-size="9" fill="var(--muted)" text-anchor="middle">선 없음</text>
+
+    <!-- row 5: volume bars -->
+    <rect x="136" y="256" width="10" height="6" rx="2" fill="var(--muted)"/>
+    <rect x="230" y="254" width="18" height="10" rx="2" fill="var(--muted)"/>
+    <rect x="332" y="256" width="10" height="6" rx="2" fill="var(--muted)"/>
+    <rect x="399" y="248" width="76" height="22" rx="3" fill="var(--teal-ink)"/>
+    <rect x="497" y="248" width="76" height="22" rx="3" fill="var(--teal-ink)"/>
+    <rect x="595" y="248" width="76" height="22" rx="3" fill="var(--teal-ink)"/>
+    <rect x="724" y="254" width="18" height="10" rx="2" fill="var(--muted)"/>
+    <rect x="826" y="256" width="10" height="6" rx="2" fill="var(--muted)"/>
+    <text x="535" y="264" font-size="9.5" font-weight="700" fill="#fff" text-anchor="middle">사실상 전체 트래픽</text>
+
+    <rect x="0" y="284" width="880" height="44" rx="8" fill="var(--gray-bg)" stroke="var(--line)"/>
+    <text x="14" y="303" font-size="10.5" fill="var(--ink)">읽는 법: 컨트롤 채널은 전부 unix socket 아니면 TCP 다 — 튜닝 대상이 아니라 "붙었나 안 붙었나" 의 문제.</text>
+    <text x="14" y="320" font-size="10.5" fill="var(--muted)">④ 세 갈래만 굵고, 그중 둘(같은 노드·NVLink 도메인)은 전송조차 아니라 <tspan font-weight="700">메모리 매핑</tspan>이다. 실제로 선을 타는 건 오른쪽 하나뿐이다.</text>
+  </svg>
+  <p class="figcap"><span class="en">Assembled from the code references in this chapter; the three data-plane columns are the three cases of the selection rule above.</span><span class="ko">이 장의 코드 참조들을 모아 구성. 데이터 평면 세 칸은 위 선택 규칙의 세 경우다.</span></p>
+
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">The single most surprising row</span><span class="ko">가장 뜻밖인 줄</span></span>
+    <span class="en">The "transport" row for the first two data-plane columns says <b>memory mapping, not a transfer</b>. That is the thing to internalise: when the peer is close enough, Mooncake does not send anything at all — the remote memory is simply addressable, and a "transfer" collapses into pointer arithmetic. Only the third column is a network operation in the sense most people mean. So "how fast is Mooncake?" has three different answers depending on a topology question, and the answer to that question is not in Mooncake's configuration — it is in where you put the pool.</span>
+    <span class="ko">데이터 평면 앞 두 칸의 "전송" 줄이 <b>전송이 아니라 메모리 매핑</b>이라고 적혀 있다. 이걸 체화하는 게 좋다 — 상대가 충분히 가까우면 Mooncake 는 아무것도 보내지 않는다. 원격 메모리가 그냥 주소로 잡히고, "전송" 이 포인터 연산으로 붕괴한다. 대부분이 생각하는 의미의 네트워크 동작인 건 세 번째 칸뿐이다. 그래서 "Mooncake 는 얼마나 빠른가" 에는 토폴로지에 따라 답이 셋이고, 그 토폴로지 질문의 답은 Mooncake 설정이 아니라 <b>풀을 어디에 두었는가</b> 에 있다.</span>
   </div>
 
   <h3><span class="en">Two channels I left out of the table — and both matter operationally</span><span class="ko">표에서 뺐던 두 채널 — 둘 다 운영상 중요하다</span></h3>
@@ -1545,6 +1708,51 @@ KV 블록이 사는 곳                    세그먼트 = 여기                
   <p>
     <span class="en">This is also why <code class="inl">VLLM_MOONCAKE_STORE_TIER_LOG</code> (§5) is worth turning on when you enable the SSD tier: a DRAM hit and an SSD hit are both "hits" in the metrics, and they are an order of magnitude apart.</span>
     <span class="ko">SSD 티어를 켤 때 <code class="inl">VLLM_MOONCAKE_STORE_TIER_LOG</code>(§5)를 켜 볼 값이 있는 이유이기도 하다 — 메트릭에서는 DRAM 히트와 SSD 히트가 똑같이 "히트" 인데, 실제로는 자릿수가 다르다.</span>
+  </p>
+
+  <h3><span class="en">And if the SSD tier is switched on?</span><span class="ko">SSD 티어까지 켜면 흐름이 어떻게 되나</span></h3>
+  <p>
+    <span class="en">Less changes in the picture than you would expect, because <b>vLLM never talks to the SSD</b>. Steps 3 and 6 are unchanged — they still end at the owner's DRAM. Everything about the SSD happens on the far side of that boundary, inside the owner process.</span>
+    <span class="ko">그림에서 바뀌는 건 생각보다 적다. <b>vLLM 은 SSD 와 대화하지 않기</b> 때문이다. 3·6 번은 그대로 소유자의 DRAM 에서 끝난다. SSD 에 관한 일은 전부 그 경계 너머, 소유자 프로세스 안에서 일어난다.</span>
+  </p>
+  <table>
+    <tr><th style="width:16%"><span class="en">Step</span><span class="ko">단계</span></th><th><span class="en">What actually changes</span><span class="ko">실제로 달라지는 것</span></th></tr>
+    <tr>
+      <td><b><span class="en">3 · write</span><span class="ko">3 · 쓰기</span></b></td>
+      <td><span class="en">Nothing on the vLLM side. The blocks land in the DRAM pool exactly as before. Later — asynchronously, and with no involvement from vLLM — the owner demotes cold blocks from DRAM down to its SSD. vLLM neither knows nor waits.</span><span class="ko">vLLM 쪽은 아무것도 안 바뀐다. 블록은 전과 똑같이 DRAM 풀에 떨어진다. 나중에 — 비동기로, vLLM 은 관여하지 않은 채 — 소유자가 차가운 블록을 DRAM 에서 자기 SSD 로 강등시킨다. vLLM 은 알지도 못하고 기다리지도 않는다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">5 · lookup</span><span class="ko">5 · 조회</span></b></td>
+      <td><span class="en">Also unchanged. The master answers "I have these keys" without saying which tier they are in. A hit is a hit as far as the scheduler is concerned.</span><span class="ko">역시 그대로다. master 는 "이 키들 갖고 있다" 고만 답하고 어느 티어인지는 말하지 않는다. 스케줄러 입장에서 히트는 그냥 히트다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">6 · read</span><span class="ko">6 · 읽기</span></b></td>
+      <td><span class="en">Same wire, different latency. If the key had been demoted, the owner first reads it off the file into its own DRAM, and only then serves it over the data plane. The extra hop is invisible to vLLM except as a slower hit.</span><span class="ko">같은 선, 다른 지연. 키가 강등돼 있었다면 소유자가 먼저 파일에서 자기 DRAM 으로 읽어 들이고, 그다음에야 데이터 평면으로 내보낸다. 그 추가 홉은 vLLM 에게는 "느린 히트" 로만 보인다.</span></td>
+    </tr>
+  </table>
+
+  <div class="plain">
+    <span class="tag"><span class="en">What the tiers really buy you is time, not space</span><span class="ko">티어가 사주는 건 공간이 아니라 시간이다</span></span>
+    <span class="en">Each level holds a prefix for a different <b>duration</b>, and that maps directly onto the qualifying question in §6 about the gap between turns. GPU-local prefix cache: <b>seconds to minutes</b>. DRAM pool: <b>minutes to hours</b>. SSD tier: <b>hours to days</b>. If a customer's sessions come back the next morning, the SSD tier is not an optimisation — it is the only level that still has their data.</span>
+    <span class="ko">각 층이 프리픽스를 붙들고 있는 <b>기간</b>이 다르고, 그게 §6 의 "턴 사이 간격" 질문과 정확히 대응된다. GPU 로컬 프리픽스 캐시는 <b>초~분</b>, DRAM 풀은 <b>분~시간</b>, SSD 티어는 <b>시간~일</b>. 고객 세션이 다음 날 아침에 돌아온다면 SSD 티어는 최적화가 아니라 <b>그들의 데이터를 아직 갖고 있는 유일한 층</b>이다.</span>
+  </div>
+
+  <h4><span class="en">The trap: a single oversized block cancels the whole load</span><span class="ko">함정 — 블록 하나가 크면 로드 전체가 취소된다</span></h4>
+  <p>
+    <span class="en">Turning on <code class="inl">enable_offload</code> makes vLLM allocate a DirectIO staging buffer, and reads are then split into sub-batches that fit the owner's staging budget. The splitting is graceful — but there is a hard cap:</span>
+    <span class="ko"><code class="inl">enable_offload</code> 를 켜면 vLLM 이 DirectIO 스테이징 버퍼를 할당하고, 읽기가 소유자의 스테이징 예산에 맞는 서브 배치로 쪼개진다. 쪼개는 건 부드럽게 되는데, 단단한 상한이 하나 있다.</span>
+  </p>
+<pre><span class="cm"># store/worker.py — _split_disk_offload_batches</span>
+key_bytes = _estimate_disk_offload_staging_bytes(size)
+<span class="kw">if</span> key_bytes &gt; raw_budget_bytes:
+    <span class="kw">return</span> [], key      <span class="cm"># ← 배치를 못 만들고 그 요청의 로드를 통째로 포기</span></pre>
+  <p>
+    <span class="en">If <b>one key</b> is bigger than the hard per-key budget, the function aborts and returns no batches at all — that request's load is skipped and those blocks are recomputed. Since a key covers one KV block, this is a function of <code class="inl">block_size</code>: raise the block size far enough and a single block can exceed the staging budget, at which point offloaded reads quietly stop paying off. It does not error; the hit rate just fails to convert into TTFT.</span>
+    <span class="ko"><b>키 하나</b>가 키당 하드 예산보다 크면 함수가 중단하고 배치를 아예 안 돌려준다 — 그 요청의 로드는 건너뛰고 해당 블록들은 재계산된다. 키 하나가 KV 블록 하나에 대응하므로 이건 <code class="inl">block_size</code> 의 함수다. 블록 크기를 충분히 키우면 블록 하나가 스테이징 예산을 넘길 수 있고, 그 순간부터 오프로드된 읽기가 조용히 값을 못 한다. 에러가 나는 게 아니라, 히트율이 TTFT 로 환산되지 않을 뿐이다.</span>
+  </p>
+  <p>
+    <span class="en">Two practical notes that follow. The usable budget is the raw one scaled by <code class="inl">VLLM_MOONCAKE_DISK_STAGING_USABLE_RATIO</code>, so the effective cap is lower than the buffer you configured. And the SSD path only works if <b>three</b> settings agree — <code class="inl">--enable_offload</code> on <code class="inl">mooncake_master</code>, the same on the owning <code class="inl">mooncake_client</code>, and <code class="inl">"enable_offload": true</code> in the vLLM-side JSON (a config key, not an environment variable). Miss one and offload silently does not happen (§5).</span>
+    <span class="ko">여기서 실무 메모 둘. 쓸 수 있는 예산은 raw 예산에 <code class="inl">VLLM_MOONCAKE_DISK_STAGING_USABLE_RATIO</code> 를 곱한 값이라, 실효 상한은 설정한 버퍼보다 낮다. 그리고 SSD 경로는 설정 <b>셋</b>이 맞아야 동작한다 — <code class="inl">mooncake_master</code> 의 <code class="inl">--enable_offload</code>, 소유자 <code class="inl">mooncake_client</code> 의 같은 플래그, 그리고 vLLM 쪽 JSON 의 <code class="inl">"enable_offload": true</code>(환경변수가 아니라 설정 키다). 하나라도 빠지면 오프로드가 조용히 일어나지 않는다(§5).</span>
   </p>
 
   <div class="callout c-teal">
