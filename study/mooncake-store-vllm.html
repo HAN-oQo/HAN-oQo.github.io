@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mooncake in vLLM — design, code flow, and how it differs from LMCache</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  .flow{list-style:none;padding:0;margin:14px 0;counter-reset:fl}
+  .flow>li{position:relative;padding:10px 0 12px 40px;border-bottom:1px solid var(--line)}
+  .flow>li::before{counter-increment:fl;content:counter(fl);position:absolute;left:0;top:9px;
+    width:26px;height:26px;border-radius:50%;background:var(--blue-ink);color:#fff;font-size:12px;
+    font-weight:700;display:flex;align-items:center;justify-content:center}
+  .flow code{font-size:12px}
+  .flow a.pl{font-size:11.5px;color:var(--muted);border-bottom:1px dotted var(--muted);text-decoration:none}
+  .flow a.pl:hover{color:var(--blue-ink)}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">Mooncake in vLLM — design, code flow, and how it differs from LMCache</span>
+    <span class="ko">vLLM 속의 Mooncake — 설계, 코드 흐름, 그리고 LMCache 와 무엇이 다른가</span>
+  </h1>
+  <p class="lede">
+    <span class="en">Mooncake turns the idle CPU DRAM and SSD sitting in a GPU cluster into <b>one cluster-wide KV cache pool</b>, so a prefix computed on instance A can be reused by instance B. vLLM ships <b>two</b> separate Mooncake integrations — a point-to-point transfer connector for PD disaggregation, and a shared-store connector — and they are meant to be stacked, not chosen between. This note walks the real code path with commit-pinned permalinks, draws the flow, and contrasts the design against LMCache and the other offload connectors in the same registry.</span>
+    <span class="ko">Mooncake 는 GPU 클러스터에서 놀고 있는 CPU DRAM 과 SSD 를 묶어 <b>클러스터 전체가 공유하는 KV 캐시 풀</b>로 만든다. 인스턴스 A 가 계산한 프리픽스를 인스턴스 B 가 그대로 재사용한다는 뜻이다. vLLM 에는 Mooncake 통합이 <b>둘</b> 있다 — PD 분리를 위한 P2P 전송 커넥터와 공유 스토어 커넥터인데, 둘 중 고르는 게 아니라 <b>겹쳐 쓰도록</b> 설계돼 있다. 이 노트는 커밋 고정 permalink 로 실제 코드 경로를 따라가고, 흐름을 그림으로 그리고, LMCache 및 같은 레지스트리의 다른 오프로드 커넥터들과 설계를 대조한다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://docs.vllm.ai/en/stable/features/mooncake_connector_usage/">vLLM Mooncake docs</a></span>
+    <span class="badge"><a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vLLM blog (2026-05-06)</a></span>
+    <span class="badge"><a href="https://kvcache-ai.github.io/Mooncake/">Mooncake docs</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/ba1cdcfcf05f581d1f58cc911644fed62317c8c6">vllm @ ba1cdcf</a></span>
+    <span class="badge"><a href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280">Mooncake @ f8c9667</a></span>
+    <span class="badge"><span class="en">Feature deep-dive · code-walk</span><span class="ko">기능 딥다이브 · 코드 분석</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-08-10">2026-08-10</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">The problem: a prefix cache that dies with the instance</span><span class="ko">문제 — 인스턴스와 함께 사라지는 프리픽스 캐시</span></a></li>
+    <li><a href="#s2"><span class="en">What Mooncake actually is — three layers, two vLLM connectors</span><span class="ko">Mooncake 의 실체 — 3개 층, 2개의 vLLM 커넥터</span></a></li>
+    <li><a href="#s3"><span class="en">Code flow: one request through MooncakeStoreConnector</span><span class="ko">코드 흐름 — 요청 하나가 MooncakeStoreConnector 를 지나가는 길</span></a></li>
+    <li><a href="#s4"><span class="en">Five design decisions worth naming</span><span class="ko">짚어둘 설계 결정 다섯 가지</span></a></li>
+    <li><a href="#s5"><span class="en">How it differs from LMCache and the rest</span><span class="ko">LMCache 및 나머지와의 차이</span></a></li>
+    <li><a href="#s6"><span class="en">Reported effects — and what they do not say</span><span class="ko">보고된 효과 — 그리고 말하지 않는 것</span></a></li>
+    <li><a href="#s7"><span class="en">Usage: exact config to turn it on</span><span class="ko">사용법 — 켜는 데 필요한 설정 전부</span></a></li>
+    <li><a href="#s8"><span class="en">Status, constraints, sources</span><span class="ko">상태·제약·출처</span></a></li>
+  </ol>
+</nav>
+
+<section>
+  <h3 style="margin-top:0"><span class="en">Glossary — the six words this note leans on</span><span class="ko">용어 — 이 노트가 기대는 여섯 단어</span></h3>
+  <div class="grid3">
+    <div class="mini">
+      <h4>KV cache</h4>
+      <p><span class="en">Per-token attention keys/values kept so already-seen tokens are not recomputed. It is the memory that makes generation cheap, and the thing everything here moves around.</span>
+         <span class="ko">이미 본 토큰을 다시 계산하지 않으려고 보관하는 토큰별 attention key/value. 생성을 싸게 만들어 주는 메모리이고, 이 글에서 옮겨 다니는 대상 전부가 이것이다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">prefix caching</span><span class="ko">프리픽스 캐싱</span></h4>
+      <p><span class="en">Reusing the KV of a shared prompt prefix across requests. Standard vLLM does this <i>within one instance's GPU memory</i> — that boundary is the whole story below.</span>
+         <span class="ko">여러 요청이 공유하는 프롬프트 앞부분의 KV 를 재사용하는 것. 기본 vLLM 은 이걸 <i>한 인스턴스의 GPU 메모리 안에서만</i> 한다. 아래 내용은 전부 그 경계에 관한 이야기다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>KVConnector</h4>
+      <p><span class="en">vLLM's plug-in interface for "get KV from somewhere else / put KV somewhere else". Both Mooncake integrations and LMCache are implementations of it.</span>
+         <span class="ko">"KV 를 딴 데서 가져오고 / 딴 데로 내보내는" vLLM 의 플러그인 인터페이스. Mooncake 통합 둘도, LMCache 도 전부 이것의 구현체다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>RDMA · GPUDirect</h4>
+      <p><span class="en">RDMA lets a NIC read/write remote memory without the remote CPU. GPUDirect RDMA extends that to GPU HBM, so KV can leave the GPU without a CPU staging copy.</span>
+         <span class="ko">RDMA 는 상대 CPU 를 거치지 않고 NIC 가 원격 메모리를 직접 읽고 쓰게 한다. GPUDirect RDMA 는 그걸 GPU HBM 까지 확장해서, CPU 임시 복사 없이 KV 가 GPU 를 빠져나간다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>Transfer Engine</h4>
+      <p><span class="en">Mooncake's bottom layer: a transport that abstracts RDMA / TCP / NVMe-oF behind one API. Everything else in Mooncake is built on it.</span>
+         <span class="ko">Mooncake 의 맨 아래 층. RDMA·TCP·NVMe-oF 를 하나의 API 뒤로 감춘 전송 계층이다. Mooncake 의 나머지는 전부 이 위에 올라간다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>PD disaggregation</h4>
+      <p><span class="en">Running prefill and decode on separate instances. Creates the need to ship KV from the prefiller to the decoder — the original reason a KV connector exists.</span>
+         <span class="ko">프리필과 디코드를 서로 다른 인스턴스에서 돌리는 것. 프리필러가 만든 KV 를 디코더로 보내야 하는 필요가 여기서 생기고, KV 커넥터가 존재하는 원래 이유다.</span></p>
+    </div>
+  </div>
+</section>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">In one line</span><span class="ko">한 줄 요약</span></span>
+  <span class="en"><b>Mooncake is not a cache library — it is a memory fabric.</b> It gives vLLM a cluster-wide, RDMA-addressable object store whose keys are block hashes, and vLLM's own connector code decides what to put in it. That split is the opposite of LMCache, where a thick external library owns the caching logic and vLLM holds a thin adapter. The practical consequence: Mooncake is fastest at "the same prefix, on another node, right now", and deliberately does not do compression or non-prefix blending.</span>
+  <span class="ko"><b>Mooncake 는 캐시 라이브러리가 아니라 메모리 패브릭이다.</b> 블록 해시를 키로 하는, RDMA 로 주소 지정되는 클러스터 전역 오브젝트 스토어를 vLLM 에 제공할 뿐이고, 거기에 무엇을 담을지는 vLLM 안의 커넥터 코드가 정한다. 이 분담은 LMCache 와 정반대다 — 그쪽은 두꺼운 외부 라이브러리가 캐싱 로직을 다 갖고 vLLM 은 얇은 어댑터만 든다. 실질적 결과: Mooncake 는 "같은 프리픽스를, 다른 노드에서, 지금 당장" 에 가장 빠르고, 압축이나 비-프리픽스 blending 은 <b>의도적으로</b> 하지 않는다.</span>
+</div>
+
+<section id="s1">
+  <h2><span class="num">1</span>
+    <span class="en">The problem: a prefix cache that dies with the instance</span>
+    <span class="ko">문제 — 인스턴스와 함께 사라지는 프리픽스 캐시</span>
+  </h2>
+
+  <p>
+    <span class="en">vLLM already has prefix caching. Two requests sharing a prompt prefix reuse the same KV blocks, and the second one skips that much prefill. It works well and it is on by default. It also has two hard walls: the cache lives in <b>this instance's</b> GPU memory, and it is only as big as the GPU blocks left over after the model weights.</span>
+    <span class="ko">vLLM 에는 이미 프리픽스 캐싱이 있다. 프롬프트 앞부분을 공유하는 두 요청은 같은 KV 블록을 재사용하고, 두 번째 요청은 그만큼 프리필을 건너뛴다. 잘 작동하고 기본으로 켜져 있다. 다만 벽이 둘 있다 — 캐시가 <b>이 인스턴스</b>의 GPU 메모리에 살고, 크기는 모델 가중치를 뺀 나머지 GPU 블록만큼뿐이다.</span>
+  </p>
+
+  <p>
+    <span class="en">For chat that is fine. For <b>agentic</b> workloads it falls apart. An agent session is many turns over a growing transcript, so turn <i>n</i> shares almost everything with turn <i>n−1</i> — the ideal case for prefix caching. But between turns the session may wait minutes, the blocks get evicted, and the load balancer may well send the next turn to a different replica that never saw the prefix at all. The vLLM blog puts a number on how bad that gets:</span>
+    <span class="ko">채팅이라면 괜찮다. <b>에이전트</b> 워크로드에서는 무너진다. 에이전트 세션은 점점 길어지는 트랜스크립트 위에서 여러 턴을 도는 것이라, <i>n</i> 번째 턴은 <i>n−1</i> 번째와 거의 전부를 공유한다 — 프리픽스 캐싱에 가장 이상적인 조건이다. 그런데 턴 사이에 몇 분씩 쉬는 동안 블록은 축출되고, 로드밸런서는 그 프리픽스를 본 적 없는 다른 replica 로 다음 턴을 보내기 십상이다. vLLM 블로그가 그 정도를 숫자로 보여준다.</span>
+  </p>
+
+  <blockquote class="q">
+    <p>"cache hit rate ... from 1.7% to 92.2%"</p>
+    <cite><span class="en">vLLM blog, Codex agentic traces on 1P1D — the 1.7% is the <i>baseline</i>, i.e. local prefix caching alone.</span><span class="ko">vLLM 블로그, 1P1D 에서 Codex 에이전트 트레이스. 1.7% 가 <i>베이스라인</i> — 로컬 프리픽스 캐싱만 켠 상태다.</span> · <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">vllm.ai/blog/2026-05-06-mooncake-store</a></cite>
+  </blockquote>
+
+  <p>
+    <span class="en">A 1.7% hit rate means the prefix cache is doing essentially nothing: nearly every turn re-prefills a transcript that some GPU in the cluster computed minutes ago. Meanwhile the same cluster has hundreds of gigabytes of CPU DRAM and terabytes of NVMe doing nothing at all. <b>That gap — hot data thrown away next to cold capacity sitting idle — is the entire premise of Mooncake.</b></span>
+    <span class="ko">히트율 1.7% 는 프리픽스 캐시가 사실상 아무 일도 못 하고 있다는 뜻이다. 클러스터 안 어느 GPU 가 몇 분 전에 계산해 둔 트랜스크립트를, 거의 매 턴 다시 프리필한다. 그러는 동안 같은 클러스터의 수백 GB CPU DRAM 과 수 TB NVMe 는 아무것도 안 하고 있다. <b>뜨거운 데이터는 버려지는데 옆에서 차가운 용량이 놀고 있는 이 간극이 Mooncake 의 전제 전부다.</b></span>
+  </p>
+</section>
+
+<section id="s2">
+  <h2><span class="num">2</span>
+    <span class="en">What Mooncake actually is — three layers, two vLLM connectors</span>
+    <span class="ko">Mooncake 의 실체 — 3개 층, 2개의 vLLM 커넥터</span>
+  </h2>
+
+  <p>
+    <span class="en">"Mooncake" names a whole stack, which is why the docs can feel like they are describing three different products. They are three layers:</span>
+    <span class="ko">"Mooncake" 는 스택 전체의 이름이다. 문서가 서로 다른 제품 셋을 설명하는 것처럼 느껴지는 이유가 이것인데, 사실은 층이 셋이다.</span>
+  </p>
+
+  <div class="grid3">
+    <div class="mini">
+      <h4>1 · Transfer Engine</h4>
+      <p><span class="en">The transport. One API over RDMA / TCP / NVMe-oF. Knows nothing about KV cache — it moves bytes between registered memory regions.</span>
+         <span class="ko">전송 계층. RDMA·TCP·NVMe-oF 를 하나의 API 로. KV 캐시가 뭔지 모른다 — 등록된 메모리 영역 사이로 바이트를 옮길 뿐이다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>2 · Mooncake Store</h4>
+      <p><span class="en">A distributed object store on top of it, pooling each node's DRAM (and optionally SSD) into one address space. Keys are strings; values are byte ranges.</span>
+         <span class="ko">그 위의 분산 오브젝트 스토어. 각 노드의 DRAM(선택적으로 SSD)을 하나의 주소 공간으로 묶는다. 키는 문자열, 값은 바이트 범위다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>3 · Master</h4>
+      <p><span class="en">A metadata service: which key lives where, replica state, client liveness. <code class="inl">mooncake_master --port 50051</code>. Not on the data path.</span>
+         <span class="ko">메타데이터 서비스. 어느 키가 어디 있는지, replica 상태, 클라이언트 생존 여부. <code class="inl">mooncake_master --port 50051</code>. 데이터 경로에는 없다.</span></p>
+    </div>
+  </div>
+
+  <p>
+    <span class="en">Notice what is <b>not</b> in that list: nothing knows what a KV cache is. The store takes a key and some memory addresses. All the inference-specific logic — which blocks to save, how to name them, when to look them up — lives in vLLM. That is the single most important structural fact in this note, and section 5 is where it pays off.</span>
+    <span class="ko">이 목록에 <b>없는</b> 것을 보자 — 어느 층도 KV 캐시가 뭔지 모른다. 스토어는 키와 메모리 주소 몇 개를 받을 뿐이다. 추론에 특화된 로직 전부(어느 블록을 저장할지, 어떻게 이름 붙일지, 언제 조회할지)는 vLLM 안에 있다. 이 노트에서 구조적으로 가장 중요한 사실이고, 5절에서 값을 한다.</span>
+  </p>
+
+  <h3><span class="en">Two connectors, meant to be stacked</span><span class="ko">두 개의 커넥터, 겹쳐 쓰라고 만든 것</span></h3>
+
+  <p>
+    <span class="en">vLLM's connector registry has both Mooncake integrations side by side — different modules, different classes:</span>
+    <span class="ko">vLLM 의 커넥터 레지스트리에는 Mooncake 통합 둘이 나란히 등록돼 있다. 모듈도 클래스도 다르다.</span>
+  </p>
+
+<pre>KVConnectorFactory.register_connector(
+    "MooncakeConnector",
+    "vllm.distributed.kv_transfer.kv_connector.v1.mooncake.mooncake_connector",
+    "MooncakeConnector",
+)
+KVConnectorFactory.register_connector(
+    "MooncakeStoreConnector",
+    "vllm.distributed.kv_transfer.kv_connector.v1.mooncake.store.connector",
+    "MooncakeStoreConnector",
+)</pre>
+  <p class="figcap"><a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/factory.py#L218-L227">factory.py#L218-L227</a></p>
+
+  <svg class="fig" viewBox="0 0 880 330" xmlns="http://www.w3.org/2000/svg"
+       font-family="-apple-system,sans-serif" role="img"
+       aria-label="MooncakeConnector moves KV point to point from prefiller to decoder; MooncakeStoreConnector writes and reads a cluster-wide shared pool; MultiConnector stacks both">
+    <text x="0" y="15" font-size="13" font-weight="700" fill="var(--ink)">MooncakeConnector (P2P) vs MooncakeStoreConnector (shared pool)</text>
+
+    <rect x="0" y="34" width="200" height="70" rx="10" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <text x="100" y="62" font-size="12.5" font-weight="700" fill="var(--blue-ink)" text-anchor="middle">Prefiller</text>
+    <text x="100" y="82" font-size="11" fill="var(--blue-ink)" text-anchor="middle">vLLM instance</text>
+
+    <rect x="600" y="34" width="200" height="70" rx="10" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <text x="700" y="62" font-size="12.5" font-weight="700" fill="var(--blue-ink)" text-anchor="middle">Decoder</text>
+    <text x="700" y="82" font-size="11" fill="var(--blue-ink)" text-anchor="middle">vLLM instance</text>
+
+    <path d="M200,60 L596,60" stroke="var(--coral-bd)" stroke-width="2"/>
+    <path d="M590,55 L599,60 L590,65 Z" fill="var(--coral-bd)"/>
+    <text x="398" y="50" font-size="11.5" font-weight="700" fill="var(--coral-ink)" text-anchor="middle">MooncakeConnector — direct P2P, this request only</text>
+
+    <rect x="120" y="150" width="640" height="82" rx="12" fill="var(--teal-bg)" stroke="var(--teal-bd)"/>
+    <text x="440" y="176" font-size="13" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">Mooncake Store — one pool over every node's DRAM / SSD</text>
+    <text x="440" y="197" font-size="11.5" fill="var(--teal-ink)" text-anchor="middle">key = model + parallel ranks + block hash &#160;·&#160; value = KV block bytes</text>
+    <text x="440" y="216" font-size="11" fill="var(--teal-ink)" text-anchor="middle">any instance may read what any other instance wrote, minutes later</text>
+
+    <path d="M100,104 L100,146" stroke="var(--teal-bd)" stroke-width="2"/>
+    <path d="M95,140 L100,149 L105,140 Z" fill="var(--teal-bd)"/>
+    <text x="112" y="130" font-size="11" fill="var(--teal-ink)">save</text>
+    <path d="M700,146 L700,106" stroke="var(--teal-bd)" stroke-width="2"/>
+    <path d="M695,112 L700,103 L705,112 Z" fill="var(--teal-bd)"/>
+    <text x="712" y="130" font-size="11" fill="var(--teal-ink)">load</text>
+
+    <rect x="0" y="252" width="880" height="34" rx="8" fill="var(--gray-bg)" stroke="var(--line)"/>
+    <text x="14" y="274" font-size="11.5" fill="var(--ink)">Instance C, D, E … also read and write the same pool — this is what P2P structurally cannot do</text>
+
+    <rect x="0" y="296" width="880" height="32" rx="8" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+    <text x="14" y="317" font-size="11.5" font-weight="700" fill="var(--purple-ink)">MultiConnector wraps both, so one deployment gets the fast hand-off AND the cluster-wide pool</text>
+  </svg>
+  <p class="figcap"><span class="en">Drawn from the two usage docs and the connector registry; <code class="inl">MultiConnector</code> stacking is the documented XpYd setup.</span><span class="ko">두 usage 문서와 커넥터 레지스트리를 근거로 작성. <code class="inl">MultiConnector</code> 겹쳐 쓰기는 문서에 나온 XpYd 구성이다.</span></p>
+
+  <p>
+    <span class="en">The distinction the vLLM docs draw is exact and worth quoting, because most confusion about Mooncake starts here:</span>
+    <span class="ko">vLLM 문서가 긋는 구분이 정확하다. Mooncake 에 대한 혼란은 대개 여기서 시작하니 그대로 인용한다.</span>
+  </p>
+
+  <blockquote class="q">
+    <p>"Unlike <code>MooncakeConnector</code> which does direct point-to-point KV transfer between prefiller and decoder, MooncakeStoreConnector enables KV cache offloading to an external distributed store"</p>
+    <cite><a href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/docs/features/mooncake_store_connector_usage.md">docs/features/mooncake_store_connector_usage.md</a></cite>
+  </blockquote>
+
+  <p>
+    <span class="en">P2P answers "this prefiller must hand this request to that decoder, now". The store answers "has <i>anyone</i> computed these blocks recently?". They solve different problems, which is why the documented disaggregated setup runs both under <code class="inl">MultiConnector</code> rather than picking one.</span>
+    <span class="ko">P2P 는 "이 프리필러가 이 요청을 저 디코더에게 지금 넘겨야 한다" 에 답한다. 스토어는 "<i>누구든</i> 이 블록들을 최근에 계산한 적 있나?" 에 답한다. 서로 다른 문제라서, 문서에 나온 분리 구성은 하나를 고르는 대신 <code class="inl">MultiConnector</code> 아래에 둘 다 돌린다.</span>
+  </p>
+</section>
+
+<section id="s3">
+  <h2><span class="num">3</span>
+    <span class="en">Code flow: one request through MooncakeStoreConnector</span>
+    <span class="ko">코드 흐름 — 요청 하나가 MooncakeStoreConnector 를 지나가는 길</span>
+  </h2>
+
+  <p>
+    <span class="en">All line numbers are pinned to vLLM <a class="src" href="https://github.com/vllm-project/vllm/tree/ba1cdcfcf05f581d1f58cc911644fed62317c8c6"><code class="inl">ba1cdcf</code></a> (2026-08-09). The connector splits into the usual vLLM shape — a <b>scheduler side</b> that only decides, and a <b>worker side</b> that moves bytes:</span>
+    <span class="ko">모든 줄 번호는 vLLM <a class="src" href="https://github.com/vllm-project/vllm/tree/ba1cdcfcf05f581d1f58cc911644fed62317c8c6"><code class="inl">ba1cdcf</code></a> (2026-08-09) 에 고정돼 있다. 커넥터는 vLLM 의 통상적 형태로 갈린다 — 판단만 하는 <b>스케줄러 쪽</b>과 바이트를 옮기는 <b>워커 쪽</b>.</span>
+  </p>
+
+<pre>vllm/distributed/kv_transfer/kv_connector/v1/mooncake/
+├── mooncake_connector.py   2,179 lines   ← P2P (transfer engine, ZMQ bootstrap)
+└── store/
+    ├── worker.py           2,069         ← RDMA get/put, transfer threads
+    ├── data.py               450         ← key format, address math
+    ├── scheduler.py          448         ← lookup, load specs
+    ├── coordinator.py        412
+    ├── connector.py          354         ← the KVConnectorBase_V1 surface
+    ├── metrics.py            189
+    └── protocol.py            40</pre>
+
+  <svg class="fig" viewBox="0 0 880 396" xmlns="http://www.w3.org/2000/svg"
+       font-family="-apple-system,sans-serif" role="img"
+       aria-label="Flow: scheduler asks the master how many tokens hit, allocates blocks, the worker recv thread RDMA-reads them into the KV tensors, and after prefill the send thread RDMA-writes new blocks back">
+    <text x="0" y="15" font-size="13" font-weight="700" fill="var(--ink)">One request: lookup on the scheduler, RDMA on the worker</text>
+
+    <rect x="0" y="32" width="418" height="150" rx="12" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+    <text x="16" y="54" font-size="12.5" font-weight="700" fill="var(--blue-ink)">SCHEDULER process — decides only</text>
+    <text x="16" y="78" font-size="11.5" fill="var(--blue-ink)">① get_num_new_matched_tokens(request)</text>
+    <text x="30" y="96" font-size="11" fill="var(--blue-ink)">→ client.lookup(req_id, n_tokens, block_hashes)</text>
+    <text x="30" y="113" font-size="11" fill="var(--muted)">master replies: "N tokens of this prefix exist"</text>
+    <text x="16" y="136" font-size="11.5" fill="var(--blue-ink)">② allocate blocks for the N hit tokens</text>
+    <text x="16" y="158" font-size="11.5" fill="var(--blue-ink)">③ build_connector_meta → hand block ids to worker</text>
+    <text x="16" y="175" font-size="10.5" fill="var(--muted)">no KV bytes touched anywhere in this box</text>
+
+    <rect x="462" y="32" width="418" height="150" rx="12" fill="var(--teal-bg)" stroke="var(--teal-bd)"/>
+    <text x="478" y="54" font-size="12.5" font-weight="700" fill="var(--teal-ink)">WORKER process — moves bytes</text>
+    <text x="478" y="78" font-size="11.5" fill="var(--teal-ink)">④ start_load_kv → queue onto recv thread</text>
+    <text x="492" y="96" font-size="11" fill="var(--teal-ink)">batch_get_into_multi_buffers(keys, addrs, sizes)</text>
+    <text x="478" y="119" font-size="11.5" fill="var(--teal-ink)">⑤ model runs prefill on the remaining tokens</text>
+    <text x="478" y="142" font-size="11.5" fill="var(--teal-ink)">⑥ wait_for_save → queue onto send thread</text>
+    <text x="492" y="160" font-size="11" fill="var(--teal-ink)">batch_put_from_multi_buffers(keys, addrs, sizes)</text>
+    <text x="478" y="176" font-size="10.5" fill="var(--muted)">both run off a background thread, not the model thread</text>
+
+    <path d="M418,107 L458,107" stroke="var(--muted)" stroke-width="1.6"/>
+    <path d="M452,102 L461,107 L452,112 Z" fill="var(--muted)"/>
+
+    <rect x="150" y="206" width="580" height="62" rx="12" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+    <text x="440" y="230" font-size="12.5" font-weight="700" fill="var(--amber-ink)" text-anchor="middle">Mooncake Store — DRAM pool across nodes (+ optional SSD tier)</text>
+    <text x="440" y="252" font-size="11" fill="var(--amber-ink)" text-anchor="middle">RDMA reads/writes land directly in the KV tensors — no staging copy</text>
+
+    <path d="M640,182 L520,202" stroke="var(--teal-bd)" stroke-width="1.8"/>
+    <path d="M527,196 L516,203 L528,207 Z" fill="var(--teal-bd)"/>
+    <path d="M700,202 L740,184" stroke="var(--teal-bd)" stroke-width="1.8"/>
+    <path d="M735,190 L744,181 L745,193 Z" fill="var(--teal-bd)"/>
+
+    <rect x="0" y="288" width="880" height="46" rx="10" fill="var(--gray-bg)" stroke="var(--line)"/>
+    <text x="14" y="308" font-size="11.5" font-weight="700" fill="var(--ink)">Why the addresses work: at startup the worker registers the raw KV tensor storage with the store.</text>
+    <text x="14" y="326" font-size="11" fill="var(--muted)">store.register_buffer(base_addr, region_len) — after that, "load block 42" is just an address, and RDMA writes into it in place.</text>
+
+    <rect x="0" y="346" width="880" height="44" rx="10" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+    <text x="14" y="366" font-size="11.5" font-weight="700" fill="var(--purple-ink)">The master is never on the data path.</text>
+    <text x="14" y="383" font-size="11" fill="var(--purple-ink)">It answers "where / does it exist"; the bytes go NIC-to-NIC. That is why one master can serve many vLLM instances.</text>
+  </svg>
+  <p class="figcap"><span class="en">Reconstructed from the code paths listed below.</span><span class="ko">아래 나열한 코드 경로를 근거로 재구성.</span></p>
+
+  <h3><span class="en">The path, step by step</span><span class="ko">경로, 단계별로</span></h3>
+
+  <ol class="flow">
+    <li>
+      <b><span class="en">Startup — hand the KV tensors to the store.</span><span class="ko">기동 — KV 텐서를 스토어에 넘긴다.</span></b><br>
+      <span class="en">The worker walks every KV cache tensor, takes <code class="inl">untyped_storage().data_ptr()</code>, and registers that region. It also sniffs the layout by stride to split FlashAttn's <code class="inl">(2, num_blocks, …)</code> K/V-first tensors into two segments, while FlashInfer/MLA's blocks-first layout stays one.</span>
+      <span class="ko">워커가 모든 KV 캐시 텐서를 돌면서 <code class="inl">untyped_storage().data_ptr()</code> 를 꺼내 그 영역을 등록한다. stride 를 보고 레이아웃도 판별한다 — FlashAttn 의 <code class="inl">(2, num_blocks, …)</code> K/V-우선 텐서는 두 세그먼트로 쪼개고, FlashInfer/MLA 의 블록-우선 레이아웃은 하나로 둔다.</span><br>
+      <code class="inl">store.register_buffer(base_addr, region_len)</code>
+      <a class="pl" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L1501-L1570">store/worker.py#L1501-L1570</a>
+    </li>
+    <li>
+      <b><span class="en">Scheduler — ask how much of this prompt already exists.</span><span class="ko">스케줄러 — 이 프롬프트가 얼마나 이미 있는지 묻는다.</span></b><br>
+      <span class="en">vLLM already computed <code class="inl">request.block_hashes</code> for its own prefix cache; the connector reuses them verbatim as store keys. A hit returns a token count, and the scheduler allocates blocks for it instead of prefilling.</span>
+      <span class="ko">vLLM 은 자기 프리픽스 캐시를 위해 이미 <code class="inl">request.block_hashes</code> 를 계산해 뒀다. 커넥터는 그걸 그대로 스토어 키로 쓴다. 히트하면 토큰 수가 돌아오고, 스케줄러는 프리필 대신 그만큼 블록을 할당한다.</span><br>
+      <code class="inl">num_external_hit_tokens = self.client.lookup(request.request_id, request.num_tokens, request.block_hashes, non_block=self.lookup_async)</code>
+      <a class="pl" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/scheduler.py#L81-L134">store/scheduler.py#L81-L134</a>
+    </li>
+    <li>
+      <b><span class="en">The key — what makes two instances agree.</span><span class="ko">키 — 두 인스턴스가 합의하는 지점.</span></b><br>
+      <span class="en">A store key is the block hash prefixed with the model identity <i>and the parallel layout</i>. Read this line carefully; section 4 argues it is the most consequential design decision in the whole integration.</span>
+      <span class="ko">스토어 키는 블록 해시 앞에 모델 정체성 <i>그리고 병렬 레이아웃</i>을 붙인 것이다. 이 줄을 잘 봐 두자 — 4절에서 이 통합 전체에서 가장 파급이 큰 설계 결정이라고 주장할 것이다.</span><br>
+<pre>f"{prefix}{model_name}@tp_rank:{tp}@pcp{pcp}@dcp{dcp}@pp_rank:{pp}@group:{group_id}"
+# then:  key = f"{key_prefix}@{chunk_hash}"</pre>
+      <a class="pl" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/data.py#L116-L165">store/data.py#L116-L165</a>
+    </li>
+    <li>
+      <b><span class="en">Address math — the zero-copy handle.</span><span class="ko">주소 계산 — zero-copy 의 정체.</span></b><br>
+      <span class="en">There is no serialization step. A "value" is simply <code class="inl">base_addr + block_id × block_len</code> per KV segment, vectorized with numpy over all chunks at once. This is what makes the RDMA land inside the live KV tensor rather than in a buffer that must then be copied.</span>
+      <span class="ko">직렬화 단계가 없다. "값" 은 KV 세그먼트마다 <code class="inl">base_addr + block_id × block_len</code> 일 뿐이고, 모든 청크에 대해 numpy 로 한 번에 벡터화해 계산한다. RDMA 가 별도 버퍼가 아니라 살아 있는 KV 텐서 안으로 바로 내려앉는 이유다.</span><br>
+<pre>addrs = base[None, :] + bids[:, None] * blen[None, :]
+sizes = blen[None, :] * block_counts[:, None]</pre>
+      <a class="pl" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/data.py#L210-L240">store/data.py#L210-L240</a>
+    </li>
+    <li>
+      <b><span class="en">Load — RDMA straight into the block slots.</span><span class="ko">로드 — 블록 슬롯 안으로 직접 RDMA.</span></b><br>
+      <span class="en">The receiving thread issues one batched call per batch of keys. Any key whose return value is negative is recorded as a failed block, and those block ids are reported back so the scheduler can recompute them rather than serve garbage.</span>
+      <span class="ko">수신 스레드가 키 배치마다 배치 호출 하나를 날린다. 반환값이 음수인 키는 실패 블록으로 기록되고, 그 block id 들이 되보고돼서 스케줄러가 쓰레기를 내보내는 대신 다시 계산하게 한다.</span><br>
+      <code class="inl">res = self.store.batch_get_into_multi_buffers(batch_keys, batch_addrs, batch_sizes)</code>
+      <a class="pl" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L1140-L1142">store/worker.py#L1140-L1142</a>
+    </li>
+    <li>
+      <b><span class="en">Save — the mirror image, after prefill.</span><span class="ko">저장 — 프리필 후, 정확히 대칭.</span></b><br>
+      <span class="en">Newly computed blocks are written back with the same address list and the same key scheme, so the next instance to see this prefix finds it.</span>
+      <span class="ko">새로 계산된 블록은 같은 주소 목록과 같은 키 규칙으로 되쓰인다. 다음에 이 프리픽스를 만나는 인스턴스가 그걸 찾을 수 있게.</span><br>
+      <code class="inl">res = self.store.batch_put_from_multi_buffers(...)</code>
+      <a class="pl" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L684-L700">store/worker.py#L684-L700</a>
+    </li>
+    <li>
+      <b><span class="en">Off the critical path.</span><span class="ko">크리티컬 패스 밖으로.</span></b><br>
+      <span class="en">Both directions run on dedicated <code class="inl">threading.Thread</code> workers fed by queues, so an RDMA round trip never blocks the thread launching GPU kernels. The file header credits where the pattern came from.</span>
+      <span class="ko">양방향 모두 큐가 먹여주는 전용 <code class="inl">threading.Thread</code> 워커에서 돈다. RDMA 왕복이 GPU 커널을 띄우는 스레드를 막지 않는다. 파일 헤더에 이 패턴의 출처가 적혀 있다.</span><br>
+<pre># The transfer-thread scaffolding (KVTransferThread, KVCacheStoreSendingThread,
+# KVCacheStoreRecvingThread) is adapted from vllm-project/vllm-ascend</pre>
+      <a class="pl" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py#L383-L520">store/worker.py#L383-L520</a>
+    </li>
+  </ol>
+
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">The shape of it</span><span class="ko">구조의 요점</span></span>
+    <span class="en">Look at what the store is asked to do: <code class="inl">register_buffer</code>, <code class="inl">lookup</code>, <code class="inl">batch_get_into_multi_buffers</code>, <code class="inl">batch_put_from_multi_buffers</code>. Four verbs over raw addresses. Every inference-specific decision — hashing, block sizing, which layout the tensor has, what to do with a failed block — is written in vLLM.</span>
+    <span class="ko">스토어에게 요구하는 게 뭔지 보자 — <code class="inl">register_buffer</code>, <code class="inl">lookup</code>, <code class="inl">batch_get_into_multi_buffers</code>, <code class="inl">batch_put_from_multi_buffers</code>. 생주소 위의 동사 네 개다. 추론에 특화된 판단(해싱, 블록 크기, 텐서 레이아웃, 실패 블록 처리)은 전부 vLLM 쪽에 쓰여 있다.</span>
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="num">4</span>
+    <span class="en">Five design decisions worth naming</span>
+    <span class="ko">짚어둘 설계 결정 다섯 가지</span>
+  </h2>
+
+  <h3><span class="en">① Zero-copy means "no serialization step exists"</span><span class="ko">① zero-copy 는 "직렬화 단계가 아예 없다" 는 뜻</span></h3>
+  <p>
+    <span class="en">Most caches serialize a tensor into a buffer, then send the buffer. Mooncake skips the concept: because the KV tensor storage was registered with the NIC up front, a block is addressable, and the store reads and writes it in place. The vLLM blog states the intent plainly — <i>"This path requires no staging buffer and does not consume SMs."</i> The second half matters as much as the first: no staging buffer also means no GPU kernel doing the copy, so offloading does not steal compute from the model.</span>
+    <span class="ko">대부분의 캐시는 텐서를 버퍼로 직렬화한 다음 그 버퍼를 보낸다. Mooncake 는 그 개념 자체를 건너뛴다. KV 텐서 저장소를 미리 NIC 에 등록해 뒀기 때문에 블록이 주소로 지정 가능하고, 스토어가 그 자리에서 읽고 쓴다. vLLM 블로그의 표현이 명확하다 — <i>"This path requires no staging buffer and does not consume SMs."</i> 뒷절이 앞절만큼 중요하다. staging buffer 가 없다는 건 복사를 수행할 GPU 커널도 없다는 뜻이고, 오프로딩이 모델에게서 연산을 빼앗지 않는다.</span>
+  </p>
+
+  <h3><span class="en">② The key embeds the parallel layout — and that sets the sharing boundary</span><span class="ko">② 키에 병렬 레이아웃이 박힌다 — 그게 공유 경계를 정한다</span></h3>
+  <p>
+    <span class="en">The key is not just <code class="inl">hash(tokens)</code>. It carries <code class="inl">model_name</code>, <code class="inl">tp_rank</code>, <code class="inl">pcp</code>, <code class="inl">dcp</code>, <code class="inl">pp_rank</code> and a KV-group id. That is correct — a TP-4 rank 2 shard is genuinely not interchangeable with a TP-8 shard — but it has a blunt operational consequence:</span>
+    <span class="ko">키는 그냥 <code class="inl">hash(tokens)</code> 가 아니다. <code class="inl">model_name</code>, <code class="inl">tp_rank</code>, <code class="inl">pcp</code>, <code class="inl">dcp</code>, <code class="inl">pp_rank</code>, KV 그룹 id 를 달고 있다. 옳은 설계다 — TP-4 의 rank 2 샤드는 TP-8 샤드와 실제로 호환되지 않는다. 다만 운영상 무딘 결과가 따라온다.</span>
+  </p>
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">Practical consequence</span><span class="ko">실무적 귀결</span></span>
+    <span class="en">Two instances only share cache if they run the <b>same model at the same parallel layout</b>. Change TP for one deployment and its cache is a separate namespace — you do not get errors, you get a silent hit-rate collapse. Prefill TP4 and decode DP8 in the blog's own setup therefore do not share store entries with each other; the store pays off <i>across turns and across replicas of the same role</i>, not across roles.</span>
+    <span class="ko">두 인스턴스는 <b>같은 모델을 같은 병렬 레이아웃으로</b> 돌릴 때만 캐시를 공유한다. 한쪽 배포의 TP 를 바꾸면 그 캐시는 별도 네임스페이스가 된다 — 에러가 나는 게 아니라 히트율이 조용히 무너진다. 블로그의 구성(프리필 TP4, 디코드 DP8)에서도 둘은 서로 스토어 엔트리를 공유하지 않는다. 스토어가 값을 하는 건 <i>턴 사이, 그리고 같은 역할의 replica 사이</i>이지 역할을 가로질러서가 아니다.</span>
+  </div>
+
+  <h3><span class="en">③ Everything is asynchronous by construction</span><span class="ko">③ 비동기가 기본값이 아니라 구조다</span></h3>
+  <p>
+    <span class="en">Lookup can be non-blocking (<code class="inl">lookup_async</code>), returning <code class="inl">None</code> to mean "ask me again next scheduler step" rather than stalling the loop. Loads and saves go onto queue-fed threads. The scheduler-side comment is explicit about the contract: <i>"Returns <code>(None, False)</code> when an async lookup is still in flight, signaling the scheduler to retry this request on a later step."</i> A remote cache that blocks the scheduler would be worse than no cache; this is the design detail that prevents it.</span>
+    <span class="ko">조회는 논블로킹일 수 있고(<code class="inl">lookup_async</code>), 루프를 멈추는 대신 <code class="inl">None</code> 을 돌려 "다음 스케줄러 스텝에 다시 물어봐" 를 뜻한다. 로드와 저장은 큐가 먹여주는 스레드로 간다. 스케줄러 쪽 주석이 계약을 명시한다 — <i>"Returns <code>(None, False)</code> when an async lookup is still in flight, signaling the scheduler to retry this request on a later step."</i> 스케줄러를 막는 원격 캐시는 캐시가 없느니만 못하다. 그걸 막는 설계 디테일이 이것이다.</span>
+  </p>
+
+  <h3><span class="en">④ Two topologies: pool inside the ranks, or pool outside them</span><span class="ko">④ 두 가지 토폴로지 — 랭크 안에 풀, 랭크 밖에 풀</span></h3>
+  <table>
+    <tr><th><span class="en">mode</span><span class="ko">모드</span></th><th><span class="en">who owns the DRAM pool</span><span class="ko">DRAM 풀 소유자</span></th><th><span class="en">when to use</span><span class="ko">언제</span></th></tr>
+    <tr>
+      <td><code class="inl">embedded</code> <span class="muted">(default)</span></td>
+      <td><span class="en">every vLLM rank contributes <code class="inl">global_segment_size</code> in-process</span><span class="ko">모든 vLLM 랭크가 in-process 로 <code class="inl">global_segment_size</code> 만큼 기여</span></td>
+      <td><span class="en">simplest; no extra process to run</span><span class="ko">가장 단순. 띄울 프로세스가 안 늘어난다</span></td>
+    </tr>
+    <tr>
+      <td><code class="inl">standalone-store</code></td>
+      <td><span class="en">an external <code class="inl">mooncake_client</code> owns the CPU pool and the SSD tier; ranks are pure requesters (<code class="inl">global_segment_size: 0</code>)</span><span class="ko">외부 <code class="inl">mooncake_client</code> 가 CPU 풀과 SSD 계층을 소유. 랭크는 순수 요청자 (<code class="inl">global_segment_size: 0</code>)</span></td>
+      <td><span class="en">the documented choice for <b>disk offloading</b> — avoids per-rank duplication of the SSD pool and keeps DirectIO budgeting in one process</span><span class="ko"><b>디스크 오프로딩</b> 시 문서가 권하는 선택. SSD 풀이 랭크마다 중복되는 걸 피하고 DirectIO 예산 관리를 한 프로세스에 모은다</span></td>
+    </tr>
+  </table>
+  <p>
+    <span class="en">This is a real operational fork, not a tuning knob: in <code class="inl">embedded</code> mode a rank restart takes its slice of the pool with it.</span>
+    <span class="ko">튜닝 노브가 아니라 실제 운영상의 분기다. <code class="inl">embedded</code> 모드에서는 랭크가 재시작하면 자기 몫의 풀도 같이 사라진다.</span>
+  </p>
+
+  <h3><span class="en">⑤ Hash block size is decoupled from the engine block size</span><span class="ko">⑤ 해시 블록 크기와 엔진 블록 크기의 분리</span></h3>
+  <p>
+    <span class="en">The connector resolves two separate sizes — the scheduler's <code class="inl">block_size</code> and a <code class="inl">hash_block_size</code> — and when partial hits are enabled it aligns lookups on the finer one. Without that, a shared prefix shorter than one physical block is simply invisible. It is a small thing that decides whether short-prefix workloads see any benefit at all.</span>
+    <span class="ko">커넥터는 스케줄러의 <code class="inl">block_size</code> 와 <code class="inl">hash_block_size</code> 를 따로 해석하고, 부분 히트가 켜져 있으면 더 잘게 쪼갠 쪽에 맞춰 조회한다. 이게 없으면 물리 블록 하나보다 짧은 공유 프리픽스는 아예 안 보인다. 작아 보이지만, 짧은 프리픽스 워크로드가 이득을 보느냐 마느냐를 가르는 지점이다.</span>
+  </p>
+</section>
+
+<section id="s5">
+  <h2><span class="num">5</span>
+    <span class="en">How it differs from LMCache and the rest</span>
+    <span class="ko">LMCache 및 나머지와의 차이</span>
+  </h2>
+
+  <p>
+    <span class="en">The registry at <a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/factory.py#L152-L245">factory.py</a> holds a dozen connectors, and they are not variations on one idea. Our earlier survey maps them all by transfer direction — <a class="src" href="vllm-kv-connectors.html">vLLM KV-cache connectors — transfer-direction map</a>. Here we only need the axis that separates Mooncake from LMCache, and it is not performance. It is <b>where the caching logic lives</b>.</span>
+    <span class="ko"><a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/factory.py#L152-L245">factory.py</a> 의 레지스트리에는 커넥터가 열 개 넘게 있고, 한 아이디어의 변주들이 아니다. 전체 지도는 이전 노트에 있다 — <a class="src" href="vllm-kv-connectors.html">vLLM KV-cache 커넥터 — 전송 방향 지도</a>. 여기서 필요한 축은 하나뿐인데, 성능이 아니라 <b>캐싱 로직이 어디 사는가</b> 다.</span>
+  </p>
+
+  <svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg"
+       font-family="-apple-system,sans-serif" role="img"
+       aria-label="LMCache puts a thin adapter in vLLM and a thick library outside; Mooncake puts thick logic in vLLM and a thin storage primitive outside">
+    <text x="0" y="15" font-size="13" font-weight="700" fill="var(--ink)">Same interface, opposite division of labour</text>
+
+    <text x="0" y="44" font-size="12.5" font-weight="700" fill="var(--coral-ink)">LMCache</text>
+    <rect x="120" y="30" width="180" height="46" rx="9" fill="var(--coral-bg)" stroke="var(--coral-bd)"/>
+    <text x="210" y="50" font-size="11.5" fill="var(--coral-ink)" text-anchor="middle">vLLM-side adapter</text>
+    <text x="210" y="67" font-size="11" font-weight="700" fill="var(--coral-ink)" text-anchor="middle">354 lines</text>
+    <path d="M300,53 L344,53" stroke="var(--muted)" stroke-width="1.6"/>
+    <path d="M338,48 L347,53 L338,58 Z" fill="var(--muted)"/>
+    <rect x="348" y="24" width="532" height="58" rx="9" fill="var(--coral-bg)" stroke="var(--coral-bd)"/>
+    <text x="614" y="45" font-size="11.5" font-weight="700" fill="var(--coral-ink)" text-anchor="middle">lmcache library — a standalone daemon</text>
+    <text x="614" y="64" font-size="11" fill="var(--coral-ink)" text-anchor="middle">tiering, eviction, CacheGen compression, CacheBlend non-prefix reuse, backends</text>
+
+    <text x="0" y="140" font-size="12.5" font-weight="700" fill="var(--teal-ink)">Mooncake</text>
+    <rect x="120" y="112" width="420" height="58" rx="9" fill="var(--teal-bg)" stroke="var(--teal-bd)"/>
+    <text x="330" y="133" font-size="11.5" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">vLLM-side connector — ~6,100 lines</text>
+    <text x="330" y="152" font-size="11" fill="var(--teal-ink)" text-anchor="middle">keys, block layout, lookup policy, threads, failure handling</text>
+    <path d="M540,141 L584,141" stroke="var(--muted)" stroke-width="1.6"/>
+    <path d="M578,136 L587,141 L578,146 Z" fill="var(--muted)"/>
+    <rect x="588" y="112" width="292" height="58" rx="9" fill="var(--teal-bg)" stroke="var(--teal-bd)"/>
+    <text x="734" y="133" font-size="11.5" font-weight="700" fill="var(--teal-ink)" text-anchor="middle">Mooncake store + transfer engine</text>
+    <text x="734" y="152" font-size="11" fill="var(--teal-ink)" text-anchor="middle">register / lookup / batch get / batch put</text>
+
+    <rect x="0" y="192" width="430" height="96" rx="10" fill="var(--gray-bg)" stroke="var(--line)"/>
+    <text x="14" y="213" font-size="11.5" font-weight="700" fill="var(--ink)">What LMCache's shape buys</text>
+    <text x="14" y="232" font-size="11" fill="var(--muted)">features vLLM never has to know about — compression,</text>
+    <text x="14" y="248" font-size="11" fill="var(--muted)">non-prefix blending, many storage backends; cache survives</text>
+    <text x="14" y="264" font-size="11" fill="var(--muted)">an engine crash because the daemon is a separate process</text>
+    <text x="14" y="281" font-size="11" fill="var(--muted)">cost: a second system with its own semantics to operate</text>
+
+    <rect x="450" y="192" width="430" height="96" rx="10" fill="var(--gray-bg)" stroke="var(--line)"/>
+    <text x="464" y="213" font-size="11.5" font-weight="700" fill="var(--ink)">What Mooncake's shape buys</text>
+    <text x="464" y="232" font-size="11" fill="var(--muted)">the fast path is short — hash, address, RDMA, done; the</text>
+    <text x="464" y="248" font-size="11" fill="var(--muted)">connector reuses vLLM's own block hashes and layouts, so</text>
+    <text x="464" y="264" font-size="11" fill="var(--muted)">it tracks engine internals closely</text>
+    <text x="464" y="281" font-size="11" fill="var(--muted)">cost: that logic must be maintained inside vLLM</text>
+  </svg>
+  <p class="figcap"><span class="en">Line counts measured at vllm <code class="inl">ba1cdcf</code>; LMCache capabilities from <a class="src" href="https://docs.lmcache.ai/">docs.lmcache.ai</a>.</span><span class="ko">줄 수는 vllm <code class="inl">ba1cdcf</code> 에서 실측. LMCache 기능은 <a class="src" href="https://docs.lmcache.ai/">docs.lmcache.ai</a> 기준.</span></p>
+
+  <p>
+    <span class="en">The vLLM-side LMCache connector is a shim: it imports the adapter and forwards every call.</span>
+    <span class="ko">vLLM 쪽 LMCache 커넥터는 얇은 껍데기다. 어댑터를 import 하고 모든 호출을 그대로 넘긴다.</span>
+  </p>
+
+<pre>from lmcache.integration.vllm.vllm_v1_adapter import (
+    ...
+)</pre>
+  <p class="figcap"><a class="src" href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/vllm/distributed/kv_transfer/kv_connector/v1/lmcache_connector.py#L99-L112">lmcache_connector.py#L99-L112</a></p>
+
+  <table>
+    <tr>
+      <th></th>
+      <th>MooncakeStoreConnector</th>
+      <th>LMCacheConnectorV1</th>
+      <th><span class="en">OffloadingConnector / SimpleCPUOffload</span><span class="ko">OffloadingConnector / SimpleCPUOffload</span></th>
+    </tr>
+    <tr>
+      <td><span class="en">scope</span><span class="ko">범위</span></td>
+      <td><span class="en">cluster-wide shared pool</span><span class="ko">클러스터 전역 공유 풀</span></td>
+      <td><span class="en">tiered local + remote backends</span><span class="ko">계층형 로컬 + 원격 백엔드</span></td>
+      <td><span class="en">this node only</span><span class="ko">이 노드 한정</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">transport</span><span class="ko">전송</span></td>
+      <td><span class="en">RDMA (TCP fallback), NIC-to-NIC</span><span class="ko">RDMA (TCP 폴백), NIC 대 NIC</span></td>
+      <td><span class="en">pluggable — incl. NIXL, Redis, S3</span><span class="ko">플러그형 — NIXL·Redis·S3 등</span></td>
+      <td><span class="en">host memcpy / DirectIO</span><span class="ko">호스트 memcpy / DirectIO</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">compression</span><span class="ko">압축</span></td>
+      <td><span class="en"><b>none</b> — bytes as they sit in HBM</span><span class="ko"><b>없음</b> — HBM 에 있는 바이트 그대로</span></td>
+      <td><span class="en">CacheGen; pluggable SERDE</span><span class="ko">CacheGen, 플러그형 SERDE</span></td>
+      <td><span class="en">none</span><span class="ko">없음</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">non-prefix reuse</span><span class="ko">비-프리픽스 재사용</span></td>
+      <td><span class="en"><b>no</b> — prefix hashes only</span><span class="ko"><b>불가</b> — 프리픽스 해시만</span></td>
+      <td><span class="en">yes, via CacheBlend (selective recompute)</span><span class="ko">가능 — CacheBlend (선택적 재계산)</span></td>
+      <td><span class="en">no</span><span class="ko">불가</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">sharing boundary</span><span class="ko">공유 경계</span></td>
+      <td><span class="en">same model <i>and</i> same parallel layout</span><span class="ko">같은 모델 <i>그리고</i> 같은 병렬 레이아웃</span></td>
+      <td><span class="en">backend-defined</span><span class="ko">백엔드가 정의</span></td>
+      <td><span class="en">n/a</span><span class="ko">해당 없음</span></td>
+    </tr>
+    <tr>
+      <td><span class="en">extra processes</span><span class="ko">추가 프로세스</span></td>
+      <td><code class="inl">mooncake_master</code> <span class="en">(+ client in standalone mode)</span><span class="ko">(standalone 모드면 client 도)</span></td>
+      <td><span class="en">the LMCache daemon</span><span class="ko">LMCache 데몬</span></td>
+      <td><span class="en">none</span><span class="ko">없음</span></td>
+    </tr>
+  </table>
+
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">Editor's note — not a claim by vLLM or Mooncake</span><span class="ko">편집자 주 — vLLM·Mooncake 의 주장 아님</span></span>
+    <span class="en">Read the two as answers to different questions rather than competitors. <b>Mooncake optimises the hot path</b>: the same prefix, on another node, seconds later, moved with no copy and no compute. <b>LMCache optimises coverage</b>: get a hit even when the KV must be compressed to fit, or when the reusable text is not a prefix at all. If your traffic is agentic multi-turn on a homogeneous fleet, Mooncake's boundary conditions are exactly your workload. If it is RAG with shared-but-not-prefixed chunks, they are not, and no amount of RDMA fixes that.</span>
+    <span class="ko">둘을 경쟁자가 아니라 서로 다른 질문에 대한 답으로 읽는 게 맞다. <b>Mooncake 는 핫 패스를 최적화한다</b> — 같은 프리픽스를, 다른 노드에서, 몇 초 뒤에, 복사도 연산도 없이. <b>LMCache 는 커버리지를 최적화한다</b> — 압축해야 들어가는 상황에서도, 재사용할 텍스트가 프리픽스가 아닐 때도 히트를 만든다. 트래픽이 동질적인 fleet 위의 에이전트 멀티턴이라면 Mooncake 의 경계 조건이 곧 당신의 워크로드다. shared-but-not-prefixed 청크를 쓰는 RAG 라면 그렇지 않고, RDMA 를 아무리 깔아도 그건 해결되지 않는다.</span>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="num">6</span>
+    <span class="en">Reported effects — and what they do not say</span>
+    <span class="ko">보고된 효과 — 그리고 말하지 않는 것</span>
+  </h2>
+
+  <p>
+    <span class="en">All numbers below are <b>first-party</b>: the vLLM blog and the Mooncake project's own site. None are ours; we have not reproduced any of them.</span>
+    <span class="ko">아래 수치는 전부 <b>1차 당사자</b> 발표다 — vLLM 블로그와 Mooncake 프로젝트 자체 사이트. 우리 측정이 아니고, 재현해 보지도 않았다.</span>
+  </p>
+
+  <h3><span class="en">vLLM blog, 2026-05-06</span><span class="ko">vLLM 블로그, 2026-05-06</span></h3>
+  <table>
+    <tr><th><span class="en">Setup</span><span class="ko">구성</span></th><th><span class="en">Metric</span><span class="ko">지표</span></th><th><span class="en">Reported</span><span class="ko">보고값</span></th></tr>
+    <tr><td rowspan="4"><span class="en">Kimi-2.5 NVFP4 on GB200, PD disagg (prefill TP4 / decode DP8+EP), 1P1D = 12 GPUs, Codex agentic traces (610 traces, median 33 turns), with vs. without Mooncake Store</span><span class="ko">GB200 의 Kimi-2.5 NVFP4, PD 분리(프리필 TP4 / 디코드 DP8+EP), 1P1D = GPU 12장, Codex 에이전트 트레이스(610개, 중앙값 33턴), Mooncake Store 유무 비교</span></td>
+        <td><span class="en">cache hit rate</span><span class="ko">캐시 히트율</span></td><td>1.7% → 92.2%</td></tr>
+    <tr><td><span class="en">throughput</span><span class="ko">처리량</span></td><td>3.8×</td></tr>
+    <tr><td>P50 TTFT</td><td><span class="en">46× lower</span><span class="ko">46배 감소</span></td></tr>
+    <tr><td><span class="en">end-to-end latency</span><span class="ko">종단 지연</span></td><td><span class="en">8.6× lower</span><span class="ko">8.6배 감소</span></td></tr>
+    <tr><td><span class="en">Round-robin routing, 12 → 60 GPUs</span><span class="ko">라운드로빈 라우팅, GPU 12 → 60장</span></td>
+        <td><span class="en">hit rate / scaling</span><span class="ko">히트율 / 확장</span></td>
+        <td><span class="en">&gt;95% at all scales, "nearly linear"</span><span class="ko">전 구간 &gt;95%, "nearly linear"</span></td></tr>
+  </table>
+
+  <h3><span class="en">Mooncake project site</span><span class="ko">Mooncake 프로젝트 사이트</span></h3>
+  <p>
+    <span class="en">Best Paper Award at FAST'25; "Mooncake's architecture enables Kimi to handle 75% more requests" under real workloads; "up to a 525% throughput increase" in simulation; Kimi K2 production figures of 224k tokens/sec prefill and 288k tokens/sec decode. These describe the <b>whole Mooncake architecture</b> (including its KVCache-centric scheduler), not the vLLM store connector in isolation.</span>
+    <span class="ko">FAST'25 Best Paper. 실제 워크로드에서 "Mooncake's architecture enables Kimi to handle 75% more requests", 시뮬레이션에서 "up to a 525% throughput increase", Kimi K2 프로덕션 수치로 프리필 224k tok/s·디코드 288k tok/s. 이건 <b>Mooncake 아키텍처 전체</b>(KVCache 중심 스케줄러 포함)에 대한 것이지, vLLM 스토어 커넥터 단독의 수치가 아니다.</span>
+  </p>
+
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">Read these ratios carefully</span><span class="ko">이 배수들을 조심해서 읽자</span></span>
+    <ul style="margin:6px 0 0">
+      <li><span class="en"><b>The baseline is 1.7% hit rate.</b> Any cache looks spectacular against a baseline that is recomputing nearly everything. The honest reading of "46× TTFT" is "prefill was almost entirely eliminated for a workload built out of 33-turn transcripts", not "the connector is 46× faster at anything".</span>
+          <span class="ko"><b>베이스라인이 히트율 1.7% 다.</b> 거의 전부를 다시 계산하는 베이스라인 앞에서는 어떤 캐시든 극적으로 보인다. "TTFT 46배" 의 정직한 해석은 "33턴짜리 트랜스크립트로 구성된 워크로드에서 프리필이 거의 통째로 사라졌다" 이지, "커넥터가 뭔가를 46배 빠르게 한다" 가 아니다.</span></li>
+      <li><span class="en"><b>Best-case workload.</b> Codex agentic traces with a median of 33 turns are the single most favourable shape for cross-instance prefix reuse. Short single-turn traffic has nothing to reuse and would show ~nothing.</span>
+          <span class="ko"><b>최선의 워크로드다.</b> 중앙값 33턴짜리 Codex 에이전트 트레이스는 인스턴스 간 프리픽스 재사용에 가장 유리한 형태다. 짧은 단일 턴 트래픽은 재사용할 게 없어 거의 아무 효과도 안 난다.</span></li>
+      <li><span class="en"><b>Not isolated.</b> The documented disaggregated setup runs the store connector <i>stacked with</i> the P2P connector under <code class="inl">MultiConnector</code>. Attributing the full gain to the store alone would be wrong.</span>
+          <span class="ko"><b>단독 측정이 아니다.</b> 문서의 분리 구성은 스토어 커넥터를 P2P 커넥터와 <code class="inl">MultiConnector</code> 아래 <i>겹쳐서</i> 돌린다. 이득 전부를 스토어에 귀속하면 틀린다.</span></li>
+      <li><span class="en"><b>Hardware matters.</b> GB200 with GPUDirect RDMA is the premise. On a TCP-only cluster the transport falls back and the whole zero-copy argument weakens; the docs themselves call TCP a "fallback".</span>
+          <span class="ko"><b>하드웨어가 전제다.</b> GPUDirect RDMA 가 되는 GB200 이 기준이다. TCP 뿐인 클러스터에서는 전송이 폴백되고 zero-copy 논지 자체가 약해진다. 문서도 TCP 를 "fallback" 이라고 부른다.</span></li>
+      <li><span class="en"><b>No published head-to-head with LMCache</b> that we could find. The comparison in section 5 is structural, drawn from code and docs — not a benchmark.</span>
+          <span class="ko"><b>LMCache 와의 공개 직접 비교는 찾지 못했다.</b> 5절의 비교는 코드와 문서에서 끌어낸 구조적 비교이지 벤치마크가 아니다.</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="s7">
+  <h2><span class="num">7</span>
+    <span class="en">Usage: exact config to turn it on</span>
+    <span class="ko">사용법 — 켜는 데 필요한 설정 전부</span>
+  </h2>
+
+  <h3><span class="en">1. Install and start the master</span><span class="ko">1. 설치와 master 기동</span></h3>
+<pre>uv pip install mooncake-transfer-engine
+mooncake_master --port 50051        # RPC default 50051; many vLLM instances may share one</pre>
+
+  <h3><span class="en">2. Write the store config and point vLLM at it</span><span class="ko">2. 스토어 설정 파일과 경로 지정</span></h3>
+<pre>{
+  "mode": "embedded",                       // or "standalone-store"
+  "metadata_server": "P2PHANDSHAKE",
+  "master_server_address": "127.0.0.1:50051",
+  "global_segment_size": "80GB",            // CPU memory this rank contributes (per GPU)
+  "local_buffer_size": "4GB",               // private buffer for this node's own ops
+  "protocol": "rdma",                       // "tcp" works as a fallback
+  "device_name": "",
+  "enable_offload": false,                  // true = SSD tier via DirectIO staging
+  "tenant_id": "default"                    // producers and consumers must match
+}</pre>
+<pre>export MOONCAKE_CONFIG_PATH=/path/to/mooncake_config.json</pre>
+
+  <h3><span class="en">3a. Single node — just extend the cache</span><span class="ko">3a. 단일 노드 — 캐시만 늘리기</span></h3>
+<pre>MOONCAKE_CONFIG_PATH=mooncake_config.json \
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+    --kv-transfer-config '{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both"}'</pre>
+
+  <h3><span class="en">3b. Disaggregated XpYd — stack both connectors</span><span class="ko">3b. 분리 XpYd — 커넥터 두 개를 겹치기</span></h3>
+<pre>MOONCAKE_CONFIG_PATH=mooncake_config.json \
+VLLM_MOONCAKE_BOOTSTRAP_PORT=50052 \
+vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8100 \
+    --kv-transfer-config '{
+        "kv_connector": "MultiConnector",
+        "kv_role": "kv_producer",
+        "kv_connector_extra_config": {
+            "connectors": [
+                {"kv_connector": "MooncakeConnector",      "kv_role": "kv_producer"},
+                {"kv_connector": "MooncakeStoreConnector", "kv_role": "kv_both"}
+            ]
+        }
+    }'</pre>
+  <p>
+    <span class="en">The decoder is the mirror (<code class="inl">kv_consumer</code>, its own bootstrap port). A disaggregation proxy is required to set <code class="inl">do_remote_prefill</code> / <code class="inl">do_remote_decode</code>; the P2P usage guide covers it.</span>
+    <span class="ko">디코더는 대칭이다(<code class="inl">kv_consumer</code>, 자기 bootstrap 포트). <code class="inl">do_remote_prefill</code> / <code class="inl">do_remote_decode</code> 를 세팅해 줄 분리 프록시가 필요하고, P2P usage 가이드에 나와 있다.</span>
+  </p>
+
+  <h3><span class="en">3c. Disk offloading — three things must agree</span><span class="ko">3c. 디스크 오프로딩 — 세 군데를 맞춰야 한다</span></h3>
+  <p>
+    <span class="en">Documented as a <code class="inl">standalone-store</code> deployment. Miss any one of the three and offload silently does not happen:</span>
+    <span class="ko">문서상 <code class="inl">standalone-store</code> 배포다. 셋 중 하나라도 빠지면 오프로드가 조용히 안 일어난다.</span>
+  </p>
+  <ul>
+    <li><code class="inl">mooncake_master --enable_offload=true</code></li>
+    <li><code class="inl">mooncake_client --enable_offload=true</code> + <code class="inl">MOONCAKE_OFFLOAD_FILE_STORAGE_PATH</code></li>
+    <li><span class="en"><code class="inl">"enable_offload": true</code> in the JSON file — <b>read from the config, not an env var</b>, with <code class="inl">"global_segment_size": 0</code></span><span class="ko">JSON 파일 안의 <code class="inl">"enable_offload": true</code> — <b>환경변수가 아니라 설정 파일에서</b> 읽는다. <code class="inl">"global_segment_size": 0</code> 과 함께</span></li>
+  </ul>
+
+  <h3><span class="en">Environment variables</span><span class="ko">환경변수</span></h3>
+  <table>
+    <tr><th><span class="en">Variable</span><span class="ko">변수</span></th><th><span class="en">Default</span><span class="ko">기본값</span></th><th><span class="en">Purpose</span><span class="ko">용도</span></th></tr>
+    <tr><td><code class="inl">MOONCAKE_CONFIG_PATH</code></td><td>—</td><td><span class="en">path to the JSON above</span><span class="ko">위 JSON 경로</span></td></tr>
+    <tr><td><code class="inl">VLLM_MOONCAKE_BOOTSTRAP_PORT</code></td><td>8998</td><td><span class="en">P2P bootstrap; must match across headless instances</span><span class="ko">P2P bootstrap. headless 인스턴스 간 일치해야 함</span></td></tr>
+    <tr><td><code class="inl">VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT</code></td><td>480<span class="muted">s</span></td><td><span class="en">release KV after an aborted request</span><span class="ko">중단된 요청의 KV 해제까지</span></td></tr>
+  </table>
+</section>
+
+<section id="s8">
+  <h2><span class="num">8</span>
+    <span class="en">Status, constraints, sources</span>
+    <span class="ko">상태·제약·출처</span>
+  </h2>
+
+  <h3><span class="en">Where it stands</span><span class="ko">현재 위치</span></h3>
+  <ul>
+    <li><span class="en">Both connectors are <b>in-tree and registered by default</b> at <code class="inl">ba1cdcf</code>, with documentation pages under <code class="inl">docs/features/</code> and a unit-test suite (<code class="inl">test_mooncake_store_worker.py</code>, <code class="inl">…_scheduler.py</code>, <code class="inl">…_coordinator.py</code>, HMA e2e).</span>
+        <span class="ko">두 커넥터 모두 <code class="inl">ba1cdcf</code> 기준 <b>in-tree 이고 기본 등록</b>돼 있다. <code class="inl">docs/features/</code> 아래 문서가 있고 단위 테스트도 있다(<code class="inl">test_mooncake_store_worker.py</code>, <code class="inl">…_scheduler.py</code>, <code class="inl">…_coordinator.py</code>, HMA e2e).</span></li>
+    <li><span class="en">The store connector declares <code class="inl">SupportsHMA</code>, i.e. it participates in vLLM's hybrid memory allocator, and handles Mamba-style layers whose entries are tensor lists.</span>
+        <span class="ko">스토어 커넥터는 <code class="inl">SupportsHMA</code> 를 선언한다 — vLLM 의 hybrid memory allocator 에 참여하고, 항목이 텐서 리스트인 Mamba 계열 레이어도 처리한다.</span></li>
+    <li><span class="en">The docs describe <code class="inl">"mode": "embedded"</code> as the "PR-40900 baseline", so the standalone-store topology is the newer of the two.</span>
+        <span class="ko">문서가 <code class="inl">"mode": "embedded"</code> 를 "PR-40900 baseline" 이라 부른다. 즉 standalone-store 토폴로지가 둘 중 나중에 붙은 쪽이다.</span></li>
+    <li><span class="en">The transfer-thread scaffolding is credited to <b>vllm-ascend</b> in the source header, and the blog repeats the acknowledgement.</span>
+        <span class="ko">전송 스레드 뼈대는 소스 헤더에서 <b>vllm-ascend</b> 에 공을 돌리고 있고, 블로그도 같은 감사를 반복한다.</span></li>
+  </ul>
+
+  <h3><span class="en">Constraints to plan around</span><span class="ko">미리 계산에 넣을 제약</span></h3>
+  <ul>
+    <li><span class="en">Same model <b>and</b> same parallel layout to share cache (§4②) — a silent hit-rate cliff, not an error.</span>
+        <span class="ko">캐시 공유 조건은 같은 모델 <b>그리고</b> 같은 병렬 레이아웃(§4②). 에러가 아니라 조용한 히트율 절벽이다.</span></li>
+    <li><span class="en">Prefix-only. No compression, no non-prefix blending.</span>
+        <span class="ko">프리픽스 전용. 압축도, 비-프리픽스 blending 도 없다.</span></li>
+    <li><span class="en">RDMA is the design point; TCP is explicitly a fallback.</span>
+        <span class="ko">RDMA 가 설계 전제. TCP 는 명시적으로 폴백이다.</span></li>
+    <li><span class="en">One more control-plane process to run and monitor (<code class="inl">mooncake_master</code>), plus <code class="inl">mooncake_client</code> in standalone mode.</span>
+        <span class="ko">운영·모니터링할 control-plane 프로세스가 하나 늘어난다(<code class="inl">mooncake_master</code>). standalone 모드면 <code class="inl">mooncake_client</code> 까지.</span></li>
+    <li><span class="en">In <code class="inl">embedded</code> mode the pool is only as durable as the ranks contributing to it.</span>
+        <span class="ko"><code class="inl">embedded</code> 모드에서 풀의 내구성은 기여 중인 랭크만큼이다.</span></li>
+  </ul>
+
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">Editor's note — our angle, not a claim by the sources</span><span class="ko">편집자 주 — 우리 관점, 출처의 주장 아님</span></span>
+    <span class="en">For our MI250 / ROCm work the interesting question is not the headline ratio but the transport premise. Mooncake's advantage compounds from GPUDirect RDMA: no staging buffer, no SMs consumed. On a fabric where that path is unavailable the design degrades toward "a remote cache reached over TCP", which is a different and much less compelling product — and the honest test is whether cross-instance hits still beat local recompute once the transport is slower. That is a measurement we have not made, and it is the one we would make first.</span>
+    <span class="ko">우리 MI250 / ROCm 작업 관점에서 흥미로운 건 헤드라인 배수가 아니라 전송 전제다. Mooncake 의 이점은 GPUDirect RDMA 에서 복리로 불어난다 — staging buffer 없음, SM 소모 없음. 그 경로가 없는 패브릭에서는 설계가 "TCP 로 접근하는 원격 캐시" 쪽으로 퇴화하는데, 그건 전혀 다르고 훨씬 덜 매력적인 물건이다. 정직한 시험은 전송이 느려졌을 때도 인스턴스 간 히트가 로컬 재계산을 이기는가이다. 우리는 아직 그 측정을 하지 않았고, 한다면 그것부터 할 것이다.</span>
+  </div>
+
+  <h3><span class="en">Sources</span><span class="ko">출처</span></h3>
+  <ul class="srcs">
+    <li><span class="en">vLLM blog (first-party), "Mooncake Store in vLLM", 2026-05-06 — Qiao, Le, Shen, Li, Wang. All §6 vLLM numbers. <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">https://vllm.ai/blog/2026-05-06-mooncake-store</a></span><span class="ko">vLLM 블로그(1차 당사자), "Mooncake Store in vLLM", 2026-05-06 — Qiao, Le, Shen, Li, Wang. §6 의 vLLM 수치 전부. <a href="https://vllm.ai/blog/2026-05-06-mooncake-store">https://vllm.ai/blog/2026-05-06-mooncake-store</a></span></li>
+    <li>vLLM docs — MooncakeConnector usage: <a href="https://docs.vllm.ai/en/stable/features/mooncake_connector_usage/">https://docs.vllm.ai/en/stable/features/mooncake_connector_usage/</a></li>
+    <li>vLLM docs (in-tree) — MooncakeStoreConnector usage: <a href="https://github.com/vllm-project/vllm/blob/ba1cdcfcf05f581d1f58cc911644fed62317c8c6/docs/features/mooncake_store_connector_usage.md">docs/features/mooncake_store_connector_usage.md @ ba1cdcf</a></li>
+    <li><span class="en">Mooncake project site (first-party) — architecture, FAST'25, production figures: <a href="https://kvcache-ai.github.io/Mooncake/">https://kvcache-ai.github.io/Mooncake/</a></span><span class="ko">Mooncake 프로젝트 사이트(1차 당사자) — 아키텍처, FAST'25, 프로덕션 수치: <a href="https://kvcache-ai.github.io/Mooncake/">https://kvcache-ai.github.io/Mooncake/</a></span></li>
+    <li>Mooncake source @ <code class="inl">f8c9667</code>: <a href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280">github.com/kvcache-ai/Mooncake</a></li>
+    <li>vLLM source @ <code class="inl">ba1cdcf</code> (2026-08-09): <a href="https://github.com/vllm-project/vllm/tree/ba1cdcfcf05f581d1f58cc911644fed62317c8c6">github.com/vllm-project/vllm</a></li>
+    <li><span class="en">LMCache docs — used only for the structural comparison in §5: <a href="https://docs.lmcache.ai/">https://docs.lmcache.ai/</a></span><span class="ko">LMCache 문서 — §5 의 구조 비교에만 사용: <a href="https://docs.lmcache.ai/">https://docs.lmcache.ai/</a></span></li>
+    <li><span class="en">Our earlier survey of every connector in the registry: <a href="vllm-kv-connectors.html">vLLM KV-cache connectors — transfer-direction map</a></span><span class="ko">레지스트리의 모든 커넥터를 훑은 이전 노트: <a href="vllm-kv-connectors.html">vLLM KV-cache 커넥터 — 전송 방향 지도</a></span></li>
+  </ul>
+</section>
+
+<footer>
+  <span class="en">Code pinned at vllm <code class="inl">ba1cdcf</code> (2026-08-09) and Mooncake <code class="inl">f8c9667</code> (2026-07-13) — line numbers drift, the SHAs do not. Written 2026-08-10.</span>
+  <span class="ko">코드는 vllm <code class="inl">ba1cdcf</code> (2026-08-09), Mooncake <code class="inl">f8c9667</code> (2026-07-13) 에 고정. 줄 번호는 흐르지만 SHA 는 그대로다. 작성 2026-08-10.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
