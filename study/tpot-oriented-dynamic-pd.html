@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TPOT-oriented dynamic P/D — moving engines between prefill and decode to hold one SLO</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.75; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:26px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:18px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  .c-green{background:var(--green-bg);color:var(--green-ink)} .c-green .tag{color:var(--green-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  figure{margin:18px 0 6px}
+  figure img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:10px;background:#fff}
+  .figcap{font-size:12.5px;color:var(--faint);margin:8px 0 14px;text-align:center}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">TPOT-oriented dynamic P/D — moving engines between prefill and decode to hold one SLO</span>
+    <span class="ko">TPOT 중심 동적 P/D — SLO 하나를 지키려고 엔진을 prefill 과 decode 사이로 옮기기</span>
+  </h1>
+  <p class="lede">
+    <span class="en">Prefill/decode disaggregation forces a decision nobody can make correctly in advance: how many engines go to each role. The right split depends on the traffic, and the traffic changes. This note walks through a scheduler that stops guessing — it simulates the near future every 100&nbsp;ms, asks only "will the decode side still meet its per-token SLO?", and converts an engine from one role to the other when the answer is no. Measured on a 3-node MI250 cluster, it converges on its own to the split a human would have hand-picked for each workload — and the write-up is equally clear about where it breaks.</span>
+    <span class="ko">Prefill/decode 분리는 아무도 미리 맞힐 수 없는 결정을 강요한다 — 어느 역할에 엔진을 몇 대 줄 것인가. 정답은 트래픽에 달렸고, 트래픽은 변한다. 이 노트는 추측을 그만두는 스케줄러를 따라간다. 100&nbsp;ms 마다 가까운 미래를 시뮬레이션해서 "decode 쪽이 토큰당 SLO 를 계속 지킬 수 있는가" 하나만 묻고, 아니면 엔진의 역할을 바꾼다. 3노드 MI250 클러스터 실측에서 각 워크로드마다 사람이 손으로 골랐을 비율로 스스로 수렴한다 — 그리고 어디서 깨지는지도 똑같이 분명하게 적혀 있다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><span class="en">Source: Chanho Park, "TPOT-oriented Dynamic P/D" (2026-08-21)</span><span class="ko">원 자료: Chanho Park, "TPOT-oriented Dynamic P/D" (2026-08-21)</span></span>
+    <span class="badge"><span class="en">Figures reproduced from the original deck</span><span class="ko">그림은 원 자료 그대로</span></span>
+    <span class="badge"><span class="en">Design note · analysis</span><span class="ko">설계 노트 · 분석</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-08-21">2026-08-21</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s0"><span class="en">Background: the terms you need</span><span class="ko">배경 — 필요한 용어</span></a></li>
+    <li><a href="#s1"><span class="en">The problem: there is a best P/D ratio, and it moves</span><span class="ko">문제 — 최적 P/D 비율은 있고, 그게 움직인다</span></a></li>
+    <li><a href="#s2"><span class="en">The idea: chase the decode SLO and nothing else</span><span class="ko">아이디어 — decode SLO 하나만 쫓는다</span></a></li>
+    <li><a href="#s3"><span class="en">Deciding when to switch — a 100 ms simulation loop</span><span class="ko">언제 바꿀지 — 100 ms 시뮬레이션 루프</span></a></li>
+    <li><a href="#s4"><span class="en">How to switch — three modes, and why the fast one is off</span><span class="ko">어떻게 바꿀지 — 세 가지 방식, 그리고 제일 빠른 게 꺼져 있는 이유</span></a></li>
+    <li><a href="#s5"><span class="en">Results on three workloads</span><span class="ko">세 가지 워크로드 실험 결과</span></a></li>
+    <li><a href="#s6"><span class="en">Limitations, stated plainly</span><span class="ko">한계 — 솔직하게</span></a></li>
+    <li><a href="#s7"><span class="en">Related work: DOPD, xLLM, NVIDIA Dynamo</span><span class="ko">관련 연구·구현: DOPD, xLLM, NVIDIA Dynamo</span></a></li>
+    <li><a href="#s8"><span class="en">Editor's note</span><span class="ko">편집자 주</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">In one line</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">Instead of predicting the workload, this scheduler <b>simulates the decode queue 100 ms at a time</b> and keeps exactly enough engines in the decode role to stay under a per-token latency target — converting the rest to prefill. It reproduces the best static split for each workload <b>without being told what the workload is</b>. The honest catch: throughput is not the objective, so once the cluster saturates it gives some away.</span>
+  <span class="ko">워크로드를 예측하는 대신, 이 스케줄러는 <b>100 ms 단위로 decode 큐를 시뮬레이션</b>해서 토큰당 지연 목표를 지킬 만큼만 decode 역할로 두고 나머지를 prefill 로 돌린다. <b>워크로드가 무엇인지 알려주지 않아도</b> 각 워크로드의 최적 정적 비율을 재현한다. 정직한 단서 하나 — throughput 은 목적함수가 아니라서, 클러스터가 포화되면 그만큼 내준다.</span>
+</div>
+
+<div class="callout c-amber">
+  <span class="tag"><span class="en">What this is, and how to read the numbers</span><span class="ko">이 글의 성격과 수치를 읽는 법</span></span>
+  <span class="en">This is a write-up of an <b>internal work-in-progress deck</b>, not a peer-reviewed paper. The measurements are single-run results from one 3-node cluster with one model, and the author's own limitations section (§6) lists several things the design does not yet handle. Read the shapes of the curves, not the third decimal place.</span>
+  <span class="ko">이 글은 <b>사내 진행 중 발표자료</b>를 정리한 것이지 심사를 거친 논문이 아니다. 수치는 한 모델·한 3노드 클러스터에서의 단발 측정이고, 저자 본인의 한계 절(§6)이 아직 다루지 못하는 것들을 여럿 적어 두었다. 곡선의 모양을 읽되 소수점 셋째 자리를 읽지는 말 것.</span>
+</div>
+
+<section id="s0">
+  <h2><span class="num">0</span>
+    <span class="en">Background: the terms you need</span>
+    <span class="ko">배경 — 필요한 용어</span>
+  </h2>
+  <div class="grid3">
+    <div class="mini">
+      <h4>P/D disaggregation</h4>
+      <p><span class="en">Running the two phases of generation on <b>separate engines</b>. Prefill reads the prompt in one compute-heavy pass; decode emits tokens one at a time and is memory-bound. Splitting them stops a long prompt from stalling everyone's token stream.</span><span class="ko">생성의 두 단계를 <b>서로 다른 엔진</b>에서 돌리는 것. prefill 은 프롬프트를 한 번에 읽는 연산 위주 작업이고, decode 는 토큰을 하나씩 뱉는 메모리 위주 작업이다. 갈라 두면 긴 프롬프트 하나가 모두의 토큰 스트림을 멈추는 일이 없어진다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>TTFT / TPOT</h4>
+      <p><span class="en">Time To First Token — how long before anything appears. Time Per Output Token — the gap between tokens after that. TTFT is prefill's score; TPOT is decode's. They <b>trade off</b>: give an engine to prefill and TTFT improves while TPOT gets worse.</span><span class="ko">Time To First Token — 무언가 나타나기까지의 시간. Time Per Output Token — 그 뒤 토큰 사이의 간격. TTFT 는 prefill 의 성적표, TPOT 는 decode 의 성적표다. 둘은 <b>맞바꾸는 관계</b>다. 엔진 하나를 prefill 에 주면 TTFT 는 좋아지고 TPOT 는 나빠진다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>Goodput</h4>
+      <p><span class="en">Not "requests served" but "requests served <b>within the SLO</b>". A request that finished slowly counts as zero. That is why goodput can fall while raw throughput rises.</span><span class="ko">"처리한 요청 수" 가 아니라 "<b>SLO 안에</b> 처리한 요청 수". 느리게 끝난 요청은 0점이다. 그래서 raw throughput 이 오르는데 goodput 이 떨어지는 일이 생긴다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">The SLO used here (k=2)</span><span class="ko">여기서 쓴 SLO (k=2)</span></h4>
+      <p><span class="en">The target is <b>2× the TPOT the same request would get running completely alone</b> (concurrency = 1). A per-request, self-relative bar — no absolute millisecond number to argue about.</span><span class="ko">목표는 <b>같은 요청이 혼자 돌 때(concurrency = 1) 나오는 TPOT 의 2배</b>다. 요청마다 자기 자신을 기준으로 삼는 잣대라, 절대 밀리초 수치를 두고 다툴 일이 없다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Decode batch</span><span class="ko">decode 배치</span></h4>
+      <p><span class="en">How many requests one decode engine is stepping at once. Bigger batch = better utilisation but slower per-token time. So "meet the TPOT SLO" translates directly into "keep the batch below <i>this</i> number".</span><span class="ko">decode 엔진 하나가 동시에 진행 중인 요청 수. 배치가 클수록 이용률은 좋고 토큰당 시간은 느려진다. 그래서 "TPOT SLO 를 지켜라" 가 곧바로 "배치를 <i>이 수</i> 아래로 유지하라" 로 번역된다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>ISL / OSL</h4>
+      <p><span class="en">Input and output sequence length — prompt tokens in, generated tokens out. ISL sets the prefill cost; OSL sets how long a request occupies a decode slot.</span><span class="ko">입력·출력 시퀀스 길이 — 들어가는 프롬프트 토큰 수와 생성되는 토큰 수. ISL 이 prefill 비용을 정하고, OSL 이 그 요청이 decode 슬롯을 얼마나 오래 붙잡는지를 정한다.</span></p>
+    </div>
+  </div>
+</section>
+
+<section id="s1">
+  <h2><span class="num">1</span>
+    <span class="en">The problem: there is a best P/D ratio, and it moves</span>
+    <span class="ko">문제 — 최적 P/D 비율은 있고, 그게 움직인다</span>
+  </h2>
+  <p>
+    <span class="en">Once you disaggregate, you have to say how many engines are prefill and how many are decode. Six engines can be 2P4D, 3P3D, 4P2D, and so on. The deck's opening claim is that this choice is <b>not free</b>: pick wrong and you are wasting hardware, and inference traffic is hard to predict, so you will pick wrong.</span>
+    <span class="ko">분리를 하고 나면 몇 대를 prefill 로, 몇 대를 decode 로 둘지 말해야 한다. 엔진 6대면 2P4D, 3P3D, 4P2D … 가 된다. 발표자료의 첫 주장은 이 선택이 <b>공짜가 아니라는</b> 것이다. 잘못 고르면 하드웨어를 버리는 셈인데, 추론 트래픽은 예측하기 어려우니 잘못 고르게 된다.</span>
+  </p>
+  <figure>
+    <img src="../assets/tpot-pd/fig1-motivation.png" alt="Two goodput-over-time charts. With short 1k-token prompts the static 2P4D split wins; with long 4k-token prompts the static 4P2D split wins. Same hardware, opposite answers.">
+    <p class="figcap"><span class="en">Goodput (SLO-meeting QPS, k=2) over a 10-minute run that steps the offered load upward. Series are the static splits 2P4D / 3P3D / 4P2D and a colocated baseline. <b>Top: short prompts (ISL 1k) — 2P4D wins. Bottom: long prompts (ISL 4k) — 4P2D wins.</b> Figure from the original deck, p.2.</span><span class="ko">부하를 단계적으로 올리는 10분 실행 동안의 goodput(SLO 를 지킨 QPS, k=2). 계열은 정적 분할 2P4D / 3P3D / 4P2D 와 colocated 기준선이다. <b>위: 짧은 프롬프트(ISL 1k) — 2P4D 가 이긴다. 아래: 긴 프롬프트(ISL 4k) — 4P2D 가 이긴다.</b> 원 자료 p.2 그림.</span></p>
+  </figure>
+  <p>
+    <span class="en">The two halves of that figure are the whole argument. <b>Same cluster, same engines, opposite best answers.</b> Short prompts are cheap to prefill and the pressure lands on decode, so you want four decode engines. Long prompts invert it — prefill becomes the bottleneck and you want four prefill engines. A static configuration is right for exactly one of these and wrong for the other, and real traffic is a moving mixture of both.</span>
+    <span class="ko">저 그림의 위아래가 논증의 전부다. <b>같은 클러스터, 같은 엔진, 정반대의 정답.</b> 짧은 프롬프트는 prefill 이 싸서 압력이 decode 로 몰리니 decode 를 4대 두고 싶어진다. 긴 프롬프트는 그게 뒤집힌다 — prefill 이 병목이 되니 prefill 을 4대 두고 싶어진다. 정적 설정은 둘 중 하나에만 맞고 다른 하나에는 틀리는데, 실제 트래픽은 둘이 계속 섞여 움직인다.</span>
+  </p>
+</section>
+
+<section id="s2">
+  <h2><span class="num">2</span>
+    <span class="en">The idea: chase the decode SLO and nothing else</span>
+    <span class="ko">아이디어 — decode SLO 하나만 쫓는다</span>
+  </h2>
+  <p>
+    <span class="en">The design makes one deliberately narrow choice, and everything else follows from it: <b>the only thing the scheduler tries to satisfy is the decode SLO.</b> Not TTFT, not throughput, not a weighted blend. One target.</span>
+    <span class="ko">이 설계는 의도적으로 좁은 선택을 하나 하고, 나머지는 전부 거기서 따라 나온다. <b>스케줄러가 만족시키려는 대상은 decode SLO 하나뿐이다.</b> TTFT 도, throughput 도, 가중합도 아니다. 목표 하나.</span>
+  </p>
+  <p><span class="en">Two reasons are given for singling out decode:</span><span class="ko">decode 를 고른 이유로 둘을 든다.</span></p>
+  <ul>
+    <li><span class="en"><b>TTFT and TPOT trade off anyway.</b> Because moving an engine helps one and hurts the other, pinning one of the two implicitly settles the other. You do not need two objectives; you need one, plus the knowledge that the second moves in the opposite direction.</span><span class="ko"><b>어차피 TTFT 와 TPOT 는 맞바꾸는 관계다.</b> 엔진을 옮기면 한쪽이 좋아지고 다른 쪽이 나빠지므로, 둘 중 하나를 고정하면 나머지는 자동으로 정해진다. 목적함수가 둘일 필요가 없다. 하나면 되고, 나머지가 반대로 움직인다는 사실만 알면 된다.</span></li>
+    <li><span class="en"><b>Multi-turn traffic is growing.</b> As conversations get longer, more of each new prompt is already in the KV cache, so the prefix-cache hit rate rises and the true prefill cost per request falls. The work that does <i>not</i> get cheaper is decode — every output token still has to be generated. So the deck argues decode speed is the part that will matter more over time.</span><span class="ko"><b>멀티턴이 늘어나는 추세다.</b> 대화가 길어질수록 새 프롬프트의 상당 부분이 이미 KV 캐시에 있으므로 프리픽스 캐시 히트율이 올라가고 요청당 실제 prefill 비용은 내려간다. 반면 싸지지 <i>않는</i> 일이 decode 다 — 출력 토큰은 하나하나 다 만들어야 한다. 그래서 앞으로 중요해지는 쪽은 decode 속도라는 게 발표자료의 주장이다.</span></li>
+  </ul>
+  <div class="callout c-green">
+    <span class="tag"><span class="en">Why one target makes the problem tractable</span><span class="ko">목표가 하나면 왜 문제가 풀리는가</span></span>
+    <span class="en">"Meet the decode SLO" has a mechanical translation. A decode engine's per-token time is a function of its batch size, and that function can be profiled once. So a TPOT target becomes <b>a maximum decode batch size</b> — a plain integer. From there the scheduling question stops being "what will the workload look like?" and becomes "<b>how many decode engines do I need so that no engine exceeds that batch?</b>" That is a counting problem, and counting problems can be simulated.</span>
+    <span class="ko">"decode SLO 를 지켜라" 는 기계적으로 번역된다. decode 엔진의 토큰당 시간은 배치 크기의 함수이고, 그 함수는 한 번 프로파일링해 두면 된다. 그래서 TPOT 목표가 <b>최대 decode 배치 크기</b>, 즉 평범한 정수 하나가 된다. 그 순간 스케줄링 질문이 "워크로드가 어떻게 생겼을까?" 에서 "<b>어느 엔진도 그 배치를 넘지 않으려면 decode 엔진이 몇 대 필요한가?</b>" 로 바뀐다. 이건 세는 문제이고, 세는 문제는 시뮬레이션할 수 있다.</span>
+  </div>
+</section>
+
+<section id="s3">
+  <h2><span class="num">3</span>
+    <span class="en">Deciding when to switch — a 100 ms simulation loop</span>
+    <span class="ko">언제 바꿀지 — 100 ms 시뮬레이션 루프</span>
+  </h2>
+  <p>
+    <span class="en">This is the core of the design, and it is refreshingly small. Rather than forecasting arrivals with a time-series model, the scheduler looks at <b>work it can already see</b> and plays it forward.</span>
+    <span class="ko">설계의 핵심이고, 놀랄 만큼 작다. 시계열 모델로 도착을 예측하는 대신, 스케줄러는 <b>이미 눈에 보이는 일</b>을 보고 그것을 앞으로 굴려 본다.</span>
+  </p>
+  <figure>
+    <img src="../assets/tpot-pd/fig5-decision.png" alt="Two input boxes feed a simulation box, which produces a bar chart of predicted decode batch over time against a dashed baseline. Bars that cross the baseline are filled black.">
+    <p class="figcap"><span class="en">The switching decision. Left: the two arrival/departure estimates. Middle: the simulation. Right: predicted decode batch over time against the SLO-required baseline. Figure from the original deck, p.6.</span><span class="ko">전환 판단. 왼쪽: 두 개의 유입·이탈 추정. 가운데: 시뮬레이션. 오른쪽: 시간에 따른 예상 decode 배치와 SLO 요구 기준선. 원 자료 p.6 그림.</span></p>
+  </figure>
+
+  <h3><span class="en">The two things it estimates</span><span class="ko">추정하는 두 가지</span></h3>
+  <table>
+    <tr>
+      <th style="width:34%"><span class="en">Estimate</span><span class="ko">추정 대상</span></th>
+      <th><span class="en">What it is computed from</span><span class="ko">무엇으로 계산하나</span></th>
+    </tr>
+    <tr>
+      <td><b><span class="en">When new work will <i>arrive</i> at decode</span><span class="ko">decode 노드에 요청이 <i>생길</i> 예상 시각</span></b></td>
+      <td><span class="en">The requests currently sitting on the prefill engines, plus how long each one's ISL takes to prefill. A request finishing prefill at time <i>t</i> becomes a decode slot occupant at time <i>t</i>.</span><span class="ko">지금 prefill 엔진에 올라 있는 요청 수와, 각 요청의 ISL 을 처리하는 데 걸리는 시간. 시각 <i>t</i> 에 prefill 을 마친 요청은 그 시각에 decode 슬롯을 차지하는 요청이 된다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">When current work will <i>leave</i> decode</span><span class="ko">decode 노드의 요청이 <i>끝날</i> 예상 시각</span></b></td>
+      <td><span class="en">The OSL remaining on each in-flight request and the request count, times the profiled per-step time for a decode batch. A request with 100 tokens left leaves 100 steps from now.</span><span class="ko">진행 중인 각 요청에 남은 OSL 과 요청 수에, 프로파일링해 둔 decode 배치의 1 step 처리 시간을 곱한다. 100 토큰 남은 요청은 지금부터 100 step 뒤에 빠진다.</span></td>
+    </tr>
+  </table>
+  <p>
+    <span class="en">Put the arrivals and departures on one timeline and you can compute, <b>at every future instant</b>, how big the decode batch will be. Draw the SLO-required batch as a horizontal baseline. Now the decision is visual: does the predicted batch cross the line?</span>
+    <span class="ko">유입과 이탈을 한 타임라인에 올리면 <b>미래의 매 순간</b>마다 decode 배치가 얼마가 될지 계산할 수 있다. SLO 가 요구하는 배치를 수평 기준선으로 긋는다. 이제 판단은 눈으로 보인다 — 예상 배치가 선을 넘는가?</span>
+  </p>
+
+  <h3><span class="en">The rule, in two lines</span><span class="ko">규칙, 두 줄</span></h3>
+  <div class="grid2">
+    <div class="mini">
+      <h4><span class="en">Promote prefill → decode</span><span class="ko">prefill → decode 로</span></h4>
+      <p><span class="en">If the batch crosses the baseline <b>even with all <i>n</i> current decode engines</b>, decode is about to miss its SLO. Convert a prefill engine to decode.</span><span class="ko">현재 <b>decode <i>n</i> 대 전부로도</b> 기준선을 넘으면 decode 가 곧 SLO 를 놓친다. prefill 엔진 하나를 decode 로 바꾼다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Demote decode → prefill</span><span class="ko">decode → prefill 로</span></h4>
+      <p><span class="en">If it <b>would not cross even with <i>n−1</i></b>, one decode engine is surplus. Convert it to prefill, where it will help TTFT instead.</span><span class="ko"><b><i>n−1</i> 대로도 안 넘으면</b> decode 엔진 하나가 남는다. prefill 로 바꿔서 TTFT 를 돕게 한다.</span></p>
+    </div>
+  </div>
+  <p><span class="en">Around that core sit four operational rules that matter more than they look:</span><span class="ko">그 핵심 둘레에 실무적으로 보기보다 중요한 규칙 넷이 붙는다.</span></p>
+  <ul>
+    <li><span class="en"><b>Re-run every 0.1 s.</b> Fast enough to react inside a burst rather than after it.</span><span class="ko"><b>0.1초마다 다시 계산.</b> 버스트가 끝난 뒤가 아니라 버스트 안에서 반응할 만큼 빠르다.</span></li>
+    <li><span class="en"><b>A switch in progress can be cancelled.</b> The loop keeps recomputing during a transition; if the move has stopped being useful, it is abandoned. The engine goes back to what it was doing.</span><span class="ko"><b>진행 중인 전환도 취소된다.</b> 전환 도중에도 루프가 계속 다시 계산하고, 그 이동이 더 이상 쓸모없어지면 그만둔다. 엔진은 하던 일로 돌아간다.</span></li>
+    <li><span class="en"><b>Several engines can move at once</b> when the gap is large — it does not creep one at a time.</span><span class="ko">격차가 크면 <b>여러 대를 한꺼번에</b> 옮긴다. 한 대씩 기어가지 않는다.</span></li>
+    <li><span class="en"><b>At least one engine stays in each role, always.</b> A guard against the degenerate 0P or 0D state that would deadlock the pipeline.</span><span class="ko"><b>각 역할에 최소 한 대는 항상 남긴다.</b> 파이프라인을 교착시킬 0P·0D 상태를 막는 안전장치다.</span></li>
+  </ul>
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">The assumption doing the most work</span><span class="ko">가장 무거운 짐을 진 가정</span></span>
+    <span class="en">The departure estimate needs to know <b>how many tokens each request still has to emit</b> — and a model does not know its own output length until it stops. The deck is explicit that OSL is currently treated as a fixed value. Everything downstream inherits that assumption, which is why "an OSL predictor is needed" appears in the limitations.</span>
+    <span class="ko">이탈 추정은 <b>각 요청이 앞으로 토큰을 몇 개 더 뱉을지</b>를 알아야 하는데, 모델은 멈추기 전까지 자기 출력 길이를 모른다. 발표자료는 현재 OSL 을 고정값으로 둔다고 명시한다. 그 뒤의 모든 것이 이 가정을 물려받고, 그래서 한계 절에 "OSL 예측기가 필요" 가 등장한다.</span>
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="num">4</span>
+    <span class="en">How to switch — three modes, and why the fast one is off</span>
+    <span class="ko">어떻게 바꿀지 — 세 가지 방식, 그리고 제일 빠른 게 꺼져 있는 이유</span>
+  </h2>
+  <p>
+    <span class="en">Deciding to move an engine is not the same as moving it. The engine is mid-flight: it has requests on it. What happens to them defines the transition cost.</span>
+    <span class="ko">엔진을 옮기기로 정하는 것과 실제로 옮기는 것은 다르다. 엔진은 일하는 중이고, 그 위에 요청들이 올라가 있다. 그것들을 어떻게 하느냐가 전환 비용을 결정한다.</span>
+  </p>
+  <figure>
+    <img src="../assets/tpot-pd/fig6-switchmodes.png" alt="Three timelines from the moment a role switch is decided: switch immediately; finish remaining work first then switch (default); or keep processing leftovers while already accepting new-role requests.">
+    <p class="figcap"><span class="en">The three transition modes, drawn from the instant the switch is decided. Black = requests in the new role, white = leftovers from the old role. Figure from the original deck, p.7.</span><span class="ko">역할 전환을 정한 순간부터 그린 세 가지 전환 방식. 검정 = 새 역할 요청, 흰색 = 이전 역할에서 남은 요청. 원 자료 p.7 그림.</span></p>
+  </figure>
+  <table>
+    <tr>
+      <th style="width:22%"><span class="en">Mode</span><span class="ko">방식</span></th>
+      <th style="width:34%"><span class="en">What happens to in-flight work</span><span class="ko">진행 중인 일은 어떻게 되나</span></th>
+      <th><span class="en">Trade-off</span><span class="ko">대가</span></th>
+    </tr>
+    <tr>
+      <td><b><span class="en">Switch immediately</span><span class="ko">바로 전환</span></b></td>
+      <td><span class="en">Starts taking new-role requests at once.</span><span class="ko">곧바로 새 역할 요청을 받기 시작한다.</span></td>
+      <td><span class="en">Zero delay — but only safe when the engine has nothing left to finish.</span><span class="ko">지연 0 — 다만 남은 일이 없을 때만 안전하다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Drain, then switch</span><span class="ko">다 끝내고 전환</span></b> <span class="muted">(<span class="en">default</span><span class="ko">기본</span>)</span></td>
+      <td><span class="en">Stops accepting new work, finishes what it has, then flips role.</span><span class="ko">새 요청을 안 받고 갖고 있던 것만 끝낸 뒤 역할을 바꾼다.</span></td>
+      <td><span class="en">Clean, but the engine is <b>idle-ish for the whole drain</b> — and that window is set by the slowest request on it.</span><span class="ko">깔끔하지만 <b>비우는 내내 엔진이 놀다시피</b> 한다. 그 시간은 그 위에서 가장 느린 요청이 정한다.</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Overlap</span><span class="ko">받으면서 전환</span></b> <span class="muted">(<span class="en">experimental</span><span class="ko">옵션</span>)</span></td>
+      <td><span class="en">Keeps processing leftovers <b>while already accepting</b> new-role requests, adjusting <code class="inl">max_num_batched_tokens</code> to share the engine.</span><span class="ko">남은 일을 계속 처리하면서 <b>동시에</b> 새 역할 요청도 받는다. <code class="inl">max_num_batched_tokens</code> 를 조정해 엔진을 나눠 쓴다.</span></td>
+      <td><span class="en">Added to remove the drain cost — but it <b>slows decode down</b>, so it is still under test and not the default.</span><span class="ko">비우는 비용을 없애려고 넣었지만 <b>decode 속도가 느려지는 문제</b>가 있어서 아직 실험 중이고 기본값이 아니다.</span></td>
+    </tr>
+  </table>
+  <p>
+    <span class="en">The default is the middle one, with a shortcut: <b>if there is nothing left to finish, just move immediately.</b> The interesting admission is the third row — the obvious optimisation was built, measured, and found to cost more than it saved, so it was left switched off. That is the kind of detail that usually gets dropped from a write-up.</span>
+    <span class="ko">기본값은 가운데이고 지름길이 하나 붙는다 — <b>남은 일이 없으면 그냥 바로 옮긴다.</b> 흥미로운 고백은 셋째 줄이다. 뻔한 최적화를 만들어서 재 봤더니 아낀 것보다 비용이 더 커서 꺼 둔 것이다. 보통 정리하면서 빠지는 종류의 디테일이다.</span>
+  </p>
+</section>
+
+<section id="s5">
+  <h2><span class="num">5</span>
+    <span class="en">Results on three workloads</span>
+    <span class="ko">세 가지 워크로드 실험 결과</span>
+  </h2>
+
+  <h3><span class="en">Setup</span><span class="ko">실험 환경</span></h3>
+  <table>
+    <tr><th style="width:26%"><span class="en">Item</span><span class="ko">항목</span></th><th><span class="en">Value</span><span class="ko">값</span></th></tr>
+    <tr><td><span class="en">Model / engine</span><span class="ko">모델 / 엔진</span></td><td><code class="inl">google/gemma-4-31B-it</code> · vLLM 0.25.1 (ROCm)</td></tr>
+    <tr><td><span class="en">Hardware</span><span class="ko">하드웨어</span></td><td><span class="en">MI250 (gfx90a) — 3 nodes × 8 GCD = 24 GCD, TP-4. That is <b>6 engines</b>, which is why the static baselines are 2P4D / 3P3D / 4P2D.</span><span class="ko">MI250 (gfx90a) — 3노드 × 8 GCD = 24 GCD, TP-4. 즉 <b>엔진 6대</b>이고, 그래서 정적 기준선이 2P4D / 3P3D / 4P2D 다.</span></td></tr>
+    <tr><td><span class="en">SLO</span><span class="ko">SLO</span></td><td><span class="en">TPOT within <b>2× the concurrency-1 value</b> (k = 2)</span><span class="ko">TPOT 이 <b>concurrency=1 일 때 값의 2배</b> 이내 (k = 2)</span></td></tr>
+    <tr><td><span class="en">Other</span><span class="ko">기타</span></td><td><span class="en">Deliberately run with <b>no KV cache hits</b></span><span class="ko">일부러 <b>KV 캐시 히트가 나지 않는</b> 환경</span></td></tr>
+    <tr><td><span class="en">Scenarios</span><span class="ko">시나리오</span></td><td><span class="en">Short ISL 1k · Long ISL 4k · Mixed 1k:4k = 7:3 — all ±30%, OSL 256 ±30%. Offered load steps upward every 120 s over a 600 s run.</span><span class="ko">Short ISL 1k · Long ISL 4k · Mixed 1k:4k = 7:3 — 모두 ±30%, OSL 256 ±30%. 600초 동안 120초마다 부하를 한 단계씩 올린다.</span></td></tr>
+  </table>
+  <p class="muted"><span class="en">Terminology in the charts: <b>QPS</b> is measured throughput; <b>RPS</b> is the client-side offered request rate. Each result figure has two panels — goodput on top, and below it the <b>role composition</b>: how many engines the scheduler had in each role at each moment. An engine mid-transition is drawn as the role it is becoming.</span><span class="ko">그림의 용어: <b>QPS</b> 는 측정된 throughput, <b>RPS</b> 는 클라이언트가 밀어 넣은 요청률이다. 결과 그림마다 패널이 둘인데, 위가 goodput, 아래가 <b>역할 구성</b> — 각 순간에 스케줄러가 어느 역할에 엔진을 몇 대 두었는지다. 전환 중인 엔진은 되어 가는 쪽 역할로 그린다.</span></p>
+
+  <h3><span class="en">Short (ISL 1k) — it finds 2P4D by itself</span><span class="ko">Short (ISL 1k) — 스스로 2P4D 를 찾는다</span></h3>
+  <figure>
+    <img src="../assets/tpot-pd/fig2-short.png" alt="Short workload: goodput of ours tracks the best static split up to 11.5 rps, then drops below static 2P4D at 15 rps. The role composition panel shows engines migrating from prefill to decode as load rises.">
+    <p class="figcap"><span class="en">Short workload. Top: goodput. Bottom: role composition of <code>ours</code>. Figure from the original deck, p.3.</span><span class="ko">Short 워크로드. 위: goodput. 아래: <code>ours</code> 의 역할 구성. 원 자료 p.3 그림.</span></p>
+  </figure>
+  <p>
+    <span class="en">Read the bottom panel left to right and you can watch the scheduler make the discovery. It starts at 5P1D. As load steps up it walks the split down — 4P2D, then 3P3D, then 2P4D, then 1P5D — and up to the saturation point it sits <b>right on top of the best static line</b>. Nobody told it that short prompts want decode capacity; it inferred that from the decode queue alone.</span>
+    <span class="ko">아래 패널을 왼쪽에서 오른쪽으로 읽으면 스케줄러가 그 사실을 발견하는 과정이 보인다. 5P1D 로 시작한다. 부하가 한 단계씩 오르면 분할을 내려간다 — 4P2D, 3P3D, 2P4D, 1P5D. 그리고 포화점 전까지는 <b>최적 정적 곡선 위에 그대로 겹쳐</b> 있다. 짧은 프롬프트가 decode 용량을 원한다고 아무도 알려 주지 않았다. decode 큐만 보고 스스로 알아낸 것이다.</span>
+  </p>
+  <p>
+    <span class="en">At 15 rps the two curves separate: <code>ours</code> falls to roughly 5 while static 2P4D holds around 10. That is the saturation behaviour, and §6 names it as a known problem rather than hiding it.</span>
+    <span class="ko">15 rps 에서 두 곡선이 갈라진다. <code>ours</code> 가 5 언저리로 떨어지는데 정적 2P4D 는 10 근처를 유지한다. 이게 포화 시 동작이고, §6 이 이걸 감추지 않고 알려진 문제로 명시한다.</span>
+  </p>
+
+  <h3><span class="en">Long (ISL 4k) — the same loop lands on the opposite split</span><span class="ko">Long (ISL 4k) — 같은 루프가 정반대 분할에 도달한다</span></h3>
+  <figure>
+    <img src="../assets/tpot-pd/fig3-long.png" alt="Long workload: ours tracks static 4P2D across the whole run, staying above 3P3D and well above 2P4D. Role composition holds 4-5 prefill engines for most of the run.">
+    <p class="figcap"><span class="en">Long workload. <code>ours</code> converges to a 4P2D-like split. Figure from the original deck, p.4.</span><span class="ko">Long 워크로드. <code>ours</code> 가 4P2D 와 비슷한 지점으로 수렴한다. 원 자료 p.4 그림.</span></p>
+  </figure>
+  <p>
+    <span class="en">This is the result that makes the design credible. <b>Identical algorithm, identical parameters</b>, and it settles on the mirror-image configuration — mostly prefill-heavy, tracking static 4P2D. Note also the brief oscillation around 240–350 s where the role line flickers between 4 and 5 prefill: that is the loop hunting near a boundary, and it is the same flicker §6 flags as "role switching happens too often".</span>
+    <span class="ko">이 결과가 설계를 믿게 만든다. <b>알고리즘도 파라미터도 같은데</b> 거울상 구성에 안착한다 — 대체로 prefill 쪽이 무겁고, 정적 4P2D 를 따라간다. 240–350초 부근에서 역할 선이 prefill 4와 5 사이를 깜빡이는 것도 눈여겨볼 만하다. 경계 근처에서 루프가 헤매는 것이고, §6 이 "역할 전환이 자주 발생" 이라고 짚은 바로 그 현상이다.</span>
+  </p>
+
+  <h3><span class="en">Mixed (1k:4k = 7:3) — and here it beats every static split</span><span class="ko">Mixed (1k:4k = 7:3) — 여기선 모든 정적 분할을 이긴다</span></h3>
+  <figure>
+    <img src="../assets/tpot-pd/fig4-mixed.png" alt="Mixed workload: ours rises above all three static splits in the 5-9.5 rps range while its role composition sits at 3P3D.">
+    <p class="figcap"><span class="en">Mixed workload. <code>ours</code> converges to 3P3D yet scores above static 3P3D. Figure from the original deck, p.5.</span><span class="ko">Mixed 워크로드. <code>ours</code> 는 3P3D 로 수렴하는데 정적 3P3D 보다 점수가 높다. 원 자료 p.5 그림.</span></p>
+  </figure>
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">The one place the gain is not just "picked the right ratio"</span><span class="ko">이득이 "비율을 잘 골랐다" 만이 아닌 유일한 지점</span></span>
+    <span class="en">At 7.3 rps the scheduler converges to 3P3D — the same split as the static baseline — and yet scores <b>higher</b> than static 3P3D. Same ratio, better result, so the ratio cannot be the explanation. The deck attributes it to a <b>routing gain</b>: the system is not only choosing how many engines are decode, it is also choosing which engine each request goes to, and on a mixed workload that placement matters. It is the one number here that a static-split experiment could never have produced.</span>
+    <span class="ko">7.3 rps 에서 스케줄러는 3P3D 로 수렴한다 — 정적 기준선과 같은 분할이다 — 그런데 정적 3P3D 보다 점수가 <b>높다</b>. 비율이 같은데 결과가 더 좋으니 비율로는 설명이 안 된다. 발표자료는 이걸 <b>라우팅 이득</b>으로 돌린다. 이 시스템은 decode 엔진을 몇 대 둘지만 정하는 게 아니라 각 요청을 어느 엔진에 보낼지도 정하고, 혼합 워크로드에서는 그 배치가 실제로 중요하다는 것이다. 정적 분할 실험으로는 결코 나올 수 없었던 유일한 수치다.</span>
+  </div>
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">One thing to hold in mind while reading these</span><span class="ko">읽으면서 하나 기억해 둘 것</span></span>
+    <span class="en">The setup deliberately runs with <b>no KV cache hits</b> — which is a clean way to isolate the scheduler, but it is also the opposite of the multi-turn condition §2 used to argue that decode deserves to be the single objective. Both choices are defensible; they just are not testing the same world. What these runs demonstrate is that the loop finds the right split, not that decode-only is the right objective for a cache-friendly deployment.</span>
+    <span class="ko">실험은 일부러 <b>KV 캐시 히트가 없는</b> 환경에서 돌린다. 스케줄러만 떼어 보기에는 깔끔한 방법이지만, 동시에 §2 가 decode 를 유일한 목적으로 삼는 근거로 든 멀티턴 조건과는 정반대다. 두 선택 다 타당하되, 같은 세계를 시험하고 있지는 않다. 이 실행들이 보여 주는 것은 루프가 올바른 분할을 찾아낸다는 것이지, 캐시가 잘 도는 배포에서 decode-only 가 옳은 목적함수라는 것은 아니다.</span>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="num">6</span>
+    <span class="en">Limitations, stated plainly</span>
+    <span class="ko">한계 — 솔직하게</span>
+  </h2>
+  <p>
+    <span class="en">The deck devotes a full slide to what the design does not do. Reproduced here in full, because the list is more informative than the results.</span>
+    <span class="ko">발표자료는 이 설계가 못 하는 것에 슬라이드 하나를 통째로 쓴다. 목록이 결과보다 정보량이 많아서 그대로 옮긴다.</span>
+  </p>
+  <table>
+    <tr>
+      <th style="width:28%"><span class="en">Limitation</span><span class="ko">한계</span></th>
+      <th style="width:38%"><span class="en">Why it bites</span><span class="ko">왜 문제가 되나</span></th>
+      <th><span class="en">Author's stated next step</span><span class="ko">저자가 적은 다음 단계</span></th>
+    </tr>
+    <tr>
+      <td><b><span class="en">KV cache is not considered</span><span class="ko">KV 캐시를 고려하지 않음</span></b></td>
+      <td><span class="en">When an engine changes role, whatever KV it holds has to go somewhere. Right now that is simply not modelled.</span><span class="ko">엔진이 역할을 바꾸면 갖고 있던 KV 를 어디론가 보내야 한다. 지금은 그게 아예 모델링되어 있지 않다.</span></td>
+      <td><span class="en">Remote KV cache</span><span class="ko">Remote KV cache</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Role switching happens too often</span><span class="ko">역할 전환이 자주 발생</span></b></td>
+      <td><span class="en">When the simulation is inaccurate, or new requests arrive mid-transition, the move gets cancelled — and the cancelling itself leaves that engine <b>underutilised</b>.</span><span class="ko">시뮬레이션이 부정확하거나 전환 도중에 요청이 더 들어오면 이동이 취소되는데, 그 취소 때문에 해당 노드가 <b>덜 쓰이게</b> 된다.</span></td>
+      <td><span class="en">Raise simulation accuracy — e.g. live profiling</span><span class="ko">시뮬레이션 정확도 올리기 — 실시간 프로파일링 등</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">The true OSL is unknown</span><span class="ko">정확한 OSL 값을 모름</span></b></td>
+      <td><span class="en">The departure estimate assumes OSL is known. It is not — a model stops when it stops.</span><span class="ko">이탈 추정이 OSL 을 안다고 가정한다. 실제로는 모른다 — 모델은 멈출 때 멈춘다.</span></td>
+      <td><span class="en">An OSL predictor is needed</span><span class="ko">OSL 예측기가 필요</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Transition cost eats throughput</span><span class="ko">전환 비용으로 인한 throughput 손실</span></b></td>
+      <td><span class="en">One OSL outlier is enough: a decode→prefill switch waits on the single longest request, and the engine idles for that whole tail.</span><span class="ko">OSL outlier 하나면 충분하다. decode→prefill 전환이 가장 긴 요청 하나를 기다리게 되고, 그 꼬리 내내 엔진이 논다.</span></td>
+      <td><span class="en">Request live migration off the decode engine</span><span class="ko">decode 노드에서 request live migration</span></td>
+    </tr>
+    <tr>
+      <td><b><span class="en">Throughput is not the objective — so it drops at saturation</span><span class="ko">throughput 이 최적화 대상이 아님 — 그래서 포화 시 떨어진다</span></b></td>
+      <td><span class="en">Once saturated, the rule converges on "send everything to decode", which is exactly the wrong move for total throughput. This is the 15 rps gap in the Short chart.</span><span class="ko">포화되면 규칙이 "무조건 decode 로 보낸다" 로 수렴하는데, 총 throughput 관점에서는 정확히 틀린 수다. Short 그림의 15 rps 격차가 이것이다.</span></td>
+      <td><span class="en">Change the formula at saturation: admission control, or maximise throughput by matching <b>prefill production rate = decode consumption rate</b></span><span class="ko">포화 상태일 때 수식 변경 — admission control, 혹은 <b>prefill 생산 속도 = decode 소비 속도</b> 로 맞춰 throughput 최대화</span></td>
+    </tr>
+  </table>
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">The two that are really one</span><span class="ko">사실 하나인 두 가지</span></span>
+    <span class="en">Rows 1 and 4 are the same wound seen from two sides. An engine cannot leave the decode role cheaply <b>because its KV cache is stuck to it</b> — that is why draining is the default, why an OSL outlier strands a whole engine, and why live migration is on the list. Give the cluster a place to put KV that is not the engine's own HBM and both rows soften at once. That is not a coincidence; it is the same architectural gap.</span>
+    <span class="ko">1번과 4번은 같은 상처를 양쪽에서 본 것이다. 엔진이 decode 역할에서 싸게 빠져나오지 못하는 이유는 <b>KV 캐시가 거기 붙어 있기 때문</b>이다 — 그래서 비우기가 기본값이고, 그래서 OSL outlier 하나가 엔진 하나를 통째로 묶어 두고, 그래서 live migration 이 목록에 올라 있다. KV 를 엔진 자기 HBM 말고 둘 곳을 클러스터에 주면 두 줄이 동시에 누그러진다. 우연이 아니라 같은 구조적 빈틈이다.</span>
+  </div>
+</section>
+
+<section id="s7">
+  <h2><span class="num">7</span>
+    <span class="en">Related work: DOPD, xLLM, NVIDIA Dynamo</span>
+    <span class="ko">관련 연구·구현: DOPD, xLLM, NVIDIA Dynamo</span>
+  </h2>
+  <p>
+    <span class="en">Three systems solve the same problem, and the interesting thing is that <b>two of them predict and this one does not</b>.</span>
+    <span class="ko">같은 문제를 푸는 시스템이 셋 있는데, 흥미로운 점은 <b>그중 둘은 예측을 하고 이것은 하지 않는다</b>는 것이다.</span>
+  </p>
+  <table>
+    <tr>
+      <th style="width:18%"><span class="en">System</span><span class="ko">시스템</span></th>
+      <th style="width:24%"><span class="en">How it decides</span><span class="ko">무엇으로 정하나</span></th>
+      <th style="width:14%"><span class="en">Cadence</span><span class="ko">주기</span></th>
+      <th><span class="en">Notes</span><span class="ko">특징</span></th>
+    </tr>
+    <tr>
+      <td><b><span class="en">This design</span><span class="ko">이 설계</span></b></td>
+      <td><span class="en"><b>Simulation</b> of work already in the system</span><span class="ko">이미 시스템 안에 있는 일의 <b>시뮬레이션</b></span></td>
+      <td><b>0.1 s</b></td>
+      <td><span class="en">No forecasting model at all. Single objective: decode SLO. Minimum one engine per role.</span><span class="ko">예측 모델이 아예 없다. 목적함수 하나 — decode SLO. 역할당 최소 1대.</span></td>
+    </tr>
+    <tr>
+      <td><b>DOPD</b></td>
+      <td><span class="en"><b>ARIMA forecast</b> of request count and lengths (ISL, OSL)</span><span class="ko">요청 수와 길이(ISL, OSL)의 <b>ARIMA 예측</b></span></td>
+      <td><span class="muted">—</span></td>
+      <td><span class="en">Goal is to equalise <b>prefill production and decode consumption</b>. Very short requests — where KV-cache transfer would cost more than prefill itself — are handled directly on the decode node. Weak against forecast error and burstiness, so it carries a fallback that converts the required P/D node count from the wait-queue length.</span><span class="ko">목표가 <b>prefill 생산량과 decode 소비량을 같게</b> 하는 것. 아주 짧은 요청 — KV 캐시 전송이 prefill 자체보다 오래 걸리는 경우 — 은 decode 노드가 직접 처리한다. 예측이 틀리거나 burstiness 가 있으면 대응이 어려워서, 필요 P/D 노드 수를 wait queue 의 요청 수로 환산하는 fallback 로직이 들어가 있다.</span></td>
+    </tr>
+    <tr>
+      <td><b>xLLM</b> <span class="muted">(JD.com · OpenAtom)</span></td>
+      <td><span class="en"><b>Monitoring</b> + per-request ISL inspection</span><span class="ko"><b>모니터링</b> + 요청별 ISL 확인</span></td>
+      <td><span class="muted">—</span></td>
+      <td><span class="en">Closest in spirit — it also prioritises the TPOT SLO. D→P when a request's ISL says prefill cannot meet TTFT; P→D on resource shortage or an observed TPOT SLO miss, and only when the prefill node has no work. Allows P/D aggregation <i>during</i> a transition, gives decode batches allocation priority, keeps a minimum of two engines.</span><span class="ko">정신적으로 가장 가깝다 — 여기도 TPOT SLO 를 우선한다. 요청의 ISL 을 보고 prefill 노드로는 TTFT 를 못 맞추겠다 싶으면 D→P 로 바꿔 할당한다. P→D 는 자원이 부족하거나 모니터링 중 TPOT SLO 를 못 지킬 때, 그리고 prefill 노드에 일이 없을 때. 전환 <i>중</i> P/D aggregation 을 허용하고, decode 배치에 할당 우선권을 주며, 최소 2대를 유지한다.</span></td>
+    </tr>
+    <tr>
+      <td><b>NVIDIA Dynamo</b></td>
+      <td><span class="en"><b>ARIMA forecast</b> in a throughput-based loop (<code class="inl">sla</code> target)</span><span class="ko">throughput 기반 루프의 <b>ARIMA 예측</b> (<code class="inl">sla</code> 목표)</span></td>
+      <td><b><span class="en">3 min</span><span class="ko">3분</span></b></td>
+      <td><span class="en">Monitors request count, mean ISL/OSL, KV-cache hit and speculative accept length; forecasts the first three, uses recent values for the last two, then computes the per-worker throughput that meets TTFT/TPOT. Also has <b>conditional disaggregation</b> — a decode worker may run the prefill itself when fewer than 2048 tokens need computing <b>and</b> under 70% of the prompt must be recomputed.</span><span class="ko">요청 수, 평균 ISL/OSL, KV 캐시 히트, speculative accept length 를 모니터링해서 앞의 셋은 예측하고 뒤의 둘은 최근 값을 쓴 다음, TTFT/TPOT 를 만족하는 worker 당 처리량을 계산한다. <b>Conditional disaggregation</b> 도 있다 — 새로 계산할 토큰이 2048 개 미만이고 <b>동시에</b> 전체 프롬프트의 70% 미만만 재계산하면 되는 경우, decode worker 가 prefill 을 직접 돌린다.</span></td>
+    </tr>
+  </table>
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">The axis that actually separates them</span><span class="ko">이들을 실제로 가르는 축</span></span>
+    <span class="en">It is not the algorithm, it is the <b>clock</b>. Dynamo re-decides every three minutes, which the deck notes makes it vulnerable to short bursts — a burst can begin and end inside one interval. This design re-decides <b>1,800 times</b> in that same window. It can afford to, because it never fits a model; it just replays a queue it can already see. The cost of that cheapness is that it cannot see anything that has not arrived yet, which is precisely what ARIMA is for. The two approaches are complementary, and nothing stops a system from doing both.</span>
+    <span class="ko">알고리즘이 아니라 <b>시계</b>가 가른다. Dynamo 는 3분마다 다시 정하는데, 발표자료는 그래서 짧은 버스트에 취약하다고 짚는다 — 버스트가 한 주기 안에서 시작해 끝나 버릴 수 있다. 이 설계는 같은 시간 동안 <b>1,800번</b> 다시 정한다. 그럴 수 있는 이유는 모델을 적합시키지 않기 때문이다. 이미 보이는 큐를 굴려 볼 뿐이다. 그 저렴함의 대가는 아직 도착하지 않은 것을 볼 수 없다는 것이고, ARIMA 는 정확히 그걸 위한 것이다. 두 접근은 상보적이고, 한 시스템이 둘 다 하지 못할 이유는 없다.</span>
+  </div>
+</section>
+
+<section id="s8">
+  <h2><span class="num">8</span>
+    <span class="en">Editor's note</span>
+    <span class="ko">편집자 주</span>
+  </h2>
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">Editor's note — not a claim of the original deck</span><span class="ko">편집자 주 — 원 자료의 주장 아님</span></span>
+    <span class="en">Two things strike me reading this next to the KV-offload work.<br><br>
+    <b>First, limitation #1 is the whole ballgame.</b> The design's transition cost exists because KV lives in the engine's own memory, so a role change means either draining or stranding. A cluster-wide KV pool — a store the engines read and write over the fabric rather than owning — turns "drain this engine" into "hand off its state", which is the difference between waiting on the longest request and not waiting at all. The author's two TODOs (remote KV cache, live migration) are both that same fix.<br><br>
+    <b>Second, the objective and the experiment point in different directions.</b> §2 justifies a decode-only objective by arguing that multi-turn traffic raises the prefix-cache hit rate and so shrinks prefill's real cost — but the experiment deliberately runs with no cache hits. The scheduler is therefore validated in the regime where its own motivating premise is switched off. That is a fine way to isolate the mechanism, and it also means the most interesting run has not happened yet: the same loop with a warm cache, where prefill gets cheap and the decode-only objective should look <i>better</i>, not merely equal.</span>
+    <span class="ko">KV 오프로드 쪽 작업과 나란히 놓고 읽으니 두 가지가 눈에 띈다.<br><br>
+    <b>첫째, 한계 1번이 사실상 전부다.</b> 이 설계의 전환 비용은 KV 가 엔진 자기 메모리에 살기 때문에 생긴다. 그래서 역할을 바꾸려면 비우거나 묶어 두거나 둘 중 하나다. 클러스터 전역 KV 풀 — 엔진이 소유하는 대신 패브릭 너머로 읽고 쓰는 스토어 — 이 있으면 "이 엔진을 비워라" 가 "상태를 넘겨라" 로 바뀌고, 그건 가장 긴 요청을 기다리느냐 아예 안 기다리느냐의 차이다. 저자의 TODO 둘(remote KV cache, live migration)이 둘 다 같은 처방이다.<br><br>
+    <b>둘째, 목적함수와 실험이 서로 다른 곳을 가리킨다.</b> §2 는 멀티턴이 프리픽스 캐시 히트율을 올려 prefill 의 실제 비용을 줄인다는 근거로 decode-only 목적함수를 정당화하는데, 정작 실험은 일부러 캐시 히트가 없는 환경에서 돈다. 즉 스케줄러가 자기 전제가 꺼진 조건에서 검증된 셈이다. 메커니즘만 떼어 보기에는 좋은 방법이고, 동시에 가장 흥미로운 실행이 아직 남아 있다는 뜻이기도 하다 — 캐시가 데워진 상태에서 같은 루프를 돌리면 prefill 이 싸지므로 decode-only 목적함수가 단지 대등한 게 아니라 <i>더 좋아</i> 보여야 한다.</span>
+  </div>
+</section>
+
+<section id="s9">
+  <h2><span class="num">9</span>
+    <span class="en">Sources</span>
+    <span class="ko">출처</span>
+  </h2>
+  <ul class="srcs">
+    <li><span class="en">Primary source — Chanho Park, <b>"TPOT-oriented Dynamic P/D"</b>, 2026-08-21. An internal work-in-progress presentation; all figures on this page are reproduced from it unchanged, and all measurements quoted are its own.</span><span class="ko">1차 출처 — Chanho Park, <b>"TPOT-oriented Dynamic P/D"</b>, 2026-08-21. 사내 진행 중 발표자료이며, 이 페이지의 그림은 전부 원본 그대로이고 인용한 수치도 전부 원 자료의 것이다.</span></li>
+    <li><span class="en"><b>DOPD</b> — "A Dynamic PD-Disaggregation Architecture for Maximizing Goodput in LLM Inference Serving" (title as cited in the source deck).</span><span class="ko"><b>DOPD</b> — "A Dynamic PD-Disaggregation Architecture for Maximizing Goodput in LLM Inference Serving" (원 자료에 인용된 제목 그대로).</span></li>
+    <li><b>xLLM</b> — <a href="https://github.com/xLLM-AI/xllm">github.com/xLLM-AI/xllm</a> (JD.com · OpenAtom Foundation)</li>
+    <li><b>NVIDIA Dynamo</b> — <a href="https://github.com/ai-dynamo/dynamo">github.com/ai-dynamo/dynamo</a> — "A Datacenter Scale Distributed Inference Serving Framework"</li>
+    <li><span class="en">Related notes here — <a href="mooncake-in-practice.html">Mooncake in practice</a> and <a href="mooncake-store-vllm.html">Mooncake in vLLM</a>, on exactly the remote-KV-pool piece that limitation #1 asks for.</span><span class="ko">이 사이트의 관련 노트 — <a href="mooncake-in-practice.html">Mooncake 실전</a>, <a href="mooncake-store-vllm.html">Mooncake in vLLM</a>. 한계 1번이 요구하는 원격 KV 풀이 바로 그 주제다.</span></li>
+  </ul>
+</section>
+
+<footer>
+  <span class="en">Write-up of an internal presentation dated 2026-08-21; figures reproduced from the original. Written 2026-08-21.</span>
+  <span class="ko">2026-08-21 자 사내 발표자료 정리. 그림은 원본 그대로. 작성 2026-08-21.</span>
+</footer>
+
+
+
+
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
