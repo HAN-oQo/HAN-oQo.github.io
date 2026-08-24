@@ -36,6 +36,22 @@
     <span class="ko">LLM 추론 내부 구조 학습 노트 — 서빙 시스템, 디버깅, 비교.</span>
   </p>
 
+  <a class="card" href="rope-explained.html">
+    <span class="tag t-green">
+      <span class="en">Deep dive</span>
+      <span class="ko">딥다이브</span>
+    </span>
+    <h2>
+      <span class="en">RoPE from scratch — rotary position embedding, derived</span>
+      <span class="ko">RoPE 처음부터 — 회전으로 위치를 심는 법</span>
+    </h2>
+    <p>
+      <span class="en">Attention is blind to word order, and the obvious fix leaks: expand <code>&lt;q+p_m, k+p_n&gt;</code> and two terms depend on <b>m alone and n alone</b>. RoPE multiplies instead of adding — rotate each query and key by an angle proportional to its position, and the conjugate inside the inner product flips one sign so the absolute positions <b>cancel and leave only m−n</b>. This note derives that from the design goal: the 2-D complex-number solve step by step, then <code>R(a)ᵀR(b) = R(b−a)</code> with both underlying facts (angle addition, orthogonality) proved out, checked against real numbers. Then the extension to 128 dims as <b>64 two-dimensional pairs with geometric frequencies</b> — a clock with 64 hands, where fast pairs resolve neighbouring tokens (λ≈6) and slow pairs carry document-scale position (λ≈54K), tiling log-distance evenly. Also: the <code>rotate_half</code> elementwise form the kernels really run (O(d), not O(d²) — only 1.6% of the 128×128 matrix is nonzero), the interleaved-vs-half-split convention trap that silently breaks weight ports, and why long-context models raise the base. Closes on KV-cache reuse: keys are cached <i>already rotated</i>, orthogonality makes stripping exact and free, and my own arc computation shows <b>28 of 64 pairs only ever see a partial arc</b> in a 1K calibration window — which is precisely why a fit on rotated keys cannot extrapolate to 32K. 4 original diagrams. Companion to the KV-transfer paper note.</span>
+      <span class="ko">어텐션은 어순을 못 본다. 그런데 가장 뻔한 해법은 새어나간다: <code>&lt;q+p_m, k+p_n&gt;</code>을 전개하면 두 항이 <b>m만, n만</b>에 의존한다. RoPE는 더하는 대신 곱한다 — 각 query와 key를 위치에 비례한 각도만큼 회전시키면, 내적 안의 켤레가 한쪽 부호를 뒤집어 절대 위치가 <b>상쇄되고 m−n만 남는다</b>. 이 노트는 그걸 설계 목표에서부터 유도한다: 2차원 복소수 해법을 단계별로, 그다음 <code>R(a)ᵀR(b) = R(b−a)</code>를 받치는 두 사실(각도 덧셈, 직교성)까지 증명하고 실제 숫자로 검산한다. 이어서 128차원 확장을 <b>등비 주파수를 가진 2차원 쌍 64개</b>로 — 바늘 64개짜리 시계다. 빠른 쌍은 옆 토큰 순서를(λ≈6), 느린 쌍은 문서 규모 위치를(λ≈54K) 담으며 로그 거리 축을 균일하게 덮는다. 그리고 커널이 실제로 돌리는 <code>rotate_half</code> 원소별 형태(O(d²)가 아니라 O(d) — 128×128 행렬에서 0이 아닌 성분이 1.6%뿐), 가중치 이식을 조용히 깨뜨리는 interleaved vs half-split 규약 함정, 긴 컨텍스트 모델이 base를 올리는 이유. 마무리는 KV 캐시 재사용: key는 <i>이미 회전된 채로</i> 캐시되고, 직교성 덕에 벗겨내기가 정확하고 공짜이며, 직접 계산해 보면 1K 캘리브레이션 창에서 <b>64개 쌍 중 28개가 원의 일부만 본다</b> — 회전된 key로 피팅한 매핑이 32K로 외삽되지 않는 이유가 바로 이것이다. 직접 그린 다이어그램 4개. KV 전이 논문 정리의 부록.</span>
+    </p>
+    <p class="post-meta"><time datetime="2026-08-24">2026-08-24</time></p>
+  </a>
+
   <a class="card" href="glm52-pd-sweeps.html">
     <span class="tag t-green">
       <span class="en">Data review · analysis</span>
@@ -129,7 +145,12 @@
       <span class="en">NVIDIA (arXiv:2608.03893) asks whether a router that hands a conversation from Qwen3-14B up to 32B really needs the 32B to re-read the prompt — or whether the 14B's KV cache can just be <b>translated</b>. Their finding: within a family the cross-model KV relationship is <b>mostly linear</b>, so a per-head <b>ridge regression</b> — closed form, no backprop, fit on 500 FineWeb-Edu documents in ~1 hour — lets the receiver decode straight from the mapped cache. Three ingredients: top-<b>k</b> source layers per target layer (the biggest contributor by far), <b>RoPE stripped</b> so the fit is position-free and survives 1K→32K, and ridge for conditioning. Result: <b>73–98% of standalone accuracy on four of six pairs at 2.7–25× less prefill latency</b> — and a hard collapse to ~42% on two Ministral pairs. The best part is the diagnosis: retention is decided by <b>where the mapping error lands, not how big it is</b>. Calibration R² is uncorrelated with success (r=−0.20); <b>attention-output cosine</b> predicts it (r=+0.57), and an MLP buys +37 pp purely by pushing error into directions attention ignores. Includes the deployment bill (4–12 GB per ordered pair, quadratic in fleet size) and the caveats behind the 25×. No public code.</span>
       <span class="ko">NVIDIA (arXiv:2608.03893): 라우터가 대화를 Qwen3-14B에서 32B로 넘길 때 32B가 정말 프롬프트를 다시 읽어야 하나, 아니면 14B의 KV 캐시를 <b>번역</b>하면 되나? 발견: 같은 패밀리 안에서 모델 간 KV 관계는 <b>대체로 선형</b>이라, head별 <b>릿지 회귀</b> — 닫힌 해, 역전파 없음, FineWeb-Edu 문서 500개로 ~1시간 피팅 — 만으로 받는 쪽이 매핑된 캐시에서 바로 디코딩할 수 있다. 재료 셋: 타깃 레이어마다 top-<b>k</b> 소스 레이어(압도적 1등 기여), <b>RoPE 분리</b>로 위치와 무관한 피팅(1K로 맞춰도 32K에서 동작), 그리고 조건수를 위한 릿지. 결과: <b>6쌍 중 4쌍에서 정확도 73~98% 유지, prefill 지연 2.7~25배 감소</b> — 그리고 Ministral 2쌍에서는 ~42%로 붕괴. 백미는 진단이다: retention을 가르는 건 <b>오차의 크기가 아니라 오차가 떨어지는 위치</b>. 캘리브레이션 R²은 성공과 무상관(r=−0.20)이고 <b>어텐션 출력 코사인</b>이 예측하며(r=+0.57), MLP는 오차를 어텐션이 무시하는 방향으로 밀어내는 것만으로 +37 pp를 번다. 배포 청구서(순서쌍당 4~12 GB, 플릿 크기의 제곱)와 25배 뒤의 단서들도 정리. 공개 코드 없음.</span>
     </p>
-    <p class="post-meta"><time datetime="2026-08-10">2026-08-10</time></p>
+    <p class="post-meta">
+      <time datetime="2026-08-10">2026-08-10</time>
+      <span class="sep">·</span>
+      <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
+      <time datetime="2026-08-24">2026-08-24</time>
+    </p>
   </a>
 
   <a class="card" href="nvidia-cmx-kv-cache-nvme.html">
