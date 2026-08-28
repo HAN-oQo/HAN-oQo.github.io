@@ -103,11 +103,12 @@
     <span class="badge">Nixon, Durbin, Standhartinger, Gunawi, Yang</span>
     <span class="badge">UChicago · Harvard · Chutes</span>
   </div>
-  <p class="post-meta"><time datetime="2026-08-28">2026-08-28</time></p>
+  <p class="post-meta"><time datetime="2026-08-28">2026-08-28</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-08-28">2026-08-28</time></p>
 </header>
 
 <nav class="toc">
   <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <p style="margin:0 0 10px;font-size:14px"><a href="#implications" style="color:var(--blue-ink);text-decoration:none;border-bottom:1px dashed var(--blue-bd);font-weight:600"><span class="en">🎯 Implications — start here</span><span class="ko">🎯 시사점 — 여기부터</span></a></p>
   <ol>
     <li><a href="#s1"><span class="en">Problem — every public LLM trace is too short, too narrow, or too sampled</span><span class="ko">문제 정의 — 공개된 LLM 트레이스는 너무 짧거나, 좁거나, 샘플링돼 있다</span></a></li>
     <li><a href="#s2"><span class="en">Method — what a year of unsampled request-level production traffic contains</span><span class="ko">해결 방법 — 샘플링 없는 1년치 요청 단위 프로덕션 트래픽에 담긴 것</span></a></li>
@@ -122,6 +123,85 @@
   <span class="en">The first public LLM serving trace that is simultaneously <b>long</b> (12 months), <b>unsampled</b> (every request), <b>broad</b> (9,174 models including the long tail), and <b>attributed</b> (anonymized user <i>and</i> serving-instance IDs). Seven numbered findings, of which two matter most. <b>Finding 5:</b> prefix-cache reuse is so strongly recency-driven that FIFO and LRU match or beat ARC, S3FIFO, LHD, GDSF and Sieve — the sophisticated policies are solving a problem this workload doesn't have. <b>Finding 7:</b> cache locality and load balance are in fundamental tension, but the measured price of locality is far lower than expected — cache-aware routing costs only <b>5–7% load imbalance</b> while cache-blind routing leaves large KV caches almost useless, because requests never return to the instance holding their prefix.</span>
   <span class="ko">동시에 <b>길고</b>(12개월), <b>샘플링이 없고</b>(모든 요청), <b>넓고</b>(롱테일 포함 9,174개 모델), <b>귀속 가능한</b>(익명화된 사용자 <i>및</i> 서빙 인스턴스 ID) 최초의 공개 LLM 서빙 트레이스. 번호가 붙은 발견 일곱 개 중 둘이 특히 중요하다. <b>Finding 5:</b> prefix 캐시 재사용이 너무 강하게 최근성(recency) 기반이라 FIFO와 LRU가 ARC·S3FIFO·LHD·GDSF·Sieve와 비슷하거나 더 낫다 — 정교한 정책들은 이 워크로드에 없는 문제를 풀고 있다. <b>Finding 7:</b> 캐시 지역성과 부하 균형은 근본적으로 충돌하지만, 측정된 지역성의 대가가 예상보다 훨씬 싸다 — 캐시 인식 라우팅의 비용이 <b>부하 불균형 5~7%</b>뿐인 반면, 캐시를 무시하는 라우팅은 큰 KV 캐시를 거의 무용지물로 만든다. 요청이 자기 prefix를 들고 있는 인스턴스로 돌아가지 않기 때문이다.</span>
 </div>
+
+<section id="implications">
+  <h2>🎯
+    <span class="en">Implications — what this trace asks of a serving stack</span>
+    <span class="ko">시사점 — 이 트레이스가 서빙 스택에 요구하는 것</span>
+  </h2>
+  <p class="en">Put at the top on purpose. The rest of this note is the evidence; this is what I'd actually do with it, ordered by leverage. The <b>source</b> column separates what the paper measured from what I'm inferring — treat the second kind as a hypothesis to test on our own traffic, not a result.</p>
+  <p class="ko">일부러 맨 앞에 뒀습니다. 이 노트의 나머지는 근거이고, 여기는 그걸로 실제로 무엇을 할지를 레버리지 순으로 적은 것입니다. <b>근거</b> 열이 논문이 측정한 것과 제가 추론한 것을 구분합니다 — 후자는 결과가 아니라 우리 트래픽에서 검증할 가설로 다뤄 주세요.</p>
+
+  <table>
+    <thead><tr>
+      <th style="width:34%"><span class="en">Implication</span><span class="ko">시사점</span></th>
+      <th style="width:30%"><span class="en">Why (evidence)</span><span class="ko">근거</span></th>
+      <th style="width:24%"><span class="en">What to do</span><span class="ko">실행</span></th>
+      <th style="width:12%"><span class="en">Source</span><span class="ko">출처</span></th>
+    </tr></thead>
+    <tbody>
+      <tr class="good">
+        <td><b>A. <span class="en">A cache-blind router makes KV memory a wasted purchase.</span><span class="ko">캐시를 모르는 라우터에서는 KV 메모리 증설이 낭비다.</span></b></td>
+        <td><span class="en"><code class="inl">load_first</code> and <code class="inl">round_robin</code> hit ratios stay <b>flat</b> as per-instance cache grows; only <code class="inl">cache_first</code> converts capacity into reuse.</span><span class="ko"><code class="inl">load_first</code>·<code class="inl">round_robin</code>은 인스턴스당 캐시를 키워도 히트율이 <b>평평</b>하다. 용량을 재사용으로 바꾸는 건 <code class="inl">cache_first</code>뿐.</span></td>
+        <td><span class="en">Audit whether our router is cache-aware <i>before</i> approving more KV memory. If it isn't, that is the single highest-leverage change.</span><span class="ko">KV 메모리 증설을 승인하기 <i>전에</i> 라우터가 캐시 인식인지 감사. 아니라면 그게 단일 최대 레버리지.</span></td>
+        <td><a class="src" href="https://arxiv.org/html/2608.13573v1#S7.SS2">Finding 7</a></td>
+      </tr>
+      <tr class="good">
+        <td><b>B. <span class="en">Measure load in tokens, not requests.</span><span class="ko">부하를 요청 수가 아니라 토큰으로 재라.</span></b></td>
+        <td><span class="en">Replica count tracked <b>token work</b>, not request rate — instances scaled down while the request rate stayed flat. And P90 TTFT explodes past a tokens/s threshold.</span><span class="ko">replica 수가 요청률이 아니라 <b>토큰 작업량</b>을 따라갔다 — 요청률은 평평한데 인스턴스가 줄었다. 그리고 P90 TTFT가 tokens/s 임계를 넘으면 폭발한다.</span></td>
+        <td><span class="en">Autoscaling and routing signals should be tokens/s. A QPS-based autoscaler under-provisions exactly when prompts get long.</span><span class="ko">오토스케일링·라우팅 신호를 tokens/s로. QPS 기반 오토스케일러는 프롬프트가 길어지는 바로 그때 과소 프로비저닝한다.</span></td>
+        <td><a class="src" href="https://arxiv.org/html/2608.13573v1#S7.SS1">§7.1.1</a></td>
+      </tr>
+      <tr class="good">
+        <td><b>C. <span class="en">Under P/D, the two pools want different routing policies.</span><span class="ko">P/D 분리에서는 두 풀이 다른 라우팅 정책을 원한다.</span></b></td>
+        <td><span class="en">Overload is asymmetric: P90 TTFT rises sharply with instance load, while P90 decode <b>mainly follows output length and is largely insensitive</b> to it.</span><span class="ko">과부하가 비대칭이다: P90 TTFT는 인스턴스 부하에 급격히 오르는데, P90 decode는 <b>주로 출력 길이를 따르고 부하에는 거의 둔감</b>하다.</span></td>
+        <td><span class="en">Prefill pool: imbalance-sensitive, cache-affinity-hungry. Decode pool: neither. One policy across both leaves value on the table.</span><span class="ko">prefill 풀은 불균형에 민감하고 캐시 어피니티가 절실. decode 풀은 둘 다 아님. 양쪽에 한 정책을 쓰면 이득을 버린다.</span></td>
+        <td><span class="muted"><span class="en">my inference from</span><span class="ko">내 추론 —</span></span> <a class="src" href="https://arxiv.org/html/2608.13573v1#S7.SS1">§7.1.1</a></td>
+      </tr>
+      <tr>
+        <td><b>D. <span class="en">Stop shopping for a clever eviction policy.</span><span class="ko">영리한 eviction 정책 쇼핑을 그만둬라.</span></b></td>
+        <td><span class="en">FIFO and LRU match or beat ARC, S3FIFO, LHD, GDSF and Sieve. A prefix is born, reused within seconds, then dead — frequency carries no signal.</span><span class="ko">FIFO·LRU가 ARC·S3FIFO·LHD·GDSF·Sieve와 비슷하거나 낫다. prefix는 태어나 몇 초 안에 쓰이고 죽는다 — 빈도에 신호가 없다.</span></td>
+        <td><span class="en">Leave the KV cache on LRU and spend the engineering on routing (A) instead. Confirm on our traces first.</span><span class="ko">KV 캐시는 LRU로 두고, 엔지니어링은 라우팅(A)에 쓸 것. 우리 트레이스로 먼저 확인.</span></td>
+        <td><a class="src" href="https://arxiv.org/html/2608.13573v1#S6.SS3">Finding 5</a></td>
+      </tr>
+      <tr>
+        <td><b>E. <span class="en">A KV TTL of minutes captures almost everything.</span><span class="ko">KV TTL은 수 분이면 거의 전부를 잡는다.</span></b></td>
+        <td><span class="en">Same (user, model) repeat arrivals: ~50% within <b>0.1 s</b>, ~80% within <b>10 s</b>, <b>99% within 15 min</b>.</span><span class="ko">같은 (사용자, 모델) 반복 도착: 약 50%가 <b>0.1초</b>, 약 80%가 <b>10초</b>, <b>99%가 15분</b> 안에.</span></td>
+        <td><span class="en">Retention beyond tens of minutes buys very little; dropping below seconds loses a lot. A cheap, concrete knob.</span><span class="ko">수십 분을 넘는 보존은 얻는 게 매우 적고, 초 단위 아래로 내리면 많이 잃는다. 싸고 구체적인 손잡이.</span></td>
+        <td><a class="src" href="https://arxiv.org/html/2608.13573v1#S6.SS2">Finding 4</a></td>
+      </tr>
+      <tr>
+        <td><b>F. <span class="en">Session is the right cache granularity, not block.</span><span class="ko">캐시 단위는 블록이 아니라 세션이다.</span></b></td>
+        <td><span class="en">Per-request hit ratios are <b>bimodal</b> — a request either inherits the previous turn's whole prefix or starts fresh. Partial hits are rare.</span><span class="ko">요청별 히트율이 <b>이봉분포</b>다 — 직전 턴의 prefix 전체를 물려받거나 새로 시작하거나 둘 중 하나. 부분 히트는 드물다.</span></td>
+        <td><span class="en">Scope admission, eviction and routing keys to sessions. The paper's own simulator does exactly this, justified with this data.</span><span class="ko">admission·eviction·라우팅 키를 세션 스코프로. 논문의 시뮬레이터가 정확히 그렇게 하고, 이 데이터로 정당화한다.</span></td>
+        <td><a class="src" href="https://arxiv.org/html/2608.13573v1#S6.SS2">Finding 4</a></td>
+      </tr>
+      <tr>
+        <td><b>G. <span class="en">Never size a fleet from a one-week window.</span><span class="ko">1주일 창으로 플릿 크기를 정하지 마라.</span></b></td>
+        <td><span class="en">Over a year: dominant models turn over, traffic spreads to the tail, inputs stay stable while <b>output medians fall from a few hundred to under 100 tokens</b>.</span><span class="ko">1년에 걸쳐: 지배 모델이 교체되고, 트래픽이 꼬리로 퍼지고, 입력은 안정적인데 <b>출력 중앙값이 수백에서 100 토큰 아래로</b> 떨어진다.</span></td>
+        <td><span class="en">Assume the prefill:decode ratio drifts <i>toward prefill</i>, and re-derive capacity models on a long window.</span><span class="ko">prefill:decode 비가 <i>prefill 쪽으로</i> 표류한다고 가정하고, 긴 창에서 용량 모델을 다시 유도할 것.</span></td>
+        <td><a class="src" href="https://arxiv.org/html/2608.13573v1#S5.SS2">Finding 3</a></td>
+      </tr>
+      <tr>
+        <td><b>H. <span class="en">KV transfer is not automatically the fix for locality.</span><span class="ko">KV 전송이 지역성 문제의 자동 해법은 아니다.</span></b></td>
+        <td><span class="en">A 100K-token context is ~<b>27 GB</b>, ~<b>2.7 s</b> over a 10 GB/s link one way — against reuse that often returns <i>within seconds</i>.</span><span class="ko">100K 토큰 컨텍스트가 약 <b>27 GB</b>, 10 GB/s 링크에서 한 방향 약 <b>2.7초</b> — 그런데 재사용은 흔히 <i>몇 초 안에</i> 돌아온다.</span></td>
+        <td><span class="en">For short-gap reuse, keeping locality beats moving bytes. Reserve transfer for genuinely long gaps.</span><span class="ko">간격이 짧은 재사용에는 바이트를 옮기는 것보다 지역성 유지가 낫다. 전송은 진짜로 긴 간격에만.</span></td>
+        <td><a class="src" href="https://arxiv.org/html/2608.13573v1#S7.SS2">§7.2</a></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">three things to check before quoting any of this internally</span><span class="ko">사내에서 인용하기 전에 확인할 세 가지</span></span>
+    <span class="en">① <b>The "locality costs only 5–7% imbalance" number is subsidized.</b> The paper says so itself: abundant <i>single-turn</i> sessions give <code class="inl">cache_first</code> slack to route freely and offset localized multi-turn traffic. Agentic workloads have far fewer one-offs. <b>Measure our multi-turn fraction before repeating that figure.</b><br>
+    ② <b>The distributions may not transfer; the tension does.</b> This is a serverless multi-tenant platform where 5,252 of 9,174 models are user-deployed and the power users are effectively model routers. Our deployments are few-model and dedicated — so treat the long-tail and cohort-drift characterization as background, and Finding 7 as structural.<br>
+    ③ <b>Sessions were inferred, not observed.</b> Everything downstream of §3.1 rests on chaining turns by token arithmetic, with no accuracy validation and no sensitivity analysis on K = 10. And the trace itself is not yet released, so none of it is independently checkable today.</span>
+    <span class="ko">① <b>"지역성 비용은 불균형 5~7%뿐"이라는 수치는 보조받은 값입니다.</b> 논문이 직접 말합니다: 풍부한 <i>단발</i> 세션이 <code class="inl">cache_first</code>에 자유롭게 라우팅할 여유를 주어 국소화된 멀티턴 트래픽을 상쇄한다고요. 에이전트 워크로드에는 단발이 훨씬 적습니다. <b>그 수치를 옮기기 전에 우리 멀티턴 비중을 재세요.</b><br>
+    ② <b>분포는 안 옮겨올 수 있지만 긴장은 옮겨옵니다.</b> 여기는 9,174개 모델 중 5,252개가 사용자 배포이고 파워 유저가 사실상 모델 라우터인 서버리스 멀티테넌트 플랫폼입니다. 우리 배포는 소수 모델 전용이고요 — 롱테일·코호트 표류 특성화는 배경 지식으로, Finding 7은 구조적인 것으로 다루세요.<br>
+    ③ <b>세션은 관측이 아니라 추론입니다.</b> §3.1 이후의 모든 것이 토큰 산술로 턴을 잇는 것 위에 서 있고, 정확도 검증도 K = 10 민감도 분석도 없습니다. 게다가 트레이스 자체가 아직 공개되지 않아 오늘 시점에 독립적으로 확인할 수 없습니다.</span>
+  </div>
+  <p class="figcap"><span class="en">A–B and D–H are the paper's measurements applied to our context; C is my own inference. The longer version, with the fetch-vs-recompute thread connecting this to the CMX and FreeToken notes, is in <a class="src" href="#s5">§5.1</a>.</span><span class="ko">A~B와 D~H는 논문의 측정을 우리 맥락에 적용한 것이고, C는 제 추론입니다. CMX·FreeToken 노트와 이어지는 fetch 대 recompute 맥락까지 담은 긴 버전은 <a class="src" href="#s5">§5.1</a>에 있습니다.</span></p>
+</section>
 
 <div class="grid3">
   <div class="mini">
