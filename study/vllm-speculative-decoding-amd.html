@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Exploring Speculative Decoding in vLLM on AMD GPUs — 번역</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:880px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:28px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;line-height:1.55;margin:12px 0}
+  .eq{background:var(--gray-bg);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:14px 0;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:14px;color:var(--ink);overflow-x:auto;text-align:center;line-height:1.9}
+  .eq .hl{background:var(--amber-bg);padding:1px 5px;border-radius:4px;font-weight:700}
+  .eq .lbl{color:var(--faint);font-size:12px}
+  .eq .mat{display:inline-block;text-align:left;white-space:pre;line-height:1.5}
+  .step{border-left:3px solid var(--blue-bd);padding:2px 0 2px 16px;margin:16px 0}
+  .step .n{display:inline-block;font-size:11.5px;font-weight:700;color:var(--blue-ink);
+    background:var(--blue-bg);border-radius:6px;padding:1px 8px;margin-bottom:4px}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber)} .c-amber .tag{color:var(--amber)}
+  .c-teal{background:var(--teal-bg);color:var(--teal)} .c-teal .tag{color:var(--teal)}
+  .c-purple{background:var(--purple-bg);color:var(--purple)} .c-purple .tag{color:var(--purple)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  tr.good td{background:var(--teal-bg)}
+  tr.bad td{background:var(--coral-bg)}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13.5px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13.5px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+  /* translation banner + hotlinked blog figures + token-flow blocks */
+  .tbanner{border:1px solid var(--amber-bd);background:var(--amber-bg);border-radius:12px;
+    padding:16px 18px;margin:0 0 28px;font-size:14.5px;color:var(--amber)}
+  .tbanner b{color:var(--amber)}
+  .tbanner a{color:var(--amber);text-decoration:none;border-bottom:1px solid var(--amber-bd);font-weight:600}
+  img.blogfig{display:block;max-width:100%;height:auto;margin:18px auto 4px;border-radius:10px;
+    border:1px solid var(--line);background:#fff}
+  .flow{background:var(--gray-bg);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:14px 0;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13.5px;line-height:1.9;overflow-x:auto}
+  .flow .ar{color:var(--faint);padding:0 6px}
+  .flow .ok{color:var(--teal);font-weight:700}
+  .flow .no{color:var(--red);font-weight:700}
+  .flow .tk{background:#fff;border:1px solid var(--gray-bd);border-radius:5px;padding:1px 7px;margin:0 2px}
+  .flow .tgt{background:var(--blue-bg);border-color:var(--blue-bd);color:var(--blue-ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">Exploring Speculative Decoding in vLLM on AMD GPUs — translation</span>
+    <span class="ko">Exploring Speculative Decoding in vLLM on AMD GPUs — 번역</span>
+  </h1>
+  <p class="lede">
+    <span class="en">A practical guide to speculative decoding in vLLM on AMD GPUs, covering draft-and-verify mechanics, MTP, EAGLE-3, DFlash, DSpark, configuration, tuning, and benchmarks on MI300X and MI355X.</span>
+    <span class="ko">AMD GPU 위 vLLM에서의 speculative decoding 실무 가이드. draft-and-verify 동작 원리, MTP, EAGLE-3, DFlash, DSpark, 설정 방법, 튜닝, 그리고 MI300X·MI355X 벤치마크를 다룬다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://vllm.ai/blog/2026-08-23-speculative-decoding-amd-gpus">vllm.ai · <span class="en">original post</span><span class="ko">원문</span></a></span>
+    <span class="badge">AMD and Embedded LLM</span>
+    <span class="badge">2026-08-23</span>
+    <span class="badge">#speculative-decoding #amd</span>
+  </div>
+  <p class="post-meta"><time datetime="2026-08-28">2026-08-28</time></p>
+</header>
+
+<div class="tbanner">
+  <span class="en"><b>⚠ This is an unofficial Korean translation.</b> The original article is <a href="https://vllm.ai/blog/2026-08-23-speculative-decoding-amd-gpus">“Exploring Speculative Decoding in vLLM on AMD GPUs”</a>, published on the vLLM blog on 2026-08-23 by <b>AMD and Embedded LLM</b>. All text, measurements, figures and claims belong to the original authors; this page only adds a Korean rendering. The <b>EN</b> toggle shows the original English wording; the <b>KO</b> toggle shows the translation. The three figures are served directly from vllm.ai. For the interactive per-position acceptance heatmaps in the appendix, please read the original — they cannot be reproduced here.</span>
+  <span class="ko"><b>⚠ 비공식 한국어 번역입니다.</b> 원문은 2026-08-23 vLLM 블로그에 <b>AMD and Embedded LLM</b> 명의로 게시된 <a href="https://vllm.ai/blog/2026-08-23-speculative-decoding-amd-gpus">“Exploring Speculative Decoding in vLLM on AMD GPUs”</a>입니다. 본문·측정치·그림·주장은 모두 원저자의 것이고, 이 페이지는 한국어 번역만 덧붙였습니다. <b>EN</b> 토글은 원문 영어 그대로, <b>KO</b> 토글은 번역입니다. 그림 3개는 vllm.ai에서 직접 불러옵니다. 부록의 인터랙티브 위치별 수용률 히트맵은 여기서 재현할 수 없으니 원문을 봐 주세요.</span>
+</div>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">Introduction</span><span class="ko">소개</span></a></li>
+    <li><a href="#s2"><span class="en">The autoregressive decoding baseline</span><span class="ko">자기회귀 디코딩 기준선</span></a></li>
+    <li><a href="#s3"><span class="en">Core idea of speculative decoding</span><span class="ko">Speculative decoding의 핵심 아이디어</span></a></li>
+    <li><a href="#s4"><span class="en">How the drafting methods work</span><span class="ko">드래프팅 방법들의 작동 원리</span></a></li>
+    <li><a href="#s5"><span class="en">How to enable speculative decoding in vLLM</span><span class="ko">vLLM에서 speculative decoding 켜는 법</span></a></li>
+    <li><a href="#s6"><span class="en">Where to find the pretrained draft models</span><span class="ko">사전학습된 draft 모델은 어디에 있나</span></a></li>
+    <li><a href="#s7"><span class="en">Experimental setup and measurements</span><span class="ko">실험 환경과 측정 결과</span></a></li>
+    <li><a href="#s8"><span class="en">Tuning considerations</span><span class="ko">튜닝 시 고려사항</span></a></li>
+    <li><a href="#s9"><span class="en">Training a speculator for a new target model</span><span class="ko">새 타깃 모델용 speculator 학습하기</span></a></li>
+    <li><a href="#s10"><span class="en">Summary · Future work · References</span><span class="ko">요약 · 향후 과제 · 참고문헌</span></a></li>
+  </ol>
+</nav>
+
+<!-- ============ 1 ============ -->
+<section id="s1">
+  <h2><span class="num">1</span><span class="en">Introduction</span><span class="ko">소개</span></h2>
+  <p class="en">Large language models support a wide range of applications, but serving them at scale requires careful optimization. Standard autoregressive decoding is the baseline used by most LLM serving systems: the model generates one token, appends it to the sequence, and then uses the updated sequence to generate the next token. This process is simple and reliable, but the serving loop still advances one committed token at a time because output tokens must be produced in strict left-to-right order.</p>
+  <p class="ko">대규모 언어 모델은 다양한 응용을 지원하지만, 대규모로 서빙하려면 세심한 최적화가 필요합니다. 표준 자기회귀 디코딩은 대부분의 LLM 서빙 시스템이 쓰는 기준선입니다. 모델이 토큰 하나를 생성하고, 그것을 시퀀스에 덧붙인 뒤, 갱신된 시퀀스로 다음 토큰을 생성합니다. 이 과정은 단순하고 안정적이지만, 출력 토큰이 반드시 왼쪽에서 오른쪽 순서로 나와야 하기 때문에 서빙 루프는 여전히 확정된 토큰 하나씩만 전진합니다.</p>
+
+  <p class="en">Speculative decoding [1] builds on this baseline through a draft-and-verify mechanism. A lightweight draft component proposes candidate future tokens, and the target model verifies those candidates before they are committed. When several draft tokens are accepted, the system can commit multiple output tokens from a single target-model verification step while preserving the target model's output behavior.</p>
+  <p class="ko">Speculative decoding [1]은 이 기준선 위에 draft-and-verify(초안 작성 후 검증) 메커니즘을 얹습니다. 가벼운 draft 구성요소가 미래 토큰 후보를 제안하고, 타깃 모델이 그 후보들을 확정 전에 검증합니다. 여러 draft 토큰이 수용되면, 시스템은 타깃 모델의 검증 스텝 한 번으로 여러 출력 토큰을 확정할 수 있으면서도 타깃 모델의 출력 동작은 그대로 보존합니다.</p>
+
+  <p class="en">This post explores how speculative decoding works in vLLM and shares measurements from our test environment. We first review the autoregressive decoding baseline and the draft-and-verify process. We then examine five speculative-drafting approaches: native MTP, Gemma 4 MTP, EAGLE-3, DFlash, and DSpark. These methods differ in how the draft component receives information from the target model and whether candidate tokens are generated sequentially, autoregressively, in parallel, or through a hybrid approach. Finally, we show how to enable the methods tested in our environment, report measurements from our experiments on AMD Instinct™ MI300X and MI355X GPUs using the ROCm™ open software platform, and discuss practical tuning and observability considerations.</p>
+  <p class="ko">이 글은 vLLM에서 speculative decoding이 어떻게 동작하는지 살펴보고, 저희 테스트 환경에서 측정한 결과를 공유합니다. 먼저 자기회귀 디코딩 기준선과 draft-and-verify 과정을 짚습니다. 그다음 다섯 가지 speculative drafting 방식(native MTP, Gemma 4 MTP, EAGLE-3, DFlash, DSpark)을 살펴봅니다. 이 방법들은 draft 구성요소가 타깃 모델로부터 어떤 정보를 받는지, 그리고 후보 토큰을 순차적으로 생성하는지, 자기회귀적으로 생성하는지, 병렬로 생성하는지, 아니면 혼합 방식으로 생성하는지에서 차이가 납니다. 마지막으로 저희 환경에서 테스트한 방법들을 켜는 방법을 보이고, AMD Instinct™ MI300X 및 MI355X GPU에서 ROCm™ 오픈 소프트웨어 플랫폼을 사용해 수행한 실험 결과를 보고하며, 실무적인 튜닝과 관측성 고려사항을 논의합니다.</p>
+</section>
+
+<!-- ============ 2 ============ -->
+<section id="s2">
+  <h2><span class="num">2</span><span class="en">The autoregressive decoding baseline</span><span class="ko">자기회귀 디코딩 기준선</span></h2>
+  <p class="en">In standard autoregressive decoding, each decode step produces and commits one new token. For example, generating four output tokens requires four sequential decode steps:</p>
+  <p class="ko">표준 자기회귀 디코딩에서는 디코드 스텝마다 새 토큰 하나를 만들어 확정합니다. 예를 들어 출력 토큰 4개를 생성하려면 순차적인 디코드 스텝 4번이 필요합니다:</p>
+  <div class="flow">Step 1:&nbsp; <span class="tk">context</span> <span class="ar">→</span> model <span class="ar">→</span> <span class="tk">T1</span><br>
+Step 2:&nbsp; <span class="tk">context + T1</span> <span class="ar">→</span> model <span class="ar">→</span> <span class="tk">T2</span><br>
+Step 3:&nbsp; <span class="tk">context + T1 T2</span> <span class="ar">→</span> model <span class="ar">→</span> <span class="tk">T3</span><br>
+Step 4:&nbsp; <span class="tk">context + T1 T2 T3</span> <span class="ar">→</span> model <span class="ar">→</span> <span class="tk">T4</span></div>
+  <p class="en">After each step, the generated token is appended to the sequence and becomes part of the input for the next step. This makes the decoding loop straightforward, but it also requires one model decode step for every output token. During long generations, this token-by-token loop can dominate latency and limit serving throughput.</p>
+  <p class="ko">각 스텝이 끝나면 생성된 토큰이 시퀀스에 덧붙어 다음 스텝의 입력 일부가 됩니다. 덕분에 디코딩 루프는 단순해지지만, 출력 토큰 하나마다 모델 디코드 스텝 하나가 필요해집니다. 긴 생성에서는 이 토큰 단위 루프가 지연 시간을 지배하고 서빙 처리량을 제한할 수 있습니다.</p>
+  <p class="en">The key question behind speculative decoding is therefore:</p>
+  <p class="ko">따라서 speculative decoding의 바탕에 깔린 핵심 질문은 이것입니다:</p>
+  <div class="callout c-blue">
+    <span class="en">Can we preserve the output behavior of the original model while reducing how often generation advances by only one token at a time?</span>
+    <span class="ko">원래 모델의 출력 동작은 보존하면서, 생성이 한 번에 토큰 하나씩만 전진하는 횟수를 줄일 수 있을까?</span>
+  </div>
+  <p class="en">Speculative decoding addresses this by separating proposal from verification. A draft component first proposes several candidate future tokens. The original model, acting as the target model, then verifies those candidates before they are committed.</p>
+  <p class="ko">Speculative decoding은 제안(proposal)과 검증(verification)을 분리해 이 문제에 접근합니다. 먼저 draft 구성요소가 미래 토큰 후보 여럿을 제안합니다. 그다음 원래 모델이 타깃 모델 역할을 하며, 확정되기 전에 그 후보들을 검증합니다.</p>
+</section>
+
+<!-- ============ 3 ============ -->
+<section id="s3">
+  <h2><span class="num">3</span><span class="en">Core idea of speculative decoding</span><span class="ko">Speculative decoding의 핵심 아이디어</span></h2>
+  <p class="en">Speculative decoding does not replace the original model. Instead, it keeps the original model as the target model, which remains responsible for the final output, and adds a faster proposal stage in front of it.</p>
+  <p class="ko">Speculative decoding은 원래 모델을 대체하지 않습니다. 대신 원래 모델을 타깃 모델로 두어 최종 출력에 대한 책임을 계속 지게 하고, 그 앞에 더 빠른 제안 단계를 덧붙입니다.</p>
+  <p class="en">The process has two parts:</p>
+  <p class="ko">과정은 두 부분으로 나뉩니다:</p>
+  <ul class="en"><li><b>Draft</b>: propose several candidate future tokens.</li><li><b>Verify</b>: use the target model to check those candidates.</li></ul>
+  <ul class="ko"><li><b>Draft</b>: 미래 토큰 후보 여럿을 제안한다.</li><li><b>Verify</b>: 타깃 모델로 그 후보들을 검사한다.</li></ul>
+  <p class="en">During each speculative decoding round, as illustrated in Figure 1, a lightweight draft component proposes one or more future tokens. These tokens are only candidates and are not committed immediately. The target model then evaluates the candidate token sequence in one verification pass.</p>
+  <p class="ko">Figure 1에 나타낸 것처럼, 각 speculative decoding 라운드에서 가벼운 draft 구성요소가 미래 토큰을 하나 이상 제안합니다. 이 토큰들은 후보일 뿐 즉시 확정되지 않습니다. 그다음 타깃 모델이 후보 토큰 시퀀스를 한 번의 검증 패스로 평가합니다.</p>
+  <p class="en">Verification proceeds from left to right. Each draft token is checked using the target model's result at the corresponding position. Accepted tokens are committed to the output sequence. When a draft token is rejected, later candidates from the same proposal are no longer accepted.</p>
+  <p class="ko">검증은 왼쪽에서 오른쪽으로 진행됩니다. 각 draft 토큰은 해당 위치에서의 타깃 모델 결과로 검사됩니다. 수용된 토큰은 출력 시퀀스에 확정됩니다. draft 토큰 하나가 거부되면, 같은 제안에 속한 이후 후보들은 더 이상 수용되지 않습니다.</p>
+  <p class="en">If a draft token is rejected, the target model provides the next token. The remaining draft tokens are discarded, and generation continues from the updated sequence.</p>
+  <p class="ko">draft 토큰이 거부되면 타깃 모델이 다음 토큰을 제공합니다. 남은 draft 토큰들은 버려지고, 생성은 갱신된 시퀀스에서 이어집니다.</p>
+  <p class="en">Conceptually, standard autoregressive decoding advances like this:</p>
+  <p class="ko">개념적으로 표준 자기회귀 디코딩은 이렇게 전진합니다:</p>
+  <div class="flow">target model <span class="ar">→</span> <span class="tk">T1</span> &nbsp;&nbsp; target model <span class="ar">→</span> <span class="tk">T2</span> &nbsp;&nbsp; target model <span class="ar">→</span> <span class="tk">T3</span> &nbsp;&nbsp; target model <span class="ar">→</span> <span class="tk">T4</span></div>
+  <p class="en">Speculative decoding instead allows several candidate positions to be evaluated together:</p>
+  <p class="ko">반면 speculative decoding은 여러 후보 위치를 한꺼번에 평가할 수 있게 합니다:</p>
+  <div class="flow">draft proposes&nbsp;&nbsp; <span class="tk">T1</span> <span class="tk">T2</span> <span class="tk">T3</span> <span class="tk">T4</span><br>
+model verifies&nbsp;&nbsp; <span class="ok">✓</span> &nbsp; <span class="ok">✓</span> &nbsp; <span class="no">✗</span> &nbsp; stop<br>
+commit&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="tk">T1</span> <span class="tk">T2</span> <span class="tk tgt">replacement token</span> —</div>
+  <p class="en">This can reduce the number of target-model decoding rounds when multiple candidates are accepted. When the draft component produces tokens that the target model accepts, several output tokens can be committed from one target-model verification step. When a proposal is rejected, the target-side result determines how generation continues.</p>
+  <p class="ko">후보 여럿이 수용되면 타깃 모델의 디코딩 라운드 수를 줄일 수 있습니다. draft 구성요소가 타깃 모델이 수용하는 토큰을 만들어내면, 타깃 모델의 검증 스텝 한 번으로 여러 출력 토큰을 확정할 수 있습니다. 제안이 거부되면 타깃 쪽 결과가 생성이 어떻게 이어질지를 결정합니다.</p>
+
+  <img class="blogfig" loading="lazy" src="https://vllm.ai/blog-assets/figures/2026-08-23-speculative-decoding-amd-gpus/figure-01.svg" alt="Speculative decoding round: a draft component proposes candidate tokens and the target model verifies them in one pass">
+  <p class="figcap"><span class="en">Figure 1 — from the original post, served from vllm.ai.</span><span class="ko">Figure 1 — 원문의 그림, vllm.ai에서 직접 불러옴.</span></p>
+
+  <h3><span class="en">A simple accept/reject example</span><span class="ko">간단한 수용/거부 예시</span></h3>
+  <p class="en">Figure 2 gives an example of one speculative decoding round. Green boxes are draft tokens that survive verification, the red box marks the first rejected draft token, and the gray box is a later draft token that is discarded. The blue token in the output comes from the target model, not from the draft proposal.</p>
+  <p class="ko">Figure 2는 speculative decoding 라운드 하나의 예시입니다. 초록 상자는 검증을 통과한 draft 토큰, 빨간 상자는 처음으로 거부된 draft 토큰, 회색 상자는 그 뒤에 있어 버려지는 draft 토큰입니다. 출력의 파란 토큰은 draft 제안이 아니라 타깃 모델에서 나온 것입니다.</p>
+
+  <img class="blogfig" loading="lazy" src="https://vllm.ai/blog-assets/figures/2026-08-23-speculative-decoding-amd-gpus/figure-02.svg" alt="Accept and reject example: two draft tokens accepted, the third rejected and replaced by the target model token, the fourth discarded">
+  <p class="figcap"><span class="en">Figure 2 — from the original post, served from vllm.ai.</span><span class="ko">Figure 2 — 원문의 그림, vllm.ai에서 직접 불러옴.</span></p>
+
+  <p class="en">Suppose the current prompt is <code class="inl">The weather today is</code>. The draft component proposes several future tokens: <code class="inl">sunny</code>, <code class="inl">and</code>, <code class="inl">warm</code>, <code class="inl">outside</code>. The target model verifies the draft tokens from left to right:</p>
+  <p class="ko">현재 프롬프트가 <code class="inl">The weather today is</code>라고 합시다. draft 구성요소가 미래 토큰 여럿을 제안합니다: <code class="inl">sunny</code>, <code class="inl">and</code>, <code class="inl">warm</code>, <code class="inl">outside</code>. 타깃 모델은 draft 토큰들을 왼쪽에서 오른쪽으로 검증합니다:</p>
+  <div class="flow">draft proposes&nbsp;&nbsp; <span class="tk">sunny</span> <span class="tk">and</span> <span class="tk">warm</span> <span class="tk">outside</span><br>
+model verifies&nbsp;&nbsp; <span class="ok">✓</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="ok">✓</span> &nbsp;&nbsp;&nbsp; <span class="no">✗</span> &nbsp;&nbsp;&nbsp;&nbsp; stop<br>
+commit&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="tk">sunny</span> <span class="tk">and</span> <span class="tk tgt">clear</span> —</div>
+  <p class="en">The first two draft tokens, <code class="inl">sunny</code> and <code class="inl">and</code>, are accepted. At the third position, the draft proposes <code class="inl">warm</code>, but the target model selects <code class="inl">clear</code>. The remaining candidate, <code class="inl">outside</code>, is discarded because it follows the first rejected position. The next decoding round therefore continues from <code class="inl">The weather today is sunny and clear</code>.</p>
+  <p class="ko">첫 두 draft 토큰 <code class="inl">sunny</code>와 <code class="inl">and</code>는 수용됩니다. 세 번째 위치에서 draft는 <code class="inl">warm</code>을 제안하지만 타깃 모델은 <code class="inl">clear</code>를 선택합니다. 남은 후보 <code class="inl">outside</code>는 처음 거부된 위치 뒤에 있으므로 버려집니다. 따라서 다음 디코딩 라운드는 <code class="inl">The weather today is sunny and clear</code>에서 이어집니다.</p>
+</section>
+
+<!-- ============ 4 ============ -->
+<section id="s4">
+  <h2><span class="num">4</span><span class="en">How the drafting methods work</span><span class="ko">드래프팅 방법들의 작동 원리</span></h2>
+  <p class="en">Although all speculative decoding methods follow the same overall draft-and-verify process, they differ in how the draft component is designed and how it works with the target model. The main differences are: the type of information received from the target model; how this information is incorporated into the drafting process; and whether candidate tokens are generated sequentially or in parallel.</p>
+  <p class="ko">모든 speculative decoding 방법이 큰 틀에서 같은 draft-and-verify 과정을 따르지만, draft 구성요소를 어떻게 설계했고 타깃 모델과 어떻게 협력하는지가 다릅니다. 주요 차이는 세 가지입니다: 타깃 모델로부터 받는 정보의 종류, 그 정보를 드래프팅 과정에 어떻게 통합하는지, 그리고 후보 토큰을 순차적으로 생성하는지 병렬로 생성하는지.</p>
+  <p class="en">Based on these differences, the drafting methods discussed in this post can be grouped into three broad categories:</p>
+  <p class="ko">이 차이를 기준으로, 이 글에서 다루는 드래프팅 방법들은 크게 세 범주로 묶을 수 있습니다:</p>
+  <ul class="en">
+    <li><b>Native MTP modules</b>: built directly into the target-model architecture; use a model-native auxiliary prediction path; generate candidate tokens sequentially.</li>
+    <li><b>Separate MTP drafters</b>: use a separate checkpoint paired with a specific target model; use target-model activations and shared KV-cache information during inference; generate candidate tokens sequentially.</li>
+    <li><b>Dedicated target-conditioned draft networks</b>: use separate speculator models trained for a specific target model, including EAGLE-3, DFlash, and DSpark. EAGLE-3 drafts autoregressively from target-model hidden states, DFlash drafts parallel blocks from target-model hidden states, and DSpark adds lightweight causal correction and confidence-based prefix selection.</li>
+  </ul>
+  <ul class="ko">
+    <li><b>Native MTP 모듈</b>: 타깃 모델 아키텍처에 직접 내장됨. 모델 고유의 보조 예측 경로를 사용하고, 후보 토큰을 순차적으로 생성합니다.</li>
+    <li><b>별도 MTP drafter</b>: 특정 타깃 모델과 짝지어진 별도 체크포인트를 사용합니다. 추론 시 타깃 모델의 activation과 공유 KV 캐시 정보를 사용하고, 후보 토큰을 순차적으로 생성합니다.</li>
+    <li><b>전용 target-conditioned draft 네트워크</b>: 특정 타깃 모델을 위해 학습된 별도 speculator 모델을 사용하며, EAGLE-3·DFlash·DSpark가 여기 해당합니다. EAGLE-3는 타깃 모델의 hidden state로부터 자기회귀적으로 draft하고, DFlash는 타깃 모델 hidden state로부터 블록을 병렬로 draft하며, DSpark는 가벼운 인과적 보정과 신뢰도 기반 prefix 선택을 더합니다.</li>
+  </ul>
+  <p class="en">These categories describe the draft component architecture, not the target-model family. A target model may support native MTP while also having separately trained EAGLE-3, DFlash, or DSpark draft models. The draft component does not operate entirely on its own. Depending on the method, it may receive: a hidden representation from the target model; hidden states from several selected target layers; the target model's KV cache; or features produced by combining multiple target-model representations.</p>
+  <p class="ko">이 범주는 draft 구성요소의 아키텍처를 설명하는 것이지 타깃 모델 패밀리를 설명하는 게 아닙니다. 한 타깃 모델이 native MTP를 지원하면서 동시에 별도로 학습된 EAGLE-3·DFlash·DSpark draft 모델을 가질 수도 있습니다. draft 구성요소가 완전히 혼자 동작하는 것도 아닙니다. 방법에 따라 다음을 받을 수 있습니다: 타깃 모델의 hidden representation, 선택된 여러 타깃 레이어의 hidden state, 타깃 모델의 KV 캐시, 또는 여러 타깃 모델 표현을 결합해 만든 feature.</p>
+
+  <h3><span class="en">Native MTP</span><span class="ko">Native MTP</span></h3>
+  <p class="en">Multi-Token Prediction, or MTP, refers to a family of model-native mechanisms for predicting tokens beyond the immediate next token. In vLLM, native MTP is available when the target model includes a compatible auxiliary prediction component [2]. The exact MTP architecture varies across model families, but each implementation provides an auxiliary path for proposing future tokens.</p>
+  <p class="ko">MTP(Multi-Token Prediction)는 바로 다음 토큰 너머를 예측하기 위한, 모델에 내장된 메커니즘 계열을 가리킵니다. vLLM에서는 타깃 모델이 호환되는 보조 예측 구성요소를 포함하고 있을 때 native MTP를 쓸 수 있습니다 [2]. 정확한 MTP 아키텍처는 모델 패밀리마다 다르지만, 각 구현은 미래 토큰을 제안하는 보조 경로를 제공합니다.</p>
+  <p class="en">At the first speculative step, the MTP component combines a hidden representation from the target model with information from the current token to predict the first draft token. At subsequent steps, the newly drafted token and the hidden state produced by the previous MTP step are used to predict the next candidate. After the configured number of candidates has been proposed, the target model evaluates them together in one verification pass.</p>
+  <p class="ko">첫 speculative 스텝에서 MTP 구성요소는 타깃 모델의 hidden representation과 현재 토큰의 정보를 결합해 첫 draft 토큰을 예측합니다. 이후 스텝에서는 새로 draft된 토큰과 직전 MTP 스텝이 만든 hidden state를 사용해 다음 후보를 예측합니다. 설정된 개수만큼 후보가 제안되면, 타깃 모델이 그것들을 한 번의 검증 패스로 함께 평가합니다.</p>
+  <div class="flow"><b>First draft token</b><br>Target-model hidden representation <span class="ar">→</span> MTP component <span class="ar">→</span> <span class="tk">Draft token 1</span> + updated hidden state<br><br>
+<b>Subsequent draft tokens</b><br>Previous MTP hidden state + latest draft token <span class="ar">→</span> MTP component <span class="ar">→</span> <span class="tk">Next draft token</span> + updated hidden state<br><br>
+<span class="ar">→</span> Configured draft sequence complete <span class="ar">→</span> Target model evaluates all proposed tokens together in one verification pass</div>
+  <p class="en">Many native MTP implementations follow a similar pattern. A hidden representation from the target model or from the previous MTP prediction is combined with the embedding of a shifted input token or the latest drafted token, then passed through a model-specific fusion or projection into an auxiliary prediction layer producing draft-token logits.</p>
+  <p class="ko">많은 native MTP 구현이 비슷한 패턴을 따릅니다. 타깃 모델 또는 직전 MTP 예측의 hidden representation을, shift된 입력 토큰이나 최신 draft 토큰의 임베딩과 결합한 뒤, 모델별 fusion 또는 projection을 거쳐 보조 예측 레이어로 넣어 draft 토큰 logit을 얻습니다.</p>
+  <p class="en">The two inputs serve different purposes: (1) the hidden representation carries information about the preceding sequence; and (2) the token embedding identifies the latest token from which drafting continues. In common implementations, they are combined along the hidden dimension and transformed before entering the auxiliary prediction layer.</p>
+  <p class="ko">두 입력은 서로 다른 역할을 합니다: (1) hidden representation은 앞선 시퀀스에 대한 정보를 담고, (2) 토큰 임베딩은 드래프팅이 이어질 최신 토큰을 지목합니다. 일반적인 구현에서는 둘을 hidden 차원을 따라 결합하고 변환한 뒤 보조 예측 레이어로 넣습니다.</p>
+  <p class="en">The number of physical MTP layers and the configured speculative length are separate concepts. When <code class="inl">num_speculative_tokens</code> exceeds the prediction depth directly provided by the checkpoint, vLLM can reuse the MTP path through additional forward passes. A larger value therefore proposes more candidates before verification, but also introduces more sequential drafting work.</p>
+  <p class="ko">물리적인 MTP 레이어 수와 설정된 speculative 길이는 별개의 개념입니다. <code class="inl">num_speculative_tokens</code>가 체크포인트가 직접 제공하는 예측 깊이를 넘어서면, vLLM은 추가 forward pass를 통해 MTP 경로를 재사용할 수 있습니다. 따라서 값을 키우면 검증 전에 더 많은 후보를 제안하지만, 그만큼 순차적인 드래프팅 작업도 늘어납니다.</p>
+  <p class="en">Native MTP is closely tied to the target-model architecture. In many implementations, parts of the MTP path share components with the target model, which can keep the additional memory overhead relatively modest. However, generating multiple speculative tokens still requires sequential drafting before verification.</p>
+  <p class="ko">Native MTP는 타깃 모델 아키텍처와 밀접하게 묶여 있습니다. 많은 구현에서 MTP 경로의 일부가 타깃 모델과 구성요소를 공유하므로 추가 메모리 오버헤드가 비교적 작게 유지될 수 있습니다. 다만 speculative 토큰을 여러 개 생성하려면 여전히 검증 전에 순차적인 드래프팅이 필요합니다.</p>
+
+  <h3><span class="en">Gemma 4 MTP</span><span class="ko">Gemma 4 MTP</span></h3>
+  <p class="en">Gemma 4 uses a separately packaged MTP draft component paired with a specific target model [3]. Although the draft component has its own checkpoint, it remains closely connected to the target model during inference. The draft component uses activations produced by the target model and shares the target model's KV cache. This allows it to reuse contextual information that the target has already computed instead of processing the accepted prefix independently.</p>
+  <p class="ko">Gemma 4는 특정 타깃 모델과 짝지어진, 별도로 패키징된 MTP draft 구성요소를 사용합니다 [3]. draft 구성요소가 자체 체크포인트를 갖지만, 추론 중에는 타깃 모델과 긴밀히 연결된 상태를 유지합니다. draft 구성요소는 타깃 모델이 만들어낸 activation을 사용하고 타깃 모델의 KV 캐시를 공유합니다. 덕분에 수용된 prefix를 독립적으로 처리하는 대신, 타깃이 이미 계산해 둔 문맥 정보를 재사용할 수 있습니다.</p>
+  <div class="flow">Gemma 4 target model <span class="ar">→</span> Target-model activations · Shared target KV cache <span class="ar">→</span> Gemma 4 MTP draft component <span class="ar">→</span> <span class="tk">Candidate tokens</span></div>
+  <p class="en">As with native MTP, the number of layers in the draft component is separate from the configured speculative length. When several candidate tokens are requested, the draft component generates them sequentially, and the target model then verifies the proposed sequence.</p>
+  <p class="ko">native MTP와 마찬가지로, draft 구성요소의 레이어 수는 설정된 speculative 길이와 별개입니다. 후보 토큰을 여러 개 요청하면 draft 구성요소가 순차적으로 생성하고, 그다음 타깃 모델이 제안된 시퀀스를 검증합니다.</p>
+
+  <h3><span class="en">EAGLE-3</span><span class="ko">EAGLE-3</span></h3>
+  <p class="en">EAGLE-3 uses a dedicated draft network trained for a specific target model. The draft component has its own execution path, but it remains closely conditioned on information produced by the target model [4].</p>
+  <p class="ko">EAGLE-3는 특정 타깃 모델을 위해 학습된 전용 draft 네트워크를 사용합니다. draft 구성요소는 자체 실행 경로를 갖지만, 타깃 모델이 만들어낸 정보에 강하게 조건화된 상태를 유지합니다 [4].</p>
+  <p class="en">During the target-model forward pass, EAGLE-3 records hidden states from three stages of the target Transformer: near the beginning, around the middle, and near the end. These are contextual representations of the same accepted sequence at different stages of target-model processing. The three hidden states are concatenated and projected into a single fused target feature. This fused representation is then combined with the embedding of the sampled token before entering the EAGLE-3 draft decoder.</p>
+  <p class="ko">타깃 모델의 forward pass 동안 EAGLE-3는 타깃 Transformer의 세 지점(앞쪽, 중간쯤, 뒤쪽)에서 hidden state를 기록합니다. 이것들은 같은 수용 시퀀스를, 타깃 모델 처리의 서로 다른 단계에서 본 문맥 표현입니다. 세 hidden state는 concatenate된 뒤 하나의 융합된 타깃 feature로 projection됩니다. 이 융합 표현은 sampling된 토큰의 임베딩과 결합된 다음 EAGLE-3 draft 디코더로 들어갑니다.</p>
+  <div class="flow">Early-layer + Middle-layer + Late-layer hidden state <span class="ar">→</span> Concatenate + projection <span class="ar">→</span> <b>Fused target feature</b><br>
+Fused target feature + Sampled-token embedding <span class="ar">→</span> Concatenate + projection <span class="ar">→</span> EAGLE-3 draft decoder <span class="ar">→</span> <span class="tk">Draft token</span></div>
+  <p class="en">The two inputs serve different purposes: the fused target feature summarizes the accepted sequence using information from several stages of the target-model forward pass, and the sampled-token embedding identifies the token from which drafting continues.</p>
+  <p class="ko">두 입력의 역할은 다릅니다. 융합된 타깃 feature는 타깃 모델 forward pass의 여러 단계 정보를 사용해 수용된 시퀀스를 요약하고, sampling된 토큰 임베딩은 드래프팅이 이어질 토큰을 지목합니다.</p>
+  <p class="en">EAGLE-3 generates draft tokens autoregressively. For the first draft token, it uses the fused target feature computed from the accepted sequence together with the sampled-token embedding. After a draft token is produced, its embedding is fed into the next drafting stage. Because the target model has not yet processed the later speculative positions, target-model hidden states for those positions are not available. EAGLE-3 therefore uses the previous draft-component output when continuing the draft sequence.</p>
+  <p class="ko">EAGLE-3는 draft 토큰을 자기회귀적으로 생성합니다. 첫 draft 토큰에는 수용된 시퀀스로부터 계산한 융합 타깃 feature와 sampling된 토큰 임베딩을 함께 사용합니다. draft 토큰이 만들어지면 그 임베딩이 다음 드래프팅 단계로 들어갑니다. 타깃 모델이 뒤쪽 speculative 위치들을 아직 처리하지 않았으므로 그 위치의 타깃 모델 hidden state는 사용할 수 없습니다. 그래서 EAGLE-3는 draft 시퀀스를 이어갈 때 직전 draft 구성요소의 출력을 사용합니다.</p>
+  <p class="en">This sequential feedback gives later draft tokens direct dependence on earlier drafted tokens along the proposed sequence. However, generating more speculative tokens also requires more sequential drafting work before verification.</p>
+  <p class="ko">이 순차적 피드백 덕분에 뒤쪽 draft 토큰이 제안 시퀀스 상의 앞선 draft 토큰에 직접 의존하게 됩니다. 다만 speculative 토큰을 더 많이 생성할수록 검증 전에 필요한 순차 드래프팅 작업도 늘어납니다.</p>
+
+  <h3><span class="en">DFlash</span><span class="ko">DFlash</span></h3>
+  <p class="en">DFlash uses a dedicated draft network trained for a specific target model. Unlike MTP and EAGLE-3, which generate candidate tokens sequentially, DFlash predicts a whole block of future positions in parallel [5].</p>
+  <p class="ko">DFlash는 특정 타깃 모델을 위해 학습된 전용 draft 네트워크를 사용합니다. 후보 토큰을 순차적으로 생성하는 MTP·EAGLE-3와 달리, DFlash는 미래 위치 블록 전체를 병렬로 예측합니다 [5].</p>
+  <p class="en">DFlash begins each draft block with an anchor token. The anchor is a known token produced or confirmed by the target model, so DFlash does not need to predict it. Instead, it provides a known starting point for the masked positions that follow. In later decoding rounds, this is typically the additional target token returned by the previous verification pass.</p>
+  <p class="ko">DFlash는 각 draft 블록을 anchor 토큰으로 시작합니다. anchor는 타깃 모델이 만들었거나 확인한 알려진 토큰이므로 DFlash가 예측할 필요가 없습니다. 대신 뒤따르는 마스킹된 위치들에 대해 알려진 출발점을 제공합니다. 이후 디코딩 라운드에서는 보통 직전 검증 패스가 돌려준 추가 타깃 토큰이 anchor가 됩니다.</p>
+  <div class="flow">Position&nbsp; 0 &nbsp;&nbsp; 1 &nbsp;&nbsp;&nbsp; 2 &nbsp;&nbsp;&nbsp; 3 &nbsp;&nbsp;&nbsp; 4 &nbsp;&nbsp;&nbsp; 5 &nbsp;&nbsp;&nbsp; 6<br>
+Input&nbsp;&nbsp;&nbsp;&nbsp; <span class="tk tgt">anchor</span> <span class="tk">mask</span> <span class="tk">mask</span> <span class="tk">mask</span> <span class="tk">mask</span> <span class="tk">mask</span> <span class="tk">mask</span><br>
+Output&nbsp;&nbsp;&nbsp; <span class="tk tgt">anchor</span> <span class="tk">draft1</span> <span class="tk">draft2</span> <span class="tk">draft3</span> <span class="tk">draft4</span> <span class="tk">draft5</span> <span class="tk">draft6</span></div>
+  <p class="en">Like EAGLE-3, DFlash first combines hidden states from several target-model layers into a fused representation. The main difference is how this fused representation is used. EAGLE-3 combines it with the sampled-token embedding at the input of its autoregressive draft network. DFlash instead converts the fused target context into additional Key and Value representations that are available in every layer of the draft network.</p>
+  <p class="ko">EAGLE-3와 마찬가지로 DFlash도 먼저 여러 타깃 모델 레이어의 hidden state를 융합 표현으로 결합합니다. 주된 차이는 그 융합 표현을 어떻게 쓰느냐입니다. EAGLE-3는 자기회귀 draft 네트워크의 입력에서 sampling된 토큰 임베딩과 결합합니다. 반면 DFlash는 융합된 타깃 문맥을 추가적인 Key·Value 표현으로 변환해, draft 네트워크의 <b>모든 레이어</b>에서 사용할 수 있게 합니다.</p>
+  <p class="en">Queries from the masked draft positions can therefore attend to both Key/Value representations derived from the target model and Key/Value representations produced from the draft block itself. The target-model context therefore remains available throughout the draft network, rather than being supplied only once at its input.</p>
+  <p class="ko">따라서 마스킹된 draft 위치의 query는 타깃 모델에서 유도된 Key/Value와 draft 블록 자체에서 나온 Key/Value 양쪽에 attend할 수 있습니다. 즉 타깃 모델 문맥이 입력에서 한 번만 주어지는 게 아니라 draft 네트워크 전체에 걸쳐 계속 사용 가능한 상태로 남습니다.</p>
+  <p class="en">After the draft block has been generated, the target model evaluates all proposed tokens in one verification pass. The acceptance decision is then applied from left to right: accepted tokens are committed until the first rejection, and the remaining candidates are discarded.</p>
+  <p class="ko">draft 블록이 생성되고 나면 타깃 모델이 제안된 토큰 전부를 한 번의 검증 패스로 평가합니다. 그다음 수용 판정을 왼쪽에서 오른쪽으로 적용합니다. 첫 거부 전까지의 토큰이 확정되고, 남은 후보들은 버려집니다.</p>
+  <div class="flow">draft proposal&nbsp;&nbsp;&nbsp; <span class="tk">D1</span> <span class="tk">D2</span> <span class="tk">D3</span> <span class="tk">D4</span> <span class="tk">D5</span><br>
+acceptance&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="ok">accept</span> <span class="ok">accept</span> <span class="no">reject</span> discard discard<br>
+committed&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="tk">D1</span> <span class="tk">D2</span> <span class="tk tgt">target-model token</span> — —</div>
+  <p class="en">A defining characteristic of DFlash is that all masked positions are predicted together in one draft-network forward pass, rather than sequentially. Because all masked positions are predicted together, a later position is not conditioned on the sampled output of an earlier position during the same pass. This removes the token-by-token feedback used by autoregressive drafting. The effectiveness of later positions therefore depends on the trained checkpoint and workload, particularly when longer draft blocks are used.</p>
+  <p class="ko">DFlash를 규정하는 특징은 마스킹된 모든 위치를 순차적으로가 아니라 draft 네트워크의 <b>단일 forward pass에서 함께</b> 예측한다는 점입니다. 모든 위치를 함께 예측하므로, 같은 pass 안에서 뒤쪽 위치가 앞쪽 위치의 sampling 결과에 조건화되지 않습니다. 자기회귀 드래프팅이 쓰던 토큰 단위 피드백이 사라지는 것이죠. 따라서 뒤쪽 위치의 효과는 학습된 체크포인트와 워크로드에 달려 있으며, 특히 draft 블록이 길어질수록 그렇습니다.</p>
+
+  <h3><span class="en">DSpark</span><span class="ko">DSpark</span></h3>
+  <p class="en">DSpark extends parallel drafting with two additional mechanisms: a lightweight sequential head that introduces dependence between tokens within the draft block, and confidence-based selection of the prefix submitted for target-model verification.</p>
+  <p class="ko">DSpark는 병렬 드래프팅에 두 가지 장치를 더합니다: draft 블록 내 토큰들 사이에 의존성을 도입하는 가벼운 순차 head, 그리고 타깃 모델 검증에 제출할 prefix를 신뢰도 기반으로 선택하는 기능입니다.</p>
+  <p class="en">DSpark uses a modified DFlash model as its parallel backbone [6]. The backbone performs the main draft computation for all positions in one forward pass, producing a hidden state and a set of base logits for each draft position. It therefore inherits the target-context conditioning described in the DFlash section.</p>
+  <p class="ko">DSpark는 수정된 DFlash 모델을 병렬 backbone으로 사용합니다 [6]. backbone은 모든 위치에 대한 주요 draft 계산을 한 번의 forward pass로 수행해, draft 위치마다 hidden state와 base logit 집합을 만들어냅니다. 따라서 DFlash 절에서 설명한 타깃 문맥 조건화를 그대로 물려받습니다.</p>
+  <p class="en">A fully parallel draft component predicts every position without first seeing the tokens selected at earlier positions in the same block. When several continuations are plausible, this can produce inconsistent combinations. For example, both "of course" and "no problem" may be reasonable continuations, but independent position-wise predictions could produce "of problem."</p>
+  <p class="ko">완전히 병렬인 draft 구성요소는 같은 블록의 앞선 위치에서 어떤 토큰이 선택됐는지 보지 않은 채로 모든 위치를 예측합니다. 그럴듯한 이어쓰기가 여럿일 때 이 방식은 일관성 없는 조합을 만들 수 있습니다. 예를 들어 "of course"와 "no problem"이 모두 타당한 이어쓰기지만, 위치별로 독립 예측하면 "of problem"이 나올 수 있습니다.</p>
+  <p class="en">DSpark addresses this behavior by applying a lightweight sequential head after the parallel backbone. The backbone still computes the base logits for every position together. The sequential head then selects tokens from left to right, adjusting each position using information from the previously selected draft tokens. Specifically, DSpark applies a lightweight Markov head: for each position, it uses the immediately preceding selected token to produce a small bias that adjusts the base logits.</p>
+  <p class="ko">DSpark는 병렬 backbone 뒤에 가벼운 순차 head를 붙여 이 문제를 다룹니다. backbone은 여전히 모든 위치의 base logit을 한꺼번에 계산합니다. 그다음 순차 head가 왼쪽에서 오른쪽으로 토큰을 선택하면서, 앞서 선택된 draft 토큰의 정보로 각 위치를 조정합니다. 구체적으로 DSpark는 가벼운 Markov head를 적용합니다. 각 위치에서 바로 앞에 선택된 토큰을 사용해 작은 bias를 만들고, 그것으로 base logit을 조정합니다.</p>
+  <div class="flow">Base logits for position k &nbsp;+&nbsp; Bias from draft token k−1 <span class="ar">→</span> Adjusted distribution for position k<br><br>
+One parallel backbone pass + lightweight sequential correction <span class="ar">→</span> <span class="tk">token 1</span> <span class="ar">→</span> <span class="tk">token 2</span> <span class="ar">→</span> <span class="tk">token 3</span> <span class="ar">→</span> … <span class="ar">→</span> <span class="tk">token N</span></div>
+  <p class="en">The main draft network processes all candidate positions together in one forward pass. After that, only the lightweight Markov head runs from left to right to adjust each position using the previously selected draft token. This allows later draft tokens to depend on tokens already selected within the same block without running the full draft network again for every position.</p>
+  <p class="ko">주 draft 네트워크는 모든 후보 위치를 한 번의 forward pass로 함께 처리합니다. 그 뒤에는 가벼운 Markov head만 왼쪽에서 오른쪽으로 돌면서 앞서 선택된 draft 토큰으로 각 위치를 조정합니다. 덕분에 위치마다 전체 draft 네트워크를 다시 돌리지 않고도, 뒤쪽 draft 토큰이 같은 블록 안에서 이미 선택된 토큰에 의존할 수 있습니다.</p>
+  <div class="callout c-amber">
+    <span class="en">The DSpark design also includes a confidence head that can select a shorter draft prefix for target-model verification. <b>This feature was not active in the vLLM path used for our experiments</b>, so the benchmark results reflect only the parallel draft network and lightweight Markov correction.</span>
+    <span class="ko">DSpark 설계에는 타깃 모델 검증에 제출할 draft prefix를 더 짧게 고를 수 있는 confidence head도 있습니다. <b>이 기능은 저희 실험에 사용한 vLLM 경로에서 활성화되지 않았으므로</b>, 벤치마크 결과는 병렬 draft 네트워크와 가벼운 Markov 보정만 반영합니다.</span>
+  </div>
+
+  <h3><span class="en">Summary of the drafting methods</span><span class="ko">드래프팅 방법 요약</span></h3>
+  <p class="en">Figure 3 gives a visual side-by-side view of the five drafting methods: what the draft component looks like, which target-model information it uses, and whether candidate tokens are generated sequentially or in parallel. The table below the figure restates the same comparison in a compact form. In all five methods, the target model still evaluates the proposed sequence in one verification pass, and the acceptance decision is applied from left to right until the first rejected draft token.</p>
+  <p class="ko">Figure 3은 다섯 가지 드래프팅 방법을 나란히 보여줍니다. draft 구성요소가 어떻게 생겼는지, 타깃 모델의 어떤 정보를 쓰는지, 후보 토큰을 순차적으로 생성하는지 병렬로 생성하는지. 그림 아래 표가 같은 비교를 압축해 다시 정리합니다. 다섯 방법 모두에서 타깃 모델은 여전히 제안된 시퀀스를 한 번의 검증 패스로 평가하고, 수용 판정은 처음 거부된 draft 토큰까지 왼쪽에서 오른쪽으로 적용됩니다.</p>
+
+  <img class="blogfig" loading="lazy" src="https://vllm.ai/blog-assets/figures/2026-08-23-speculative-decoding-amd-gpus/figure-method-summary.svg" alt="Side-by-side comparison of native MTP, Gemma 4 MTP, EAGLE-3, DFlash and DSpark draft components">
+  <p class="figcap"><span class="en">Figure 3 — from the original post, served from vllm.ai.</span><span class="ko">Figure 3 — 원문의 그림, vllm.ai에서 직접 불러옴.</span></p>
+
+  <table>
+    <thead><tr>
+      <th><span class="en">Method</span><span class="ko">방법</span></th>
+      <th><span class="en">Draft component</span><span class="ko">Draft 구성요소</span></th>
+      <th><span class="en">Target-model information used</span><span class="ko">사용하는 타깃 모델 정보</span></th>
+      <th><span class="en">How draft tokens are generated</span><span class="ko">Draft 토큰 생성 방식</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td><b>Native MTP</b></td>
+        <td><span class="en">Model-native auxiliary MTP path</span><span class="ko">모델에 내장된 보조 MTP 경로</span></td>
+        <td><span class="en">A target-model or previous MTP hidden representation combined with current draft-token information</span><span class="ko">타깃 모델 또는 직전 MTP의 hidden representation을 현재 draft 토큰 정보와 결합</span></td>
+        <td><span class="en">Sequentially through repeated use of the MTP path</span><span class="ko">MTP 경로를 반복 사용해 순차적으로</span></td></tr>
+      <tr><td><b>Gemma 4 MTP</b></td>
+        <td><span class="en">Separate MTP draft component paired with the target model</span><span class="ko">타깃 모델과 짝지어진 별도 MTP draft 구성요소</span></td>
+        <td><span class="en">Target-model activations and the shared target KV cache</span><span class="ko">타깃 모델 activation과 공유된 타깃 KV 캐시</span></td>
+        <td><span class="en">Sequentially through the paired MTP component</span><span class="ko">짝지어진 MTP 구성요소를 통해 순차적으로</span></td></tr>
+      <tr><td><b>EAGLE-3</b></td>
+        <td><span class="en">Dedicated autoregressive draft network</span><span class="ko">전용 자기회귀 draft 네트워크</span></td>
+        <td><span class="en">Hidden states captured near the beginning, around the middle, and near the end of the target-model forward pass, fused into one representation</span><span class="ko">타깃 모델 forward pass의 앞·중간·뒤에서 포착한 hidden state를 하나의 표현으로 융합</span></td>
+        <td><span class="en">Sequentially, with each drafted token influencing the next</span><span class="ko">순차적으로, 각 draft 토큰이 다음 토큰에 영향을 줌</span></td></tr>
+      <tr><td><b>DFlash</b></td>
+        <td><span class="en">Dedicated parallel draft network</span><span class="ko">전용 병렬 draft 네트워크</span></td>
+        <td><span class="en">Fused target-model hidden states provided as additional Key and Value information in every draft layer</span><span class="ko">융합된 타깃 모델 hidden state를 모든 draft 레이어에 추가 Key·Value 정보로 제공</span></td>
+        <td><span class="en">All candidate positions are predicted together in one parallel forward pass</span><span class="ko">모든 후보 위치를 한 번의 병렬 forward pass로 함께 예측</span></td></tr>
+      <tr><td><b>DSpark</b></td>
+        <td><span class="en">DFlash-style parallel draft network with a lightweight Markov head</span><span class="ko">가벼운 Markov head를 갖춘 DFlash 방식 병렬 draft 네트워크</span></td>
+        <td><span class="en">The same target-conditioned information used by the parallel draft network</span><span class="ko">병렬 draft 네트워크가 쓰는 것과 동일한 target-conditioned 정보</span></td>
+        <td><span class="en">One parallel forward pass followed by lightweight sequential adjustment of token selection</span><span class="ko">한 번의 병렬 forward pass 뒤에 토큰 선택을 가볍게 순차 조정</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 5 ============ -->
+<section id="s5">
+  <h2><span class="num">5</span><span class="en">How to enable speculative decoding in vLLM</span><span class="ko">vLLM에서 speculative decoding 켜는 법</span></h2>
+  <p class="en">In vLLM, speculative decoding is configured through <code class="inl">--speculative-config</code>. The main differences are the method name, whether a separate draft checkpoint is required, and the number of candidate tokens requested. Current vLLM supports <code class="inl">mtp</code>, <code class="inl">eagle3</code>, <code class="inl">dflash</code>, and <code class="inl">dspark</code> as method values.</p>
+  <p class="ko">vLLM에서는 <code class="inl">--speculative-config</code>로 speculative decoding을 설정합니다. 주된 차이는 method 이름, 별도의 draft 체크포인트가 필요한지 여부, 그리고 요청할 후보 토큰 개수입니다. 현재 vLLM은 method 값으로 <code class="inl">mtp</code>, <code class="inl">eagle3</code>, <code class="inl">dflash</code>, <code class="inl">dspark</code>를 지원합니다.</p>
+  <table>
+    <thead><tr><th><span class="en">Method</span><span class="ko">방법</span></th><th><span class="en">Separate draft checkpoint</span><span class="ko">별도 draft 체크포인트</span></th><th><span class="en">Typical configuration</span><span class="ko">일반적인 설정</span></th></tr></thead>
+    <tbody>
+      <tr><td>Native MTP</td><td><span class="en">No</span><span class="ko">불필요</span></td><td><code class="inl">"method": "mtp"</code><br><code class="inl">"num_speculative_tokens": &lt;N&gt;</code></td></tr>
+      <tr><td>Gemma 4 MTP</td><td><span class="en">Yes</span><span class="ko">필요</span></td><td><code class="inl">"method": "mtp"</code><br><code class="inl">"model": "&lt;matching-assistant&gt;"</code><br><code class="inl">"num_speculative_tokens": &lt;N&gt;</code></td></tr>
+      <tr><td>EAGLE-3</td><td><span class="en">Yes</span><span class="ko">필요</span></td><td><code class="inl">"method": "eagle3"</code><br><code class="inl">"model": "&lt;matching-speculator&gt;"</code><br><code class="inl">"num_speculative_tokens": &lt;N&gt;</code></td></tr>
+      <tr><td>DFlash</td><td><span class="en">Yes</span><span class="ko">필요</span></td><td><code class="inl">"method": "dflash"</code><br><code class="inl">"model": "&lt;matching-speculator&gt;"</code><br><code class="inl">"num_speculative_tokens": &lt;N&gt;</code></td></tr>
+      <tr><td>DSpark</td><td><span class="en">Yes</span><span class="ko">필요</span></td><td><code class="inl">"method": "dspark"</code><br><code class="inl">"model": "&lt;matching-speculator&gt;"</code><br><code class="inl">"num_speculative_tokens": &lt;N&gt;</code></td></tr>
+    </tbody>
+  </table>
+  <p class="en">For native MTP, the draft component is included with the target model, so the <code class="inl">model</code> field is omitted:</p>
+  <p class="ko">Native MTP에서는 draft 구성요소가 타깃 모델에 포함되어 있으므로 <code class="inl">model</code> 필드를 생략합니다:</p>
+  <pre>vllm serve &lt;target-model&gt; \
+  --speculative-config '{
+    "method": "mtp",
+    "num_speculative_tokens": &lt;N&gt;
+  }'</pre>
+  <p class="en">For Gemma 4 MTP, EAGLE-3, DFlash, and DSpark, the <code class="inl">model</code> field normally points to a checkpoint trained for the target model:</p>
+  <p class="ko">Gemma 4 MTP, EAGLE-3, DFlash, DSpark에서는 보통 <code class="inl">model</code> 필드가 해당 타깃 모델용으로 학습된 체크포인트를 가리킵니다:</p>
+  <pre>vllm serve &lt;target-model&gt; \
+  --speculative-config '{
+    "method": "&lt;method&gt;",
+    "model": "&lt;matching-draft-checkpoint&gt;",
+    "num_speculative_tokens": &lt;N&gt;
+  }'</pre>
+  <p class="en">Gemma 4 assistant checkpoints use the MTP path even though they are supplied through the <code class="inl">model</code> field. vLLM connects the assistant component to the target model and allows it to share the target KV cache.</p>
+  <p class="ko">Gemma 4 assistant 체크포인트는 <code class="inl">model</code> 필드로 지정되더라도 MTP 경로를 사용합니다. vLLM이 assistant 구성요소를 타깃 모델에 연결하고 타깃 KV 캐시를 공유하게 해 줍니다.</p>
+  <p class="en">Before enabling a method, check that: the installed vLLM version supports the method and model architecture; the draft checkpoint is compatible with the target model and method; <code class="inl">num_speculative_tokens</code> is compatible with the checkpoint; and the model card supports the intended hardware and inference backend.</p>
+  <p class="ko">어떤 방법을 켜기 전에 다음을 확인하세요: 설치된 vLLM 버전이 그 방법과 모델 아키텍처를 지원하는지, draft 체크포인트가 타깃 모델·방법과 호환되는지, <code class="inl">num_speculative_tokens</code>가 체크포인트와 호환되는지, 그리고 모델 카드가 의도한 하드웨어와 추론 백엔드를 지원하는지.</p>
+  <h3><span class="en">Memory considerations</span><span class="ko">메모리 고려사항</span></h3>
+  <p class="en">Native MTP does not load a separate draft checkpoint and may share components such as the embedding table or output head with the target model. Gemma 4 MTP, EAGLE-3, DFlash, and DSpark load additional draft weights, so sufficient GPU memory headroom should be reserved. The actual overhead depends on the draft-component size, numerical precision, tensor-parallel configuration, and runtime buffers.</p>
+  <p class="ko">Native MTP는 별도 draft 체크포인트를 로드하지 않으며 임베딩 테이블이나 출력 head 같은 구성요소를 타깃 모델과 공유할 수 있습니다. Gemma 4 MTP, EAGLE-3, DFlash, DSpark는 추가 draft 가중치를 로드하므로 충분한 GPU 메모리 여유를 확보해야 합니다. 실제 오버헤드는 draft 구성요소 크기, 수치 정밀도, 텐서 병렬 구성, 런타임 버퍼에 따라 달라집니다.</p>
+</section>
+
+<!-- ============ 6 ============ -->
+<section id="s6">
+  <h2><span class="num">6</span><span class="en">Where to find the pretrained draft models</span><span class="ko">사전학습된 draft 모델은 어디에 있나</span></h2>
+  <p class="en">Several organizations now publish pretrained draft models on Hugging Face. Google provides MTP assistants for Gemma 4, while Z-Lab maintains a collection of DFlash checkpoints. Red Hat AI offers draft models across EAGLE-3, DFlash, and DSpark, and DeepSeek's DeepSpec collection provides matched checkpoints for all three methods. LightSeek focuses on EAGLE-based draft models for Kimi, while Inferact publishes draft models for MiniMax and Kimi.</p>
+  <p class="ko">여러 조직이 Hugging Face에 사전학습된 draft 모델을 공개하고 있습니다. Google은 Gemma 4용 MTP assistant를 제공하고, Z-Lab은 DFlash 체크포인트 컬렉션을 유지합니다. Red Hat AI는 EAGLE-3·DFlash·DSpark에 걸친 draft 모델을 제공하고, DeepSeek의 DeepSpec 컬렉션은 세 방법 모두에 대해 짝이 맞는 체크포인트를 제공합니다. LightSeek은 Kimi용 EAGLE 기반 draft 모델에 집중하고, Inferact은 MiniMax와 Kimi용 draft 모델을 공개합니다.</p>
+  <table>
+    <thead><tr><th><span class="en">Publisher</span><span class="ko">배포처</span></th><th><span class="en">Methods</span><span class="ko">방법</span></th><th><span class="en">Representative models and targets</span><span class="ko">대표 모델과 타깃</span></th></tr></thead>
+    <tbody>
+      <tr><td>Google</td><td>Gemma 4 MTP</td><td><span class="en">Assistant checkpoints for Gemma 4 E2B, E4B, 12B, 26B-A4B, and 31B target models. [7]</span><span class="ko">Gemma 4 E2B, E4B, 12B, 26B-A4B, 31B 타깃 모델용 assistant 체크포인트. [7]</span></td></tr>
+      <tr><td>LightSeek Foundation</td><td>EAGLE-3, EAGLE-3.1</td><td><span class="en">EAGLE-based draft models for Kimi-K2.5, Kimi-K2.6, and Kimi-K2.7-Coder, including standard and MLA variants. [8]</span><span class="ko">Kimi-K2.5, Kimi-K2.6, Kimi-K2.7-Coder용 EAGLE 기반 draft 모델. 표준 및 MLA 변종 포함. [8]</span></td></tr>
+      <tr><td>Red Hat AI</td><td>EAGLE-3, DFlash, DSpark</td><td><span class="en">A collection covering target families such as Llama, Qwen, Gemma, GPT-OSS, GLM, Nemotron, and Mistral. Common suffixes include <code class="inl">-speculator.eagle3</code>, <code class="inl">-speculator.dflash</code>, and <code class="inl">-speculator.dspark</code>. [9]</span><span class="ko">Llama, Qwen, Gemma, GPT-OSS, GLM, Nemotron, Mistral 등 타깃 패밀리를 아우르는 컬렉션. 흔한 접미사는 <code class="inl">-speculator.eagle3</code>, <code class="inl">-speculator.dflash</code>, <code class="inl">-speculator.dspark</code>. [9]</span></td></tr>
+      <tr><td>Z-Lab</td><td>DFlash</td><td><span class="en">DFlash checkpoints for targets including Qwen3, Qwen3.5, Qwen3.6, Gemma 4, Kimi, MiniMax, GPT-OSS, and Llama. Checkpoint names generally follow the <code class="inl">&lt;target&gt;-DFlash</code> pattern. [10]</span><span class="ko">Qwen3, Qwen3.5, Qwen3.6, Gemma 4, Kimi, MiniMax, GPT-OSS, Llama 등을 타깃으로 한 DFlash 체크포인트. 이름은 대체로 <code class="inl">&lt;target&gt;-DFlash</code> 패턴을 따릅니다. [10]</span></td></tr>
+      <tr><td>DeepSeek AI</td><td>EAGLE-3, DFlash, DSpark</td><td><span class="en">The DeepSpec collection provides versions of all three methods for Qwen3-4B, Qwen3-8B, and Qwen3-14B, as well as Gemma 4 12B. Examples include <code class="inl">eagle3_qwen3_8b_ttt7</code>, <code class="inl">dflash_qwen3_8b_block7</code>, and <code class="inl">dspark_qwen3_8b_block7</code>. [11]</span><span class="ko">DeepSpec 컬렉션은 Qwen3-4B, Qwen3-8B, Qwen3-14B와 Gemma 4 12B에 대해 세 방법 모두의 버전을 제공합니다. 예: <code class="inl">eagle3_qwen3_8b_ttt7</code>, <code class="inl">dflash_qwen3_8b_block7</code>, <code class="inl">dspark_qwen3_8b_block7</code>. [11]</span></td></tr>
+      <tr><td>Inferact</td><td>EAGLE-3, DSpark</td><td><span class="en">Draft models including <code class="inl">Inferact/MiniMax-M3-EAGLE3</code>, its GQA variants, and <code class="inl">Inferact/Kimi-K3-DSpark</code>. [12]</span><span class="ko"><code class="inl">Inferact/MiniMax-M3-EAGLE3</code>과 그 GQA 변종, <code class="inl">Inferact/Kimi-K3-DSpark</code> 등의 draft 모델. [12]</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 7 ============ -->
+<section id="s7">
+  <h2><span class="num">7</span><span class="en">Experimental setup and measurements</span><span class="ko">실험 환경과 측정 결과</span></h2>
+  <p class="en">After enabling speculative decoding, the practical question is whether the additional drafting work improves end-to-end serving performance. Candidate tokens do not need to be correct at every position because the target model evaluates them before they are committed. Performance therefore depends on how many proposed tokens are accepted and whether the saved target-model decoding work outweighs the cost of drafting and verification.</p>
+  <p class="ko">speculative decoding을 켠 뒤의 실무적 질문은, 추가된 드래프팅 작업이 end-to-end 서빙 성능을 개선하느냐입니다. 후보 토큰이 모든 위치에서 맞을 필요는 없습니다. 확정 전에 타깃 모델이 평가하니까요. 따라서 성능은 제안된 토큰이 얼마나 수용되는지, 그리고 절약된 타깃 모델 디코딩 작업이 드래프팅·검증 비용을 넘어서는지에 달려 있습니다.</p>
+  <p class="en">We evaluate model quality and serving performance using task-grounded benchmarks rather than random token sequences. Acceptance behavior depends on the structure and predictability of actual model outputs, so task-based prompts provide a more representative view of practical performance. The main performance indicators are: output-token throughput and speedup over the non-speculative baseline; mean accepted length and draft-token acceptance rates, where available; and model quality relative to the non-speculative baseline.</p>
+  <p class="ko">모델 품질과 서빙 성능은 무작위 토큰 시퀀스가 아니라 과제 기반 벤치마크로 평가합니다. 수용 동작은 실제 모델 출력의 구조와 예측 가능성에 의존하므로, 과제 기반 프롬프트가 실무 성능을 더 대표성 있게 보여줍니다. 주요 성능 지표는 다음과 같습니다: 비-speculative 기준선 대비 출력 토큰 처리량과 속도 향상, 가능한 경우 평균 수용 길이와 draft 토큰 수용률, 그리고 비-speculative 기준선 대비 모델 품질.</p>
+
+  <h3><span class="en">Models and experiment coverage</span><span class="ko">모델과 실험 커버리지</span></h3>
+  <p class="en">The experiments cover five speculative-drafting approaches across several target-model families. A check mark indicates that benchmark results are available for that target-method combination; a dash indicates that the combination was not included in the current experiments.</p>
+  <p class="ko">실험은 여러 타깃 모델 패밀리에 걸쳐 다섯 가지 speculative drafting 방식을 다룹니다. 체크 표시는 해당 타깃-방법 조합의 벤치마크 결과가 있다는 뜻이고, 대시는 이번 실험에 포함되지 않았다는 뜻입니다.</p>
+  <table>
+    <thead><tr><th><span class="en">Target model</span><span class="ko">타깃 모델</span></th><th>Native MTP</th><th>Gemma 4 MTP</th><th>EAGLE-3</th><th>DFlash</th><th>DSpark</th></tr></thead>
+    <tbody>
+      <tr><td><code class="inl">google/gemma-4-26B-A4B-it</code></td><td>—</td><td>✓ <span class="muted">Google</span></td><td>✓ <span class="muted">Red Hat AI</span></td><td>✓ <span class="muted">Z-Lab</span></td><td>—</td></tr>
+      <tr><td><code class="inl">google/gemma-4-31B-it</code></td><td>—</td><td>✓ <span class="muted">Google</span></td><td>✓ <span class="muted">Red Hat AI</span></td><td>✓ <span class="muted">Z-Lab</span></td><td>✓ <span class="muted">Red Hat AI</span></td></tr>
+      <tr><td><code class="inl">Qwen/Qwen3-8B</code></td><td>—</td><td>—</td><td>✓ <span class="muted">Red Hat AI</span></td><td>✓ <span class="muted">Z-Lab</span></td><td>✓ <span class="muted">DeepSeek</span></td></tr>
+      <tr><td><code class="inl">Qwen/Qwen3.5-27B</code></td><td>✓ <span class="muted">Built-in</span></td><td>—</td><td>—</td><td>✓ <span class="muted">Z-Lab</span></td><td>—</td></tr>
+      <tr><td><code class="inl">Qwen/Qwen3.5-122B-A10B</code></td><td>✓ <span class="muted">Built-in</span></td><td>—</td><td>—</td><td>✓ <span class="muted">Z-Lab</span></td><td>—</td></tr>
+      <tr><td><code class="inl">Qwen/Qwen3.6-27B</code></td><td>✓ <span class="muted">Built-in</span></td><td>—</td><td>—</td><td>✓ <span class="muted">Z-Lab</span></td><td>—</td></tr>
+      <tr><td><code class="inl">Qwen/Qwen3.6-35B-A3B</code></td><td>✓ <span class="muted">Built-in</span></td><td>—</td><td>—</td><td>✓ <span class="muted">Z-Lab</span></td><td>—</td></tr>
+      <tr><td><code class="inl">moonshotai/Kimi-K2.5</code></td><td>—</td><td>—</td><td>✓ <span class="muted">LightSeek</span></td><td>✓ <span class="muted">Z-Lab</span></td><td>—</td></tr>
+      <tr><td><code class="inl">MiniMaxAI/MiniMax-M3-MXFP8</code></td><td>—</td><td>—</td><td>✓ <span class="muted">Inferact</span></td><td>—</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p class="en">The table summarizes the target-method combinations included in the experiments and shows how speculative decoding behaves across different models, workloads, and proposal lengths. Each result should be interpreted within its test configuration, since model architecture, active parameter count, draft-component size, workload, and serving conditions can all affect performance. For throughput, we measure generated tokens per second against a standard autoregressive baseline and sweep the number of speculative tokens to study how speculation depth affects end-to-end serving throughput.</p>
+  <p class="ko">이 표는 실험에 포함된 타깃-방법 조합을 정리하고, speculative decoding이 모델·워크로드·제안 길이에 따라 어떻게 동작하는지 보여줍니다. 모델 아키텍처, 활성 파라미터 수, draft 구성요소 크기, 워크로드, 서빙 조건이 모두 성능에 영향을 줄 수 있으므로 각 결과는 그 테스트 구성 안에서 해석해야 합니다. 처리량은 표준 자기회귀 기준선 대비 초당 생성 토큰으로 측정하고, speculative 토큰 개수를 훑으면서 speculation 깊이가 end-to-end 서빙 처리량에 어떤 영향을 주는지 살펴봅니다.</p>
+
+  <h3><span class="en">Main observations</span><span class="ko">주요 관찰</span></h3>
+  <p class="en">The measurements varied by target model, drafting method, workload, and proposal length.</p>
+  <p class="ko">측정치는 타깃 모델, 드래프팅 방법, 워크로드, 제안 길이에 따라 달랐습니다.</p>
+  <ul class="en">
+    <li>For <b>gemma-4-26B-A4B-it</b>, the largest measured throughput ratios within the tested sweep were <b>2.74×</b> and <b>2.62×</b> for Gemma 4 MTP on GSM8K and MBPP, and <b>2.87×</b> and <b>2.79×</b> for DFlash on MATH500 and HumanEval. EAGLE-3 ranged from 2.11× to 2.27× across the four datasets.</li>
+    <li>For <b>gemma-4-31B-it</b>, Gemma 4 MTP reached 2.00× on GSM8K and 1.99× on MBPP, while DFlash reached 2.34× on MATH500 and 2.05× on HumanEval. EAGLE-3 and DSpark were also above baseline across the four evaluated datasets. The proposal length associated with the largest measured throughput varied by workload.</li>
+    <li>For <b>Qwen3-8B</b>, DSpark ranged from 1.15× on MATH500 to 1.63× on GSM8K. DFlash ranged from 1.08× to 1.27×. EAGLE-3 was above baseline on GSM8K, HumanEval, and MBPP, while its largest measured MATH500 value remained <b>below</b> the baseline.</li>
+    <li>For <b>Qwen3.5-27B</b>, <b>Qwen3.5-122B-A10B</b>, and <b>Qwen3.6-27B</b>, the maximum measured native-MTP values were higher than the corresponding maximum DFlash values. The largest ratio in this group was <b>2.20×</b> for Qwen3.5-122B-A10B on MATH500. The native-MTP proposal length associated with the largest measured throughput ranged from N=4 to N=7.</li>
+    <li>For <b>Qwen3.6-35B-A3B</b>, DFlash ranged from 1.77× to 2.06×, with the largest value at N=7 for each of the four datasets. Native MTP ranged from 1.28× to 1.49×, largest at N=6. The difference from the Qwen3.6-27B measurements shows that results can vary between models in the same family.</li>
+    <li>For <b>MiniMax-M3-MXFP8</b>, EAGLE-3 reached 2.09× on HumanEval at N=4. For <b>Kimi-K2.5</b>, EAGLE-3 reached up to 2.33× and DFlash up to <b>2.68×</b>. Within the tested sweeps, the largest EAGLE-3 values generally occurred at N=4, while the largest DFlash values occurred at N=7.</li>
+  </ul>
+  <ul class="ko">
+    <li><b>gemma-4-26B-A4B-it</b>: 테스트한 스윕 내 최대 처리량 비는 Gemma 4 MTP가 GSM8K에서 <b>2.74×</b>, MBPP에서 <b>2.62×</b>, DFlash가 MATH500에서 <b>2.87×</b>, HumanEval에서 <b>2.79×</b>였습니다. EAGLE-3는 네 데이터셋에서 2.11×~2.27× 범위였습니다.</li>
+    <li><b>gemma-4-31B-it</b>: Gemma 4 MTP가 GSM8K 2.00×, MBPP 1.99×, DFlash가 MATH500 2.34×, HumanEval 2.05×에 도달했습니다. EAGLE-3와 DSpark도 평가한 네 데이터셋에서 기준선을 넘었습니다. 최대 처리량이 나온 제안 길이는 워크로드마다 달랐습니다.</li>
+    <li><b>Qwen3-8B</b>: DSpark는 MATH500 1.15×에서 GSM8K 1.63× 범위였습니다. DFlash는 1.08×~1.27×. EAGLE-3는 GSM8K·HumanEval·MBPP에서 기준선을 넘었지만, MATH500의 최대 측정치는 기준선 <b>아래</b>에 머물렀습니다.</li>
+    <li><b>Qwen3.5-27B</b>, <b>Qwen3.5-122B-A10B</b>, <b>Qwen3.6-27B</b>: native MTP의 최대 측정치가 대응하는 DFlash 최대치보다 높았습니다. 이 그룹의 최대 비율은 Qwen3.5-122B-A10B의 MATH500에서 <b>2.20×</b>였습니다. 최대 처리량이 나온 native MTP 제안 길이는 N=4에서 N=7 사이였습니다.</li>
+    <li><b>Qwen3.6-35B-A3B</b>: DFlash가 1.77×~2.06× 범위였고, 네 데이터셋 모두 N=7에서 최대였습니다. Native MTP는 1.28×~1.49×, 최대는 N=6. Qwen3.6-27B 측정치와의 차이는 같은 패밀리 내 모델 사이에서도 결과가 달라질 수 있음을 보여줍니다.</li>
+    <li><b>MiniMax-M3-MXFP8</b>: EAGLE-3가 N=4에서 HumanEval 2.09×에 도달했습니다. <b>Kimi-K2.5</b>: EAGLE-3가 최대 2.33×, DFlash가 최대 <b>2.68×</b>. 테스트한 스윕 내에서 EAGLE-3의 최대치는 대체로 N=4에서, DFlash의 최대치는 N=7에서 나왔습니다.</li>
+  </ul>
+  <p class="en">Across the experiments, the proposal length associated with the largest measured throughput was not constant. For the sequential methods, throughput often increased over the first few values of N before reaching a plateau. For DFlash and DSpark, N=7 was frequently among the higher-throughput settings, while larger values did not consistently increase throughput. These observations reflect the hardware, software, target model, draft checkpoint, workload, and sweep settings used in this study.</p>
+  <p class="ko">실험 전반에서, 최대 처리량이 나오는 제안 길이는 일정하지 않았습니다. 순차적 방법들에서는 N의 처음 몇 값에서 처리량이 오르다가 정체되는 경우가 많았습니다. DFlash와 DSpark에서는 N=7이 높은 처리량 설정에 자주 포함됐고, 그보다 큰 값이 처리량을 일관되게 올리지는 않았습니다. 이 관찰들은 본 연구에서 사용한 하드웨어·소프트웨어·타깃 모델·draft 체크포인트·워크로드·스윕 설정을 반영합니다.</p>
+</section>
+
+<!-- ============ 8 ============ -->
+<section id="s8">
+  <h2><span class="num">8</span><span class="en">Tuning considerations</span><span class="ko">튜닝 시 고려사항</span></h2>
+  <p class="en">Speculative decoding should be treated as a runtime optimization rather than a fixed setting that works equally well for every workload. The value of <code class="inl">num_speculative_tokens</code> associated with the highest throughput depends on how many proposed tokens are accepted and whether the avoided target-model decode work outweighs the cost of drafting and verification.</p>
+  <p class="ko">Speculative decoding은 모든 워크로드에 똑같이 잘 듣는 고정 설정이 아니라 런타임 최적화로 다뤄야 합니다. 최고 처리량을 내는 <code class="inl">num_speculative_tokens</code> 값은 제안된 토큰이 얼마나 수용되는지, 그리고 회피한 타깃 모델 디코드 작업이 드래프팅·검증 비용을 넘어서는지에 달려 있습니다.</p>
+  <p class="en">Observability is therefore important. A model-card recommendation or example configuration provides a useful starting point, but the final setting should be selected using representative workloads and end-to-end measurements. Useful signals include throughput, mean accepted length, overall acceptance rate, and per-position acceptance rate.</p>
+  <p class="ko">그래서 관측성이 중요합니다. 모델 카드의 권장값이나 예시 설정은 유용한 출발점이지만, 최종 설정은 대표성 있는 워크로드와 end-to-end 측정으로 골라야 합니다. 유용한 신호로는 처리량, 평균 수용 길이, 전체 수용률, 위치별 수용률이 있습니다.</p>
+  <p class="en">A larger proposal window gives the system more opportunities to commit several tokens in one verification pass. However, acceptance may decrease at later draft positions. When this happens, the additional candidates contribute little while still adding drafting and verification work, causing throughput to flatten or regress.</p>
+  <p class="ko">제안 윈도우가 크면 검증 한 번에 여러 토큰을 확정할 기회가 늘어납니다. 다만 뒤쪽 draft 위치일수록 수용률이 떨어질 수 있습니다. 그렇게 되면 추가 후보들이 기여는 거의 없으면서 드래프팅·검증 작업만 늘려, 처리량이 정체되거나 뒷걸음질합니다.</p>
+
+  <h3><span class="en">Start from a supported configuration</span><span class="ko">지원되는 설정에서 시작하기</span></h3>
+  <p class="en">For native MTP, N=1 is a conservative starting point because it introduces the least additional sequential drafting work: <code class="inl">{"method": "mtp", "num_speculative_tokens": 1}</code>. After confirming correctness and stability, sweep larger values such as 2, 3, 4, 5, 6, and 7.</p>
+  <p class="ko">Native MTP에서는 추가되는 순차 드래프팅 작업이 가장 적은 N=1이 보수적인 출발점입니다: <code class="inl">{"method": "mtp", "num_speculative_tokens": 1}</code>. 정확성과 안정성을 확인한 뒤 2, 3, 4, 5, 6, 7 같은 큰 값들을 훑어 보세요.</p>
+  <p class="en">In our measurements, the native-MTP setting associated with the largest measured throughput varied by target model and workload. For Qwen3.5-27B, the largest measured throughput occurred at N=5 for GSM8K and MATH500, N=4 for HumanEval and MBPP, and N=3 for MT-Bench. For Qwen3.5-122B-A10B, the largest measured throughput across the four listed reasoning and code datasets occurred at N=7. The Qwen3.6 measurements also show that this setting can change between models in the same family: for Qwen3.6-27B the largest measured values occurred at N=4 or N=5, while throughput for the tested Qwen3.6-35B-A3B configurations increased through N=6.</p>
+  <p class="ko">저희 측정에서 최대 처리량을 낸 native MTP 설정은 타깃 모델과 워크로드에 따라 달랐습니다. Qwen3.5-27B에서는 GSM8K·MATH500이 N=5, HumanEval·MBPP가 N=4, MT-Bench가 N=3에서 최대였습니다. Qwen3.5-122B-A10B에서는 나열된 네 개의 추론·코드 데이터셋 전부 N=7에서 최대였습니다. Qwen3.6 측정치는 같은 패밀리 안에서도 이 설정이 달라질 수 있음을 보여줍니다. Qwen3.6-27B는 N=4 또는 N=5에서 최대였던 반면, 테스트한 Qwen3.6-35B-A3B 구성은 N=6까지 처리량이 계속 올랐습니다.</p>
+  <p class="en">For Gemma 4 MTP and EAGLE-3, increasing N also adds sequential drafting work. A short sweep is therefore useful even when the checkpoint provides a recommended configuration. In our Gemma 4 and EAGLE-3 experiments, measured throughput generally increased over the first few values of N before reaching a plateau.</p>
+  <p class="ko">Gemma 4 MTP와 EAGLE-3에서도 N을 키우면 순차 드래프팅 작업이 늘어납니다. 그래서 체크포인트가 권장 설정을 제공하더라도 짧게 스윕해 보는 게 유용합니다. 저희 Gemma 4·EAGLE-3 실험에서는 N의 처음 몇 값에서 처리량이 오르다가 정체되는 것이 일반적이었습니다.</p>
+  <p class="en">For DFlash, begin with the proposal lengths recommended or supported by the draft checkpoint. Many DFlash checkpoints are trained with a fixed block size. For example, when <code class="inl">block_size = 16</code>, the maximum proposal length is normally <code class="inl">num_speculative_tokens = 15</code>, because the first position is the confirmed anchor token and the remaining 15 positions are draft candidates. This is the maximum supported proposal length, not necessarily the highest-throughput setting. In practice, it is useful to test smaller values such as N = 3, 7, 11, 15. Across our DFlash experiments, N=7 was frequently among the higher-throughput settings; for some workloads, the largest measured throughput occurred at N=11.</p>
+  <p class="ko">DFlash에서는 draft 체크포인트가 권장하거나 지원하는 제안 길이에서 시작하세요. 많은 DFlash 체크포인트가 고정된 블록 크기로 학습됩니다. 예를 들어 <code class="inl">block_size = 16</code>이면 최대 제안 길이는 보통 <code class="inl">num_speculative_tokens = 15</code>입니다. 첫 위치가 확정된 anchor 토큰이고 나머지 15개가 draft 후보이기 때문입니다. 이는 지원되는 최대 제안 길이이지 반드시 최고 처리량 설정은 아닙니다. 실무에서는 N = 3, 7, 11, 15 같은 더 작은 값들도 테스트해 보는 게 좋습니다. 저희 DFlash 실험 전반에서 N=7이 높은 처리량 설정에 자주 포함됐고, 일부 워크로드에서는 N=11에서 최대치가 나왔습니다.</p>
+  <p class="en">For DSpark, <code class="inl">num_speculative_tokens</code> sets the number of candidate tokens generated in each speculative round. In our vLLM experiments, the full configured proposal was submitted for target-model verification, so values such as N=3 and N=7 should be compared using end-to-end throughput.</p>
+  <p class="ko">DSpark에서 <code class="inl">num_speculative_tokens</code>는 speculative 라운드마다 생성할 후보 토큰 개수를 정합니다. 저희 vLLM 실험에서는 설정된 제안 전체가 타깃 모델 검증에 제출됐으므로, N=3과 N=7 같은 값들은 end-to-end 처리량으로 비교해야 합니다.</p>
+
+  <h3><span class="en">Monitor acceptance behavior</span><span class="ko">수용 동작 모니터링</span></h3>
+  <table>
+    <thead><tr><th><span class="en">Signal</span><span class="ko">신호</span></th><th><span class="en">What it shows</span><span class="ko">무엇을 보여주나</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="en">Throughput</span><span class="ko">처리량</span></td><td><span class="en">How end-to-end serving performance changes relative to the non-speculative baseline</span><span class="ko">비-speculative 기준선 대비 end-to-end 서빙 성능이 어떻게 바뀌는지</span></td></tr>
+      <tr><td><span class="en">Mean accepted length</span><span class="ko">평균 수용 길이</span></td><td><span class="en">How many draft tokens are committed per speculative round on average</span><span class="ko">speculative 라운드당 평균 몇 개의 draft 토큰이 확정되는지</span></td></tr>
+      <tr><td><span class="en">Overall acceptance rate</span><span class="ko">전체 수용률</span></td><td><span class="en">What proportion of proposed draft tokens are accepted</span><span class="ko">제안된 draft 토큰 중 수용되는 비율</span></td></tr>
+      <tr><td><span class="en">Per-position acceptance rate</span><span class="ko">위치별 수용률</span></td><td><span class="en">Whether later positions in the proposal remain useful</span><span class="ko">제안의 뒤쪽 위치들이 여전히 쓸모 있는지</span></td></tr>
+    </tbody>
+  </table>
+  <p class="en">Per-position acceptance is particularly helpful when tuning proposal length. If the first few positions are accepted frequently but later positions contribute very little, reducing <code class="inl">num_speculative_tokens</code> may improve throughput by avoiding unnecessary draft work. Acceptance metrics should be interpreted together with throughput. A method may show higher throughput relative to baseline even with a lower acceptance rate when draft generation is inexpensive. Conversely, a high acceptance rate does not necessarily correspond to higher throughput when the draft component adds additional overhead.</p>
+  <p class="ko">위치별 수용률은 제안 길이를 튜닝할 때 특히 유용합니다. 앞쪽 몇 위치는 자주 수용되는데 뒤쪽 위치가 기여를 거의 못 한다면, <code class="inl">num_speculative_tokens</code>를 줄여 불필요한 draft 작업을 없애는 쪽이 처리량에 도움이 될 수 있습니다. 수용 지표는 처리량과 함께 해석해야 합니다. draft 생성이 저렴하다면 수용률이 낮아도 기준선 대비 처리량이 더 높을 수 있고, 반대로 draft 구성요소가 오버헤드를 더한다면 수용률이 높다고 반드시 처리량이 높지는 않습니다.</p>
+
+  <h3><span class="en">Match the sweep to the workload</span><span class="ko">스윕을 워크로드에 맞추기</span></h3>
+  <p class="en">Different workloads can produce different acceptance patterns. In our GSM8K and MATH500 measurements, medium or deeper proposal lengths were often associated with higher measured throughput within the tested sweeps. For native MTP on Qwen3.5-122B-A10B, measured throughput increased through N=7. For DFlash, higher measured values frequently occurred at N=7 or N=11. For HumanEval and MBPP, moderate proposal lengths were often among the higher-throughput settings. Code contains predictable local structure, but formatting, identifiers, and implementation choices can cause an otherwise plausible continuation to diverge.</p>
+  <p class="ko">워크로드가 다르면 수용 패턴도 달라질 수 있습니다. 저희 GSM8K·MATH500 측정에서는 테스트한 스윕 내에서 중간 또는 더 깊은 제안 길이가 높은 처리량과 짝을 이루는 경우가 많았습니다. Qwen3.5-122B-A10B의 native MTP에서는 N=7까지 처리량이 올랐습니다. DFlash에서는 N=7이나 N=11에서 높은 값이 자주 나왔습니다. HumanEval·MBPP에서는 중간 정도의 제안 길이가 높은 처리량 설정에 자주 들었습니다. 코드에는 예측 가능한 국소 구조가 있지만, 서식·식별자·구현 선택 때문에 그럴듯해 보이던 이어쓰기가 갈라질 수 있습니다.</p>
+
+  <h3><span class="en">Example tuning workflow</span><span class="ko">튜닝 워크플로 예시</span></h3>
+  <ol class="en">
+    <li>Begin with a configuration supported or recommended for the checkpoint.</li>
+    <li>Benchmark using representative prompts and generation settings.</li>
+    <li>Record throughput, mean accepted length, and acceptance rates.</li>
+    <li>Sweep several smaller and larger proposal lengths.</li>
+    <li>Select a setting based on the metric most relevant to the intended workload. In these experiments, end-to-end serving throughput was the primary selection metric.</li>
+  </ol>
+  <ol class="ko">
+    <li>체크포인트가 지원하거나 권장하는 설정에서 시작한다.</li>
+    <li>대표성 있는 프롬프트와 생성 설정으로 벤치마크한다.</li>
+    <li>처리량, 평균 수용 길이, 수용률을 기록한다.</li>
+    <li>더 작은 값과 더 큰 값의 제안 길이를 여럿 훑는다.</li>
+    <li>의도한 워크로드에 가장 관련 있는 지표를 기준으로 설정을 고른다. 이번 실험에서는 end-to-end 서빙 처리량이 주된 선택 지표였다.</li>
+  </ol>
+  <p class="en">The selected configuration does not necessarily have the longest proposal, the highest acceptance rate, or the largest mean accepted length. Selection should consider the trade-off among drafting cost, verification cost, accepted tokens, and the metric most relevant to the intended workload.</p>
+  <p class="ko">선택된 설정이 반드시 제안이 가장 길거나, 수용률이 가장 높거나, 평균 수용 길이가 가장 큰 것은 아닙니다. 선택할 때는 드래프팅 비용, 검증 비용, 수용된 토큰, 그리고 의도한 워크로드에 가장 관련 있는 지표 사이의 트레이드오프를 함께 고려해야 합니다.</p>
+</section>
+
+<!-- ============ 9 ============ -->
+<section id="s9">
+  <h2><span class="num">9</span><span class="en">Training a speculator for a new target model</span><span class="ko">새 타깃 모델용 speculator 학습하기</span></h2>
+  <p class="en">This guide does not cover speculator training in depth. The following workflow summarizes practical considerations from the referenced vLLM Speculators and DeepSpec resources [13], [14], and [15]. A typical workflow is: prepare representative prompts; generate responses with the target model; choose a hidden-state generation mode; collect the required target-model hidden states; train the speculator; test acceptance and serving throughput.</p>
+  <p class="ko">이 가이드는 speculator 학습을 깊이 다루지는 않습니다. 아래 워크플로는 참고한 vLLM Speculators와 DeepSpec 자료 [13], [14], [15]의 실무적 고려사항을 요약한 것입니다. 전형적인 흐름은 다음과 같습니다: 대표성 있는 프롬프트 준비 → 타깃 모델로 응답 생성 → hidden state 생성 모드 선택 → 필요한 타깃 모델 hidden state 수집 → speculator 학습 → 수용률과 서빙 처리량 테스트.</p>
+
+  <h3><span class="en">Prepare representative prompts</span><span class="ko">대표성 있는 프롬프트 준비</span></h3>
+  <p class="en">Start with prompts that reflect the expected workload, such as chat, mathematics, code generation, tool use, or multilingual tasks. Keep a separate set of prompts for evaluation. The responses used for training should be generated by the exact target model that the speculator will support. The tokenizer, chat template, thinking mode, and generation configuration should also match the intended deployment. The vLLM documentation emphasizes that applying the target model's tokenizer or chat template to existing responses does not make the data target-specific; the responses themselves must come from the target model.</p>
+  <p class="ko">챗, 수학, 코드 생성, 도구 사용, 다국어 과제처럼 예상 워크로드를 반영하는 프롬프트에서 시작하세요. 평가용 프롬프트는 따로 떼어 둡니다. 학습에 쓰는 응답은 speculator가 지원할 <b>바로 그 타깃 모델</b>이 생성한 것이어야 합니다. 토크나이저, 챗 템플릿, thinking 모드, 생성 설정도 실제 배포와 맞아야 합니다. vLLM 문서는 기존 응답에 타깃 모델의 토크나이저나 챗 템플릿을 적용한다고 해서 데이터가 타깃 특화가 되는 게 아니라고 강조합니다. 응답 자체가 타깃 모델에서 나와야 합니다.</p>
+
+  <h3><span class="en">Choose how to obtain hidden states</span><span class="ko">Hidden state 확보 방식 선택</span></h3>
+  <table>
+    <thead><tr><th><span class="en">Training mode</span><span class="ko">학습 모드</span></th><th><span class="en">How it works</span><span class="ko">동작 방식</span></th><th><span class="en">Main consideration</span><span class="ko">주요 고려사항</span></th></tr></thead>
+    <tbody>
+      <tr><td><b>Online</b></td><td><span class="en">Hidden states are generated by a running vLLM server when needed and discarded afterward</span><span class="ko">필요할 때 실행 중인 vLLM 서버가 hidden state를 생성하고 그 뒤 폐기</span></td><td><span class="en">Avoids a large disk cache but requires resources for target inference and training at the same time</span><span class="ko">큰 디스크 캐시가 필요 없지만, 타깃 추론과 학습에 동시에 자원이 필요</span></td></tr>
+      <tr><td><b>Offline</b></td><td><span class="en">Hidden states are generated and stored before training begins</span><span class="ko">학습 시작 전에 hidden state를 생성해 저장</span></td><td><span class="en">Frees all GPUs for training afterward but requires substantial storage</span><span class="ko">이후 모든 GPU를 학습에 쓸 수 있지만 상당한 저장 공간이 필요</span></td></tr>
+      <tr><td><b>Hybrid</b></td><td><span class="en">Hidden states are generated and cached during the first epoch, then reused</span><span class="ko">첫 epoch 동안 생성해 캐시한 뒤 재사용</span></td><td><span class="en">Pays the generation cost once without requiring a separate preprocessing stage</span><span class="ko">별도 전처리 단계 없이 생성 비용을 한 번만 지불</span></td></tr>
+    </tbody>
+  </table>
+  <p class="en">The selected mode changes where the hidden states come from; the remaining training workflow is largely the same.</p>
+  <p class="ko">선택한 모드는 hidden state가 어디서 오는지를 바꿀 뿐, 나머지 학습 워크플로는 대체로 같습니다.</p>
+
+  <h3><span class="en">Collect target-model information</span><span class="ko">타깃 모델 정보 수집</span></h3>
+  <p class="en">A vLLM server can run the target model and expose hidden states from the layers required by the selected drafting method. When custom target layers are chosen, the same layer selections must also be used in the speculator-training configuration. The information collected depends on the method: EAGLE-3 uses hidden states from selected target-model layers for autoregressive drafting [4]; DFlash uses target-model features to train a network that predicts a block of future positions in parallel [16]; DSpark adds lightweight sequential and confidence heads to a DFlash-style draft network [6]; and MTP training fine-tunes the target model's own MTP component and therefore requires a target model that already contains compatible MTP layers [13].</p>
+  <p class="ko">vLLM 서버로 타깃 모델을 실행하면서, 선택한 드래프팅 방법이 요구하는 레이어의 hidden state를 노출시킬 수 있습니다. 커스텀 타깃 레이어를 고른 경우, speculator 학습 설정에서도 같은 레이어 선택을 써야 합니다. 수집할 정보는 방법에 따라 다릅니다. EAGLE-3는 자기회귀 드래프팅을 위해 선택된 타깃 모델 레이어의 hidden state를 사용하고 [4], DFlash는 미래 위치 블록을 병렬로 예측하는 네트워크를 학습시키기 위해 타깃 모델 feature를 사용하며 [16], DSpark는 DFlash 방식 draft 네트워크에 가벼운 순차 head와 confidence head를 더합니다 [6]. MTP 학습은 타깃 모델 자체의 MTP 구성요소를 파인튜닝하므로, 호환되는 MTP 레이어를 이미 갖춘 타깃 모델이 필요합니다 [13].</p>
+
+  <h3><span class="en">Train and test the speculator</span><span class="ko">Speculator 학습과 테스트</span></h3>
+  <p class="en">The speculator configuration must match the target model's hidden size, vocabulary, tokenizer, and selected target layers. Method-specific settings such as draft-network depth, block size, sequence length, and learning rate must also be selected. After training, inspect the checkpoint and serve it together with the target model in vLLM. Training loss alone is not enough to judge the result; the important measurements are accepted length, acceptance rate, draft latency, GPU memory use, and end-to-end serving throughput. When acceptance is weak for a particular workload, the prompt mixture or training configuration can be adjusted and the process repeated. The main principle is to use the same target model, generation mode, and representative workload that the speculator is expected to support.</p>
+  <p class="ko">speculator 설정은 타깃 모델의 hidden size, 어휘, 토크나이저, 선택된 타깃 레이어와 맞아야 합니다. draft 네트워크 깊이, 블록 크기, 시퀀스 길이, 학습률 같은 방법별 설정도 골라야 합니다. 학습 후에는 체크포인트를 점검하고 vLLM에서 타깃 모델과 함께 서빙해 보세요. 학습 손실만으로는 결과를 판단할 수 없습니다. 중요한 측정치는 수용 길이, 수용률, draft 지연, GPU 메모리 사용량, end-to-end 서빙 처리량입니다. 특정 워크로드에서 수용률이 낮으면 프롬프트 구성이나 학습 설정을 조정하고 과정을 반복할 수 있습니다. 핵심 원칙은 speculator가 지원할 바로 그 타깃 모델, 생성 모드, 대표 워크로드를 사용하는 것입니다.</p>
+</section>
+
+<!-- ============ 10 ============ -->
+<section id="s10">
+  <h2><span class="num">10</span><span class="en">Summary · Future work · References</span><span class="ko">요약 · 향후 과제 · 참고문헌</span></h2>
+  <h3><span class="en">Summary</span><span class="ko">요약</span></h3>
+  <p class="en">This blog explored speculative decoding in vLLM as a draft-and-verify approach for LLM serving. A draft component proposes candidate future tokens, and the target model evaluates the proposal before any tokens are committed. We examined five drafting approaches: native MTP, Gemma 4 MTP, EAGLE-3, DFlash, and DSpark. They differ mainly in how they use information from the target model and whether candidate tokens are generated sequentially, in parallel, or through a combination of parallel prediction and lightweight sequential correction.</p>
+  <p class="ko">이 글은 LLM 서빙을 위한 draft-and-verify 접근으로서 vLLM의 speculative decoding을 살펴봤습니다. draft 구성요소가 미래 토큰 후보를 제안하고, 어떤 토큰도 확정되기 전에 타깃 모델이 그 제안을 평가합니다. 다섯 가지 드래프팅 방식(native MTP, Gemma 4 MTP, EAGLE-3, DFlash, DSpark)을 살펴봤습니다. 이들은 주로 타깃 모델의 정보를 어떻게 쓰는지, 그리고 후보 토큰을 순차적으로 생성하는지, 병렬로 생성하는지, 아니면 병렬 예측과 가벼운 순차 보정을 조합하는지에서 차이가 납니다.</p>
+  <p class="en">The experiments covered selected Gemma, Qwen, MiniMax, and Kimi models on AMD Instinct™ MI300X and MI355X GPUs using the ROCm™ software platform. Measured throughput varied across target models, draft checkpoints, workloads, proposal lengths, and serving configurations. Across the tested configurations, some settings produced smaller changes or throughput below the non-speculative baseline, while several model-workload combinations produced throughput ratios above 2×. Examples at the upper end of the observed range included <b>2.87× for DFlash on gemma-4-26B-A4B-it</b>, <b>2.83× for Gemma 4 MTP</b> on the same target, and <b>2.68× for DFlash on Kimi-K2.5</b>.</p>
+  <p class="ko">실험은 AMD Instinct™ MI300X·MI355X GPU에서 ROCm™ 소프트웨어 플랫폼으로 Gemma, Qwen, MiniMax, Kimi 계열 일부 모델을 대상으로 했습니다. 측정된 처리량은 타깃 모델·draft 체크포인트·워크로드·제안 길이·서빙 설정에 따라 달랐습니다. 테스트한 구성 전반에서, 어떤 설정은 변화가 작거나 비-speculative 기준선보다 낮은 처리량을 냈고, 여러 모델-워크로드 조합에서는 2배를 넘는 처리량 비가 나왔습니다. 관측 범위 상단의 예로는 <b>gemma-4-26B-A4B-it에서 DFlash 2.87×</b>, 같은 타깃에서 <b>Gemma 4 MTP 2.83×</b>, <b>Kimi-K2.5에서 DFlash 2.68×</b>가 있습니다.</p>
+  <p class="en">Proposal length was also an important experimental variable. Increasing <code class="inl">num_speculative_tokens</code> sometimes increased throughput over the first few settings, while larger values could lead to a plateau or lower throughput. Checkpoint recommendations can provide starting points, but representative workload measurements and acceptance metrics are needed when selecting a deployment configuration.</p>
+  <p class="ko">제안 길이도 중요한 실험 변수였습니다. <code class="inl">num_speculative_tokens</code>를 키우면 처음 몇 설정에서는 처리량이 오르기도 했지만, 값이 더 커지면 정체되거나 낮아질 수 있었습니다. 체크포인트 권장값이 출발점은 되지만, 배포 설정을 고를 때는 대표 워크로드 측정치와 수용 지표가 필요합니다.</p>
+
+  <h3><span class="en">Future work</span><span class="ko">향후 과제</span></h3>
+  <ul class="en">
+    <li>Future benchmarking could include non-learned approaches such as n-gram speculation and suffix decoding, particularly for workloads with repeated token patterns such as code editing and agentic loops.</li>
+    <li>Broader evaluation across concurrency levels, prompt and output lengths, batch sizes, and sampling settings would also help show how speculative decoding behaves under different serving conditions.</li>
+    <li>Another useful direction is to study how speculator training data affects acceptance across code, mathematics, chat, multilingual prompts, tool use, and structured output.</li>
+    <li>Finally, deeper profiling of draft generation, target verification, KV-cache behavior, graph execution, and scheduling would help explain the performance differences observed across target models and workloads.</li>
+  </ul>
+  <ul class="ko">
+    <li>향후 벤치마킹에는 n-gram speculation이나 suffix decoding 같은 비학습 방식도 포함할 수 있습니다. 특히 코드 편집이나 에이전트 루프처럼 토큰 패턴이 반복되는 워크로드에서 그렇습니다.</li>
+    <li>동시성 수준, 프롬프트·출력 길이, 배치 크기, 샘플링 설정에 걸친 폭넓은 평가도 speculative decoding이 다양한 서빙 조건에서 어떻게 동작하는지 보여주는 데 도움이 될 것입니다.</li>
+    <li>또 하나 유용한 방향은 speculator 학습 데이터가 코드·수학·챗·다국어 프롬프트·도구 사용·구조화 출력 전반의 수용률에 어떤 영향을 주는지 연구하는 것입니다.</li>
+    <li>마지막으로, draft 생성·타깃 검증·KV 캐시 동작·그래프 실행·스케줄링에 대한 더 깊은 프로파일링은 타깃 모델과 워크로드에 따라 관측된 성능 차이를 설명하는 데 도움이 될 것입니다.</li>
+  </ul>
+
+  <h3><span class="en">References</span><span class="ko">참고문헌</span></h3>
+  <ol style="font-size:14px;line-height:1.8">
+    <li>vLLM documentation, "Speculative Decoding" — <a class="src" href="https://docs.vllm.ai/en/latest/features/speculative_decoding/">docs.vllm.ai</a></li>
+    <li>vLLM documentation, "MTP Speculative Decoding" — <a class="src" href="https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/">docs.vllm.ai</a></li>
+    <li>Google Developers Blog, "Multi-token prediction in Gemma 4" — <a class="src" href="https://blog.google/innovation-and-ai/technology/developers-tools/multi-token-prediction-gemma-4/">blog.google</a></li>
+    <li>EAGLE-3, "Scaling up Inference Acceleration of Large Language Models via Training-Time Test" — <a class="src" href="https://arxiv.org/pdf/2503.01840">arXiv:2503.01840</a></li>
+    <li>Z-Lab, "DFlash" GitHub repository — <a class="src" href="https://github.com/z-lab/dflash">github.com/z-lab/dflash</a></li>
+    <li>DSpark paper — <a class="src" href="https://arxiv.org/pdf/2607.05147">arXiv:2607.05147</a></li>
+    <li>Google, "Gemma 4" Hugging Face collection — <a class="src" href="https://huggingface.co/collections/google/gemma-4">huggingface.co</a></li>
+    <li>LightSeek Foundation model collection — <a class="src" href="https://huggingface.co/lightseekorg/models">huggingface.co</a></li>
+    <li>Red Hat AI, "Speculator Models" collection — <a class="src" href="https://huggingface.co/collections/RedHatAI/speculator-models">huggingface.co</a></li>
+    <li>Z-Lab, "DFlash" Hugging Face collection — <a class="src" href="https://huggingface.co/collections/z-lab/dflash">huggingface.co</a></li>
+    <li>DeepSeek-AI, "DeepSpec" Hugging Face collection — <a class="src" href="https://huggingface.co/collections/deepseek-ai/deepspec">huggingface.co</a></li>
+    <li>Inferact model collection — <a class="src" href="https://huggingface.co/Inferact/models">huggingface.co</a></li>
+    <li>vLLM Speculators documentation, "Training a Speculator" — <a class="src" href="https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/">docs.vllm.ai</a></li>
+    <li>vLLM Project, "Speculators" GitHub repository — <a class="src" href="https://github.com/vllm-project/speculators">github.com/vllm-project/speculators</a></li>
+    <li>DeepSeek-AI, "DeepSpec" GitHub repository — <a class="src" href="https://github.com/deepseek-ai/DeepSpec">github.com/deepseek-ai/DeepSpec</a></li>
+    <li>DFlash paper — <a class="src" href="https://arxiv.org/pdf/2602.06036">arXiv:2602.06036</a></li>
+  </ol>
+</section>
+
+<!-- ============ APPENDIX / ACK / DISCLAIMER ============ -->
+<section id="appendix">
+  <h2>📎<span class="en">Appendix, acknowledgements and disclaimer</span><span class="ko">부록 · 감사의 말 · 고지</span></h2>
+  <div class="callout c-amber">
+    <span class="en"><b>The appendix is not reproduced here.</b> The original post's appendix is an interactive viewer: you choose a target model, drafting method and experiment to see one per-position acceptance heatmap, where rows are proposal lengths N, columns are draft positions, darker cells mean higher acceptance, and each row also shows measured speedup and output throughput. That covers roughly a hundred model × method × benchmark combinations and cannot be mirrored as static HTML. <a href="https://vllm.ai/blog/2026-08-23-speculative-decoding-amd-gpus#appendix">Read it in the original post →</a></span>
+    <span class="ko"><b>부록은 여기에 옮기지 않았습니다.</b> 원문의 부록은 인터랙티브 뷰어입니다. 타깃 모델·드래프팅 방법·실험을 고르면 위치별 수용률 히트맵 하나가 나오는데, 행은 제안 길이 N, 열은 draft 위치이고 진한 칸일수록 수용률이 높으며, 각 행에 측정된 속도 향상과 출력 처리량도 함께 표시됩니다. 모델 × 방법 × 벤치마크 조합이 약 100개라 정적 HTML로는 그대로 옮길 수 없습니다. <a href="https://vllm.ai/blog/2026-08-23-speculative-decoding-amd-gpus#appendix">원문에서 보기 →</a></span>
+  </div>
+
+  <h3><span class="en">Acknowledgements</span><span class="ko">감사의 말</span></h3>
+  <p class="en">We would like to thank everyone who contributed to this collaboration, including Hongxia Yang and Peng Sun from AMD, and Pin Siang Tan, Jun Kang Chow, and Ye Hur Cheong from Embedded LLM.</p>
+  <p class="ko">이 협업에 기여해 주신 모든 분들, 특히 AMD의 Hongxia Yang과 Peng Sun, Embedded LLM의 Pin Siang Tan, Jun Kang Chow, Ye Hur Cheong께 감사드립니다.</p>
+
+  <h3><span class="en">Disclaimer</span><span class="ko">고지</span></h3>
+  <p class="en">Measurements were run on AMD Instinct™ MI300X and MI355X platforms using the configurations below.</p>
+  <p class="ko">측정은 아래 구성의 AMD Instinct™ MI300X 및 MI355X 플랫폼에서 수행됐습니다.</p>
+  <table>
+    <thead><tr><th><span class="en">Configuration</span><span class="ko">구성</span></th><th><span class="en">Details</span><span class="ko">세부</span></th></tr></thead>
+    <tbody>
+      <tr><td><b>Hardware 1</b></td><td>8× AMD Instinct™ MI300X GPUs (gfx942) · 2× AMD EPYC™ 9654 96-Core Processor</td></tr>
+      <tr><td><b>Hardware 2</b></td><td><span class="en">8× AMD Instinct™ MI355X GPUs (gfx950) · 2× AMD EPYC™ 9575F 64-Core processors. This platform was used for the MiniMax-M3-MXFP8 experiment.</span><span class="ko">8× AMD Instinct™ MI355X GPU (gfx950) · 2× AMD EPYC™ 9575F 64코어 프로세서. MiniMax-M3-MXFP8 실험에 사용된 플랫폼입니다.</span></td></tr>
+      <tr><td><b>Software</b></td><td>Ubuntu 22.04.5 LTS · ROCm/HIP runtime 7.2.53211 · vLLM 0.23.1rc1.dev1120+g0f0f28b53 · PyTorch 2.11.0+gitd0c8b1f · Transformers 5.13.1 · Python 3.12.13</td></tr>
+    </tbody>
+  </table>
+  <p class="en">Server manufacturers may vary configurations, yielding different results. Performance may vary based on configuration, software, vLLM version, and the use of the latest drivers and optimizations.</p>
+  <p class="ko">서버 제조사에 따라 구성이 달라질 수 있고, 그에 따라 결과도 달라질 수 있습니다. 성능은 구성, 소프트웨어, vLLM 버전, 최신 드라이버 및 최적화 적용 여부에 따라 달라질 수 있습니다.</p>
+</section>
+
+<footer>
+  <span class="en">Unofficial Korean translation of <a href="https://vllm.ai/blog/2026-08-23-speculative-decoding-amd-gpus">“Exploring Speculative Decoding in vLLM on AMD GPUs”</a> by <b>AMD and Embedded LLM</b>, vLLM blog, 2026-08-23. All content belongs to the original authors. Figures are served from vllm.ai. Translated 2026-08-28.</span>
+  <span class="ko">vLLM 블로그 2026-08-23 게시글 <a href="https://vllm.ai/blog/2026-08-23-speculative-decoding-amd-gpus">“Exploring Speculative Decoding in vLLM on AMD GPUs”</a>(<b>AMD and Embedded LLM</b>)의 비공식 한국어 번역. 모든 내용의 권리는 원저자에게 있습니다. 그림은 vllm.ai에서 제공됩니다. 번역 2026-08-28.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
