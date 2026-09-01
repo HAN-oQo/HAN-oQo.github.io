@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ATOM (ROCm) — AMD's inference engine: architecture, code flow, how to run it, lineage</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  .flow{list-style:none;padding:0;margin:14px 0;counter-reset:fl}
+  .flow>li{position:relative;padding:10px 0 12px 40px;border-bottom:1px solid var(--line)}
+  .flow>li::before{counter-increment:fl;content:counter(fl);position:absolute;left:0;top:9px;
+    width:26px;height:26px;border-radius:50%;background:var(--blue-ink);color:#fff;font-size:12px;
+    font-weight:700;display:flex;align-items:center;justify-content:center}
+  .flow code{font-size:12px}
+  .flow a.pl{font-size:11.5px;color:var(--muted);border-bottom:1px dotted var(--muted);text-decoration:none}
+  .flow a.pl:hover{color:var(--blue-ink)}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./">
+  <span class="en">Inference</span><span class="ko">추론</span>
+</a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">ATOM (ROCm) — AMD's inference engine: architecture, code flow, how to run it, and where it came from</span>
+    <span class="ko">ATOM (ROCm) — AMD의 추론 엔진: 아키텍처·코드 흐름·실행법·계보</span>
+  </h1>
+  <p class="lede">
+    <span class="en"><b>ATOM</b> (AiTer Optimized Model) is AMD's LLM inference engine for Instinct GPUs. Its README says it plainly: the project was <b>adapted from nano-vllm</b> — a ~1.2k-line teaching reimplementation of vLLM — and AMD grew that skeleton into a production engine whose every hot operation calls an <a class="src" href="https://github.com/ROCm/aiter">AITER</a> kernel instead of a generic PyTorch op. This note walks the architecture, traces one request end-to-end through the real code with commit-pinned permalinks, shows the exact commands to run it, and asks the honest question: what does ATOM actually give you that vLLM-on-ROCm doesn't?</span>
+    <span class="ko"><b>ATOM</b>(AiTer Optimized Model)은 AMD Instinct GPU용 LLM 추론 엔진이다. README에 그대로 적혀 있듯 이 프로젝트는 <b>nano-vllm에서 갈라져 나왔다</b> — vLLM을 ~1.2천 줄로 다시 쓴 학습용 구현체다. AMD는 그 뼈대를 받아, 뜨거운 연산이 전부 일반 PyTorch 연산자 대신 <a class="src" href="https://github.com/ROCm/aiter">AITER</a> 커널을 호출하는 프로덕션 엔진으로 키웠다. 이 노트는 아키텍처를 훑고, 요청 하나가 실제 코드를 어떻게 지나가는지 커밋 고정 permalink로 추적하고, 실행 명령을 그대로 보여준 뒤, 솔직한 질문을 던진다 — vLLM-on-ROCm 대신 ATOM을 쓰면 뭐가 다른가?</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://github.com/ROCm/ATOM">ROCm/ATOM</a></span>
+    <span class="badge"><a href="https://rocm.docs.amd.com/projects/atom/en/latest/">ATOM docs</a></span>
+    <span class="badge"><a href="https://github.com/ROCm/ATOM/tree/cd161f16bd041b63bc3bc4f234f3d1915a80200d">code @ cd161f1</a></span>
+    <span class="badge"><a href="atom-knowledge-graph.html"><span class="en">Knowledge graph ↗</span><span class="ko">지식 그래프 ↗</span></a></span>
+    <span class="badge"><span class="en">Deep dive · code-walk</span><span class="ko">딥다이브 · 코드 분석</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-09-01">2026-09-01</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. Where ATOM came from — a teaching repo that AMD turned into a product</span><span class="ko">1. ATOM의 유래 — 학습용 레포가 AMD의 제품이 되기까지</span></a></li>
+    <li><a href="#s2"><span class="en">2. Architecture — five layers and a multi-process spine</span><span class="ko">2. 아키텍처 — 5개 계층과 멀티프로세스 척추</span></a></li>
+    <li><a href="#s3"><span class="en">3. Code flow — one request, end to end (with permalinks)</span><span class="ko">3. 코드 흐름 — 요청 하나의 처음부터 끝까지 (permalink)</span></a></li>
+    <li><a href="#s4"><span class="en">4. The AITER layer — the part that is actually AMD-specific</span><span class="ko">4. AITER 계층 — 진짜로 AMD 전용인 부분</span></a></li>
+    <li><a href="#s5"><span class="en">5. Compilation &amp; CUDA graphs — why attention is deliberately opaque</span><span class="ko">5. 컴파일 &amp; CUDA graph — 왜 attention을 일부러 불투명하게 두는가</span></a></li>
+    <li><a href="#s6"><span class="en">6. Running it — install, serve, benchmark, profile</span><span class="ko">6. 실행법 — 설치·서빙·벤치마크·프로파일링</span></a></li>
+    <li><a href="#s7"><span class="en">7. How ATOM differs from vLLM, SGLang, and vLLM-on-ROCm</span><span class="ko">7. vLLM·SGLang·vLLM-on-ROCm 과 뭐가 다른가</span></a></li>
+    <li><a href="#s8"><span class="en">8. Status, limits, and what I could not verify</span><span class="ko">8. 상태·한계·확인하지 못한 것</span></a></li>
+    <li><a href="#s9"><span class="en">9. Sources</span><span class="ko">9. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <span class="en">ATOM is <b>vLLM's architecture re-implemented small enough for AMD to move fast in</b>: same continuous batching, paged KV cache, prefill-first scheduler, CUDA graphs and speculative decoding, but ~300 Python files instead of vLLM's thousands, and every compute-heavy call routed to an AITER kernel (ASM / Composable Kernel / Triton). It has a <b>dual identity</b> — a standalone OpenAI-compatible server <i>and</i> a plugin backend that installs itself into vLLM and SGLang through their official entry-point hooks, so the community can get AMD-tuned execution without leaving vLLM. The performance claims are real numbers but <b>all vendor-reported</b>; I found no independent benchmark.</span>
+  <span class="ko">ATOM은 <b>AMD가 빠르게 움직일 수 있을 만큼 작게 다시 구현한 vLLM 아키텍처</b>다. continuous batching, paged KV cache, prefill-first scheduler, CUDA graph, speculative decoding까지 개념은 같지만, vLLM의 수천 개 파일 대신 Python 파일 ~300개이고, 무거운 연산은 전부 AITER 커널(ASM / Composable Kernel / Triton)로 내려간다. <b>정체성이 둘</b>이다 — 독립 실행되는 OpenAI 호환 서버이면서, 동시에 vLLM·SGLang의 공식 entry-point 훅으로 자기를 꽂아 넣는 플러그인 백엔드이기도 하다. 덕분에 사용자는 vLLM을 떠나지 않고도 AMD 최적화 실행 경로를 쓸 수 있다. 성능 수치는 실재하지만 <b>전부 벤더 자체 보고</b>이고, 독립 벤치마크는 찾지 못했다.</span>
+</div>
+
+<div class="grid3">
+  <div class="mini"><h4>AITER</h4><p><span class="en">AMD's GPU kernel library for ROCm — hand-written ASM, Composable Kernel (CK), and Triton backends. ATOM is a thin engine <i>on top of</i> it; the "A" and "T" in ATOM are AiTer.</span><span class="ko">AMD의 ROCm용 GPU 커널 라이브러리 — 손으로 쓴 ASM, Composable Kernel(CK), Triton 백엔드. ATOM은 그 <i>위에</i> 얹힌 얇은 엔진이다. ATOM의 "A·T"가 AiTer에서 왔다.</span></p></div>
+  <div class="mini"><h4>nano-vllm</h4><p><span class="en">A minimal from-scratch reimplementation of vLLM (~1.2k lines) meant to be readable. ATOM's README credits it as the project's origin.</span><span class="ko">읽을 수 있게 만든, vLLM의 밑바닥부터 최소 재구현(~1.2천 줄). ATOM README가 이 프로젝트의 출발점으로 명시한다.</span></p></div>
+  <div class="mini"><h4><span class="en">paged KV cache</span><span class="ko">paged KV cache</span></h4><p><span class="en">The KV cache is chopped into fixed blocks (ATOM default 16 tokens) so sequences can grow without contiguous memory, and identical prefixes can share blocks.</span><span class="ko">KV cache를 고정 크기 블록(ATOM 기본 16토큰)으로 쪼개, 연속 메모리 없이도 시퀀스가 자라고 같은 prefix끼리 블록을 공유할 수 있게 하는 기법.</span></p></div>
+  <div class="mini"><h4><span class="en">prefill / decode</span><span class="ko">prefill / decode</span></h4><p><span class="en">Prefill processes the whole prompt in one compute-bound pass; decode generates one token at a time and is memory-bandwidth-bound. Nearly every scheduling decision is about balancing the two.</span><span class="ko">prefill은 프롬프트 전체를 한 번에 처리(연산 바운드), decode는 토큰을 하나씩 생성(메모리 대역폭 바운드). 스케줄링 결정의 거의 전부가 이 둘의 균형 문제다.</span></p></div>
+  <div class="mini"><h4><span class="en">CUDA graph (HIP graph)</span><span class="ko">CUDA graph (HIP graph)</span></h4><p><span class="en">Record a whole sequence of GPU kernel launches once, then replay it with one call — removes per-step CPU launch overhead, which dominates small decode steps.</span><span class="ko">GPU 커널 실행 순서를 한 번 기록해두고 호출 한 번으로 재생 — 작은 decode 스텝을 지배하는 스텝별 CPU 실행 오버헤드를 없앤다.</span></p></div>
+  <div class="mini"><h4>MLA / MoE / MTP</h4><p><span class="en">MLA = DeepSeek's Multi-head Latent Attention (compressed KV). MoE = Mixture-of-Experts. MTP = Multi-Token Prediction, the draft-model form of speculative decoding ATOM ships.</span><span class="ko">MLA = DeepSeek의 Multi-head Latent Attention(압축 KV). MoE = Mixture-of-Experts. MTP = Multi-Token Prediction, ATOM이 제공하는 draft 모델 방식의 speculative decoding.</span></p></div>
+</div>
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">Where ATOM came from — a teaching repo that AMD turned into a product</span><span class="ko">ATOM의 유래 — 학습용 레포가 AMD의 제품이 되기까지</span></h2>
+
+<p>
+  <span class="en">Most inference engines are coy about their ancestry. ATOM is not — the last real section of its README is two lines long:</span>
+  <span class="ko">대부분의 추론 엔진은 자기 계보를 흐릿하게 둔다. ATOM은 아니다 — README의 마지막 실질 섹션은 두 줄이다:</span>
+</p>
+
+<blockquote class="q">
+  <p>"## Acknowledgements<br>This project was adapted from <a href="https://github.com/GeeeekExplorer/nano-vllm">nano-vllm</a>."</p>
+  <cite>— ROCm/ATOM <code>README.md</code> · <a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/README.md?plain=1#L281-L283">README.md#L281-L283 @ cd161f1</a></cite>
+</blockquote>
+
+<p>
+  <span class="en"><b>nano-vllm</b> is a personal project by <a class="src" href="https://github.com/GeeeekExplorer">GeeeekExplorer</a> that reimplements vLLM from scratch, small enough to read in an afternoon. Its README describes itself as "A lightweight vLLM implementation built from scratch", with a "Readable codebase — clean implementation in ~ 1,200 lines of Python code" and an "Optimization Suite — Prefix caching, Tensor Parallelism, Torch compilation, CUDA graph, etc." It has ~15.3k stars.</span>
+  <span class="ko"><b>nano-vllm</b>은 <a class="src" href="https://github.com/GeeeekExplorer">GeeeekExplorer</a>의 개인 프로젝트로, vLLM을 밑바닥부터 다시 구현했다. 반나절이면 다 읽을 만큼 작다. README는 스스로를 "A lightweight vLLM implementation built from scratch"라 소개하고, "Readable codebase — clean implementation in ~ 1,200 lines of Python code", "Optimization Suite — Prefix caching, Tensor Parallelism, Torch compilation, CUDA graph, etc."를 내세운다. 별은 약 15.3천 개.</span>
+</p>
+
+<p>
+  <span class="en">The fingerprint survives. ATOM's own package metadata still carries nano-vllm's tagline <i>verbatim</i>:</span>
+  <span class="ko">지문은 남아 있다. ATOM의 패키지 메타데이터는 nano-vllm의 한 줄 소개를 <i>글자 그대로</i> 아직 달고 있다:</span>
+</p>
+
+<pre># ROCm/ATOM — pyproject.toml
+[project]
+name = "atom"
+description = "a lightweight vLLM implementation built from scratch"   # ← nano-vllm's own tagline
+requires-python = ">=3.10"</pre>
+<p class="figcap"><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/pyproject.toml#L5-L11">pyproject.toml#L5-L11 @ cd161f1</a></p>
+
+<p>
+  <span class="en">So the lineage is not a vague "inspired by". ATOM started as a fork of a 1,200-line educational repo and became a ~300-file engine serving 2.4-trillion-parameter models on 8-GPU nodes. That history explains a lot about how the code reads: the class names (<code class="inl">LLMEngine</code>, <code class="inl">Scheduler</code>, <code class="inl">BlockManager</code>, <code class="inl">Sequence</code>, <code class="inl">ModelRunner</code>) are vLLM's vocabulary, the scheduling policy is vLLM's continuous batching, and several files carry explicit "Adapted from vllm-project/vllm" headers — the model implementations (<code class="inl">llama.py</code>, <code class="inl">qwen3.py</code>, <code class="inl">gpt_oss.py</code>, <code class="inl">mimo_v2.py</code>), the weight loader, and the <code class="inl">WeightsMapper</code>. Some utilities are adapted from SGLang, and the linear-attention kernels from flash-linear-attention.</span>
+  <span class="ko">그러니까 계보가 막연한 "영감을 받았다"가 아니다. ATOM은 1,200줄짜리 교육용 레포의 포크로 출발해, 8-GPU 노드에서 2.4조 파라미터 모델을 서빙하는 ~300파일 엔진이 됐다. 이 내력이 코드의 인상을 상당 부분 설명한다. 클래스 이름(<code class="inl">LLMEngine</code>, <code class="inl">Scheduler</code>, <code class="inl">BlockManager</code>, <code class="inl">Sequence</code>, <code class="inl">ModelRunner</code>)은 vLLM의 어휘 그대로고, 스케줄링 정책도 vLLM의 continuous batching이며, 여러 파일에 "Adapted from vllm-project/vllm" 헤더가 명시적으로 붙어 있다 — 모델 구현(<code class="inl">llama.py</code>, <code class="inl">qwen3.py</code>, <code class="inl">gpt_oss.py</code>, <code class="inl">mimo_v2.py</code>), weight loader, <code class="inl">WeightsMapper</code>가 그렇다. 일부 유틸은 SGLang에서, linear attention 커널은 flash-linear-attention에서 가져왔다.</span>
+</p>
+
+<h3><span class="en">Why AMD wanted its own engine at all</span><span class="ko">AMD는 왜 자기 엔진을 원했나</span></h3>
+
+<p>
+  <span class="en">An internal positioning draft that ships in the repo (<code class="inl">atom_overview_draft.md</code>, marked "Draft – Internal Review Only") states the motive in the plainest terms available — and it names nano-vllm as the model:</span>
+  <span class="ko">레포에 함께 들어 있는 내부 포지셔닝 초안(<code class="inl">atom_overview_draft.md</code>, "Draft – Internal Review Only" 표기)이 동기를 가장 직설적으로 적어 놨다 — 그리고 nano-vllm을 본보기로 지목한다:</span>
+</p>
+
+<blockquote class="q">
+  <p>"ATOM's embrace the same minimalist mindset of nano-vllm 'minimalist' architecture allows it to evolve at the speed of AMD silicon. By stripping away layers of abstraction found in generic frameworks, ATOM connects the model directly to the metal via the AITER kernel library."</p>
+  <cite>— <code>atom_overview_draft.md</code> §Performance Momentum · <a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom_overview_draft.md?plain=1#L25">atom_overview_draft.md#L25 @ cd161f1</a> <span class="en">(sic — the sentence is ungrammatical in the original)</span><span class="ko">(원문 그대로 — 문장이 비문이다)</span></cite>
+</blockquote>
+
+<p>
+  <span class="en">The same draft sets out ATOM's <b>dual role</b>, which is the single most important thing to understand about the project:</span>
+  <span class="ko">같은 초안이 ATOM의 <b>이중 역할</b>을 정리해 두는데, 이 프로젝트에서 가장 중요한 한 가지가 바로 이것이다:</span>
+</p>
+
+<blockquote class="q">
+  <p>"<b>Standalone Optimization Platform</b>: It serves as a 'Proving Ground' for rapid iteration, allowing AMD to develop and validate internal system-level optimizations, compiler-driven graph enhancements, and kernel acceleration.<br><b>Integrated Plugin Backend</b>: It integrates as a high-performance backend for popular frameworks like vLLM and SGLang, ensuring that the broader AI community can access AMD-specific optimizations without changing their existing workflows."</p>
+  <cite>— <code>atom_overview_draft.md</code> §A Dual-Purpose Architecture · <a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom_overview_draft.md?plain=1#L15-L17">atom_overview_draft.md#L15-L17 @ cd161f1</a></cite>
+</blockquote>
+
+<p>
+  <span class="en">Read that carefully, because it resolves the obvious objection — "vLLM already runs on ROCm, why build a second engine?" AMD's answer is that ATOM is <b>not primarily competing with vLLM for users</b>. It is a fast-moving lab where AMD can land a new kernel, a new fused op, or a Day-0 model on its own schedule, and then expose the result <i>through</i> vLLM via a plugin. The standalone server is how AMD proves the optimization; the plugin is how you consume it.</span>
+  <span class="ko">이 대목을 잘 읽어야 한다. "vLLM은 이미 ROCm에서 돌아가는데 왜 엔진을 하나 더 만드나"라는 당연한 반론이 여기서 풀리기 때문이다. AMD의 답은, ATOM이 <b>사용자를 두고 vLLM과 경쟁하는 게 주 목적이 아니라는</b> 것이다. ATOM은 새 커널·새 fused op·Day-0 모델을 AMD 자신의 일정대로 얹을 수 있는 빠른 실험실이고, 그 결과물을 플러그인을 통해 vLLM <i>으로</i> 내보낸다. 독립 서버는 최적화를 증명하는 자리이고, 플러그인은 그걸 소비하는 통로다.</span>
+</p>
+
+<div class="callout c-amber">
+  <span class="tag"><span class="en">read this as positioning, not measurement</span><span class="ko">측정이 아니라 포지셔닝으로 읽을 것</span></span>
+  <span class="en"><code class="inl">atom_overview_draft.md</code> is an unreleased AMD marketing draft that happens to be committed to a public repo. It is excellent evidence of <b>intent</b> — why AMD built this — and poor evidence of performance. Its throughput claims (e.g. "GPT-OSS (FP4): Throughput surged by 40.8% in 1K/1K tasks") are internal, undated against a named baseline, and I treat them as unverified throughout this note.</span>
+  <span class="ko"><code class="inl">atom_overview_draft.md</code>는 공개 레포에 우연히 커밋된, 미공개 AMD 마케팅 초안이다. <b>의도</b>의 근거로는 훌륭하고("AMD가 왜 이걸 만들었나"), 성능의 근거로는 빈약하다. 여기 적힌 처리량 수치(예: "GPT-OSS (FP4): Throughput surged by 40.8% in 1K/1K tasks")는 내부 측정이고 기준선이 명시돼 있지 않다. 이 노트 전체에서 미검증으로 취급한다.</span>
+</div>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">Architecture — five layers and a multi-process spine</span><span class="ko">아키텍처 — 5개 계층과 멀티프로세스 척추</span></h2>
+
+<p>
+  <span class="en">ATOM's own <code class="inl">CLAUDE.md</code> gives the request path in six words, and it is worth memorising because every file in the repo sits somewhere on this line:</span>
+  <span class="ko">ATOM의 <code class="inl">CLAUDE.md</code>가 요청 경로를 여섯 단어로 적어 놨다. 레포의 모든 파일이 이 선 위 어딘가에 놓이므로 외워둘 만하다:</span>
+</p>
+
+<pre>openai_server.py → LLMEngine → CoreManager → EngineCore → Scheduler → ModelRunner
+                   (tokenizer)   (ZMQ IPC)    (inference    (batching)  (forward pass,
+                                               loop)                    KV cache, CUDAGraphs)</pre>
+<p class="figcap"><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/CLAUDE.md?plain=1#L29-L31">CLAUDE.md#L29-L31 @ cd161f1</a></p>
+
+<p>
+  <span class="en">What that line hides is that these are not all in one process. ATOM fans out into a <b>process tree</b>: the API server and tokenizer stay in the parent, each data-parallel rank gets its own <code class="inl">EngineCore</code> process, and each tensor-parallel rank inside it gets its own <code class="inl">ModelRunner</code> subprocess holding one GPU. The pieces talk over ZeroMQ with pickled payloads.</span>
+  <span class="ko">저 한 줄이 감추는 사실은, 이것들이 한 프로세스 안에 있지 않다는 점이다. ATOM은 <b>프로세스 트리</b>로 펼쳐진다. API 서버와 tokenizer는 부모 프로세스에 남고, data-parallel rank마다 <code class="inl">EngineCore</code> 프로세스가 하나씩, 그 안의 tensor-parallel rank마다 GPU 하나를 쥔 <code class="inl">ModelRunner</code> 서브프로세스가 하나씩 붙는다. 조각들은 pickle 페이로드를 실은 ZeroMQ로 대화한다.</span>
+</p>
+
+<svg class="fig" viewBox="0 0 860 470" role="img" aria-labelledby="archttl">
+  <title id="archttl">ATOM process and layer architecture</title>
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="var(--muted)"/>
+    </marker>
+    <marker id="ahb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="var(--blue-ink)"/>
+    </marker>
+  </defs>
+
+  <!-- parent process -->
+  <rect x="14" y="14" width="832" height="128" rx="12" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="30" y="36" font-size="12" font-weight="700" fill="var(--blue-ink)">parent process — atom.entrypoints.openai.api_server</text>
+
+  <rect x="34" y="50" width="150" height="52" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="109" y="70" font-size="12" font-weight="600" text-anchor="middle" fill="var(--ink)">FastAPI / uvicorn</text>
+  <text x="109" y="87" font-size="10.5" text-anchor="middle" fill="var(--muted)">/v1/chat/completions</text>
+
+  <rect x="216" y="50" width="150" height="52" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="291" y="70" font-size="12" font-weight="600" text-anchor="middle" fill="var(--ink)">LLMEngine</text>
+  <text x="291" y="87" font-size="10.5" text-anchor="middle" fill="var(--muted)">tokenize · TTFT/TPOT</text>
+
+  <rect x="398" y="50" width="150" height="52" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="473" y="70" font-size="12" font-weight="600" text-anchor="middle" fill="var(--ink)">CoreManager</text>
+  <text x="473" y="87" font-size="10.5" text-anchor="middle" fill="var(--muted)">DP load balance</text>
+
+  <rect x="580" y="50" width="246" height="52" rx="8" fill="var(--gray-bg)" stroke="var(--line)"/>
+  <text x="703" y="69" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--ink)">ZMQ sockets</text>
+  <text x="703" y="85" font-size="10" text-anchor="middle" fill="var(--muted)">ROUTER→DEALER (in) · PULL←PUSH (out)</text>
+
+  <line x1="184" y1="76" x2="212" y2="76" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/>
+  <line x1="366" y1="76" x2="394" y2="76" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/>
+  <line x1="548" y1="76" x2="576" y2="76" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/>
+
+  <text x="30" y="128" font-size="10.5" fill="var(--muted)">pickle over ZMQ · one EngineCore process spawned per data-parallel rank (multiprocessing, spawn — never fork)</text>
+
+  <!-- arrows down -->
+  <line x1="230" y1="142" x2="230" y2="176" stroke="var(--blue-ink)" stroke-width="1.6" marker-end="url(#ahb)"/>
+  <line x1="630" y1="142" x2="630" y2="176" stroke="var(--blue-ink)" stroke-width="1.6" marker-end="url(#ahb)"/>
+
+  <!-- engine core 0 -->
+  <rect x="14" y="180" width="410" height="196" rx="12" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+  <text x="30" y="202" font-size="12" font-weight="700" fill="var(--amber-ink)">EngineCore process — DP rank 0</text>
+
+  <rect x="32" y="214" width="176" height="46" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="120" y="232" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--ink)">busy_loop()</text>
+  <text x="120" y="248" font-size="10" text-anchor="middle" fill="var(--muted)">pull queue → step → publish</text>
+
+  <rect x="222" y="214" width="186" height="46" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="315" y="232" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--ink)">Scheduler</text>
+  <text x="315" y="248" font-size="10" text-anchor="middle" fill="var(--muted)">prefill-first · preempt</text>
+
+  <rect x="222" y="268" width="186" height="42" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="315" y="285" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--ink)">BlockManager</text>
+  <text x="315" y="300" font-size="10" text-anchor="middle" fill="var(--muted)">16-token blocks · xxhash64 prefix</text>
+
+  <line x1="315" y1="260" x2="315" y2="264" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/>
+  <line x1="208" y1="237" x2="218" y2="237" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/>
+
+  <rect x="32" y="268" width="176" height="42" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="120" y="285" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--ink)">AsyncIOProcManager</text>
+  <text x="120" y="300" font-size="10" text-anchor="middle" fill="var(--muted)">spawns TP subprocesses</text>
+
+  <rect x="32" y="320" width="86" height="42" rx="7" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="75" y="337" font-size="10.5" font-weight="600" text-anchor="middle" fill="var(--green-ink)">ModelRunner</text>
+  <text x="75" y="351" font-size="9.5" text-anchor="middle" fill="var(--green-ink)">TP0 · GPU0</text>
+
+  <rect x="126" y="320" width="86" height="42" rx="7" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="169" y="337" font-size="10.5" font-weight="600" text-anchor="middle" fill="var(--green-ink)">ModelRunner</text>
+  <text x="169" y="351" font-size="9.5" text-anchor="middle" fill="var(--green-ink)">TP1 · GPU1</text>
+
+  <text x="230" y="345" font-size="11" fill="var(--muted)">… TP7 · GPU7</text>
+  <line x1="120" y1="310" x2="120" y2="316" stroke="var(--muted)" stroke-width="1.3" marker-end="url(#ah)"/>
+
+  <!-- engine core N -->
+  <rect x="440" y="180" width="406" height="196" rx="12" fill="var(--amber-bg)" stroke="var(--amber-bd)" stroke-dasharray="5 4"/>
+  <text x="456" y="202" font-size="12" font-weight="700" fill="var(--amber-ink)">EngineCore process — DP rank N (DPEngineCoreProc)</text>
+  <text x="456" y="228" font-size="11" fill="var(--ink)">Identical stack, different slice of requests.</text>
+  <text x="456" y="248" font-size="11" fill="var(--muted)">Ranks stay in lockstep via a Gloo all_reduce on CPU:</text>
+  <text x="456" y="266" font-size="11" fill="var(--muted)">if one rank has a prefill and another does not, the idle</text>
+  <text x="456" y="284" font-size="11" fill="var(--muted)">rank runs a <tspan font-weight="600" fill="var(--ink)">dummy prefill</tspan> so the NCCL/RCCL</text>
+  <text x="456" y="302" font-size="11" fill="var(--muted)">collectives on the GPU side never desynchronise.</text>
+  <rect x="456" y="316" width="374" height="44" rx="8" fill="var(--card)" stroke="var(--line)"/>
+  <text x="643" y="334" font-size="11" font-weight="600" text-anchor="middle" fill="var(--ink)">P/D disaggregation variant</text>
+  <text x="643" y="350" font-size="10" text-anchor="middle" fill="var(--muted)">PrefillEngineCore / DecodeEngineCore · KV over MORI-IO or Mooncake RDMA</text>
+
+  <!-- bottom: kernel layer -->
+  <rect x="14" y="392" width="832" height="64" rx="12" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+  <text x="30" y="414" font-size="12" font-weight="700" fill="var(--purple-ink)">AITER kernel library — the only layer that is genuinely AMD-specific</text>
+  <text x="30" y="436" font-size="11" fill="var(--purple-ink)">ASM (pa_fwd_asm, mla_decode_fwd) · Composable Kernel (gemm_a8w8*, fused_moe) · Triton (RoPE, GDN, fused norm) — plus MORI all-to-all and RCCL collectives</text>
+</svg>
+<p class="figcap"><span class="en">Redrawn from ATOM's <a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/architecture_guide.md">architecture guide</a> §"Multi-process architecture" and §"Component architecture", cross-checked against <code>engine_core.py</code> / <code>engine_core_mgr.py</code> @ cd161f1.</span><span class="ko">ATOM <a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/architecture_guide.md">architecture guide</a> §"Multi-process architecture"·§"Component architecture"를 다시 그리고, <code>engine_core.py</code>·<code>engine_core_mgr.py</code> @ cd161f1 로 교차 확인.</span></p>
+
+<h3><span class="en">The five layers, and how big each one is</span><span class="ko">5개 계층과 각각의 덩치</span></h3>
+
+<p>
+  <span class="en">I built a knowledge graph over ATOM's core engine — 310 files, 1,683 nodes, 4,200 edges — and the size distribution tells you where AMD actually spends its effort:</span>
+  <span class="ko">ATOM 코어 엔진으로 지식 그래프를 만들었다 — 파일 310개, 노드 1,683개, 엣지 4,200개. 파일 분포가 AMD가 실제로 어디에 힘을 쏟는지 말해준다:</span>
+</p>
+
+<table>
+  <thead><tr>
+    <th><span class="en">Layer</span><span class="ko">계층</span></th>
+    <th><span class="en">Files</span><span class="ko">파일</span></th>
+    <th><span class="en">What lives there</span><span class="ko">무엇이 있나</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><code class="inl">model_ops/</code></td><td>106</td><td><span class="en"><b>AITER kernel wrappers.</b> Linear/GEMM quant dispatch, MHA + MLA + GDN attention, MoE, norms, RoPE, samplers, and model-specific kernel families (<code>fla_ops</code>, <code>v4_kernels</code>, <code>kimi_k3</code>, <code>minimax_m3</code>, <code>mamba_ops</code>). The largest layer by far.</span><span class="ko"><b>AITER 커널 래퍼.</b> Linear/GEMM quant 디스패치, MHA·MLA·GDN attention, MoE, norm, RoPE, sampler, 그리고 모델 전용 커널 묶음(<code>fla_ops</code>, <code>v4_kernels</code>, <code>kimi_k3</code>, <code>minimax_m3</code>, <code>mamba_ops</code>). 압도적으로 가장 큰 계층.</span></td></tr>
+    <tr><td><code class="inl">kv_transfer/</code></td><td>37</td><td><span class="en">P/D disaggregation over MORI-IO and Mooncake RDMA, plus a separate CPU/disk KV <i>offload</i> path. Two different features that both move KV cache — don't conflate them.</span><span class="ko">MORI-IO·Mooncake RDMA 기반 P/D 분리, 그리고 그와 별개인 CPU/디스크 KV <i>offload</i> 경로. 둘 다 KV cache를 옮기지만 서로 다른 기능이다.</span></td></tr>
+    <tr><td><code class="inl">models/</code></td><td>30</td><td><span class="en">One file per architecture family, several shared (DeepSeek V2/V3/V3.2 and GLM-5 all live in <code>deepseek_v2.py</code>).</span><span class="ko">아키텍처 계열마다 파일 하나. 여럿이 공유된다(DeepSeek V2/V3/V3.2와 GLM-5가 전부 <code>deepseek_v2.py</code>에 있다).</span></td></tr>
+    <tr><td><code class="inl">entrypoints/</code></td><td>29</td><td><span class="en">The OpenAI-compatible FastAPI app, streaming/SSE plumbing, and per-model-family tool &amp; reasoning parsers. Also serves an Anthropic-shaped <code>/v1/messages</code>.</span><span class="ko">OpenAI 호환 FastAPI 앱, 스트리밍/SSE 배관, 모델 계열별 tool·reasoning 파서. Anthropic 형태의 <code>/v1/messages</code>도 제공한다.</span></td></tr>
+    <tr><td><code class="inl">utils/</code></td><td>28</td><td><span class="en">Not a grab-bag: this holds the whole <b>torch.compile + CUDA-graph subsystem</b> (<code>backends.py</code>, <code>cuda_piecewise_backend.py</code>, <code>cuda_graph.py</code>, <code>decorators.py</code>) and the global <code>ForwardContext</code>, plus TBO micro-batching.</span><span class="ko">잡동사니가 아니다. <b>torch.compile + CUDA graph 서브시스템</b> 전체(<code>backends.py</code>, <code>cuda_piecewise_backend.py</code>, <code>cuda_graph.py</code>, <code>decorators.py</code>)와 전역 <code>ForwardContext</code>, 그리고 TBO 마이크로배칭이 여기 있다.</span></td></tr>
+    <tr><td><code class="inl">model_engine/</code></td><td>25</td><td><span class="en">The spine above — but dense: <code>model_runner.py</code> alone is 4,683 lines and <code>scheduler.py</code> is 3,146.</span><span class="ko">위에서 본 척추 — 다만 밀도가 높다. <code>model_runner.py</code> 하나가 4,683줄, <code>scheduler.py</code>가 3,146줄이다.</span></td></tr>
+    <tr><td><code class="inl">spec_decode/</code></td><td>9</td><td><span class="en">EAGLE/MTP proposer plus DSpark (DeepSeek-V4-Pro's semi-autoregressive block drafter) with its own scheduler and verifier.</span><span class="ko">EAGLE/MTP proposer와 DSpark(DeepSeek-V4-Pro의 semi-autoregressive 블록 drafter). DSpark은 전용 scheduler·verifier를 갖는다.</span></td></tr>
+  </tbody>
+</table>
+
+<div class="callout c-teal">
+  <span class="tag"><span class="en">the shape of the thing</span><span class="ko">이 물건의 형태</span></span>
+  <span class="en">A third of ATOM's core is kernel-wrapping code. That is the whole thesis in one statistic: the engine logic is deliberately thin and vLLM-shaped, and the mass sits in the layer that binds models to AITER. If you are evaluating ATOM, the question is not "is its scheduler better than vLLM's" — it is nearly the same scheduler — but "do these 106 files of AMD kernel bindings beat what vLLM's ROCm path already calls?"</span>
+  <span class="ko">ATOM 코어의 3분의 1이 커널 래핑 코드다. 이 통계 하나가 논지 전부다 — 엔진 로직은 일부러 얇게, vLLM 모양 그대로 두고, 무게는 모델을 AITER에 묶는 계층에 실려 있다. ATOM을 평가한다면 질문은 "스케줄러가 vLLM보다 나은가"가 아니다(거의 같은 스케줄러다). "이 106개 파일의 AMD 커널 바인딩이, vLLM의 ROCm 경로가 이미 호출하는 것보다 나은가"다.</span>
+</div>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">Code flow — one request, end to end</span><span class="ko">코드 흐름 — 요청 하나의 처음부터 끝까지</span></h2>
+
+<p>
+  <span class="en">All permalinks below are pinned to <code class="inl">cd161f1</code> (the tip of <code class="inl">main</code> when this note was written, 2026-09-01). Line numbers drift; the SHA does not.</span>
+  <span class="ko">아래 permalink는 전부 <code class="inl">cd161f1</code>(이 노트를 쓴 2026-09-01 기준 <code class="inl">main</code> 끝)에 고정돼 있다. 줄 번호는 움직이지만 SHA는 안 움직인다.</span>
+</p>
+
+<ol class="flow">
+<li><span class="en"><b>Entry point is a 22-line shim.</b> <code class="inl">atom/entrypoints/openai_server.py</code> — the command everyone runs — only picks which server to import, then raises the open-file limit before spawning children. The real app is <code class="inl">openai/api_server.py</code>.</span><span class="ko"><b>진입점은 22줄짜리 shim.</b> 모두가 실행하는 <code class="inl">atom/entrypoints/openai_server.py</code>는 어떤 서버를 import할지 고르고, 자식 프로세스를 띄우기 전에 open-file 한도만 올린다. 진짜 앱은 <code class="inl">openai/api_server.py</code>.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/entrypoints/openai_server.py#L10-L22">entrypoints/openai_server.py#L10-L22</a></li>
+
+<li><span class="en"><b>FastAPI receives the request.</b> <code class="inl">@app.post("/v1/chat/completions")</code>. ATOM also serves <code class="inl">/v1/completions</code>, an Anthropic-shaped <code class="inl">/v1/messages</code>, <code class="inl">/health</code>, Prometheus <code class="inl">/metrics</code>, and profiling routes.</span><span class="ko"><b>FastAPI가 요청을 받는다.</b> <code class="inl">@app.post("/v1/chat/completions")</code>. <code class="inl">/v1/completions</code>, Anthropic 형태의 <code class="inl">/v1/messages</code>, <code class="inl">/health</code>, Prometheus <code class="inl">/metrics</code>, 프로파일링 라우트도 함께 제공한다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/entrypoints/openai/api_server.py#L1591-L1592">api_server.py#L1591-L1592 (chat)</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/entrypoints/openai/api_server.py#L2324-L2344">#L2324-L2344 (models/health/metrics)</a></li>
+
+<li><span class="en"><b>Tokenize and build a <code>Sequence</code>.</b> <code class="inl">InputOutputProcessor.preprocess()</code> runs the HuggingFace tokenizer and creates the <code class="inl">Sequence</code> that carries this request's tokens, block table, status and timestamps for the rest of its life. <code class="inl">arrive_time</code> is stamped here — TTFT is measured from it.</span><span class="ko"><b>토큰화하고 <code>Sequence</code>를 만든다.</b> <code class="inl">InputOutputProcessor.preprocess()</code>가 HuggingFace tokenizer를 돌리고, 이 요청의 토큰·block table·상태·타임스탬프를 남은 생애 동안 들고 다닐 <code class="inl">Sequence</code>를 만든다. <code class="inl">arrive_time</code>이 여기 찍히고, TTFT는 이 시각부터 잰다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/llm_engine.py#L635-L672">llm_engine.py#L635-L672</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/sequence.py">sequence.py</a></li>
+
+<li><span class="en"><b>Cross the process boundary.</b> <code class="inl">CoreManager.add_request()</code> pickles the sequences and pushes them over a ZMQ <code class="inl">ROUTER</code> socket. With multiple DP ranks it picks a target by load-balancing strategy — <code class="inl">least_requests</code> is the default; <code class="inl">round_robin</code> and <code class="inl">least_tokens</code> are also available.</span><span class="ko"><b>프로세스 경계를 넘는다.</b> <code class="inl">CoreManager.add_request()</code>가 시퀀스를 pickle해서 ZMQ <code class="inl">ROUTER</code> 소켓으로 밀어 넣는다. DP rank가 여럿이면 로드밸런싱 전략으로 목적지를 고른다 — 기본값은 <code class="inl">least_requests</code>, <code class="inl">round_robin</code>·<code class="inl">least_tokens</code>도 있다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/engine_core_mgr.py#L842-L920">engine_core_mgr.py#L842-L920</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/engine_core_mgr.py#L35-L36">DP_LB_STRATEGIES #L35-L36</a></li>
+
+<li><span class="en"><b>The engine loop picks it up.</b> An I/O thread on the <code class="inl">EngineCore</code> process deserializes from a <code class="inl">DEALER</code> socket into <code class="inl">input_queue</code>; <code class="inl">busy_loop()</code> drains that queue and calls <code class="inl">_process_engine_step()</code> until there is nothing left to do.</span><span class="ko"><b>엔진 루프가 집어 든다.</b> <code class="inl">EngineCore</code> 프로세스의 I/O 스레드가 <code class="inl">DEALER</code> 소켓에서 역직렬화해 <code class="inl">input_queue</code>에 넣고, <code class="inl">busy_loop()</code>가 그 큐를 비우면서 할 일이 없어질 때까지 <code class="inl">_process_engine_step()</code>을 호출한다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/engine_core.py#L311-L340">engine_core.py#L311-L340 (busy_loop)</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/engine_core.py#L517-L579">#L517-L579 (input sockets)</a></li>
+
+<li><span class="en"><b>Schedule — prefill first.</b> <code class="inl">Scheduler._schedule()</code> tries to admit waiting prefills while they fit under <code class="inl">max_num_seqs</code> (512) and <code class="inl">max_num_batched_tokens</code> (16384) and the <code class="inl">BlockManager</code> can allocate. If it scheduled <i>any</i> prefill it returns immediately — prefill and decode are not mixed in one batch. Only when zero prefills are ready does it batch the running queue for decode.</span><span class="ko"><b>스케줄 — prefill 우선.</b> <code class="inl">Scheduler._schedule()</code>은 <code class="inl">max_num_seqs</code>(512)와 <code class="inl">max_num_batched_tokens</code>(16384) 안에 들어가고 <code class="inl">BlockManager</code>가 할당할 수 있는 동안 대기 중인 prefill을 받아들인다. prefill을 <i>하나라도</i> 잡았으면 즉시 반환한다 — prefill과 decode를 한 배치에 섞지 않는다. prefill이 하나도 없을 때만 running 큐를 decode로 묶는다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/scheduler.py#L962-L982">scheduler.py#L962-L982</a></li>
+
+<li><span class="en"><b>Allocate KV blocks (and reuse them).</b> <code class="inl">BlockManager</code> hands out 16-token blocks. With <code class="inl">--enable-prefix-caching</code> it hashes block contents with <b>xxhash64</b> so two requests sharing a prompt prefix share the same physical blocks instead of recomputing them.</span><span class="ko"><b>KV 블록을 할당한다(그리고 재사용한다).</b> <code class="inl">BlockManager</code>가 16토큰짜리 블록을 나눠 준다. <code class="inl">--enable-prefix-caching</code>을 켜면 블록 내용을 <b>xxhash64</b>로 해싱해서, 프롬프트 prefix가 같은 두 요청이 다시 계산하는 대신 같은 물리 블록을 공유한다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/block_manager.py">block_manager.py</a></li>
+
+<li><span class="en"><b>Forward pass, in three phases.</b> <code class="inl">ModelRunner.forward()</code> = <code class="inl">prepare_model()</code> (assemble input IDs, build attention metadata, gather sampling params) → <code class="inl">run_model()</code> (prefill and large batches run eagerly; decode batches <b>replay a captured CUDA graph</b>) → <code class="inl">postprocess()</code> (sample, or run rejection sampling for speculative decoding, then propose the next draft tokens).</span><span class="ko"><b>forward를 3단계로.</b> <code class="inl">ModelRunner.forward()</code> = <code class="inl">prepare_model()</code>(입력 ID 조립, attention 메타데이터 구성, 샘플링 파라미터 수집) → <code class="inl">run_model()</code>(prefill과 큰 배치는 eager 실행, decode 배치는 <b>캡처해 둔 CUDA graph를 재생</b>) → <code class="inl">postprocess()</code>(샘플링, speculative decoding이면 rejection sampling, 그리고 다음 draft 토큰 제안).</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/model_runner.py#L3235-L3252">model_runner.py#L3235-L3252 (forward)</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/model_runner.py#L2569">#L2569 prepare_model</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/model_runner.py#L2840">#L2840 run_model</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/model_runner.py#L3068">#L3068 postprocess</a></li>
+
+<li><span class="en"><b>Which model class runs?</b> Resolved from the checkpoint's HuggingFace <code class="inl">architectures[0]</code> against a module-level dict. This registry is the fastest way to see what ATOM actually supports today — <b>26 entries</b>, notably more than the docs table lists.</span><span class="ko"><b>어떤 모델 클래스가 도는가?</b> 체크포인트의 HuggingFace <code class="inl">architectures[0]</code>을 모듈 레벨 dict에서 찾아 결정한다. 이 레지스트리가 ATOM이 지금 실제로 뭘 지원하는지 보는 가장 빠른 길이다 — <b>26개 항목</b>으로, 문서 표보다 눈에 띄게 많다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/model_runner.py#L105-L131">model_runner.py#L105-L131 (support_model_arch_dict)</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/model_runner.py#L732">#L732 (resolve_obj_by_qualname)</a></li>
+
+<li><span class="en"><b>Stop, or loop.</b> <code class="inl">Scheduler.postprocess()</code> appends sampled tokens, stamps <code class="inl">first_token_time</code>, checks stop conditions (EOS, stop token IDs, stop sequences, <code class="inl">max_tokens</code>) and retires finished sequences so the <code class="inl">BlockManager</code> can free their blocks.</span><span class="ko"><b>멈추거나, 다시 돈다.</b> <code class="inl">Scheduler.postprocess()</code>가 샘플된 토큰을 붙이고 <code class="inl">first_token_time</code>을 찍고 정지 조건(EOS, stop token ID, stop sequence, <code class="inl">max_tokens</code>)을 확인한 뒤, 끝난 시퀀스를 내보내 <code class="inl">BlockManager</code>가 블록을 회수하게 한다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/scheduler.py#L1942">scheduler.py#L1942</a></li>
+
+<li><span class="en"><b>Back across the boundary, and out.</b> Finished sequences go to <code class="inl">output_queue</code>; an output thread serializes them over a ZMQ <code class="inl">PUSH</code> socket to the manager's <code class="inl">PULL</code>. <code class="inl">InputOutputProcessor.postprocess()</code> detokenizes and computes TTFT / TPOT.</span><span class="ko"><b>다시 경계를 넘어 밖으로.</b> 끝난 시퀀스는 <code class="inl">output_queue</code>로 가고, 출력 스레드가 ZMQ <code class="inl">PUSH</code> 소켓으로 직렬화해 매니저의 <code class="inl">PULL</code>로 보낸다. <code class="inl">InputOutputProcessor.postprocess()</code>가 detokenize하고 TTFT·TPOT를 계산한다.</span><br><a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/engine_core.py#L580-L635">engine_core.py#L580-L635 (output sockets)</a> · <a class="pl" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_engine/llm_engine.py#L781-L827">llm_engine.py#L781-L827</a></li>
+</ol>
+
+<h3><span class="en">Two details worth pausing on</span><span class="ko">잠깐 멈춰 볼 만한 두 지점</span></h3>
+
+<p>
+  <span class="en"><b>Preemption is a full rollback, not a pause.</b> When decode cannot get a block, the scheduler evicts the <i>last</i> running sequence: it deallocates every block, strips the speculative placeholder and rejected tokens that <code class="inl">postprocess()</code> had appended, zeroes the speculation state, and pushes the sequence to the <i>front</i> of the waiting queue to be re-prefilled from scratch. ATOM has no swap-to-host path for this case — the work is simply redone.</span>
+  <span class="ko"><b>preemption은 일시정지가 아니라 완전 롤백이다.</b> decode가 블록을 못 얻으면 스케줄러는 <i>마지막</i> running 시퀀스를 쫓아낸다. 블록을 전부 반납하고, <code class="inl">postprocess()</code>가 붙여 놨던 speculative placeholder와 rejected 토큰을 떼어내고, speculation 상태를 0으로 만든 뒤, 그 시퀀스를 대기 큐 <i>맨 앞</i>에 밀어 넣어 처음부터 다시 prefill한다. 이 경우에 대한 host swap 경로가 ATOM에는 없다 — 그냥 다시 계산한다.</span>
+</p>
+
+<div class="callout c-purple">
+  <span class="tag"><span class="en">editor's note — not a claim by ATOM's authors</span><span class="ko">편집자 주 — ATOM 저자들의 주장 아님</span></span>
+  <span class="en">The docs and the code have drifted, and the code is ahead. <code class="inl">architecture_guide.md</code> describes a clean two-phase <code class="inl">schedule()</code>; the actual <code class="inl">_schedule()</code> also carries chunked-prefill bookkeeping, a cross-DP <code class="inl">all_reduce</code> "prefill delayer" that every rank must call in lockstep, remote-KV promotion for disaggregated serving, offload parking, and pipeline-parallel branches — 3,146 lines total, with separate <code class="inl">PrefillScheduler</code> and <code class="inl">DecodeScheduler</code> subclasses for P/D mode. <b>Read the docs for the shape, the code for the truth.</b> If you are porting ideas out of ATOM, budget for that gap.</span>
+  <span class="ko">문서와 코드가 벌어져 있고, 앞서 있는 쪽은 코드다. <code class="inl">architecture_guide.md</code>는 깔끔한 2단계 <code class="inl">schedule()</code>을 설명하지만, 실제 <code class="inl">_schedule()</code>에는 chunked prefill 장부, 모든 rank가 lockstep으로 호출해야 하는 cross-DP <code class="inl">all_reduce</code> "prefill delayer", 분리 서빙용 remote-KV 승격, offload 파킹, pipeline-parallel 분기까지 들어 있다 — 총 3,146줄에, P/D 모드용 <code class="inl">PrefillScheduler</code>·<code class="inl">DecodeScheduler</code> 서브클래스가 따로 있다. <b>형태는 문서에서, 진실은 코드에서 읽어야 한다.</b> ATOM에서 아이디어를 가져올 생각이라면 이 격차를 예산에 넣어라.</span>
+</div>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">The AITER layer — the part that is actually AMD-specific</span><span class="ko">AITER 계층 — 진짜로 AMD 전용인 부분</span></h2>
+
+<p>
+  <span class="en">Strip away the vLLM-shaped engine and this is what is left, and it is the reason ATOM exists. ATOM's own docs put it bluntly:</span>
+  <span class="ko">vLLM 모양의 엔진을 걷어내면 남는 게 이것이고, ATOM이 존재하는 이유가 이것이다. ATOM 문서가 직설적으로 적어 놨다:</span>
+</p>
+
+<blockquote class="q">
+  <p>"ATOM is a thin model-level inference engine. Every compute-heavy operation delegates to an AITER kernel."</p>
+  <cite>— <code>docs/model_ops_guide.md</code> §AITER integration overview · <a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/model_ops_guide.md">model_ops_guide.md @ cd161f1</a></cite>
+</blockquote>
+
+<p>
+  <span class="en"><a class="src" href="https://github.com/ROCm/aiter">AITER</a> is AMD's own kernel library for ROCm, and crucially it is not one implementation strategy but three: hand-written <b>ASM</b>, <b>Composable Kernel (CK)</b> templates, and <b>Triton</b>. ATOM's job at each call site is to pick the right one for the current quantization type, parallelism setting, and phase. The clearest example is the linear layer, where the weight format alone selects a different GEMM:</span>
+  <span class="ko"><a class="src" href="https://github.com/ROCm/aiter">AITER</a>는 AMD가 직접 만든 ROCm용 커널 라이브러리다. 중요한 건 구현 전략이 하나가 아니라 셋이라는 점 — 손으로 쓴 <b>ASM</b>, <b>Composable Kernel(CK)</b> 템플릿, 그리고 <b>Triton</b>. 각 호출 지점에서 ATOM이 하는 일은 현재의 quantization 타입·병렬화 설정·단계에 맞는 것을 고르는 것이다. 가장 명확한 예가 linear 레이어인데, 가중치 포맷만으로 서로 다른 GEMM이 선택된다:</span>
+</p>
+
+<table>
+  <thead><tr>
+    <th>QuantType</th><th><span class="en">Weight</span><span class="ko">가중치</span></th><th><span class="en">AITER GEMM</span><span class="ko">AITER GEMM</span></th><th><span class="en">Backend</span><span class="ko">백엔드</span></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><code class="inl">No</code></td><td>BF16 / FP16</td><td><code class="inl">tuned_gemm.tgemm.mm</code></td><td>hipBLASLt</td></tr>
+    <tr><td><code class="inl">per_Tensor</code></td><td>FP8</td><td><code class="inl">tgemm.mm</code> + scales</td><td>hipBLASLt</td></tr>
+    <tr><td><code class="inl">per_Token</code></td><td>INT8</td><td><code class="inl">gemm_a8w8</code></td><td>CK</td></tr>
+    <tr><td><code class="inl">per_Token</code></td><td>FP8</td><td><code class="inl">gemm_a8w8_bpreshuffle</code></td><td>CK</td></tr>
+    <tr><td><code class="inl">per_1x128</code></td><td>FP8 (block)</td><td><code class="inl">gemm_a8w8_blockscale_bpreshuffle</code></td><td>CK</td></tr>
+    <tr><td><code class="inl">per_1x32</code></td><td>MXFP4 (<code>fp4x2</code>, e8m0 scales)</td><td><code class="inl">gemm_a4w4</code></td><td>CK</td></tr>
+  </tbody>
+</table>
+<p class="figcap"><span class="en">Reconstructed from <code>docs/model_ops_guide.md</code> §"Quantization dispatch"; the imports are visible at </span><span class="ko"><code>docs/model_ops_guide.md</code> §"Quantization dispatch" 재구성. import는 여기서 확인 가능: </span><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_ops/linear.py#L11-L17">linear.py#L11-L17 @ cd161f1</a></p>
+
+<p>
+  <span class="en">Attention splits the same way — and note that the <i>decode</i> path has three competing implementations, which is exactly where an engine like this earns or loses its margin:</span>
+  <span class="ko">attention도 같은 식으로 갈라진다. 특히 <i>decode</i> 경로에 구현이 셋이나 경쟁한다는 점을 보자 — 이런 엔진이 마진을 벌거나 잃는 지점이 바로 여기다:</span>
+</p>
+
+<table>
+  <thead><tr><th><span class="en">Phase / kind</span><span class="ko">단계 · 종류</span></th><th><span class="en">AITER function</span><span class="ko">AITER 함수</span></th><th><span class="en">Backend</span><span class="ko">백엔드</span></th></tr></thead>
+  <tbody>
+    <tr><td>MHA prefill</td><td><code class="inl">flash_attn_varlen_func</code></td><td>ASM / CK</td></tr>
+    <tr><td>MHA decode</td><td><code class="inl">pa_fwd_asm</code> · <code class="inl">pa_persistent_fwd</code></td><td>ASM</td></tr>
+    <tr><td>MHA decode (alt)</td><td><code class="inl">ops.triton.gluon.pa_decode_gluon</code></td><td>Triton</td></tr>
+    <tr><td>MLA prefill / decode</td><td><code class="inl">mla_prefill_fwd</code> · <code class="inl">mla_decode_fwd</code></td><td>ASM</td></tr>
+    <tr><td>MLA KV write</td><td><code class="inl">concat_and_cache_mla</code>, <code class="inl">fused_qk_rope_concat_and_cache_mla</code></td><td>CK</td></tr>
+    <tr><td>MoE</td><td><code class="inl">fused_moe.fused_moe</code> · <code class="inl">fused_moe_bf16_asm.asm_moe</code></td><td>CK / ASM</td></tr>
+    <tr><td>RoPE / RMSNorm / SiLU</td><td><code class="inl">rope_cached_positions_2c_fwd_inplace</code> · <code class="inl">rmsnorm2d_fwd</code> · <code class="inl">silu_and_mul</code></td><td>Triton / CK</td></tr>
+  </tbody>
+</table>
+<p class="figcap"><span class="en">Reconstructed from <code>docs/model_ops_guide.md</code> §"AITER kernel mapping table" @ cd161f1.</span><span class="ko"><code>docs/model_ops_guide.md</code> §"AITER kernel mapping table" 재구성 @ cd161f1.</span></p>
+
+<p>
+  <span class="en">On top of the general ops sit whole kernel families written for one model: <code class="inl">fla_ops/</code> (23 files of chunked linear-attention Triton kernels for Gated DeltaNet, adapted from flash-linear-attention), <code class="inl">v4_kernels/</code> (15, DeepSeek-V4's compressor state), <code class="inl">kimi_k3/</code> (4, Kimi Delta Attention), <code class="inl">minimax_m3/</code>, <code class="inl">mamba_ops/</code>. This is what "Day 0 support" actually costs in code.</span>
+  <span class="ko">일반 연산 위에는 특정 모델 하나를 위해 쓰인 커널 묶음이 통째로 얹혀 있다. <code class="inl">fla_ops/</code>(Gated DeltaNet용 chunked linear attention Triton 커널 23개, flash-linear-attention에서 가져옴), <code class="inl">v4_kernels/</code>(15개, DeepSeek-V4의 compressor state), <code class="inl">kimi_k3/</code>(4개, Kimi Delta Attention), <code class="inl">minimax_m3/</code>, <code class="inl">mamba_ops/</code>. "Day 0 지원"이 코드로 치면 실제로 얼마인지가 이것이다.</span>
+</p>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Compilation &amp; CUDA graphs — why attention is deliberately opaque</span><span class="ko">컴파일 &amp; CUDA graph — 왜 attention을 일부러 불투명하게 두는가</span></h2>
+
+<p>
+  <span class="en">ATOM has four compilation levels, set with <code class="inl">--level</code>:</span>
+  <span class="ko">ATOM은 컴파일 레벨이 넷이고, <code class="inl">--level</code>로 지정한다:</span>
+</p>
+
+<table>
+  <thead><tr><th>Level</th><th><span class="en">Name</span><span class="ko">이름</span></th><th><span class="en">Behavior</span><span class="ko">동작</span></th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td><code class="inl">NO_COMPILATION</code></td><td><span class="en">Pure eager. Debugging.</span><span class="ko">순수 eager. 디버깅용.</span></td></tr>
+    <tr><td>1</td><td><code class="inl">DYNAMO_AS_IS</code></td><td><span class="en"><code>torch.compile(backend="eager", fullgraph=True)</code> — a Dynamo-compatibility check, no optimization.</span><span class="ko"><code>torch.compile(backend="eager", fullgraph=True)</code> — Dynamo 호환성 확인용, 최적화 없음.</span></td></tr>
+    <tr><td>2</td><td><code class="inl">DYNAMO_ONCE</code></td><td><span class="en">Inductor, compiled once, then dispatched without re-checking guards.</span><span class="ko">Inductor로 한 번 컴파일 후, guard 재평가 없이 디스패치.</span></td></tr>
+    <tr><td>3</td><td><code class="inl">PIECEWISE</code></td><td><span class="en"><b>Production default.</b> Graph split at attention, each piece compiled and CUDA-graph captured.</span><span class="ko"><b>프로덕션 기본값.</b> attention에서 그래프를 쪼개고, 조각마다 컴파일 + CUDA graph 캡처.</span></td></tr>
+  </tbody>
+</table>
+
+<p>
+  <span class="en">Level 3 is where the interesting engineering is. The problem: you want CUDA graphs for decode (they remove per-step launch overhead), but attention's internals change shape every step — different sequence lengths, different block tables, different draft-token counts. You cannot bake that into a static graph.</span>
+  <span class="ko">흥미로운 엔지니어링은 레벨 3에 있다. 문제는 이렇다 — decode에 CUDA graph를 쓰고 싶은데(스텝당 실행 오버헤드가 사라지니까), attention 내부는 스텝마다 형태가 바뀐다. 시퀀스 길이도, block table도, draft 토큰 수도 다르다. 그걸 정적 그래프에 구워 넣을 수는 없다.</span>
+</p>
+
+<p>
+  <span class="en">ATOM's answer is to make attention <b>invisible to the compiler on purpose</b>. Attention is registered as a custom op marked with <code class="inl">@mark_spliting_op</code>, and the comment above it states the intent exactly:</span>
+  <span class="ko">ATOM의 답은 attention을 <b>일부러 컴파일러에게 안 보이게</b> 만드는 것이다. attention은 <code class="inl">@mark_spliting_op</code>가 붙은 custom op로 등록되고, 바로 위 주석이 의도를 정확히 적어 놨다:</span>
+</p>
+
+<pre># Dynamo will not try to inspect any of the internal operations for prefill or decode
+# This way, although attention operation is complicated,
+# we can still capture the model's computation graph as a full-graph
+@mark_spliting_op(is_custom=True, gen_fake=fake_, mutates_args=[])
+def unified_attention_with_output_base(
+    q, q_scale, k, v, positions, layer_name, use_mla, qkv,
+) -&gt; torch.Tensor:
+    atom_config = get_current_atom_config()
+    self = atom_config.compilation_config.static_forward_context[layer_name]</pre>
+<p class="figcap"><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/model_ops/base_attention.py#L344-L360">base_attention.py#L344-L360 @ cd161f1</a></p>
+
+<p>
+  <span class="en">So the model graph gets sliced at every attention call (default splitting ops: <code class="inl">aiter.unified_attention_with_output</code> and <code class="inl">aiter.mla_attention</code>). Everything between the slices is compiled by Inductor and captured into a CUDA graph; attention itself runs eagerly outside the graphs, free to consult whatever dynamic metadata it needs.</span>
+  <span class="ko">그래서 모델 그래프는 attention 호출마다 잘린다(기본 splitting op: <code class="inl">aiter.unified_attention_with_output</code>, <code class="inl">aiter.mla_attention</code>). 조각 사이의 모든 것은 Inductor가 컴파일해 CUDA graph로 캡처하고, attention 자체는 그래프 바깥에서 eager로 돌면서 필요한 동적 메타데이터를 마음껏 참조한다.</span>
+</p>
+
+<svg class="fig" viewBox="0 0 820 210" role="img" aria-labelledby="pwttl">
+  <title id="pwttl">Piecewise compilation splits the graph at attention</title>
+  <text x="14" y="20" font-size="12" font-weight="700" fill="var(--ink)">One transformer layer under --level 3 (PIECEWISE)</text>
+
+  <rect x="14" y="36" width="150" height="52" rx="8" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="89" y="58" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--green-ink)">RMSNorm + QKV</text>
+  <text x="89" y="75" font-size="10" text-anchor="middle" fill="var(--green-ink)">compiled · captured</text>
+
+  <rect x="184" y="36" width="170" height="52" rx="8" fill="var(--coral-bg)" stroke="var(--coral-bd)" stroke-dasharray="5 3"/>
+  <text x="269" y="55" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--coral-ink)">attention</text>
+  <text x="269" y="70" font-size="10" text-anchor="middle" fill="var(--coral-ink)">@mark_spliting_op</text>
+  <text x="269" y="83" font-size="10" text-anchor="middle" fill="var(--coral-ink)">eager · OUTSIDE the graph</text>
+
+  <rect x="374" y="36" width="150" height="52" rx="8" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="449" y="58" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--green-ink)">o_proj + norm</text>
+  <text x="449" y="75" font-size="10" text-anchor="middle" fill="var(--green-ink)">compiled · captured</text>
+
+  <rect x="544" y="36" width="150" height="52" rx="8" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+  <text x="619" y="58" font-size="11.5" font-weight="600" text-anchor="middle" fill="var(--green-ink)">MoE / MLP</text>
+  <text x="619" y="75" font-size="10" text-anchor="middle" fill="var(--green-ink)">compiled · captured</text>
+
+  <text x="714" y="66" font-size="12" fill="var(--muted)">→ next layer</text>
+
+  <line x1="164" y1="62" x2="180" y2="62" stroke="var(--muted)" stroke-width="1.4"/>
+  <line x1="354" y1="62" x2="370" y2="62" stroke="var(--muted)" stroke-width="1.4"/>
+  <line x1="524" y1="62" x2="540" y2="62" stroke="var(--muted)" stroke-width="1.4"/>
+  <line x1="694" y1="62" x2="708" y2="62" stroke="var(--muted)" stroke-width="1.4"/>
+
+  <rect x="14" y="108" width="680" height="42" rx="8" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+  <text x="28" y="126" font-size="11.5" font-weight="600" fill="var(--blue-ink)">global ForwardContext — set once per step, read by every attention call via get_forward_context()</text>
+  <text x="28" y="142" font-size="10.5" fill="var(--blue-ink)">attn_metadata · positions / is_prefill / batch_size · dp_metadata · spec_decode_metadata · kv_cache_data</text>
+
+  <line x1="269" y1="88" x2="269" y2="104" stroke="var(--blue-ink)" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#ahb2)"/>
+  <defs><marker id="ahb2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="var(--blue-ink)"/></marker></defs>
+
+  <text x="14" y="176" font-size="11" fill="var(--muted)">Because metadata arrives through a module-level global rather than a function argument, the captured</text>
+  <text x="14" y="193" font-size="11" fill="var(--muted)">subgraphs have stable signatures — that is the whole trick that makes piecewise capture work.</text>
+</svg>
+<p class="figcap"><span class="en">Drawn from <code>docs/compilation_cudagraph_guide.md</code> §"Level 3 — PIECEWISE" and <code>atom/utils/forward_context.py</code> @ cd161f1.</span><span class="ko"><code>docs/compilation_cudagraph_guide.md</code> §"Level 3 — PIECEWISE"와 <code>atom/utils/forward_context.py</code> 기반 작도 @ cd161f1.</span></p>
+
+<p>
+  <span class="en">The companion trick is the <b>global <code>ForwardContext</code></b>. Rather than threading attention metadata down through every function signature, ATOM sets a module-level global before the forward pass and has backends call <code class="inl">get_forward_context()</code>. That keeps the compiled subgraphs' signatures stable across steps — a parameter that changes shape would invalidate the capture. It is an unusual choice for readability and a deliberate one for CUDA-graph compatibility.</span>
+  <span class="ko">짝을 이루는 요령이 <b>전역 <code>ForwardContext</code></b>다. attention 메타데이터를 모든 함수 시그니처로 타고 내려보내는 대신, ATOM은 forward 전에 모듈 레벨 전역을 세팅하고 백엔드가 <code class="inl">get_forward_context()</code>로 꺼내 쓰게 한다. 그래야 컴파일된 서브그래프의 시그니처가 스텝마다 안정적으로 유지된다 — 형태가 바뀌는 파라미터가 있으면 캡처가 무효화되니까. 가독성 관점에선 특이한 선택이지만, CUDA graph 호환성 관점에선 의도적인 선택이다.</span>
+</p>
+
+<div class="callout c-coral">
+  <span class="tag"><span class="en">operational trap</span><span class="ko">운영 함정</span></span>
+  <span class="en">Two rules from ATOM's own <code class="inl">CLAUDE.md</code> that will bite you. (1) <b>Never edit a <code>@support_torch_compile</code>-decorated model file</b> to add instrumentation — it breaks Dynamo tracing <i>even with <code>--enforce-eager</code></i>; instrument at the call site instead. (2) <b>Clear the compile cache before restarting the server</b> (<code class="inl">rm -rf /root/.cache/atom/*</code>) — a stale cache causes silent failures after a code change. Also: first run takes ~10 minutes to compile.</span>
+  <span class="ko">ATOM <code class="inl">CLAUDE.md</code>에 적힌, 반드시 물리게 되는 규칙 둘. (1) <b><code>@support_torch_compile</code>가 붙은 모델 파일에 계측 코드를 절대 넣지 마라</b> — <i><code>--enforce-eager</code>를 줘도</i> Dynamo 트레이싱이 깨진다. 대신 호출 지점에서 계측하라. (2) <b>서버 재시작 전에 컴파일 캐시를 지워라</b>(<code class="inl">rm -rf /root/.cache/atom/*</code>) — 코드를 고친 뒤 캐시가 낡아 있으면 조용히 실패한다. 덧붙여, 최초 실행은 컴파일에 10분쯤 걸린다.</span>
+</div>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Running it — install, serve, benchmark, profile</span><span class="ko">실행법 — 설치·서빙·벤치마크·프로파일링</span></h2>
+
+<p>
+  <span class="en">Requirements are short and non-negotiable: <b>an AMD GPU with ROCm support, and Docker</b>. There is no CUDA path and no CPU fallback. Everything below is transcribed from the repo's README and docs at <code class="inl">cd161f1</code>; I have <b>not</b> run any of it — I have no MI300/MI355 access, and I flag that again in §8.</span>
+  <span class="ko">요구사항은 짧고 타협 불가다 — <b>ROCm을 지원하는 AMD GPU, 그리고 Docker</b>. CUDA 경로도, CPU 폴백도 없다. 아래는 전부 <code class="inl">cd161f1</code> 시점의 레포 README·문서에서 옮긴 것이고, <b>내가 직접 돌려본 것은 아니다</b> — MI300/MI355 접근 권한이 없다. 이 점은 §8에서 다시 밝힌다.</span>
+</p>
+
+<h3><span class="en">Install — the nightly image is the intended path</span><span class="ko">설치 — nightly 이미지가 의도된 경로</span></h3>
+
+<pre>docker pull rocm/atom-dev:latest
+
+docker run -it --network=host \
+  --device=/dev/kfd --device=/dev/dri --group-add video \
+  --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+  -v $HOME:/home/$USER -v /mnt:/mnt -v /data:/data \
+  --shm-size=16G --ulimit memlock=-1 --ulimit stack=67108864 \
+  rocm/atom-dev:latest</pre>
+
+<p>
+  <span class="en">Or build on the ROCm PyTorch base — note that <b>AITER is a separate install</b>, which reinforces the point that ATOM is a thin layer above it:</span>
+  <span class="ko">또는 ROCm PyTorch 베이스 위에 직접 빌드한다. <b>AITER를 따로 설치</b>한다는 점이, ATOM이 그 위의 얇은 층이라는 사실을 다시 확인해 준다:</span>
+</p>
+
+<pre>docker pull rocm/pytorch:rocm7.0.2_ubuntu24.04_py3.12_pytorch_release_2.8.0
+# ... same docker run flags as above ...
+
+pip install amd-aiter
+git clone https://github.com/ROCm/ATOM.git &amp;&amp; pip install ./ATOM</pre>
+<p class="figcap"><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/README.md">README.md §Installation @ cd161f1</a></p>
+
+<h3><span class="en">Offline inference — the smallest thing that works</span><span class="ko">오프라인 추론 — 돌아가는 가장 작은 것</span></h3>
+
+<pre>pip install ninja
+pip install -U "huggingface_hub" &amp;&amp; hf auth login
+
+python -m atom.examples.simple_inference \
+  --model meta-llama/Meta-Llama-3-8B --kv-cache-dtype fp8</pre>
+
+<div class="callout c-amber">
+  <span class="tag"><span class="en">expect a long first run</span><span class="ko">첫 실행은 길다</span></span>
+  <span class="en">The README warns: "First-time execution may take approximately <b>10 minutes</b> for model compilation." That is level-3 piecewise compilation + CUDA graph capture doing its work. Subsequent runs hit the cache in <code class="inl">/root/.cache/atom/</code> — which is also the cache you must delete after changing code.</span>
+  <span class="ko">README가 경고한다 — "First-time execution may take approximately <b>10 minutes</b> for model compilation." 레벨 3 piecewise 컴파일 + CUDA graph 캡처가 일하는 시간이다. 이후 실행은 <code class="inl">/root/.cache/atom/</code> 캐시를 탄다. 코드를 고쳤다면 반드시 지워야 하는 그 캐시다.</span>
+</div>
+
+<h3><span class="en">Serving — the OpenAI-compatible server</span><span class="ko">서빙 — OpenAI 호환 서버</span></h3>
+
+<pre># Single GPU
+python -m atom.entrypoints.openai_server --model Qwen/Qwen3-0.6B --kv-cache-dtype fp8
+
+# 8-GPU tensor parallel
+python -m atom.entrypoints.openai_server \
+  --model deepseek-ai/DeepSeek-R1 --kv-cache-dtype fp8 -tp 8
+
+# ...with MTP speculative decoding (3 draft tokens)
+python -m atom.entrypoints.openai_server \
+  --model deepseek-ai/DeepSeek-R1 --kv-cache-dtype fp8 -tp 8 \
+  --method mtp --num-speculative-tokens 3</pre>
+
+<p>
+  <span class="en">Then call it like any OpenAI endpoint at <code class="inl">http://localhost:8000/v1/chat/completions</code>. Every long flag accepts both spellings — <code class="inl">--kv-cache-dtype</code> and <code class="inl">--kv_cache_dtype</code> are the same flag.</span>
+  <span class="ko">그다음엔 <code class="inl">http://localhost:8000/v1/chat/completions</code>에 대고 여느 OpenAI 엔드포인트처럼 호출하면 된다. 모든 long 플래그는 두 표기를 다 받는다 — <code class="inl">--kv-cache-dtype</code>와 <code class="inl">--kv_cache_dtype</code>는 같은 플래그다.</span>
+</p>
+
+<h4><span class="en">Parallelism flags worth knowing</span><span class="ko">알아둘 만한 병렬화 플래그</span></h4>
+
+<table>
+  <thead><tr><th><span class="en">Flag</span><span class="ko">플래그</span></th><th><span class="en">What it does</span><span class="ko">하는 일</span></th><th><span class="en">Communication</span><span class="ko">통신</span></th></tr></thead>
+  <tbody>
+    <tr><td><code class="inl">-tp N</code></td><td><span class="en">Shard weights across N GPUs</span><span class="ko">가중치를 N개 GPU에 분할</span></td><td>NCCL/RCCL all-reduce</td></tr>
+    <tr><td><code class="inl">-dp N</code></td><td><span class="en">Replicate the model, split requests</span><span class="ko">모델 복제, 요청 분배</span></td><td><span class="en">Gloo all-reduce (CPU, for lockstep)</span><span class="ko">Gloo all-reduce (CPU, lockstep용)</span></td></tr>
+    <tr><td><code class="inl">--enable-expert-parallel</code></td><td><span class="en">Distribute MoE experts across GPUs</span><span class="ko">MoE expert를 GPU에 분산</span></td><td>MORI all-to-all</td></tr>
+    <tr><td><code class="inl">--enable-dp-attention</code></td><td><span class="en">Flatten DP into TP for MoE layers</span><span class="ko">MoE 레이어에서 DP를 TP로 평탄화</span></td><td>all-gather / reduce-scatter</td></tr>
+    <tr><td><code class="inl">--level 0..3</code></td><td><span class="en">Compilation level (3 = piecewise + CUDA graph, default)</span><span class="ko">컴파일 레벨 (3 = piecewise + CUDA graph, 기본)</span></td><td>—</td></tr>
+    <tr><td><code class="inl">--enable-prefix-caching</code></td><td><span class="en">xxhash64 block sharing (off by default)</span><span class="ko">xxhash64 블록 공유 (기본 꺼짐)</span></td><td>—</td></tr>
+  </tbody>
+</table>
+<p class="figcap"><span class="en">From </span><span class="ko">출처: </span><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/distributed_guide.md">docs/distributed_guide.md</a><span class="en"> §Quick Reference and </span><span class="ko"> §Quick Reference, </span><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/scheduling_kv_cache_guide.md">scheduling_kv_cache_guide.md</a><span class="en"> §Key config defaults @ cd161f1.</span><span class="ko"> §Key config defaults @ cd161f1.</span></p>
+
+<p>
+  <span class="en">Typical shapes the docs recommend: dense models <code class="inl">-tp 8</code>; MoE <code class="inl">-tp 8 --enable-expert-parallel</code>; MoE throughput scaling <code class="inl">-tp 4 -dp 2 --enable-expert-parallel</code>.</span>
+  <span class="ko">문서가 권하는 전형적 구성: dense 모델은 <code class="inl">-tp 8</code>, MoE는 <code class="inl">-tp 8 --enable-expert-parallel</code>, MoE 처리량 스케일링은 <code class="inl">-tp 4 -dp 2 --enable-expert-parallel</code>.</span>
+</p>
+
+<h3><span class="en">Benchmark and profile</span><span class="ko">벤치마크와 프로파일링</span></h3>
+
+<pre># Online throughput against a running server
+python -m atom.benchmarks.benchmark_serving \
+  --model=deepseek-ai/DeepSeek-R1 --backend=vllm --base-url=http://localhost:8000 \
+  --dataset-name=random \
+  --random-input-len=1024 --random-output-len=1024 --random-range-ratio=0.8 \
+  --num-prompts=1280 --max-concurrency=128 \
+  --request-rate=inf --ignore-eos \
+  --save-result --percentile-metrics="ttft,tpot,itl,e2el"</pre>
+
+<p>
+  <span class="en">Note <code class="inl">--backend=vllm</code>: the harness speaks vLLM's benchmark protocol, because it is adapted from that lineage. Profiling is a server flag plus two HTTP calls, and the traces come back as Excel/Markdown reports:</span>
+  <span class="ko"><code class="inl">--backend=vllm</code>에 주목. 하네스가 vLLM의 벤치마크 프로토콜을 말한다 — 그 계보에서 갈라져 나왔기 때문이다. 프로파일링은 서버 플래그 하나에 HTTP 호출 둘이면 되고, trace는 Excel·Markdown 리포트로 돌아온다:</span>
+</p>
+
+<pre># start server with --torch-profiler-dir ./trace --mark-trace, then:
+curl -X POST http://127.0.0.1:8000/start_profile
+# ... run your workload ...
+curl -X POST http://127.0.0.1:8000/stop_profile
+
+python tools/parse_trace.py ./trace/rank_0/DeepSeek-R1_ts_*.json.gz
+#   → prefill_breakdown.xlsx / decode_breakdown.xlsx (per-kernel duration, %, module grouping)
+python tools/analyze_trace_summary.py ./trace/rank_0/DeepSeek-R1_ts_*.json.gz
+#   → performance_summary.md (prefill/decode/draft step timing)</pre>
+
+<p>
+  <span class="en">Accuracy validation runs through <code class="inl">lm_eval</code> against the server's <code class="inl">/v1/completions</code>, exactly as you would validate vLLM.</span>
+  <span class="ko">정확도 검증은 <code class="inl">lm_eval</code>로 서버의 <code class="inl">/v1/completions</code>를 때린다. vLLM을 검증할 때와 똑같다.</span>
+</p>
+
+<pre>pip install lm-eval[api]
+lm_eval --model local-completions \
+  --model_args model=meta-llama/Meta-Llama-3-8B,base_url=http://localhost:8000/v1/completions,num_concurrent=64,max_retries=3,tokenized_requests=False \
+  --tasks gsm8k --num_fewshot 5</pre>
+
+<div class="callout c-coral">
+  <span class="tag"><span class="en">verify with the GPU, not the HTTP code</span><span class="ko">HTTP 코드 말고 GPU로 확인하라</span></span>
+  <span class="en">Straight from ATOM's <code class="inl">CLAUDE.md</code>: "<code>curl /health</code> can return OK even when model is not loaded. Always check <code>rocm-smi --showmemuse</code> (VRAM% &gt; 0) to confirm." Also set <code class="inl">AITER_LOG_LEVEL=WARNING</code> before starting, or kernel logs will flood the console.</span>
+  <span class="ko">ATOM <code class="inl">CLAUDE.md</code>에서 그대로: "<code>curl /health</code> can return OK even when model is not loaded. Always check <code>rocm-smi --showmemuse</code> (VRAM% &gt; 0) to confirm." 그리고 시작 전에 <code class="inl">AITER_LOG_LEVEL=WARNING</code>을 걸어라. 안 그러면 커널 로그가 콘솔을 뒤덮는다.</span>
+</div>
+
+<h3><span class="en">The other way to run it — as a vLLM plugin</span><span class="ko">다른 실행 방법 — vLLM 플러그인으로</span></h3>
+
+<p>
+  <span class="en">This is the mode most people will actually want, and it needs <b>no ATOM commands at all</b>. Installing the <code class="inl">atom</code> package next to <code class="inl">vllm</code> registers three entry points; at <code class="inl">vllm serve</code> startup vLLM discovers them and silently reroutes model execution and attention through ATOM/AITER:</span>
+  <span class="ko">대부분의 사람이 실제로 원할 모드가 이쪽이고, <b>ATOM 명령어가 아예 필요 없다</b>. <code class="inl">atom</code> 패키지를 <code class="inl">vllm</code> 옆에 설치하면 entry point 세 개가 등록되고, <code class="inl">vllm serve</code> 시작 시 vLLM이 그걸 발견해 모델 실행과 attention을 조용히 ATOM/AITER로 우회시킨다:</span>
+</p>
+
+<pre>[project.entry-points."vllm.platform_plugins"]
+atom = "atom.plugin.vllm.register:register_platform"
+
+[project.entry-points."vllm.general_plugins"]
+atom_model_registry = "atom.plugin.vllm.register:register_model"
+
+[project.entry-points."sglang.srt.plugins"]
+atom_sglang = "atom.plugin.sglang.register:register_plugin"</pre>
+<p class="figcap"><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/pyproject.toml#L44-L54">pyproject.toml#L44-L54 @ cd161f1</a> · <span class="en">disable with </span><span class="ko">비활성화: </span><code class="inl">ATOM_DISABLE_VLLM_PLUGIN=1</code></p>
+
+<p>
+  <span class="en">The division of labour is explicit in ATOM's own guide: vLLM keeps "API server, CLI, engine, scheduler, worker orchestration, cache management, and framework-level features"; ATOM supplies "platform plugin, model registry overrides, model wrappers, attention backends, and the optimized execution path". Concretely, <code class="inl">register_platform()</code> makes vLLM resolve <code class="inl">current_platform</code> to <code class="inl">ATOMPlatform</code>, <code class="inl">register_model()</code> swaps <code class="inl">ModelRegistry</code> entries for ATOM wrappers, and <code class="inl">ATOMPlatform.get_attn_backend_cls()</code> returns ATOM's AITER attention backends.</span>
+  <span class="ko">역할 분담은 ATOM 자체 가이드에 명시돼 있다. vLLM은 "API server, CLI, engine, scheduler, worker orchestration, cache management, and framework-level features"를 계속 맡고, ATOM은 "platform plugin, model registry overrides, model wrappers, attention backends, and the optimized execution path"를 공급한다. 구체적으로는 <code class="inl">register_platform()</code>이 vLLM의 <code class="inl">current_platform</code>을 <code class="inl">ATOMPlatform</code>으로 만들고, <code class="inl">register_model()</code>이 <code class="inl">ModelRegistry</code> 항목을 ATOM 래퍼로 바꾸고, <code class="inl">ATOMPlatform.get_attn_backend_cls()</code>가 ATOM의 AITER attention 백엔드를 돌려준다.</span>
+</p>
+
+<blockquote class="q">
+  <p>"This relationship is important: ATOM is not replacing vLLM as a serving framework. Instead, ATOM plugs optimized model execution components into the extension points that vLLM already exposes."</p>
+  <cite>— <code>docs/vllm_plugin_backend_guide.md</code> §Design overview · <a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/vllm_plugin_backend_guide.md">vllm_plugin_backend_guide.md @ cd161f1</a></cite>
+</blockquote>
+</section>
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">How ATOM differs from vLLM, SGLang, and vLLM-on-ROCm</span><span class="ko">vLLM·SGLang·vLLM-on-ROCm 과 뭐가 다른가</span></h2>
+
+<p>
+  <span class="en">The honest starting point: <b>architecturally, ATOM does not differ from vLLM much at all</b>, and that is by design. Continuous batching, paged KV blocks, prefill-first scheduling, preemption, prefix caching, CUDA graphs, speculative decoding, TP/DP/EP, P/D disaggregation — vLLM has all of it. ATOM inherited the design through nano-vllm and kept going in the same direction. Where it differs is <b>below</b> the engine, and in how it is meant to be consumed.</span>
+  <span class="ko">솔직한 출발점 — <b>아키텍처만 보면 ATOM은 vLLM과 크게 다르지 않다</b>. 그리고 그건 의도된 것이다. continuous batching, paged KV 블록, prefill 우선 스케줄링, preemption, prefix caching, CUDA graph, speculative decoding, TP/DP/EP, P/D 분리 — vLLM에 전부 있다. ATOM은 nano-vllm을 거쳐 그 설계를 물려받았고 같은 방향으로 계속 갔다. 다른 지점은 엔진 <b>아래쪽</b>, 그리고 어떻게 소비되도록 설계됐는가에 있다.</span>
+</p>
+
+<table>
+  <thead><tr>
+    <th></th><th>ATOM</th><th>vLLM</th><th>SGLang</th>
+  </tr></thead>
+  <tbody>
+    <tr><td><span class="en">Hardware</span><span class="ko">하드웨어</span></td>
+      <td><span class="en"><b>AMD only.</b> ROCm/HIP. No CUDA path exists.</span><span class="ko"><b>AMD 전용.</b> ROCm/HIP. CUDA 경로 자체가 없다.</span></td>
+      <td><span class="en">NVIDIA-first, with ROCm, TPU, CPU and other backends.</span><span class="ko">NVIDIA 우선, ROCm·TPU·CPU 등 백엔드 다수.</span></td>
+      <td><span class="en">NVIDIA-first, ROCm supported.</span><span class="ko">NVIDIA 우선, ROCm 지원.</span></td></tr>
+    <tr><td><span class="en">Kernel source</span><span class="ko">커널 출처</span></td>
+      <td><span class="en"><b>AITER for essentially everything</b> — ASM, CK, Triton. This is the differentiator.</span><span class="ko"><b>거의 전부 AITER</b> — ASM, CK, Triton. 이게 차별점이다.</span></td>
+      <td><span class="en">FlashAttention/FlashInfer, cuBLAS, custom CUDA; AITER on its ROCm path.</span><span class="ko">FlashAttention/FlashInfer, cuBLAS, 자체 CUDA. ROCm 경로에선 AITER도 쓴다.</span></td>
+      <td><span class="en">FlashInfer, Triton, custom kernels.</span><span class="ko">FlashInfer, Triton, 자체 커널.</span></td></tr>
+    <tr><td><span class="en">Size</span><span class="ko">규모</span></td>
+      <td><span class="en">~300 core Python files (+250 Rust for ATOMesh, +111 plugin).</span><span class="ko">코어 Python ~300파일(+ATOMesh Rust 250, +플러그인 111).</span></td>
+      <td><span class="en">Thousands of files, very large contributor base.</span><span class="ko">파일 수천 개, 매우 큰 기여자 기반.</span></td>
+      <td><span class="en">Large.</span><span class="ko">크다.</span></td></tr>
+    <tr><td><span class="en">Governance</span><span class="ko">거버넌스</span></td>
+      <td><span class="en"><b>Single-vendor</b> (AMD). MIT licensed.</span><span class="ko"><b>단일 벤더</b>(AMD). MIT 라이선스.</span></td>
+      <td><span class="en">Multi-vendor open-source project (PyTorch Foundation).</span><span class="ko">다중 벤더 오픈소스 프로젝트(PyTorch Foundation).</span></td>
+      <td><span class="en">Community + LMSYS lineage.</span><span class="ko">커뮤니티 + LMSYS 계보.</span></td></tr>
+    <tr><td><span class="en">Consumption model</span><span class="ko">소비 방식</span></td>
+      <td><span class="en">Standalone server <b>or</b> a plugin that installs <i>into</i> vLLM/SGLang.</span><span class="ko">독립 서버 <b>또는</b> vLLM·SGLang <i>안으로</i> 설치되는 플러그인.</span></td>
+      <td><span class="en">The framework itself.</span><span class="ko">프레임워크 그 자체.</span></td>
+      <td><span class="en">The framework itself.</span><span class="ko">프레임워크 그 자체.</span></td></tr>
+  </tbody>
+</table>
+
+<h3><span class="en">The real question: ATOM vs vLLM-on-ROCm</span><span class="ko">진짜 질문: ATOM vs vLLM-on-ROCm</span></h3>
+
+<p>
+  <span class="en">vLLM already runs on AMD — AMD maintains a ROCm fork, and ATOM's own source proves it: <code class="inl">atom/model_loader/weight_utils.py</code> carries the header "This code is adapted from <a class="src" href="https://github.com/ROCm/vllm">https://github.com/ROCm/vllm</a>". So the comparison is not "AMD support or none". It is "two AMD-supported paths, which one?"</span>
+  <span class="ko">vLLM은 이미 AMD에서 돈다 — AMD가 ROCm 포크를 관리하고, ATOM 자신의 소스가 그걸 증명한다. <code class="inl">atom/model_loader/weight_utils.py</code> 헤더에 "This code is adapted from <a class="src" href="https://github.com/ROCm/vllm">https://github.com/ROCm/vllm</a>"라고 적혀 있다. 그러니 비교는 "AMD 지원이 되냐 마냐"가 아니다. "AMD 지원 경로가 둘인데 어느 쪽이냐"다.</span>
+</p>
+
+<p>
+  <span class="en">AMD's own answer, from the RFC that opened this direction — <a class="src" href="https://github.com/ROCm/ATOM/issues/201">ROCm/ATOM issue #201, "[RFC] Enable ATOM as vLLM out-of-tree Platform"</a> (opened 2026-02-09, still <b>open</b> as of this writing):</span>
+  <span class="ko">이 방향을 연 RFC에 AMD 자신의 답이 있다 — <a class="src" href="https://github.com/ROCm/ATOM/issues/201">ROCm/ATOM issue #201, "[RFC] Enable ATOM as vLLM out-of-tree Platform"</a>(2026-02-09 개설, 이 글 작성 시점에도 <b>열려 있음</b>):</span>
+</p>
+
+<blockquote class="q">
+  <p>"ATOM platform is working as the incubator of the optimizations. When those optimizations are getting mature, they will be upstreamed immediately."</p>
+  <cite>— <a href="https://github.com/ROCm/ATOM/issues/201">ROCm/ATOM #201</a> · <span class="en">RFC, open since 2026-02-09</span><span class="ko">RFC, 2026-02-09부터 열림</span></cite>
+</blockquote>
+
+<p>
+  <span class="en">That is a clear and, I think, credible story: ATOM is an <b>incubator with a defined exit path</b>. Optimizations land in ATOM first because AMD controls the release cadence there, then flow upstream into vLLM once stable. The plugin is the bridge that lets you consume them before that trip completes.</span>
+  <span class="ko">명확하고, 내 판단으로는 설득력 있는 이야기다. ATOM은 <b>퇴출 경로가 정의된 인큐베이터</b>다. AMD가 릴리스 주기를 통제하는 곳이 ATOM이라 최적화가 먼저 여기 떨어지고, 안정되면 vLLM 상류로 흘러간다. 플러그인은 그 여정이 끝나기 전에 미리 쓸 수 있게 해주는 다리다.</span>
+</p>
+
+<div class="grid2">
+  <div class="mini"><h4><span class="en">Reasons to use ATOM standalone</span><span class="ko">ATOM 단독을 쓸 이유</span></h4><p><span class="en">You need a Day-0 model (Kimi-K3, DeepSeek-V4, Qwen3.8, MiniMax-M3) that vLLM's ROCm path does not have yet; you want DSpark or the V4 compressor; you are AMD-only anyway and want the shortest path to the newest kernel; or you are studying an inference engine small enough to read.</span><span class="ko">vLLM ROCm 경로에 아직 없는 Day-0 모델(Kimi-K3, DeepSeek-V4, Qwen3.8, MiniMax-M3)이 필요할 때. DSpark이나 V4 compressor를 쓰고 싶을 때. 어차피 AMD 전용이고 최신 커널까지 최단 경로를 원할 때. 또는 읽을 수 있을 만큼 작은 추론 엔진을 공부할 때.</span></p></div>
+  <div class="mini"><h4><span class="en">Reasons not to</span><span class="ko">쓰지 않을 이유</span></h4><p><span class="en">You need portability across NVIDIA and AMD; you depend on vLLM's ecosystem (LoRA serving, structured output, router integrations, the enormous model zoo); you want multi-vendor governance rather than a single vendor's roadmap; or you need production features ATOM has not built. In most of these, <b>the plugin path gives you both</b> — that is the point of it.</span><span class="ko">NVIDIA·AMD 이식성이 필요할 때. vLLM 생태계(LoRA 서빙, structured output, 라우터 연동, 방대한 모델 목록)에 의존할 때. 단일 벤더 로드맵 대신 다중 벤더 거버넌스를 원할 때. ATOM이 아직 안 만든 프로덕션 기능이 필요할 때. 대부분의 경우 <b>플러그인 경로가 둘 다 준다</b> — 그게 플러그인의 존재 이유다.</span></p></div>
+</div>
+
+<div class="callout c-purple">
+  <span class="tag"><span class="en">editor's note — my read, not AMD's claim</span><span class="ko">편집자 주 — AMD의 주장이 아닌 내 해석</span></span>
+  <span class="en">The most interesting thing about ATOM is not its performance — it is the <b>organisational move</b>. AMD's problem was never "can vLLM run on ROCm"; it was that shipping an AMD kernel optimization meant landing it in someone else's multi-vendor repo on someone else's schedule. ATOM converts that into a problem AMD owns end to end, and the plugin entry points mean adopting it costs a <code class="inl">pip install</code> rather than a migration. Whether that is good for the ecosystem depends on whether the "upstreamed immediately" half of the RFC actually happens — a promise worth re-checking in a year rather than taking on faith. The failure mode to watch for is ATOM quietly becoming a permanent AMD-only fork of the engine layer instead of a staging area.</span>
+  <span class="ko">ATOM에서 가장 흥미로운 건 성능이 아니라 <b>조직적 수</b>다. AMD의 문제는 애초에 "vLLM이 ROCm에서 도느냐"가 아니었다. AMD 커널 최적화를 출시하려면 남의 다중 벤더 레포에, 남의 일정에 맞춰 넣어야 한다는 게 문제였다. ATOM은 그걸 AMD가 처음부터 끝까지 소유하는 문제로 바꾼다. 그리고 플러그인 entry point 덕분에 도입 비용이 마이그레이션이 아니라 <code class="inl">pip install</code> 한 줄이 된다. 이게 생태계에 좋은지는 RFC의 나머지 절반, "upstreamed immediately"가 실제로 일어나느냐에 달렸다 — 믿고 넘어갈 게 아니라 1년쯤 뒤에 다시 확인할 약속이다. 경계할 실패 양상은, ATOM이 스테이징 구역이 아니라 엔진 계층의 영구적인 AMD 전용 포크로 조용히 굳는 것이다.</span>
+</div>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span><span class="en">Status, limits, and what I could not verify</span><span class="ko">상태·한계·확인하지 못한 것</span></h2>
+
+<h3><span class="en">What is there</span><span class="ko">있는 것</span></h3>
+
+<p>
+  <span class="en">The model registry in <code class="inl">model_runner.py</code> lists <b>26 architectures</b> at <code class="inl">cd161f1</code>, including Llama, Qwen3 / Qwen3-MoE / Qwen3-Next / Qwen3.5 / Qwen3.8, DeepSeek V3 / V3.2 / V4, GLM-4-MoE and GLM-5 (via <code class="inl">GlmMoeDsaForCausalLM</code>), GPT-OSS, Mixtral, Kimi-K2.5 and Kimi-K3, MiMo-V2, MiniMax-M2 and M3, and Mistral-3 — several of them multimodal (<code class="inl">*ForConditionalGeneration</code>). Feature-wise: FP8 / MXFP4 / INT8 / INT4 with auto-detection, online re-quantization at load time, MTP/EAGLE and DSpark speculative decoding, prefix caching, TBO, P/D disaggregation over MORI-IO and Mooncake, KV offload to host/disk, an RL rollout integration, and experimental Navi 4 (RDNA4, consumer Radeon) support.</span>
+  <span class="ko"><code class="inl">cd161f1</code> 시점 <code class="inl">model_runner.py</code>의 모델 레지스트리에 <b>아키텍처 26개</b>가 등록돼 있다. Llama, Qwen3 / Qwen3-MoE / Qwen3-Next / Qwen3.5 / Qwen3.8, DeepSeek V3 / V3.2 / V4, GLM-4-MoE와 GLM-5(<code class="inl">GlmMoeDsaForCausalLM</code>), GPT-OSS, Mixtral, Kimi-K2.5·Kimi-K3, MiMo-V2, MiniMax-M2·M3, Mistral-3 — 이 중 여럿은 멀티모달(<code class="inl">*ForConditionalGeneration</code>)이다. 기능 쪽으로는 FP8 / MXFP4 / INT8 / INT4 자동 감지, 로드 시점 온라인 재양자화, MTP/EAGLE·DSpark speculative decoding, prefix caching, TBO, MORI-IO·Mooncake 기반 P/D 분리, host/디스크 KV offload, RL rollout 연동, 그리고 실험적 Navi 4(RDNA4, 컨슈머 Radeon) 지원이 있다.</span>
+</p>
+
+<h3><span class="en">What to be careful about</span><span class="ko">조심할 것</span></h3>
+
+<div class="grid2">
+  <div class="mini"><h4><span class="en">All performance numbers are vendor-reported</span><span class="ko">성능 수치는 전부 벤더 자체 보고</span></h4><p><span class="en">Every figure in ATOM's README, its ROCm blog posts, and <code>atom_overview_draft.md</code> comes from AMD. I found <b>no independent third-party benchmark of ATOM</b> while researching this note. Treat the numbers as directional, not settled.</span><span class="ko">ATOM README, ROCm 블로그 글, <code>atom_overview_draft.md</code>의 모든 수치가 AMD에서 나왔다. 이 노트를 조사하는 동안 <b>ATOM에 대한 독립 제3자 벤치마크를 찾지 못했다</b>. 수치는 방향 지시로 보고, 결론으로 보지 말 것.</span></p></div>
+  <div class="mini"><h4><span class="en">I did not run it</span><span class="ko">나는 실행해 보지 않았다</span></h4><p><span class="en">Everything here is from reading the source at <code>cd161f1</code> plus the repo's docs. I have no MI300X/MI355X access, so none of the commands in §6 are verified by execution — they are transcribed from the README and docs.</span><span class="ko">여기 있는 내용은 전부 <code>cd161f1</code> 소스와 레포 문서를 읽은 결과다. MI300X/MI355X 접근 권한이 없어서 §6의 명령들은 실행으로 검증하지 않았다 — README·문서에서 옮긴 것이다.</span></p></div>
+  <div class="mini"><h4><span class="en">Docs lag the code</span><span class="ko">문서가 코드보다 뒤처져 있다</span></h4><p><span class="en">The architecture guide's clean two-phase scheduler is no longer what <code>scheduler.py</code> does, and the docs' model table lists 8 architectures where the registry has 26. Trust the code.</span><span class="ko">architecture guide의 깔끔한 2단계 스케줄러는 더 이상 <code>scheduler.py</code>의 실제 동작이 아니고, 문서의 모델 표는 8개인데 레지스트리엔 26개가 있다. 코드를 믿어라.</span></p></div>
+  <div class="mini"><h4><span class="en">Single-vendor risk</span><span class="ko">단일 벤더 리스크</span></h4><p><span class="en">MIT-licensed and public, but the roadmap, the release cadence and the review are AMD's. The RFC's upstreaming promise is the mitigation, and it is a promise, not a mechanism.</span><span class="ko">MIT 라이선스에 공개돼 있지만 로드맵·릴리스 주기·리뷰는 AMD의 것이다. RFC의 upstream 약속이 완화책인데, 그건 약속이지 장치가 아니다.</span></p></div>
+</div>
+
+<h3><span class="en">Things I looked for and did not find</span><span class="ko">찾아봤지만 없던 것</span></h3>
+<ul>
+  <li><span class="en">Any independent benchmark comparing ATOM against vLLM-on-ROCm on the same hardware and workload. AMD's README points at <a class="src" href="https://inferencex.semianalysis.com/">InferenceX (SemiAnalysis)</a> and its own <a class="src" href="https://rocm.github.io/ATOM/benchmark-dashboard/">nightly dashboard</a>, but the dashboard is AMD-run and tracks ATOM against itself over time, not against vLLM.</span><span class="ko">같은 하드웨어·워크로드에서 ATOM과 vLLM-on-ROCm을 비교한 독립 벤치마크. AMD README가 <a class="src" href="https://inferencex.semianalysis.com/">InferenceX (SemiAnalysis)</a>와 자체 <a class="src" href="https://rocm.github.io/ATOM/benchmark-dashboard/">nightly 대시보드</a>를 가리키지만, 대시보드는 AMD가 운영하며 시간에 따른 ATOM 자기 자신을 추적할 뿐 vLLM과 비교하지 않는다.</span></li>
+  <li><span class="en">A statement of which optimizations have <i>already</i> been upstreamed from ATOM into vLLM. The RFC promises it; I could not find a list confirming it has happened.</span><span class="ko">ATOM에서 vLLM으로 <i>이미</i> upstream된 최적화가 무엇인지에 대한 서술. RFC는 약속하지만, 실제로 일어났음을 확인해 주는 목록은 찾지 못했다.</span></li>
+  <li><span class="en">Confirmation of the exact vLLM ROCm support matrix — the vLLM docs rate-limited me while writing. The in-repo evidence (<code class="inl">weight_utils.py</code> adapted from <code>ROCm/vllm</code>) is what I cite instead.</span><span class="ko">vLLM의 정확한 ROCm 지원 매트릭스 확인 — 작성 중 vLLM 문서에서 rate limit이 걸렸다. 대신 레포 내부 증거(<code class="inl">weight_utils.py</code>가 <code>ROCm/vllm</code>에서 파생)를 인용했다.</span></li>
+</ul>
+</section>
+
+<section id="s9">
+<h2><span class="num">9</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+
+<h3><span class="en">Primary — the repository @ <code>cd161f1</code></span><span class="ko">1차 — 레포지토리 @ <code>cd161f1</code></span></h3>
+<ul class="srcs">
+  <li><a href="https://github.com/ROCm/ATOM">github.com/ROCm/ATOM</a> — <span class="en">the project. Analyzed at commit</span><span class="ko">본 프로젝트. 분석 커밋</span> <a href="https://github.com/ROCm/ATOM/tree/cd161f16bd041b63bc3bc4f234f3d1915a80200d"><code>cd161f16bd041b63bc3bc4f234f3d1915a80200d</code></a> (2026-09-01)</li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/README.md">README.md</a> — <span class="en">news, supported models, install, usage, benchmarking. Acknowledgement of nano-vllm at #L281-L283.</span><span class="ko">뉴스·지원 모델·설치·사용법·벤치마크. nano-vllm 출처 표기는 #L281-L283.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/architecture_guide.md">docs/architecture_guide.md</a> — <span class="en">request lifecycle, multi-process design, ForwardContext, Sequence lifecycle, MTP.</span><span class="ko">요청 생애주기, 멀티프로세스 설계, ForwardContext, Sequence 생애주기, MTP.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/model_ops_guide.md">docs/model_ops_guide.md</a> — <span class="en">the AITER kernel mapping table and quantization dispatch.</span><span class="ko">AITER 커널 매핑 표와 quantization 디스패치.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/scheduling_kv_cache_guide.md">docs/scheduling_kv_cache_guide.md</a> — <span class="en">scheduler algorithm, preemption, block manager, config defaults.</span><span class="ko">스케줄러 알고리즘, preemption, block manager, 기본 설정값.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/compilation_cudagraph_guide.md">docs/compilation_cudagraph_guide.md</a> — <span class="en">the four compilation levels and CUDA graph modes.</span><span class="ko">컴파일 레벨 4단계와 CUDA graph 모드.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/distributed_guide.md">docs/distributed_guide.md</a> — <span class="en">TP / DP / EP / DP-attention flags and collectives.</span><span class="ko">TP·DP·EP·DP-attention 플래그와 집합통신.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/docs/vllm_plugin_backend_guide.md">docs/vllm_plugin_backend_guide.md</a> — <span class="en">the plugin architecture and the vLLM/ATOM division of labour.</span><span class="ko">플러그인 아키텍처와 vLLM·ATOM 역할 분담.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom_overview_draft.md">atom_overview_draft.md</a> — <span class="en"><b>AMD internal positioning draft</b> ("Draft – Internal Review Only") committed to the public repo. Source of the dual-role framing and the nano-vllm mindset quote. Marketing, not measurement.</span><span class="ko">공개 레포에 커밋된 <b>AMD 내부 포지셔닝 초안</b>("Draft – Internal Review Only"). 이중 역할 서술과 nano-vllm 관련 인용의 출처. 측정이 아니라 마케팅 문서다.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/CLAUDE.md">CLAUDE.md</a> — <span class="en">the maintainers' own onboarding rules; source of the architecture one-liner and the operational traps in §5–6.</span><span class="ko">메인테이너들의 온보딩 규칙. §5–6의 아키텍처 한 줄 요약과 운영 함정의 출처.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/issues/201">ROCm/ATOM issue #201 — [RFC] Enable ATOM as vLLM out-of-tree Platform</a> — <span class="en">opened 2026-02-09, still open. The incubator/upstreaming argument.</span><span class="ko">2026-02-09 개설, 여전히 열림. 인큐베이터·upstream 논지의 출처.</span></li>
+</ul>
+
+<h3><span class="en">Lineage &amp; dependencies</span><span class="ko">계보와 의존성</span></h3>
+<ul class="srcs">
+  <li><a href="https://github.com/GeeeekExplorer/nano-vllm">GeeeekExplorer/nano-vllm</a> — <span class="en">ATOM's origin. "A lightweight vLLM implementation built from scratch", ~1,200 lines, ~15.3k stars. Its tagline is still ATOM's <code>pyproject.toml</code> description.</span><span class="ko">ATOM의 기원. "A lightweight vLLM implementation built from scratch", ~1,200줄, 별 ~15.3천 개. 그 한 줄 소개가 지금도 ATOM <code>pyproject.toml</code>의 description이다.</span></li>
+  <li><a href="https://github.com/ROCm/aiter">ROCm/aiter</a> — <span class="en">AMD's kernel library (ASM / Composable Kernel / Triton). ATOM's entire reason to exist; installed separately as <code>amd-aiter</code>.</span><span class="ko">AMD의 커널 라이브러리(ASM / Composable Kernel / Triton). ATOM 존재 이유 자체이며, <code>amd-aiter</code>로 별도 설치한다.</span></li>
+  <li><a href="https://github.com/ROCm/mori">ROCm/mori</a> — <span class="en">MoE expert-parallel all-to-all and MORI-IO RDMA transport, used for EP and P/D disaggregation.</span><span class="ko">MoE expert-parallel all-to-all과 MORI-IO RDMA 전송. EP와 P/D 분리에 쓰인다.</span></li>
+  <li><a href="https://github.com/kvcache-ai/Mooncake">kvcache-ai/Mooncake</a> — <span class="en">the other RDMA KV-transfer backend for P/D disaggregation.</span><span class="ko">P/D 분리용 또 하나의 RDMA KV 전송 백엔드.</span></li>
+  <li><a href="https://github.com/ROCm/vllm">ROCm/vllm</a> — <span class="en">AMD's vLLM fork; ATOM's <code>weight_utils.py</code> is adapted from it, which is how we know the two paths coexist.</span><span class="ko">AMD의 vLLM 포크. ATOM <code>weight_utils.py</code>가 여기서 파생됐고, 두 경로가 공존한다는 근거가 된다.</span></li>
+  <li><a href="https://github.com/vllm-project/vllm">vllm-project/vllm</a> · <a href="https://github.com/sgl-project/sglang">sgl-project/sglang</a> — <span class="en">the upstreams several ATOM files are explicitly "Adapted from".</span><span class="ko">여러 ATOM 파일이 "Adapted from"으로 명시한 상류 프로젝트들.</span></li>
+</ul>
+
+<h3><span class="en">Vendor blogs and articles — all AMD-authored, all vendor-reported</span><span class="ko">벤더 블로그·기사 — 전부 AMD 작성, 전부 자체 보고</span></h3>
+<ul class="srcs">
+  <li><a href="https://rocm.blogs.amd.com/software-tools-optimization/atom-inference-engine/README.html">ATOM: Unlocking Extreme AMD Instinct Inference with Software-Hardware Co-Optimization</a> — <span class="en">architecture, feature scope, model coverage, dashboard (linked from ATOM's README, ~2026/06).</span><span class="ko">아키텍처·기능 범위·모델 커버리지·대시보드(ATOM README에서 링크, ~2026/06).</span></li>
+  <li><a href="https://rocm.blogs.amd.com/software-tools-optimization/atomesh-inference/README.html">ATOMesh: Unlocking AMD Hardware for Scalable LLM Serving</a> — <span class="en">the Rust distributed orchestrator (out of this note's analysis scope).</span><span class="ko">Rust 분산 오케스트레이터(이 노트의 분석 범위 밖).</span></li>
+  <li><a href="https://rocm.blogs.amd.com/software-tools-optimization/atom-optimiztion/README.html">DP Attention and TBO for DeepSeek-V4 on MI355X</a> — <span class="en">all-gather/reduce-scatter DP attention + Two-Batch Overlap.</span><span class="ko">all-gather/reduce-scatter DP attention + Two-Batch Overlap.</span></li>
+  <li><a href="https://rocm.blogs.amd.com/software-tools-optimization/vllm-atom/README.html">vLLM-ATOM: Unlocking Native AMD Performance in the vLLM Ecosystem</a> — <span class="en">the plugin path (~2026/05).</span><span class="ko">플러그인 경로(~2026/05).</span></li>
+  <li><a href="https://www.amd.com/en/developer/resources/technical-articles/2026/kimi-k3-on-amd-instinct-gpus.html">Day 0 Kimi-K3 Inference Deployment with ATOM on AMD Instinct MI355X GPUs</a> — <span class="en">2.78T-parameter Kimi-K3, ~1.56 TB checkpoint, single 8× MI355X node, TP8 (~2026/07).</span><span class="ko">2.78조 파라미터 Kimi-K3, ~1.56 TB 체크포인트, 단일 8× MI355X 노드, TP8(~2026/07).</span></li>
+  <li><a href="https://rocm.docs.amd.com/projects/atom/en/latest/">ATOM official documentation</a> · <a href="https://rocm.github.io/ATOM/benchmark-dashboard/">nightly benchmark dashboard</a> · <a href="https://rocm.github.io/ATOM/dissecting_dsv4_compressor">Dissecting DeepSeek V4 Compressor (interactive)</a></li>
+</ul>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">companion artifact</span><span class="ko">함께 보는 자료</span></span>
+  <span class="en">Every file in ATOM's core engine was read, summarised in Korean, grouped into 20 architectural layers and threaded into a 14-step reading tour. Browse it as an interactive map: <b><a class="src" href="atom-knowledge-graph.html">ATOM knowledge graph →</a></b></span>
+  <span class="ko">ATOM 코어 엔진의 모든 파일을 읽어 한국어로 요약하고, 20개 아키텍처 계층으로 묶고, 14단계 읽기 투어로 엮었다. 인터랙티브 지도로 볼 수 있다: <b><a class="src" href="atom-knowledge-graph.html">ATOM 지식 그래프 →</a></b></span>
+</div>
+</section>
+
+<footer>
+  <span class="en">ATOM code walk pinned to <a href="https://github.com/ROCm/ATOM/tree/cd161f16bd041b63bc3bc4f234f3d1915a80200d"><code>cd161f1</code></a>. Written 2026-09-01. Line numbers drift — the SHA does not.</span>
+  <span class="ko">ATOM 코드 분석, <a href="https://github.com/ROCm/ATOM/tree/cd161f16bd041b63bc3bc4f234f3d1915a80200d"><code>cd161f1</code></a> 고정. 2026-09-01 작성. 줄 번호는 움직이지만 SHA는 안 움직인다.</span>
+</footer>
+
+
+
+
+
+
+
+
+
+
+
+
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
