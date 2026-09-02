@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMD's 4-bit KV in LMCache — what the numbers say, and what's actually upstream</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-green{background:var(--green-bg);color:var(--green-ink)} .c-green .tag{color:var(--green-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-red{background:var(--red-bg);color:var(--red-ink)} .c-red .tag{color:var(--red-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--bg)}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  .lbl{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+  .sm{font:11px -apple-system,sans-serif;fill:var(--muted)}
+  .xs{font:9.5px -apple-system,sans-serif;fill:var(--faint)}
+  .bx{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../">Home</a> · <a href="./">Study</a> · <span class="en">AMD 4-bit KV in LMCache</span><span class="ko">AMD 4-bit KV in LMCache</span></p>
+
+  <header class="hero">
+    <h1><span class="en">AMD's 4-bit KV in LMCache — what the numbers say, and what's actually upstream</span><span class="ko">AMD 의 4-bit KV in LMCache — 수치가 말하는 것, 그리고 업스트림에 실제로 있는 것</span></h1>
+    <p class="lede"><span class="en">AMD reports ~2&times; serving goodput on MI355X by packing KV to 4 bits and letting LMCache catch the overflow in CPU DRAM. The numbers are striking and the engineering is real &mdash; but the headline gain comes from a place the framing slightly obscures, and reproducing it today needs a fork, not upstream. This note summarises the post, then checks its central code claim against the LMCache tree.</span><span class="ko">AMD 는 MI355X 에서 KV 를 4비트로 압축하고 넘치는 분량을 LMCache 가 CPU DRAM 에서 받아내게 해 서빙 goodput 을 약 2배로 올렸다고 보고한다. 수치는 인상적이고 엔지니어링도 실제다 &mdash; 다만 헤드라인 이득이 나오는 지점을 글의 구성이 약간 가리고 있고, 오늘 이걸 재현하려면 업스트림이 아니라 포크가 필요하다. 이 노트는 글을 정리한 뒤, 핵심 코드 주장을 LMCache 트리에 직접 대조한다.</span></p>
+    <div class="meta">
+      <span class="badge">Deep dive · article + verification</span>
+      <span class="badge"><a class="src" href="https://rocm.blogs.amd.com/software-tools-optimization/4bit-KV-LMcache/README.html">ROCm blog (2026-08-28)</a></span>
+      <span class="badge">MI355X · ROCm 7.2.3 · TP=2</span>
+      <span class="badge">verified against LMCache <a class="src" href="https://github.com/LMCache/LMCache/tree/f9addd2e4e074f21f26cbda84c3abd932d32ef33">f9addd2e</a></span>
+      <span class="badge">vendor-reported numbers</span>
+    </div>
+    <p class="post-meta"><time datetime="2026-09-02">2026-09-02</time></p>
+  </header>
+
+  <nav class="toc">
+    <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+    <ol>
+      <li><a href="#s1"><span class="en">The claim, and the setup behind it</span><span class="ko">주장, 그리고 그 뒤의 실험 구성</span></a></li>
+      <li><a href="#s2"><span class="en">The quantization: mixed precision by layer</span><span class="ko">양자화: 레이어별 혼합 정밀도</span></a></li>
+      <li><a href="#s3"><span class="en">The LMCache side: byte-transparent, layout-aware transfer</span><span class="ko">LMCache 쪽: 바이트 투명 · 레이아웃 인지 전송</span></a></li>
+      <li><a href="#s4"><span class="en">The numbers, read carefully</span><span class="ko">수치를 조심해서 읽기</span></a></li>
+      <li><a href="#s5"><span class="en">Accuracy</span><span class="ko">정확도</span></a></li>
+      <li><a href="#s6"><span class="en">What's upstream and what isn't &mdash; checked</span><span class="ko">업스트림에 있는 것과 없는 것 &mdash; 직접 확인</span></a></li>
+      <li><a href="#s7"><span class="en">Reproducing it, and the gotchas</span><span class="ko">재현, 그리고 함정</span></a></li>
+      <li><a href="#s8"><span class="en">Sources</span><span class="ko">출처</span></a></li>
+    </ol>
+  </nav>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">One-line summary</span><span class="ko">한 줄 요약</span></span>
+    <span class="en">Quantizing KV to 4 bits makes each token ~3.76&times; smaller, which puts <b>3.2&times; more KV tokens in HBM</b> and lets a 128 GB DRAM tier hold the rest &mdash; AMD reports 385 vs 189 completed requests and 53 s vs 140 s p95 TTFT against a bf16 baseline at equal memory. LMCache's contribution is narrower than the title suggests: it does not do the quantizing, it <b>avoids corrupting</b> KV that vLLM already packed, by moving whole slots as opaque bytes.</span><span class="ko">KV 를 4비트로 양자화하면 토큰당 크기가 약 3.76배 작아진다. 그 결과 <b>HBM 에 3.2배 많은 KV 토큰</b>이 상주하고 나머지는 128 GB DRAM 계층이 받아낸다 &mdash; AMD 는 동일 메모리 조건에서 bf16 대비 완료 요청 385 대 189, p95 TTFT 53초 대 140초를 보고한다. LMCache 의 기여는 제목이 시사하는 것보다 좁다 &mdash; 양자화를 하는 게 아니라, vLLM 이 이미 압축해 둔 KV 를 <b>망가뜨리지 않고</b> 슬롯 전체를 불투명 바이트로 옮기는 일이다.</span>
+  </div>
+
+  <h3><span class="en">Glossary</span><span class="ko">용어 정리</span></h3>
+  <div class="grid3">
+    <div class="mini">
+      <h4>TurboQuant</h4>
+      <p><span class="en">A KV quantization scheme using a Hadamard rotation plus a Lloyd-Max codebook. Presets range from 3-bit to 8-bit, and it can keep keys and values at different widths.</span><span class="ko">Hadamard 회전 + Lloyd-Max 코드북을 쓰는 KV 양자화 방식. 프리셋은 3비트~8비트이고, key 와 value 의 비트폭을 다르게 둘 수 있다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Goodput</span><span class="ko">Goodput</span></h4>
+      <p><span class="en">Requests completed <i>within</i> an SLO, not raw throughput. Here: requests finishing under a 60-second TTFT budget over a 20-minute replay.</span><span class="ko">단순 처리량이 아니라 SLO <i>안에</i> 완료된 요청 수. 여기서는 20분 리플레이 동안 TTFT 60초 예산 안에 끝난 요청.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">L1 / L2 tier</span><span class="ko">L1 / L2 계층</span></h4>
+      <p><span class="en">In this post, L1 is GPU HBM and L2 is CPU DRAM. (Careful: in LMCache's own codebase L1 means the CPU staging tier &mdash; the naming differs.)</span><span class="ko">이 글에서 L1 은 GPU HBM, L2 는 CPU DRAM 이다. (주의: LMCache 코드베이스에서 L1 은 CPU 스테이징 계층을 뜻해서 명명이 다르다.)</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Byte-transparency</span><span class="ko">바이트 투명성</span></h4>
+      <p><span class="en">Moving KV as opaque <code class="inl">uint8</code> without interpreting it, so whatever format the engine packed survives the round trip bit-for-bit.</span><span class="ko">KV 를 해석하지 않고 불투명한 <code class="inl">uint8</code> 로 옮기는 것. 엔진이 어떤 포맷으로 압축했든 왕복 후 비트 단위로 그대로 남는다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>RULER</h4>
+      <p><span class="en">A long-context retrieval benchmark (needle-in-a-haystack style) run here at 16k / 64k / 128k with 550 samples per length.</span><span class="ko">긴 컨텍스트 검색 벤치마크(needle-in-a-haystack 계열). 여기서는 16k / 64k / 128k 에서 길이당 550 샘플로 측정.</span></p>
+    </div>
+    <div class="mini">
+      <h4>MI355X</h4>
+      <p><span class="en">AMD Instinct GPU (gfx950) with <b>288 GB HBM per card</b>. The test used two of them &mdash; 576 GB of HBM before any offloading.</span><span class="ko">카드당 <b>HBM 288 GB</b> 를 가진 AMD Instinct GPU(gfx950). 실험은 두 장을 썼다 &mdash; 오프로딩 전에 이미 HBM 576 GB.</span></p>
+    </div>
+  </div>
+
+  <section id="s1">
+    <h2><span class="num">1</span><span class="en">The claim, and the setup behind it</span><span class="ko">주장, 그리고 그 뒤의 실험 구성</span></h2>
+
+    <p><span class="en">The post's framing is that two techniques compound. Quantization shrinks each KV token; hierarchical caching catches what still doesn't fit. Neither alone is sufficient:</span><span class="ko">글의 구성은 두 기법이 복리로 작동한다는 것이다. 양자화는 KV 토큰 하나를 줄이고, 계층형 캐싱은 그래도 안 들어가는 분량을 받아낸다. 어느 하나만으로는 부족하다는 주장이다.</span></p>
+
+    <blockquote class="q">
+      <p>"4-bit KV holds more, but big agent contexts still overflow HBM. LMCache catches the overflow in CPU DRAM and reloads it fast, so a miss is a quick copy, not a full re-prefill."</p>
+      <cite>— <a href="https://rocm.blogs.amd.com/software-tools-optimization/4bit-KV-LMcache/README.html">ROCm blog, 2026-08-28</a></cite>
+    </blockquote>
+
+    <p><span class="en">That framing is sound, and it is the same argument behind every KV-tiering system. What is worth holding onto while reading the rest: <b>the two halves live in different repos</b>. The quantization happens in a vLLM fork; LMCache's job is transport. Section 3 and section 6 come back to that.</span><span class="ko">이 구성 자체는 타당하고, 모든 KV 계층화 시스템의 논거와 같다. 나머지를 읽는 동안 붙들고 있을 것 하나 &mdash; <b>두 반쪽은 서로 다른 레포에 산다</b>. 양자화는 vLLM 포크에서 일어나고, LMCache 의 일은 전송이다. 3절과 6절에서 다시 다룬다.</span></p>
+
+    <h3><span class="en">The bench</span><span class="ko">벤치 구성</span></h3>
+    <table>
+      <thead><tr><th><span class="en">Axis</span><span class="ko">항목</span></th><th><span class="en">Value</span><span class="ko">값</span></th></tr></thead>
+      <tbody>
+        <tr><td><span class="en">Hardware</span><span class="ko">하드웨어</span></td><td>2&times; AMD Instinct MI355X (gfx950), 288 GB HBM each, TP=2</td></tr>
+        <tr><td><span class="en">Software</span><span class="ko">소프트웨어</span></td><td>ROCm 7.2.3 · vLLM V1 (TurboQuant fork) · LMCache built for HIP</td></tr>
+        <tr><td><span class="en">Model</span><span class="ko">모델</span></td><td>MiniMax-M2.5 &mdash; 230 GB FP8 mixture-of-experts</td></tr>
+        <tr><td><span class="en">Workload</span><span class="ko">워크로드</span></td><td><span class="en">32 concurrent users, ~100k-token context, 20-minute replay</span><span class="ko">동시 사용자 32, 컨텍스트 약 100k 토큰, 20분 리플레이</span></td></tr>
+        <tr><td><span class="en">SLO</span><span class="ko">SLO</span></td><td><span class="en">60 s TTFT &mdash; goodput is requests completing under it</span><span class="ko">TTFT 60초 &mdash; goodput 은 그 안에 끝난 요청 수</span></td></tr>
+        <tr><td><span class="en">DRAM tier</span><span class="ko">DRAM 계층</span></td><td><span class="en">128 GB in the headline run; swept 17&ndash;256 GB elsewhere</span><span class="ko">대표 실험 128 GB, 별도로 17~256 GB 스윕</span></td></tr>
+        <tr><td><span class="en">Baselines</span><span class="ko">비교군</span></td><td><span class="en">bf16 KV (primary) and vLLM's native FP8 KV (<code class="inl">fp8_e4m3</code>)</span><span class="ko">bf16 KV(주 비교군), vLLM 네이티브 FP8 KV(<code class="inl">fp8_e4m3</code>)</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout c-amber">
+      <span class="tag"><span class="en">Read this as vendor-reported</span><span class="ko">벤더 보고 수치로 읽을 것</span></span>
+      <span class="en">Everything below is AMD's own measurement of AMD's own stack on AMD hardware, published on AMD's blog. That does not make it wrong &mdash; the methodology is unusually well disclosed, including a pinned Docker image and a reproduction script, which is more than most vendor posts offer. But nothing here has been independently reproduced, including by me: I verified the <i>code</i> claims against the LMCache tree, not the <i>performance</i> claims.</span><span class="ko">아래 내용은 전부 AMD 가 AMD 하드웨어에서 AMD 스택을 직접 측정해 AMD 블로그에 올린 것이다. 그렇다고 틀렸다는 뜻은 아니다 &mdash; 방법론 공개 수준은 이례적으로 높고, 고정된 Docker 이미지와 재현 스크립트까지 준다. 대부분의 벤더 글보다 낫다. 다만 여기 있는 어떤 것도 독립적으로 재현되지 않았고, 그건 나도 마찬가지다. 나는 <i>코드</i> 주장을 LMCache 트리에 대조했을 뿐, <i>성능</i> 주장을 검증하지는 않았다.</span>
+    </div>
+  </section>
+
+  <section id="s2">
+    <h2><span class="num">2</span><span class="en">The quantization: mixed precision by layer</span><span class="ko">양자화: 레이어별 혼합 정밀도</span></h2>
+
+    <p><span class="en">TurboQuant does not compress every layer the same way. The first two and last two layers stay in bf16; the 58 layers in between get packed to 4 bits.</span><span class="ko">TurboQuant 는 모든 레이어를 똑같이 압축하지 않는다. 처음 두 개와 마지막 두 개 레이어는 bf16 으로 두고, 그 사이 58개 레이어를 4비트로 압축한다.</span></p>
+
+    <blockquote class="q">
+      <p>"TurboQuant doesn't store KV in one uniform format: it keeps the sensitive boundary layers in bf16 and packs the middle layers into 4-bit."</p>
+      <cite>— <a href="https://rocm.blogs.amd.com/software-tools-optimization/4bit-KV-LMcache/README.html">ROCm blog</a></cite>
+    </blockquote>
+
+    <svg class="fig" viewBox="0 0 860 190" role="img" aria-label="Layer-wise mixed precision: boundary layers bf16, middle layers 4-bit packed">
+      <text x="20" y="26" class="lbl">62 layers, two formats</text>
+      <text x="20" y="44" class="xs">width ∝ bytes per token per head</text>
+
+      <!-- bf16 first 2 -->
+      <rect x="20" y="60" width="52" height="46" rx="5" fill="var(--purple-bg)" stroke="var(--purple-bd)" stroke-width="1.5"/>
+      <text x="26" y="80" class="sm">L0–L1</text>
+      <text x="26" y="97" class="xs">bf16</text>
+      <!-- middle 58 packed -->
+      <rect x="80" y="60" width="680" height="46" rx="5" fill="var(--green-bg)" stroke="var(--green-bd)" stroke-width="1.5"/>
+      <text x="94" y="80" class="sm">L2 – L59 · 4-bit packed (uint8 slots, K and V interleaved)</text>
+      <text x="94" y="97" class="xs">134 B / token / head</text>
+      <!-- bf16 last 2 -->
+      <rect x="768" y="60" width="52" height="46" rx="5" fill="var(--purple-bg)" stroke="var(--purple-bd)" stroke-width="1.5"/>
+      <text x="774" y="80" class="sm">L60–61</text>
+      <text x="774" y="97" class="xs">bf16</text>
+
+      <text x="20" y="132" class="sm">bf16 boundary layers: 512 B / token / head</text>
+      <text x="20" y="152" class="sm">Net effect across the model: each token ≈ 3.76× smaller</text>
+      <text x="20" y="176" class="xs">Two transfer groups follow directly from this split — see §3.</text>
+    </svg>
+    <p class="figcap"><span class="en">Layer-wise format split as described in the ROCm post; per-token-per-head byte figures are the post's.</span><span class="ko">ROCm 글이 설명한 레이어별 포맷 분할. 토큰·헤드당 바이트 수치는 글의 값이다.</span></p>
+
+    <p><span class="en">Two details matter downstream. First, the packed layers are stored as <b>opaque <code class="inl">uint8</code> slots with K and V interleaved</b>, not as separate K and V tensors &mdash; so anything moving them has to treat a slot as one indivisible blob. Second, the resulting KV cache is <b>heterogeneous</b>: a single request's KV spans two different element sizes and strides. That is the problem the connector work exists to solve.</span><span class="ko">이후에 영향을 주는 디테일이 둘 있다. 첫째, 압축된 레이어는 K 와 V 를 분리 저장하지 않고 <b>K/V 가 뒤섞인 불투명 <code class="inl">uint8</code> 슬롯</b>으로 저장된다 &mdash; 따라서 이를 옮기는 쪽은 슬롯 하나를 쪼갤 수 없는 덩어리로 다뤄야 한다. 둘째, 결과 KV 캐시는 <b>이종(heterogeneous)</b>이다. 한 요청의 KV 가 서로 다른 원소 크기와 stride 두 가지에 걸쳐 있다. 커넥터 작업이 존재하는 이유가 바로 이 문제다.</span></p>
+
+    <p class="muted"><span class="en">The kernels come from AMD's <code class="inl">turboquant-vllm-agentic</code> work plus a custom FlyDSL kernel; TurboQuant itself was introduced upstream in vLLM earlier in 2026.</span><span class="ko">커널은 AMD 의 <code class="inl">turboquant-vllm-agentic</code> 작업과 커스텀 FlyDSL 커널에서 왔다. TurboQuant 자체는 2026년 초 vLLM 업스트림에 소개됐다.</span></p>
+  </section>
+
+  <section id="s3">
+    <h2><span class="num">3</span><span class="en">The LMCache side: byte-transparent, layout-aware transfer</span><span class="ko">LMCache 쪽: 바이트 투명 · 레이아웃 인지 전송</span></h2>
+
+    <p><span class="en">Here is where the post's actual LMCache contribution sits, and it is worth being precise about, because the title ("4-bit KV Caching in LMCache") reads as though LMCache does the compressing. It doesn't. vLLM hands it an already-packed, mixed-format KV cache, and LMCache's job is to move it without understanding it.</span><span class="ko">이 글의 실제 LMCache 기여가 있는 지점이고, 정확히 짚을 가치가 있다. 제목("4-bit KV Caching in LMCache")은 마치 LMCache 가 압축을 하는 것처럼 읽히지만 그렇지 않다. vLLM 이 이미 압축된 혼합 포맷 KV 캐시를 건네고, LMCache 의 일은 그것을 이해하지 않은 채 옮기는 것이다.</span></p>
+
+    <p><span class="en">The extension to <code class="inl">LMCacheConnectorV1</code> has three parts:</span><span class="ko"><code class="inl">LMCacheConnectorV1</code> 확장은 세 부분이다.</span></p>
+
+    <div class="grid3">
+      <div class="mini">
+        <h4><span class="en">1 · Transfer groups</span><span class="ko">1 · 전송 그룹</span></h4>
+        <p><span class="en">"At registration it partitions layers into two transfer groups (bf16, packed-uint8) and issues one correctly-strided copy per group." One copy per format instead of per-layer copies.</span><span class="ko">"등록 시점에 레이어를 두 전송 그룹(bf16, packed-uint8)으로 나누고, 그룹마다 stride 가 맞는 복사 하나씩을 발행한다." 레이어마다 복사하는 대신 포맷마다 한 번.</span></p>
+      </div>
+      <div class="mini">
+        <h4><span class="en">2 · Auto-selection</span><span class="ko">2 · 자동 선택</span></h4>
+        <p><span class="en">"A uint8 KV container is an unambiguous packed signal, so the group-aware path turns on by itself." No new user-facing flag.</span><span class="ko">"uint8 KV 컨테이너는 압축됐다는 명확한 신호이므로, group-aware 경로가 스스로 켜진다." 사용자가 켤 새 플래그가 없다.</span></p>
+      </div>
+      <div class="mini">
+        <h4><span class="en">3 · Byte-transparency</span><span class="ko">3 · 바이트 투명성</span></h4>
+        <p><span class="en">"LMCache copies whole slots as opaque uint8, so the round-trip is byte-exact." This is what makes the accuracy result in §5 trivially true for the tier.</span><span class="ko">"LMCache 는 슬롯 전체를 불투명 uint8 로 복사하므로 왕복이 바이트 단위로 정확하다." 5절의 계층 정확도 결과가 자명하게 성립하는 이유다.</span></p>
+      </div>
+    </div>
+
+    <p><span class="en">The byte-transparency point is the elegant part of the design. By refusing to interpret the KV at all, the connector becomes <i>format-agnostic</i>: it works for 4-bit TurboQuant today and for whatever packing scheme comes next, with no changes. The cost is that it cannot do anything clever with the data &mdash; no re-quantization on the way down, no format conversion between tiers.</span><span class="ko">바이트 투명성은 이 설계에서 우아한 부분이다. KV 를 아예 해석하지 않기로 함으로써 커넥터는 <i>포맷 불가지론</i>이 된다 &mdash; 오늘의 4비트 TurboQuant 에도, 다음에 올 어떤 압축 방식에도 수정 없이 동작한다. 대가는 데이터로 영리한 짓을 할 수 없다는 것이다. 내려가는 길에 재양자화도, 계층 간 포맷 변환도 없다.</span></p>
+
+    <h3><span class="en">Config</span><span class="ko">설정</span></h3>
+    <pre># the connector side — nothing quantization-specific here
+--enable-prefix-caching \
+--kv-transfer-config '{…LMCacheConnectorV1…,"kv_role":"kv_both"}'
+
+# mandatory runtime environment
+PYTHONHASHSEED=0
+LMCACHE_PRE_CACHING_HASH_ALGORITHM=sha256</pre>
+
+    <div class="callout c-red">
+      <span class="tag"><span class="en">The hash-seed trap, again</span><span class="ko">해시 시드 함정, 또</span></span>
+      <span class="en"><b>"<code class="inl">PYTHONHASHSEED=0</code> is mandatory at TP&gt;1, or bit-identical prompts hash to different keys and you get 0% cache hits."</b> This is the same failure mode I flagged as trap #5 in the <a class="src" href="vllm-multiconnector-lmcache-mooncake.html">MultiConnector note</a> &mdash; there it was prefiller/decoder disagreement, here it is rank-to-rank disagreement within one TP group. Same root cause: LMCache derives chunk keys from Python's hash, which is per-process randomised by default. Worth treating as a standing rule for any LMCache deployment, not an AMD-specific quirk.</span><span class="ko"><b>"<code class="inl">PYTHONHASHSEED=0</code> 은 TP&gt;1 에서 필수다. 아니면 비트 단위로 동일한 프롬프트가 다른 키로 해싱돼 캐시 히트율이 0% 가 된다."</b> <a class="src" href="vllm-multiconnector-lmcache-mooncake.html">MultiConnector 노트</a>에서 함정 5번으로 지적한 것과 같은 실패 양상이다 &mdash; 거기선 prefiller/decoder 불일치였고 여기선 한 TP 그룹 안의 rank 간 불일치다. 근본 원인은 같다: LMCache 가 청크 키를 파이썬 해시에서 유도하는데, 그 값은 기본적으로 프로세스마다 무작위다. AMD 고유의 특이사항이 아니라 모든 LMCache 배포에 적용할 상시 규칙으로 취급할 것.</span>
+    </div>
+  </section>
+
+  <section id="s4">
+    <h2><span class="num">4</span><span class="en">The numbers, read carefully</span><span class="ko">수치를 조심해서 읽기</span></h2>
+
+    <p><span class="en">The headline comparison is TurboQuant vs bf16 at <b>equal memory</b> &mdash; same HBM pool, same 128 GB DRAM tier:</span><span class="ko">대표 비교는 <b>동일 메모리</b> 조건의 TurboQuant 대 bf16 이다 &mdash; 같은 HBM 풀, 같은 128 GB DRAM 계층.</span></p>
+
+    <table>
+      <thead><tr>
+        <th><span class="en">Metric</span><span class="ko">지표</span></th>
+        <th>BF16</th><th>TurboQuant</th>
+        <th><span class="en">Ratio</span><span class="ko">비율</span></th>
+      </tr></thead>
+      <tbody>
+        <tr><td><span class="en">Requests completed (goodput)</span><span class="ko">완료 요청 수 (goodput)</span></td><td>189</td><td><b>385</b></td><td>~2.0&times;</td></tr>
+        <tr><td>p95 TTFT</td><td>140 s</td><td><b>53 s</b></td><td>2.6&times; <span class="en">lower</span><span class="ko">낮음</span></td></tr>
+        <tr><td><span class="en">KV tokens resident in HBM</span><span class="ko">HBM 상주 KV 토큰</span></td><td>201,280</td><td><b>648,064</b></td><td>3.2&times;</td></tr>
+        <tr><td><span class="en">LMCache hit rate</span><span class="ko">LMCache 히트율</span></td><td>75.2%</td><td><b>86.8%</b></td><td>+11.6 pt</td></tr>
+        <tr><td><span class="en">Total KV copied</span><span class="ko">총 KV 복사량</span></td><td>3.30 TB</td><td><b>1.94 TB</b></td><td>1.7&times; <span class="en">less</span><span class="ko">적음</span></td></tr>
+        <tr><td><span class="en">Copy-time overhead</span><span class="ko">복사 시간 오버헤드</span></td><td>69.6 s (5.8%)</td><td>50.2 s (4.2%)</td><td>&mdash;</td></tr>
+      </tbody>
+    </table>
+
+    <h3><span class="en">What the causal chain actually is</span><span class="ko">인과 사슬의 실제 모양</span></h3>
+    <p><span class="en">Reading the table in order makes the mechanism clear, and it is worth spelling out because the LMCache framing can obscure it:</span><span class="ko">표를 순서대로 읽으면 메커니즘이 분명해진다. LMCache 중심의 서술이 이걸 가릴 수 있어서 풀어 둘 만하다.</span></p>
+
+    <svg class="fig" viewBox="0 0 860 130" role="img" aria-label="Causal chain from smaller tokens to higher goodput">
+      <defs><marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>
+      <rect x="10" y="40" width="140" height="52" rx="8" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="24" y="62" class="sm">token 3.76× smaller</text>
+      <text x="24" y="80" class="xs">vLLM-side quantization</text>
+      <path d="M154 66 L186 66" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#c1)"/>
+      <rect x="190" y="40" width="140" height="52" rx="8" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="204" y="62" class="sm">3.2× more KV in HBM</text>
+      <text x="204" y="80" class="xs">648k vs 201k tokens</text>
+      <path d="M334 66 L366 66" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#c1)"/>
+      <rect x="370" y="40" width="140" height="52" rx="8" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="384" y="62" class="sm">fewer spills</text>
+      <text x="384" y="80" class="xs">hit rate 75.2 → 86.8%</text>
+      <path d="M514 66 L546 66" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#c1)"/>
+      <rect x="550" y="40" width="140" height="52" rx="8" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+      <text x="564" y="62" class="sm">less re-prefill</text>
+      <text x="564" y="80" class="xs">1.94 vs 3.30 TB copied</text>
+      <path d="M694 66 L726 66" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#c1)"/>
+      <rect x="730" y="40" width="120" height="52" rx="8" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+      <text x="744" y="62" class="sm">2× goodput</text>
+      <text x="744" y="80" class="xs">385 vs 189</text>
+      <text x="10" y="118" class="xs">Every link after the first is a consequence of the first. LMCache's role is to keep the chain from breaking, not to start it.</text>
+    </svg>
+    <p class="figcap"><span class="en">Chain assembled from the post's own numbers.</span><span class="ko">글 자체의 수치로 구성한 사슬.</span></p>
+
+    <div class="callout c-amber">
+      <span class="tag"><span class="en">The comparison is favourable by construction</span><span class="ko">비교 자체가 구조적으로 유리하다</span></span>
+      <span class="en">"Equal memory, 4-bit vs bf16" is a fair experiment for the question *"should I quantize?"* &mdash; but it is close to tautological that 4&times;-smaller tokens fit better in a fixed pool. The interesting comparison for a practitioner is 4-bit vs the <b>next-best cheap option</b>, which is FP8 &mdash; and the post is honest that this one is not a clean sweep.</span><span class="ko">"동일 메모리, 4비트 대 bf16" 은 *"양자화를 해야 하나?"* 라는 질문에는 공정한 실험이다 &mdash; 다만 4배 작은 토큰이 고정된 풀에 더 잘 들어간다는 건 거의 동어반복에 가깝다. 실무자에게 흥미로운 비교는 4비트 대 <b>차선의 값싼 선택지</b>, 즉 FP8 인데, 글은 그쪽이 압승이 아님을 정직하게 밝힌다.</span>
+    </div>
+
+    <h3><span class="en">Versus FP8 — where it loses</span><span class="ko">FP8 대비 — 지는 지점</span></h3>
+    <p><span class="en">Against vLLM's native <code class="inl">fp8_e4m3</code> KV, the result is conditional on how much DRAM you give the tier:</span><span class="ko">vLLM 네이티브 <code class="inl">fp8_e4m3</code> KV 와 비교하면, 결과는 DRAM 계층에 얼마를 주느냐에 따라 갈린다.</span></p>
+    <table>
+      <thead><tr><th><span class="en">DRAM tier</span><span class="ko">DRAM 계층</span></th><th><span class="en">Winner</span><span class="ko">우세</span></th><th><span class="en">Why</span><span class="ko">이유</span></th></tr></thead>
+      <tbody>
+        <tr><td>17&ndash;34 GB</td><td>TurboQuant</td><td><span class="en">"FP8's heavier KV doesn't fit, so it keeps re-computing"</span><span class="ko">"FP8 의 더 무거운 KV 가 안 들어가서 계속 재계산한다"</span></td></tr>
+        <tr><td>68 GB</td><td><b>FP8</b></td><td><span class="en">FP8 "pulls ahead on goodput" &mdash; though it "moves twice the data"</span><span class="ko">FP8 이 "goodput 에서 앞선다" &mdash; 다만 "데이터를 두 배 옮긴다"</span></td></tr>
+        <tr><td>68&ndash;256 GB</td><td><span class="en">TurboQuant on efficiency</span><span class="ko">효율 면에서 TurboQuant</span></td><td><span class="en">matches bf16's goodput "with 4&times; less RAM"</span><span class="ko">"4배 적은 RAM" 으로 bf16 의 goodput 에 도달</span></td></tr>
+      </tbody>
+    </table>
+    <p><span class="en">So the honest version of the claim is narrower than "4-bit wins": <b>4-bit wins when the DRAM tier is the binding constraint.</b> If you can afford a generous DRAM tier, plain FP8 was ahead on goodput at 68 GB in their own measurement. The efficiency argument (same goodput at a quarter of the RAM) is the durable one, and it is the one that matters if you are sizing a fleet rather than a single box.</span><span class="ko">따라서 정직한 버전의 주장은 "4비트가 이긴다" 보다 좁다 &mdash; <b>DRAM 계층이 병목일 때 4비트가 이긴다.</b> DRAM 계층을 넉넉히 줄 수 있다면, 그들 자신의 측정에서도 68 GB 지점에선 평범한 FP8 이 goodput 에서 앞섰다. 오래 가는 논거는 효율 쪽이다 &mdash; RAM 1/4 로 같은 goodput. 단일 장비가 아니라 플릿을 사이징한다면 이쪽이 중요하다.</span></p>
+
+    <p class="muted"><span class="en">One more scale note: this ran on 2&times;288 GB = 576 GB of HBM. Conclusions about what "overflows HBM" do not transfer directly to smaller cards; on a 64 GB MI250 the crossover points would sit somewhere quite different, and the post makes no claim about them.</span><span class="ko">스케일에 관한 메모 하나 더 &mdash; 이건 288 GB &times; 2 = HBM 576 GB 위에서 돌았다. 무엇이 "HBM 을 넘치는가" 에 대한 결론은 더 작은 카드로 그대로 옮겨가지 않는다. 64 GB MI250 이라면 교차점이 꽤 다른 자리에 있을 것이고, 글은 그에 대해 아무 주장도 하지 않는다.</span></p>
+  </section>
+
+  <section id="s5">
+    <h2><span class="num">5</span><span class="en">Accuracy</span><span class="ko">정확도</span></h2>
+
+    <p><span class="en">The evaluation is well constructed: it isolates two variables that are easy to conflate &mdash; the error from quantizing, and any error from the DRAM round trip.</span><span class="ko">평가 설계가 좋다. 뒤섞기 쉬운 두 변수를 분리한다 &mdash; 양자화로 인한 오차와, DRAM 왕복으로 인한 오차.</span></p>
+
+    <div class="grid2">
+      <div class="mini">
+        <h4><span class="en">Quantization effect</span><span class="ko">양자화 효과</span></h4>
+        <p><span class="en">bf16 vs 4-bit KV at matched cache settings. Result: <b>"within ~1 pt on all three benchmarks"</b>. RULER long-context matches to <b>&le;0.4 pt</b> across 16k/64k/128k (&Delta; +0.4 / &minus;0.1 / 0.0).</span><span class="ko">캐시 설정을 맞춘 상태에서 bf16 대 4비트 KV. 결과: <b>"세 벤치마크 모두에서 약 1 pt 이내"</b>. RULER 롱컨텍스트는 16k/64k/128k 전반에서 <b>0.4 pt 이하</b> 차이(&Delta; +0.4 / &minus;0.1 / 0.0).</span></p>
+      </div>
+      <div class="mini">
+        <h4><span class="en">Tier effect</span><span class="ko">계층 효과</span></h4>
+        <p><span class="en">Same requests from HBM, then re-served from DRAM after a gate-confirmed flush. Short-context within &plusmn;2 pt; 480/480 correct under 32 concurrent requests sharing a prefix reloaded 20 times, <b>"with zero cross-request leakage"</b>.</span><span class="ko">같은 요청을 HBM 에서 처리한 뒤, flush 를 게이트로 확인하고 DRAM 에서 다시 처리. 짧은 컨텍스트는 &plusmn;2 pt 이내. prefix 를 공유하며 20회 재적재하는 동시 요청 32개에서 480/480 정답, <b>"요청 간 누수 0"</b>.</span></p>
+      </div>
+    </div>
+
+    <p><span class="en">The tier result is the one you should expect rather than be impressed by, and the post says why plainly:</span><span class="ko">계층 쪽 결과는 감탄할 것이 아니라 당연히 예상해야 하는 결과다. 글도 그 이유를 담백하게 말한다.</span></p>
+    <blockquote class="q">
+      <p>"Why: the DRAM round-trip is bit-exact, so the tier adds no error."</p>
+      <cite>— <a href="https://rocm.blogs.amd.com/software-tools-optimization/4bit-KV-LMcache/README.html">ROCm blog</a></cite>
+    </blockquote>
+    <p><span class="en">That follows directly from byte-transparency (&sect;3). It is a correctness <i>check</i> that the implementation didn't botch the strided copies, not evidence that tiering is inherently safe. The genuinely informative number is the quantization one: <b>~1 pt for a 3.76&times; size reduction</b>, which is a good trade if it holds on your model &mdash; and MiniMax-M2.5 is one MoE model, not a survey.</span><span class="ko">이건 바이트 투명성(&sect;3)에서 곧바로 따라 나온다. 계층화가 본질적으로 안전하다는 증거가 아니라, 구현이 stride 복사를 망치지 않았다는 정합성 <i>점검</i>이다. 진짜로 정보가 있는 수치는 양자화 쪽이다 &mdash; <b>3.76배 크기 감소에 약 1 pt</b>. 당신 모델에서도 유지된다면 좋은 거래다. 다만 MiniMax-M2.5 는 MoE 모델 하나일 뿐, 서베이가 아니다.</span></p>
+  </section>
+
+  <section id="s6">
+    <h2><span class="num">6</span><span class="en">What's upstream and what isn't &mdash; checked</span><span class="ko">업스트림에 있는 것과 없는 것 &mdash; 직접 확인</span></h2>
+
+    <p><span class="en">The post lists its LMCache component as a fork &mdash; <code class="inl">aditi-amd/LMCache</code> at <code class="inl">efd5389</code>. That raises the practical question: how much of this can you use from upstream today? I checked against the LMCache tree at <code class="inl">f9addd2e</code> (2026-08-22, six days before the post).</span><span class="ko">글은 LMCache 컴포넌트를 포크로 명시한다 &mdash; <code class="inl">aditi-amd/LMCache</code> 의 <code class="inl">efd5389</code>. 그러면 실무적인 질문이 생긴다: 오늘 업스트림에서 이 중 얼마를 쓸 수 있나? LMCache 트리 <code class="inl">f9addd2e</code>(2026-08-22, 글보다 6일 전)에 대조해 봤다.</span></p>
+
+    <table>
+      <thead><tr>
+        <th><span class="en">Piece</span><span class="ko">구성 요소</span></th>
+        <th><span class="en">Upstream at f9addd2e?</span><span class="ko">f9addd2e 업스트림에 있나?</span></th>
+        <th><span class="en">Evidence</span><span class="ko">근거</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="en">TurboQuant quantization</span><span class="ko">TurboQuant 양자화</span></td>
+          <td><b><span class="en">Yes</span><span class="ko">있음</span></b></td>
+          <td><code class="inl">lmcache/v1/distributed/serde/turboquant/</code> &mdash; <code class="inl">turboquant.py</code>, <code class="inl">store_kernel.py</code>, <code class="inl">decode_kernel.py</code>, registered in the serde factory</td>
+        </tr>
+        <tr>
+          <td><span class="en">4-bit presets</span><span class="ko">4비트 프리셋</span></td>
+          <td><b><span class="en">Yes</span><span class="ko">있음</span></b></td>
+          <td><code class="inl">TQ_PRESETS</code>: <code class="inl">turboquant_k8v4</code>, <code class="inl">turboquant_4bit_nc</code>, <code class="inl">turboquant_k3v4_nc</code>, <code class="inl">turboquant_3bit_nc</code></td>
+        </tr>
+        <tr>
+          <td><span class="en">bf16 boundary layers</span><span class="ko">bf16 경계 레이어</span></td>
+          <td><b><span class="en">Yes</span><span class="ko">있음</span></b></td>
+          <td><code class="inl">TurboQuantSerdeConfig.skip_first_layers = 2</code>, <code class="inl">skip_last_layers = 2</code> &mdash; the exact 2+2 split the post describes</td>
+        </tr>
+        <tr>
+          <td><span class="en">Hadamard + Lloyd-Max codebook</span><span class="ko">Hadamard + Lloyd-Max 코드북</span></td>
+          <td><b><span class="en">Yes</span><span class="ko">있음</span></b></td>
+          <td><code class="inl">_build_hadamard_cpu</code>, <code class="inl">_solve_lloyd_max</code>, <code class="inl">_generate_wht_signs</code></td>
+        </tr>
+        <tr>
+          <td><b><span class="en">Group-aware connector</span><span class="ko">group-aware 커넥터</span></b></td>
+          <td><b><span class="en">No</span><span class="ko">없음</span></b></td>
+          <td><span class="en">no hits for <code class="inl">group_aware</code> / <code class="inl">transfer_group</code> anywhere under <code class="inl">lmcache/</code></span><span class="ko"><code class="inl">lmcache/</code> 어디에도 <code class="inl">group_aware</code> / <code class="inl">transfer_group</code> 없음</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout c-green">
+      <span class="tag"><span class="en">The distinction that matters</span><span class="ko">중요한 구분</span></span>
+      <span class="en">Upstream TurboQuant is a <b>serde</b> &mdash; it sits on the L1&rarr;L2 serialization path. KV lives in HBM at full precision and gets quantized <i>on the way out to storage</i>. That saves storage capacity and transfer bytes. It does <b>not</b> put more KV in HBM.<br><br>The post's design is the other one: KV is <b>already packed in HBM</b> by the vLLM fork, and LMCache moves it byte-transparently. That is where "3.2&times; more KV resident in HBM" comes from &mdash; and it is a vLLM-side property, not an LMCache one. The two designs share a name and a codebook but solve different problems.</span><span class="ko">업스트림 TurboQuant 는 <b>serde</b> 다 &mdash; L1&rarr;L2 직렬화 경로에 있다. KV 는 HBM 에 전체 정밀도로 살고, <i>저장소로 나가는 길에</i> 양자화된다. 저장 용량과 전송 바이트를 아낀다. HBM 에 더 많은 KV 를 넣지는 <b>않는다</b>.<br><br>글의 설계는 다른 쪽이다: KV 가 vLLM 포크에 의해 <b>이미 HBM 에서 압축된 상태</b>이고, LMCache 는 그것을 바이트 투명하게 옮긴다. "HBM 상주 KV 3.2배" 는 여기서 나온다 &mdash; 그리고 이건 vLLM 쪽 속성이지 LMCache 쪽이 아니다. 두 설계는 이름과 코드북을 공유하지만 서로 다른 문제를 푼다.</span>
+    </div>
+
+    <p><span class="en">Practical consequence: if you want the storage/bandwidth savings, upstream LMCache gives you that today via the TurboQuant serde. If you want the HBM-residency win that produced the 2&times; goodput number, you need AMD's vLLM fork <i>and</i> their connector fork &mdash; which is exactly why they ship a pinned Docker image rather than a pip install.</span><span class="ko">실무적 귀결: 저장·대역폭 절감을 원한다면 업스트림 LMCache 가 TurboQuant serde 로 오늘 바로 준다. 2배 goodput 을 만들어 낸 HBM 상주 이득을 원한다면 AMD 의 vLLM 포크 <i>그리고</i> 커넥터 포크가 필요하다 &mdash; 그들이 pip install 이 아니라 고정된 Docker 이미지를 배포하는 이유가 정확히 이것이다.</span></p>
+
+    <p class="muted"><span class="en">Caveat on my own check: <code class="inl">f9addd2e</code> predates the post by six days, and neither AMD's connector work nor any later upstreaming of it would appear in it. Treat the "No" row as "not upstream as of 2026-08-22", not "will never be".</span><span class="ko">내 확인에 대한 단서: <code class="inl">f9addd2e</code> 는 글보다 6일 앞선다. AMD 의 커넥터 작업이나 이후의 업스트림 반영은 거기 나타나지 않는다. "없음" 행은 "2026-08-22 기준 업스트림에 없음" 으로 읽어야지 "앞으로도 없을 것" 이 아니다.</span></p>
+  </section>
+
+  <section id="s7">
+    <h2><span class="num">7</span><span class="en">Reproducing it, and the gotchas</span><span class="ko">재현, 그리고 함정</span></h2>
+
+    <p><span class="en">Credit where due: the reproduction path is more concrete than most vendor posts. Everything is pinned.</span><span class="ko">공은 인정하자 &mdash; 재현 경로가 대부분의 벤더 글보다 구체적이다. 전부 고정돼 있다.</span></p>
+
+    <pre>docker pull rocm/vllm-dev:quark-ultraquant-lmcache-mi355
+
+docker run -d --name lmcache-bench --network=host --ipc=host \
+  --device=/dev/kfd --device=/dev/dri --group-add video \
+  -v /models/MiniMax-M2.5:/models/MiniMax-M2.5:ro \
+  --entrypoint /bin/bash \
+  rocm/vllm-dev:quark-ultraquant-lmcache-mi355 -c "sleep infinity"</pre>
+
+    <table>
+      <thead><tr><th><span class="en">Layer</span><span class="ko">레이어</span></th><th><span class="en">Source</span><span class="ko">출처</span></th><th>Commit</th></tr></thead>
+      <tbody>
+        <tr><td>base</td><td><code class="inl">rocm/vllm-dev</code></td><td>ROCm 7.2.1 / torch 2.10</td></tr>
+        <tr><td>vLLM</td><td><span class="en">fork snapshot (TurboQuant)</span><span class="ko">포크 스냅샷 (TurboQuant)</span></td><td><code class="inl">3cc38a1b</code></td></tr>
+        <tr><td>FlyDSL</td><td>ROCm/FlyDSL (prebuilt)</td><td><code class="inl">41500b0</code></td></tr>
+        <tr><td>LMCache</td><td><code class="inl">aditi-amd/LMCache</code> (HIP, group-aware)</td><td><code class="inl">efd5389</code></td></tr>
+      </tbody>
+    </table>
+    <p class="muted"><span class="en">Note the base image reports ROCm 7.2.1 while the post's prose says 7.2.3 &mdash; a minor inconsistency in the post, not worth much, but worth noticing if you are matching versions exactly.</span><span class="ko">베이스 이미지는 ROCm 7.2.1 로 표기돼 있는데 본문 서술은 7.2.3 이다 &mdash; 글 내부의 사소한 불일치다. 크게 중요하진 않지만 버전을 정확히 맞추려 한다면 눈여겨볼 것.</span></p>
+
+    <h3><span class="en">Gotchas the post discloses</span><span class="ko">글이 공개한 함정</span></h3>
+    <div class="grid2">
+      <div class="mini">
+        <h4><code class="inl">PYTHONHASHSEED=0</code></h4>
+        <p><span class="en">Mandatory at TP&gt;1 or you get <b>0% cache hits</b> &mdash; silently, since nothing errors. See &sect;3.</span><span class="ko">TP&gt;1 에서 필수. 아니면 <b>캐시 히트율 0%</b> &mdash; 아무 에러도 안 나므로 조용히 그렇게 된다. &sect;3 참고.</span></p>
+      </div>
+      <div class="mini">
+        <h4><span class="en">TP graph-capture flake</span><span class="ko">TP graph capture 플레이크</span></h4>
+        <p><span class="en">Transient <code class="inl">No available shared memory broadcast block</code> during capture; the stated workaround is to kill and relaunch. Worth knowing before you debug it for an hour.</span><span class="ko">capture 중 간헐적 <code class="inl">No available shared memory broadcast block</code>. 제시된 우회책은 죽이고 다시 띄우기. 한 시간 디버깅하기 전에 알아 둘 만하다.</span></p>
+      </div>
+    </div>
+
+    <h3><span class="en">When the post says to use it</span><span class="ko">글이 제시하는 적용 조건</span></h3>
+    <p><span class="en">Unusually for a vendor post, it scopes itself:</span><span class="ko">벤더 글치고는 드물게, 스스로 범위를 좁힌다.</span></p>
+    <blockquote class="q">
+      <p>"Use it for high-concurrency, long-context agentic traffic that oversubscribes HBM. Skip it when the working set fits HBM (short-context / low-concurrency chat)."</p>
+      <cite>— <a href="https://rocm.blogs.amd.com/software-tools-optimization/4bit-KV-LMcache/README.html">ROCm blog</a></cite>
+    </blockquote>
+
+    <div class="callout c-purple">
+      <span class="tag"><span class="en">Editor's note — not a claim by AMD</span><span class="ko">편집자 주 — AMD 의 주장 아님</span></span>
+      <span class="en">What transfers to our setting and what doesn't. <b>Transfers:</b> the <code class="inl">PYTHONHASHSEED</code> rule (treat as standing policy for any LMCache deployment); the byte-transparent connector design, which is the right shape for any packed-KV format and worth arguing for upstream; and the observation that quantization and tiering compound rather than substitute.<br><br><b>Doesn't transfer:</b> the numbers. This is 576 GB of HBM across two MI355X. On our MI250 boxes the HBM/DRAM ratio is completely different, so the crossover points &mdash; including the one where plain FP8 beat 4-bit at 68 GB &mdash; would land elsewhere. If we wanted a defensible read for our hardware we would need to re-run the sweep ourselves, and the pinned image won't help since it targets gfx950.<br><br><b>What I'd actually do first:</b> the upstream TurboQuant serde is available in LMCache today and is a much smaller change than adopting a fork &mdash; it buys L2 capacity and transfer bandwidth without touching the vLLM side. That is the cheap half of this post's idea, and it is testable on hardware we have.</span><span class="ko">우리 환경으로 옮겨오는 것과 아닌 것. <b>옮겨오는 것:</b> <code class="inl">PYTHONHASHSEED</code> 규칙(모든 LMCache 배포의 상시 정책으로 취급), 바이트 투명 커넥터 설계 &mdash; 어떤 압축 KV 포맷에도 맞는 형태라 업스트림에 주장할 만하다 &mdash; 그리고 양자화와 계층화가 대체재가 아니라 보완재라는 관찰.<br><br><b>안 옮겨오는 것:</b> 수치. 이건 MI355X 두 장, HBM 576 GB 다. 우리 MI250 장비는 HBM/DRAM 비율이 완전히 달라서 교차점 &mdash; 68 GB 에서 평범한 FP8 이 4비트를 이긴 그 지점 포함 &mdash; 이 다른 자리에 놓인다. 우리 하드웨어에 대해 방어 가능한 판단을 원한다면 스윕을 직접 다시 돌려야 하고, 고정 이미지는 gfx950 대상이라 도움이 안 된다.<br><br><b>내가 먼저 해 볼 것:</b> 업스트림 TurboQuant serde 는 오늘 LMCache 에 이미 있고 포크를 들이는 것보다 훨씬 작은 변경이다 &mdash; vLLM 쪽을 건드리지 않고 L2 용량과 전송 대역폭을 번다. 이 글 아이디어의 값싼 절반이고, 우리가 가진 하드웨어에서 시험 가능하다.</span>
+    </div>
+  </section>
+
+  <section id="s8">
+    <h2><span class="num">8</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+    <h4><span class="en">The article</span><span class="ko">원문</span></h4>
+    <ul class="srcs">
+      <li><a href="https://rocm.blogs.amd.com/software-tools-optimization/4bit-KV-LMcache/README.html">"4-bit KV Caching in LMCache: Offloading Quantized KV Beyond HBM for Context-Heavy Agents on AMD MI355X"</a> — ROCm Blogs, 2026-08-28. Aditi Ghai Rana, Bowen Bao, David Limpus, Inesh Chakrabarti, Spandan Tiwari, Thiago Crepaldi, Ashish Sirasao. <span class="muted">All quoted numbers and sentences in this note come from here.</span></li>
+    </ul>
+    <h4><span class="en">Code I checked it against</span><span class="ko">대조한 코드</span></h4>
+    <ul class="srcs">
+      <li><a href="https://github.com/LMCache/LMCache/tree/f9addd2e4e074f21f26cbda84c3abd932d32ef33">LMCache @ f9addd2e</a> (2026-08-22) — <a href="https://github.com/LMCache/LMCache/tree/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/v1/distributed/serde/turboquant">lmcache/v1/distributed/serde/turboquant/</a> for the upstream TurboQuant serde, presets and <code class="inl">skip_first_layers</code>/<code class="inl">skip_last_layers</code></li>
+    </ul>
+    <h4><span class="en">Referenced by the article</span><span class="ko">원문이 참조한 것</span></h4>
+    <ul class="srcs">
+      <li><a href="https://rocm.blogs.amd.com/artificial-intelligence/turboquant-vllm-agentic/README.html">ROCm Blogs — turboquant-vllm-agentic</a> <span class="muted">(the kernel work this builds on)</span></li>
+      <li><a href="https://vllm.ai/blog/2026-05-11-turboquant">vLLM blog — TurboQuant OSS (2026-05-11)</a></li>
+      <li><a href="https://github.com/LMCache/LMCache">LMCache</a> · <a href="https://blog.lmcache.ai">blog.lmcache.ai</a> · <a href="https://vllm.ai">vllm.ai</a></li>
+      <li><span class="en">Reproduction harness (gist referenced in the post)</span><span class="ko">재현 하네스 (글이 참조한 gist)</span>: <a href="https://gist.github.com/aditi-amd/7fc2d9e531746874db3cd453025c0ecb">gist.github.com/aditi-amd/7fc2d9e…</a></li>
+    </ul>
+    <h4><span class="en">Related notes on this site</span><span class="ko">이 사이트의 관련 노트</span></h4>
+    <ul class="srcs">
+      <li><a href="vllm-multiconnector-lmcache-mooncake.html">Running PD and KV offload at once — MultiConnector with NIXL and LMCache → Mooncake</a> <span class="muted">(the LMCache MP architecture and the same PYTHONHASHSEED trap)</span></li>
+      <li><a href="vllm-kv-connectors.html">vLLM KV-cache connectors — transfer-direction map</a></li>
+      <li><a href="nvidia-cmx-kv-cache-nvme.html">NVIDIA CMX — KV cache to NVMe</a> <span class="muted">(the same tiering idea, a tier further down)</span></li>
+    </ul>
+  </section>
+
+  <footer>
+    <p><span class="en">Article read 2026-09-02; code claims checked against LMCache <code class="inl">f9addd2e</code>. Performance numbers are AMD's, not independently reproduced.</span><span class="ko">2026-09-02 원문 확인. 코드 주장은 LMCache <code class="inl">f9addd2e</code> 에 대조. 성능 수치는 AMD 의 것이며 독립적으로 재현하지 않았다.</span></p>
+  </footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
