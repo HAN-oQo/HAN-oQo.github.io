@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engram — DeepSeek V4.1's hash-indexed memory layer, and why it needs its own parallel axis</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-green{background:var(--green-bg);color:var(--green-ink)} .c-green .tag{color:var(--green-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-red{background:var(--red-bg);color:var(--red-ink)} .c-red .tag{color:var(--red-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--bg)}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  .lbl{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+  .sm{font:11px -apple-system,sans-serif;fill:var(--muted)}
+  .xs{font:9.5px -apple-system,sans-serif;fill:var(--faint)}
+  .bx{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../">Home</a> · <a href="./">Study</a> · <span class="en">DeepInfer Engram</span><span class="ko">DeepInfer Engram</span></p>
+
+  <header class="hero">
+    <h1><span class="en">Engram — DeepSeek V4.1's hash-indexed memory layer, and why it needs its own parallel axis</span><span class="ko">Engram — DeepSeek V4.1 의 해시 메모리 레이어, 그리고 자기 병렬 축이 필요한 이유</span></h1>
+    <p class="lede"><span class="en">Reading DeepInfer's parallelism code, one axis has no counterpart in any other serving engine: alongside data, context and expert parallel sits <code class="inl">engram_parallel</code>. Following it leads to a component that is not an optimisation at all but part of the model &mdash; a bank of hashed n-gram embeddings, sharded across every available rank, fetched over the MoE all-to-all fabric and gated into the residual trunk. This note reconstructs it from the inference code: how the key is built, where the table lives, how it is prefetched, and what it costs.</span><span class="ko">DeepInfer 의 병렬화 코드를 읽다 보면 다른 어떤 서빙 엔진에도 대응물이 없는 축이 하나 있다 &mdash; data · context · expert 병렬 옆에 <code class="inl">engram_parallel</code> 이 있다. 따라가 보면 최적화가 아니라 <i>모델의 일부</i>인 구성요소가 나온다. 해시된 n-gram 임베딩 뱅크를 가용 rank 전체에 샤딩해 두고, MoE all-to-all 패브릭으로 가져와, residual trunk 에 게이팅해 넣는다. 이 노트는 그것을 추론 코드에서 재구성한다 &mdash; 키를 어떻게 만들고, 테이블이 어디 살고, 어떻게 미리 가져오고, 비용이 무엇인지.</span></p>
+    <div class="meta">
+      <span class="badge">Deep dive · code-walk</span>
+      <span class="badge">DeepInfer <a class="src" href="https://github.com/deepseek-ai/DeepInfer/tree/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9">code @ 9bd9cf2</a></span>
+      <span class="badge">DeepSeek-V4.1-Flash</span>
+      <span class="badge"><a class="src" href="deepinfer-vllm-lineage.html">companion: vLLM lineage</a></span>
+    </div>
+    <p class="post-meta"><time datetime="2026-10-23">2026-10-23</time></p>
+  </header>
+
+  <nav class="toc">
+    <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+    <ol>
+      <li><a href="#s1"><span class="en">An axis that shouldn't exist</span><span class="ko">있을 수 없는 축</span></a></li>
+      <li><a href="#s2"><span class="en">Building the key: erase the surface form</span><span class="ko">키 만들기 — 표면형을 지운다</span></a></li>
+      <li><a href="#s3"><span class="en">Many heads, many primes</span><span class="ko">여러 헤드, 여러 소수</span></a></li>
+      <li><a href="#s4"><span class="en">Where the table lives</span><span class="ko">테이블이 사는 곳</span></a></li>
+      <li><a href="#s5"><span class="en">One hash, one fetch, deferred hooks</span><span class="ko">해시 한 번, fetch 한 번, 지연 훅</span></a></li>
+      <li><a href="#s6"><span class="en">Injection into the hyper-connected trunk</span><span class="ko">hyper-connected trunk 에 주입</span></a></li>
+      <li><a href="#s7"><span class="en">Constraints, costs, and what stays unknown</span><span class="ko">제약 · 비용 · 남은 미지</span></a></li>
+      <li><a href="#s8"><span class="en">Sources</span><span class="ko">출처</span></a></li>
+    </ol>
+  </nav>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">One-line summary</span><span class="ko">한 줄 요약</span></span>
+    <span class="en">Engram hashes each token's preceding n-grams &mdash; after aggressively normalising away case, accents and whitespace &mdash; into several prime-sized tables, fetches the matching FP8 embeddings from whichever rank holds them, and gates them into the residual stream at selected layers. It is a <b>learned lookup table</b> bolted onto the model, and because its size is bounded by memory rather than compute, it gets a parallel axis of its own that can span <i>more</i> ranks than the model does.</span><span class="ko">Engram 은 각 토큰의 선행 n-gram 을 &mdash; 대소문자·악센트·공백을 공격적으로 정규화해 지운 뒤 &mdash; 소수 크기 테이블 여러 개에 해싱하고, 그 키를 가진 rank 에서 FP8 임베딩을 가져와, 선택된 레이어에서 residual stream 에 게이팅해 넣는다. 모델에 덧붙인 <b>학습된 룩업 테이블</b>이고, 크기가 연산이 아니라 메모리로 제한되기 때문에 모델보다 <i>더 많은</i> rank 에 걸칠 수 있는 자기 병렬 축을 갖는다.</span>
+  </div>
+
+  <h3><span class="en">Glossary</span><span class="ko">용어 정리</span></h3>
+  <div class="grid3">
+    <div class="mini">
+      <h4><span class="en">n-gram</span><span class="ko">n-gram</span></h4>
+      <p><span class="en">A run of n consecutive tokens. Here, the n tokens immediately preceding the current position &mdash; so each position has one n-gram per order (2-gram, 3-gram, …).</span><span class="ko">연속된 토큰 n개. 여기서는 현재 위치 바로 앞의 n개 토큰이라, 각 위치가 차수별로(2-gram, 3-gram, …) n-gram 하나씩을 갖는다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Hash embedding</span><span class="ko">해시 임베딩</span></h4>
+      <p><span class="en">Instead of one row per vocabulary item, hash the item into a fixed-size table. Lets you index an unbounded key space with bounded memory, at the price of collisions.</span><span class="ko">어휘 항목마다 한 행을 두는 대신, 항목을 고정 크기 테이블로 해싱한다. 무한한 키 공간을 유한한 메모리로 인덱싱하되 충돌을 대가로 치른다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>mHC</h4>
+      <p><span class="en">Multi-way hyper-connections: V4.1 carries <code class="inl">hc_mult</code> parallel residual trunks instead of one, mixing them around each sub-layer and folding them back before the LM head.</span><span class="ko">다중 hyper-connection. V4.1 은 residual trunk 를 하나가 아니라 <code class="inl">hc_mult</code> 개 들고 다니며, 각 서브레이어 둘레에서 섞고 LM head 앞에서 다시 접는다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>DeepEP</h4>
+      <p><span class="en">DeepSeek's expert-parallel communication library &mdash; the all-to-all fabric that normally ships MoE tokens between ranks. Engram reuses it.</span><span class="ko">DeepSeek 의 expert-parallel 통신 라이브러리. 평소 MoE 토큰을 rank 간에 나르는 all-to-all 패브릭인데, Engram 이 이것을 재활용한다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">Userbuffer</span><span class="ko">Userbuffer</span></h4>
+      <p><span class="en">A registered memory region that remote ranks can read directly, without going through a copy and a send. Where the engram shards are written once at startup.</span><span class="ko">원격 rank 가 복사·전송 없이 직접 읽을 수 있는 등록된 메모리 영역. engram 샤드가 기동 시 한 번 기록되는 곳.</span></p>
+    </div>
+    <div class="mini">
+      <h4>ue8m0</h4>
+      <p><span class="en">An 8-bit exponent-only scale format for FP8 blocks. Stored packed &mdash; four per int32 on CUDA, two per int16 on Ascend.</span><span class="ko">FP8 블록용 지수 전용 8비트 스케일 포맷. 팩해서 저장한다 &mdash; CUDA 는 int32 에 4개, Ascend 는 int16 에 2개.</span></p>
+    </div>
+  </div>
+
+  <section id="s1">
+    <h2><span class="num">1</span><span class="en">An axis that shouldn't exist</span><span class="ko">있을 수 없는 축</span></h2>
+
+    <p><span class="en">DeepInfer's process-group setup creates the axes you expect &mdash; and one you do not:</span><span class="ko">DeepInfer 의 프로세스 그룹 설정은 예상 가능한 축들을 만든다 &mdash; 그리고 예상 못 한 것 하나를.</span></p>
+    <pre># deepinfer/model_executor/parallel_utils/parallel_state.py
+def data_parallel_group(self)    -> ProcessGroup: ...
+def context_parallel_group(self) -> ProcessGroup: ...
+def expert_parallel_group(self)  -> ProcessGroup: ...
+def engram_parallel_group(self)  -> ProcessGroup: ...   # ← this one
+def world_group(self)            -> ProcessGroup: ...</pre>
+    <p class="muted"><span class="en">Note also what is <b>absent</b>: there is no tensor-parallel group. <code class="inl">grep -ri 'tensor.parallel' deepinfer/</code> returns zero hits across the whole engine.</span><span class="ko">그리고 <b>없는 것</b>도 보라 &mdash; tensor-parallel 그룹이 없다. 엔진 전체에 대해 <code class="inl">grep -ri 'tensor.parallel' deepinfer/</code> 가 0건이다.</span></p>
+
+    <p><span class="en">The sizing rule is the tell. Every other axis divides the model; this one does not have to:</span><span class="ko">크기 규칙이 단서다. 다른 모든 축은 모델을 나누는데, 이 축은 그럴 필요가 없다.</span></p>
+    <pre># deepinfer/config.py:171-173
+self.model_parallel_size  = self.context_parallel_size
+self.engram_parallel_size = engram_parallel_size or (self.model_parallel_size * data_parallel_size)
+self.world_size           = max(self.model_parallel_size * data_parallel_size,
+                                self.engram_parallel_size)</pre>
+
+    <div class="callout c-green">
+      <span class="tag"><span class="en">Read that last line again</span><span class="ko">마지막 줄을 다시 보라</span></span>
+      <span class="en"><code class="inl">world_size</code> is the <b>max</b> of the model's rank count and engram's. So the engram table may be spread over <i>more</i> ranks than the model occupies. That only makes sense for something whose size is set by <b>memory capacity</b>, not by the compute graph &mdash; which is exactly what a big lookup table is.</span><span class="ko"><code class="inl">world_size</code> 가 모델 rank 수와 engram rank 수의 <b>최댓값</b>이다. 즉 engram 테이블이 모델이 차지한 것보다 <i>더 많은</i> rank 에 퍼질 수 있다. 이건 크기가 연산 그래프가 아니라 <b>메모리 용량</b>으로 정해지는 대상에서만 말이 된다 &mdash; 큰 룩업 테이블이 정확히 그렇다.</span>
+    </div>
+  </section>
+
+  <section id="s2">
+    <h2><span class="num">2</span><span class="en">Building the key: erase the surface form</span><span class="ko">키 만들기 — 표면형을 지운다</span></h2>
+
+    <p><span class="en">Before anything is hashed, the tokenizer's vocabulary is rebuilt into a <i>compressed</i> one. The normalisation chain is unusually aggressive:</span><span class="ko">해싱하기 전에, 토크나이저 어휘가 <i>압축된</i> 어휘로 다시 만들어진다. 정규화 체인이 이례적으로 공격적이다.</span></p>
+
+    <pre># deepinfer/model_executor/models/v4_modules/engram_metadata.py
+normalizer = normalizers.Sequence([
+    normalizers.NFKC(),
+    normalizers.NFD(),
+    normalizers.StripAccents(),
+    normalizers.Lowercase(),
+    normalizers.Replace(Regex(r"[ \t\r\n]+"), " "),
+    normalizers.Strip(),
+    ...
+])</pre>
+
+    <svg class="fig" viewBox="0 0 860 150" role="img" aria-label="Four surface forms collapsing to one compressed token id">
+      <defs><marker id="e1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>
+      <text x="60" y="34" class="sm">"The"</text>
+      <text x="60" y="58" class="sm">"  the"</text>
+      <text x="60" y="82" class="sm">"THE"</text>
+      <text x="60" y="106" class="sm">"Thé"</text>
+      <path d="M140 30 C 220 30, 230 66, 290 66" stroke="var(--muted)" stroke-width="1.4" fill="none"/>
+      <path d="M140 54 C 220 54, 230 66, 290 66" stroke="var(--muted)" stroke-width="1.4" fill="none"/>
+      <path d="M140 78 C 220 78, 230 66, 290 66" stroke="var(--muted)" stroke-width="1.4" fill="none"/>
+      <path d="M140 102 C 220 102, 230 66, 290 66" stroke="var(--muted)" stroke-width="1.4" fill="none" marker-end="url(#e1)"/>
+      <rect x="300" y="48" width="180" height="36" rx="7" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="316" y="71" class="lbl">one compressed id</text>
+      <path d="M484 66 L540 66" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#e1)"/>
+      <rect x="548" y="48" width="260" height="36" rx="7" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="564" y="71" class="lbl">n-gram window → hash → table row</text>
+      <text x="60" y="138" class="xs">Byte pieces that decode to invalid UTF-8 keep their raw spelling, so distinct byte tokens cannot collapse.</text>
+    </svg>
+    <p class="figcap"><span class="en">The compression mapping is built once on CPU from the tokenizer file, then mirrored to GPU as a lookup tensor.</span><span class="ko">압축 매핑은 토크나이저 파일에서 CPU 에서 한 번 만들어진 뒤 GPU 에 룩업 텐서로 복제된다.</span></p>
+
+    <p><span class="en">Case, accents and whitespace runs are all erased. That is a deliberate statement about what this table is <i>for</i>: it is not meant to memorise exact strings but to key on a normalised lexical pattern, so that the same phrase in different casing hits the same row. The one exception is guarded explicitly &mdash; pieces that decode to invalid UTF-8 keep their raw vocabulary spelling, so distinct byte-level tokens cannot be folded together.</span><span class="ko">대소문자·악센트·연속 공백이 전부 지워진다. 이 테이블이 <i>무엇을 위한</i> 것인지에 대한 의도적 선언이다 &mdash; 정확한 문자열을 외우려는 게 아니라 정규화된 어휘 패턴을 키로 삼으려는 것이고, 그래야 같은 구절이 대소문자만 달라도 같은 행에 닿는다. 유일한 예외는 명시적으로 방어된다 &mdash; 깨진 UTF-8 로 디코드되는 조각은 원래 어휘 철자를 유지해, 바이트 단위 토큰끼리 합쳐지지 않게 한다.</span></p>
+
+    <p><span class="en">The n-gram windows themselves are built <b>host-side in C++</b>, into pinned memory, including the speculative draft positions:</span><span class="ko">n-gram 윈도 자체는 <b>호스트 쪽 C++</b> 에서 pinned 메모리에 만들어지고, 투기적 draft 위치까지 포함한다.</span></p>
+    <pre># csrc/engine/zos.cpp
+result.ngram_token_ids = torch::full({total_q, max_ngram_size},
+                                     engram_compressed_pad_token, pinned(torch::kInt32));
+...
+fill_engram_row(ngram_token_ids + (offset + q) * max_ngram_size, ...,
+                compressed, seq-&gt;mtp.draft_tokens, lookup_table, ...);</pre>
+    <p class="muted"><span class="en">That <code class="inl">seq-&gt;mtp.draft_tokens</code> matters: engram lookups cover the speculative draft too, so a draft token that is later accepted already had its memory contribution computed.</span><span class="ko"><code class="inl">seq-&gt;mtp.draft_tokens</code> 가 중요하다 &mdash; engram 조회가 투기적 draft 까지 덮으므로, 나중에 채택될 draft 토큰은 이미 메모리 기여분이 계산돼 있다.</span></p>
+  </section>
+
+  <section id="s3">
+    <h2><span class="num">3</span><span class="en">Many heads, many primes</span><span class="ko">여러 헤드, 여러 소수</span></h2>
+
+    <p><span class="en">Hashing an unbounded key space into a fixed table means collisions. Engram's answer is the classic one, and the table-sizing code states it plainly:</span><span class="ko">무한한 키 공간을 고정 테이블로 해싱하면 충돌이 난다. Engram 의 답은 고전적인 것이고, 테이블 크기 코드가 그대로 말한다.</span></p>
+
+    <pre># engram_metadata.py — one distinct prime per head, never reused
+start = int(vocab_size) - 1
+sizes = []
+for _ in range(num_heads):
+    prime = int(nextprime(start))
+    while prime in seen:
+        prime = int(nextprime(prime))
+    seen.add(prime)
+    sizes.append(prime)
+    start = prime</pre>
+
+    <p><span class="en">Each head gets its own prime-sized table, and no size is reused anywhere in the model. Two n-grams that collide under one head's modulus are very unlikely to collide under another's, so the concatenation of all heads' rows disambiguates what any single row could not. Table sizes are tracked per <b>layer</b> × per <b>n-gram order</b> × per <b>head</b>.</span><span class="ko">헤드마다 자기 소수 크기 테이블을 받고, 모델 전체에서 같은 크기가 재사용되지 않는다. 한 헤드의 모듈러스에서 충돌한 두 n-gram 이 다른 헤드에서도 충돌할 확률은 매우 낮으므로, 모든 헤드 행을 이어 붙이면 한 행으로는 불가능한 구분이 가능해진다. 테이블 크기는 <b>레이어</b> × <b>n-gram 차수</b> × <b>헤드</b> 별로 관리된다.</span></p>
+
+    <div class="callout c-amber">
+      <span class="tag"><span class="en">Why primes, specifically</span><span class="ko">왜 하필 소수인가</span></span>
+      <span class="en">Using coprime table sizes makes the collision patterns of different heads structurally independent: a hash that maps two keys together mod <i>p</i> has no reason to map them together mod <i>q</i> when <i>p</i> and <i>q</i> share no factors. Picking distinct primes guarantees that cheaply. This is the standard hash-embedding construction, not something exotic &mdash; what is unusual is seeing it at this scale inside a frontier model's inference path.</span><span class="ko">서로소인 테이블 크기를 쓰면 헤드별 충돌 패턴이 구조적으로 독립이 된다. <i>p</i> 로 나눈 나머지에서 두 키를 같은 곳에 보내는 해시가, 약수를 공유하지 않는 <i>q</i> 에서도 그럴 이유는 없다. 서로 다른 소수를 고르면 그게 값싸게 보장된다. 특별할 것 없는 표준 해시 임베딩 구성이다 &mdash; 특이한 건 이게 프런티어 모델의 추론 경로 안에서 이 규모로 보인다는 점이다.</span>
+    </div>
+  </section>
+
+  <section id="s4">
+    <h2><span class="num">4</span><span class="en">Where the table lives</span><span class="ko">테이블이 사는 곳</span></h2>
+
+    <p><span class="en">Each rank holds a shard of the n-gram table, written once into a DeepEP userbuffer at startup &mdash; and then the local copy is thrown away:</span><span class="ko">각 rank 가 n-gram 테이블의 샤드를 들고 있고, 기동 시 DeepEP userbuffer 에 한 번 기록된 뒤 로컬 사본은 버려진다.</span></p>
+    <pre># v4_modules/engram.py — EngramRuntime.initialize
+self._buffer.write(weights, sfs=sfs)
+for embedding in embeddings:
+    embedding.release_storage()        # the shard now lives only in the userbuffer</pre>
+
+    <svg class="fig" viewBox="0 0 860 230" role="img" aria-label="Engram table sharded across ranks in DeepEP userbuffers">
+      <text x="20" y="26" class="lbl">One engram layer's table, sharded by hash across the engram-parallel group</text>
+
+      <rect x="20" y="48" width="190" height="80" rx="9" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+      <text x="36" y="70" class="sm">rank 0 · userbuffer</text>
+      <text x="36" y="90" class="xs">rows [0 … n)   FP8</text>
+      <text x="36" y="108" class="xs">+ ue8m0 scales, packed</text>
+
+      <rect x="230" y="48" width="190" height="80" rx="9" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+      <text x="246" y="70" class="sm">rank 1 · userbuffer</text>
+      <text x="246" y="90" class="xs">rows [n … 2n)</text>
+
+      <rect x="440" y="48" width="190" height="80" rx="9" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+      <text x="456" y="70" class="sm">rank 2 · userbuffer</text>
+      <text x="456" y="90" class="xs">rows [2n … 3n)</text>
+
+      <rect x="650" y="48" width="190" height="80" rx="9" fill="var(--card)" stroke="var(--line)" stroke-dasharray="5 4"/>
+      <text x="666" y="70" class="sm">… up to engram_parallel_size</text>
+      <text x="666" y="90" class="xs">which may exceed mp × dp</text>
+
+      <rect x="230" y="156" width="400" height="48" rx="9" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="246" y="176" class="lbl">EngramBuffer.fetch(hashes) — DeepEP all-to-all</text>
+      <text x="246" y="194" class="xs">each rank pulls whichever rows its own tokens hashed to</text>
+
+      <path d="M115 130 C 115 150, 240 146, 300 154" stroke="var(--muted)" stroke-width="1.4" fill="none"/>
+      <path d="M325 130 L 390 154" stroke="var(--muted)" stroke-width="1.4" fill="none"/>
+      <path d="M535 130 C 535 150, 500 146, 470 154" stroke="var(--muted)" stroke-width="1.4" fill="none"/>
+    </svg>
+    <p class="figcap"><span class="en">The shards are written once and never move; only the selected rows travel, per step.</span><span class="ko">샤드는 한 번 쓰이고 움직이지 않는다. 스텝마다 선택된 행만 이동한다.</span></p>
+
+    <p><span class="en">Storage is FP8 with ue8m0 scales, and the packing is platform-specific &mdash; four scales per <code class="inl">int32</code> on CUDA, two per <code class="inl">int16</code> on Ascend, following <code class="inl">PLATFORM.fp8_sf_type</code>. Weight loading happens in roughly 256 MB row chunks, with alignment rows zero-filled at unit scale.</span><span class="ko">저장은 ue8m0 스케일을 가진 FP8 이고 패킹이 플랫폼별로 다르다 &mdash; CUDA 는 <code class="inl">int32</code> 당 스케일 4개, Ascend 는 <code class="inl">int16</code> 당 2개, <code class="inl">PLATFORM.fp8_sf_type</code> 을 따른다. 가중치 로딩은 약 256 MB 행 청크 단위이고, 정렬용 행은 단위 스케일로 0 채움한다.</span></p>
+
+    <p class="muted"><span class="en">One platform note: <code class="inl">DEEPINFER_ENGRAM_FORCE_GPU_STORAGE</code> is forced on whenever the accelerator is Ascend, so the host-memory fallback for the table is NVIDIA-only.</span><span class="ko">플랫폼 메모 하나 &mdash; <code class="inl">DEEPINFER_ENGRAM_FORCE_GPU_STORAGE</code> 는 가속기가 Ascend 이면 강제로 켜진다. 즉 테이블의 호스트 메모리 폴백은 NVIDIA 전용이다.</span></p>
+  </section>
+
+  <section id="s5">
+    <h2><span class="num">5</span><span class="en">One hash, one fetch, deferred hooks</span><span class="ko">해시 한 번, fetch 한 번, 지연 훅</span></h2>
+
+    <p><span class="en">A naive implementation would gather embeddings inside each engram layer, paying a cross-rank round trip every time. DeepInfer does the opposite: it hashes and fetches <b>once at model level, before the layer loop</b>, and hands each layer a callable.</span><span class="ko">순진한 구현이라면 engram 레이어마다 임베딩을 모아 매번 rank 간 왕복을 치를 것이다. DeepInfer 는 반대로 한다 &mdash; <b>레이어 루프 전에 모델 레벨에서 한 번</b> 해시하고 가져온 뒤, 각 레이어에 호출 가능한 객체를 건넨다.</span></p>
+
+    <pre># deepinfer/model_executor/models/deepseek.py — before the layer loop
+hashes = tile_kernels.engram.engram_hash(
+    input_metadata.ngram_token_ids,   # [total_q, max_ngram_size], built in C++
+    self.ngram_multipliers, self.ngram_vocab_sizes, self.ngram_offsets,
+    getattr(input_metadata, "images_seq_mask", None),
+)
+ngram_embed_hooks = self.engram_runtime.fetch(hashes)   # → {layer_id: callable}
+
+for i in range(self.num_layers):
+    ...</pre>
+
+    <svg class="fig" viewBox="0 0 860 190" role="img" aria-label="Hash and fetch launched once before the layer loop, consumed later by each engram layer">
+      <defs><marker id="e2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>
+      <rect x="20" y="28" width="190" height="46" rx="8" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="34" y="48" class="lbl">engram_hash()</text>
+      <text x="34" y="66" class="xs">all orders × heads × layers, one kernel</text>
+
+      <path d="M214 51 L256 51" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#e2)"/>
+      <rect x="260" y="28" width="190" height="46" rx="8" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+      <text x="274" y="48" class="lbl">buffer.fetch(hashes)</text>
+      <text x="274" y="66" class="xs">one batched all-to-all · returns hooks</text>
+
+      <path d="M355 78 L355 104" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#e2)"/>
+      <text x="366" y="96" class="xs">communication in flight …</text>
+
+      <rect x="20" y="110" width="820" height="56" rx="8" fill="none" stroke="var(--line)"/>
+      <text x="34" y="130" class="sm">layer loop</text>
+      <rect x="120" y="120" width="76" height="34" rx="5" fill="var(--card)" stroke="var(--line)"/>
+      <text x="136" y="141" class="xs">L0</text>
+      <rect x="206" y="120" width="76" height="34" rx="5" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="216" y="141" class="xs">L1 engram</text>
+      <rect x="292" y="120" width="76" height="34" rx="5" fill="var(--card)" stroke="var(--line)"/>
+      <text x="308" y="141" class="xs">L2</text>
+      <rect x="378" y="120" width="76" height="34" rx="5" fill="var(--card)" stroke="var(--line)"/>
+      <text x="394" y="141" class="xs">…</text>
+      <rect x="464" y="120" width="86" height="34" rx="5" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="474" y="141" class="xs">Lk engram</text>
+      <rect x="560" y="120" width="76" height="34" rx="5" fill="var(--card)" stroke="var(--line)"/>
+      <text x="576" y="141" class="xs">…</text>
+      <text x="660" y="141" class="xs">each consumes its own hook</text>
+    </svg>
+    <p class="figcap"><span class="en">The gather is launched before any layer runs, so its latency overlaps the layers that precede the first engram layer.</span><span class="ko">gather 가 어떤 레이어보다 먼저 발사되므로, 그 지연이 첫 engram 레이어 앞의 레이어들과 겹친다.</span></p>
+
+    <p><span class="en">The return value of <code class="inl">fetch</code> is not a tensor &mdash; it is a dict of <b>hooks</b>, one per engram layer. Nothing is awaited at fetch time. Each layer calls its hook when it actually needs the data, by which point the all-to-all has had the whole preceding stack of layers to complete in. This is the same prefetch-and-overlap discipline MoE dispatch uses, which is unsurprising given it is running on the same DeepEP machinery.</span><span class="ko"><code class="inl">fetch</code> 의 반환값은 텐서가 아니라 engram 레이어당 하나씩의 <b>훅</b> 딕셔너리다. fetch 시점에 기다리는 것이 없다. 각 레이어는 데이터가 실제로 필요할 때 자기 훅을 호출하고, 그 시점이면 all-to-all 은 앞선 레이어 스택 전체를 완료 시간으로 썼다. MoE dispatch 가 쓰는 prefetch-and-overlap 규율과 같은데, 같은 DeepEP 장치 위에서 도니 놀랍지 않다.</span></p>
+  </section>
+
+  <section id="s6">
+    <h2><span class="num">6</span><span class="en">Injection into the hyper-connected trunk</span><span class="ko">hyper-connected trunk 에 주입</span></h2>
+
+    <p><span class="en">Engram does not attach to every layer &mdash; only to those listed in <code class="inl">engram_layer_ids</code>. Where it does attach, it enters as a <b>trunk intervention hook</b>, after the mHC post-mix:</span><span class="ko">Engram 은 모든 레이어에 붙지 않는다 &mdash; <code class="inl">engram_layer_ids</code> 에 올라온 레이어에만 붙는다. 붙는 곳에서는 mHC post-mix 이후의 <b>trunk 개입 훅</b>으로 들어간다.</span></p>
+
+    <pre># models/decoder_layer.py
+if model_metadata.engram_enabled and layer_idx in model_metadata.engram_cfg.engram_layer_ids:
+    self.engram = Engram(layer.engram_embedding, layer_idx, cfg)
+...
+# engram as the trunk intervention hook after hc post
+hc_post_intervention = lambda trunk: self.engram(trunk, ...)</pre>
+
+    <p><span class="en">Recall that V4.1 carries <code class="inl">hc_mult</code> parallel residual trunks rather than one, so the hidden state arriving here is shaped <code class="inl">[total_q, hc_mult, n_embed]</code>. Engram's own module asserts <code class="inl">hc_mult &gt; 1</code> &mdash; it is built for the hyper-connected model and would not make sense without it.</span><span class="ko">V4.1 이 residual trunk 를 하나가 아니라 <code class="inl">hc_mult</code> 개 들고 다닌다는 점을 떠올리면, 여기 도착하는 hidden state 는 <code class="inl">[total_q, hc_mult, n_embed]</code> 모양이다. Engram 모듈 자신이 <code class="inl">hc_mult &gt; 1</code> 을 단언한다 &mdash; hyper-connected 모델을 위해 만들어졌고 그것 없이는 성립하지 않는다.</span></p>
+
+    <p><span class="en">The gating itself is one fused kernel, with the constant weights pre-folded at construction:</span><span class="ko">게이팅 자체는 융합 커널 하나이고, 상수 가중치는 생성 시점에 미리 접어 둔다.</span></p>
+    <pre># v4_modules/engram.py
+# weight_hidden / weight_embed stay constant during inference, so fuse them once up front
+self.weight_fused = tile_kernels.engram.fused_weight(weight_hidden.data, weight_embed.data)
+...
+kv = self.fused_kv_projection(embed_hook()).unflatten(-1, (hc_mult + 1, n_embed))
+gated, *_ = tile_kernels.engram.engram_gate_fwd(
+    hidden_states, kv, self.weight_fused, self.eps, self.clamp_value,
+    save_for_backward=False, image_token_mask=images_seq_mask, inplace=True)</pre>
+    <p class="muted"><span class="en"><code class="inl">embed_hook()</code> is where the deferred fetch from &sect;5 is finally awaited. <code class="inl">inplace=True</code> means the trunk is modified in place rather than copied. And <code class="inl">image_token_mask</code> is threaded all the way down: image tokens get a sentinel id and are excluded, so a picture does not accidentally key the text n-gram table.</span><span class="ko"><code class="inl">embed_hook()</code> 이 &sect;5 의 지연된 fetch 를 비로소 기다리는 지점이다. <code class="inl">inplace=True</code> 는 trunk 를 복사하지 않고 제자리에서 수정한다는 뜻이다. 그리고 <code class="inl">image_token_mask</code> 가 끝까지 전달된다 &mdash; 이미지 토큰은 sentinel id 를 받아 제외되므로, 그림이 실수로 텍스트 n-gram 테이블을 키잉하지 않는다.</span></p>
+  </section>
+
+  <section id="s7">
+    <h2><span class="num">7</span><span class="en">Constraints, costs, and what stays unknown</span><span class="ko">제약 · 비용 · 남은 미지</span></h2>
+
+    <div class="grid2">
+      <div class="mini">
+        <h4><span class="en">Incompatible with YOCO consumer layers</span><span class="ko">YOCO consumer 레이어와 공존 불가</span></h4>
+        <p><span class="en">The model init asserts outright that <i>a yoco layer cannot be an engram layer</i>, and separately that engram layers must sit before the YOCO boundary under compaction. Two features that both rewrite the prefill trunk cannot share a layer.</span><span class="ko">모델 초기화가 <i>yoco 레이어는 engram 레이어일 수 없다</i>고 바로 단언하고, 별도로 compaction 하에서 engram 레이어가 YOCO 경계 앞에 있어야 한다고도 단언한다. prefill trunk 를 둘 다 고쳐 쓰는 두 기능은 한 레이어를 공유할 수 없다.</span></p>
+      </div>
+      <div class="mini">
+        <h4><span class="en">It shows up in the cost model</span><span class="ko">비용 모델에 등장한다</span></h4>
+        <p><span class="en"><code class="inl">csrc/engine/flops_estimator.hpp</code> carries an explicit Engram term. The scheduler's FLOP accounting &mdash; which drives MFU reporting and batch sizing &mdash; treats engram as real work, not a free lookup.</span><span class="ko"><code class="inl">csrc/engine/flops_estimator.hpp</code> 에 Engram 항이 명시적으로 있다. MFU 보고와 배치 사이징을 구동하는 스케줄러의 FLOP 회계가 engram 을 공짜 조회가 아니라 실제 작업으로 취급한다.</span></p>
+      </div>
+    </div>
+
+    <h3><span class="en">What this costs you at serving time</span><span class="ko">서빙 시점에 치르는 비용</span></h3>
+    <table>
+      <thead><tr><th><span class="en">Resource</span><span class="ko">자원</span></th><th><span class="en">What engram adds</span><span class="ko">engram 이 더하는 것</span></th></tr></thead>
+      <tbody>
+        <tr><td><span class="en">Memory</span><span class="ko">메모리</span></td><td><span class="en">The dominant cost. A table sized to span its own parallel group, which is why that group can exceed the model's.</span><span class="ko">지배적 비용. 자기 병렬 그룹 전체에 걸치도록 크기가 잡힌 테이블이고, 그래서 그 그룹이 모델 것을 넘어설 수 있다.</span></td></tr>
+        <tr><td><span class="en">Network</span><span class="ko">네트워크</span></td><td><span class="en">One extra all-to-all per step, on the same fabric as MoE dispatch &mdash; and competing with it for the same links.</span><span class="ko">스텝당 all-to-all 한 번 추가. MoE dispatch 와 같은 패브릭이고, 같은 링크를 두고 경합한다.</span></td></tr>
+        <tr><td><span class="en">Latency</span><span class="ko">지연</span></td><td><span class="en">Designed away by the hook mechanism &mdash; the fetch overlaps the layers before the first engram layer. The design only pays off if that prefix is long enough.</span><span class="ko">훅 메커니즘으로 설계상 상쇄 &mdash; fetch 가 첫 engram 레이어 앞의 레이어들과 겹친다. 그 앞부분이 충분히 길어야 이 설계가 값을 한다.</span></td></tr>
+        <tr><td><span class="en">Compute</span><span class="ko">연산</span></td><td><span class="en">Small: a hash kernel, one projection, one fused gate. The projection is FP8 when <code class="inl">fp8_proj</code> is on.</span><span class="ko">작다 &mdash; 해시 커널 하나, projection 하나, 융합 게이트 하나. <code class="inl">fp8_proj</code> 가 켜지면 projection 은 FP8.</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout c-red">
+      <span class="tag"><span class="en">What this note cannot tell you</span><span class="ko">이 노트가 말할 수 없는 것</span></span>
+      <span class="en">This is reconstructed from <b>inference code only</b>. The repo contains no training code, no paper, and no evaluation of what engram contributes to model quality. So: how big the tables actually are, how many heads and n-gram orders a real V4.1 checkpoint uses, how the table is trained, and whether it earns its memory &mdash; all unanswerable from here. The configuration lives in the checkpoint's <code class="inl">engram_cfg</code>, which is not in the repository. What <i>is</i> solid is the mechanism: key construction, sharding, fetch, and injection are all fully readable in code.</span><span class="ko">이것은 <b>추론 코드만으로</b> 재구성한 것이다. 레포에 학습 코드도, 논문도, engram 이 모델 품질에 무엇을 기여하는지에 대한 평가도 없다. 따라서 테이블이 실제로 얼마나 큰지, 진짜 V4.1 체크포인트가 헤드와 n-gram 차수를 몇 개 쓰는지, 테이블을 어떻게 학습하는지, 메모리값을 하는지 &mdash; 여기서는 전부 답할 수 없다. 설정은 체크포인트의 <code class="inl">engram_cfg</code> 에 있고 그건 레포에 없다. 반면 <i>확실한</i> 것은 메커니즘이다 &mdash; 키 구성, 샤딩, fetch, 주입은 전부 코드에서 온전히 읽힌다.</span>
+    </div>
+
+    <div class="callout c-purple">
+      <span class="tag"><span class="en">Editor's note — not a claim by DeepSeek</span><span class="ko">편집자 주 — DeepSeek 의 주장 아님</span></span>
+      <span class="en">Why I find this the most interesting thing in the repo. Everything else in DeepInfer is an <i>engineering</i> choice you could adopt piecemeal &mdash; a C++ scheduler, a kernel DSL, a dual backend. Engram is not: it is a <b>modelling</b> decision that forced an infrastructure consequence. Someone decided V4.1 should carry a large sparse lookup memory, and the serving stack then had to grow a parallel axis, reuse the MoE fabric for a non-MoE purpose, and invent a prefetch discipline to hide the resulting round trip. That is the direction of causality worth noticing: the architecture bent the runtime, not the other way round. For our own work the transferable idea is narrower but real &mdash; <i>a capacity-bound component deserves its own sharding axis, decoupled from the compute-bound one</i>. That is just as true of a KV cache tier as it is of an embedding table.</span><span class="ko">왜 이게 이 레포에서 가장 흥미로운지. DeepInfer 의 나머지는 전부 조각조각 채택 가능한 <i>엔지니어링</i> 선택이다 &mdash; C++ 스케줄러, 커널 DSL, 이중 백엔드. Engram 은 아니다. 인프라 결과를 강제한 <b>모델링</b> 결정이다. 누군가 V4.1 이 큰 희소 룩업 메모리를 들고 다녀야 한다고 정했고, 그러자 서빙 스택이 병렬 축을 하나 키우고, MoE 패브릭을 MoE 아닌 용도로 재활용하고, 그 왕복을 숨길 prefetch 규율을 발명해야 했다. 눈여겨볼 건 인과의 방향이다 &mdash; 아키텍처가 런타임을 휘게 했지, 그 반대가 아니다. 우리 작업에 옮길 아이디어는 더 좁지만 실재한다 &mdash; <i>용량 바운드 구성요소는 연산 바운드 축과 분리된 자기 샤딩 축을 가질 자격이 있다</i>. 임베딩 테이블만큼이나 KV 캐시 계층에도 그대로 해당된다.</span>
+    </div>
+  </section>
+
+  <section id="s8">
+    <h2><span class="num">8</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+    <p class="muted"><span class="en">All paths are in <a class="src" href="https://github.com/deepseek-ai/DeepInfer/tree/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9">DeepInfer @ 9bd9cf2</a> (2026-10-21). Nothing here was executed or benchmarked.</span><span class="ko">모든 경로는 <a class="src" href="https://github.com/deepseek-ai/DeepInfer/tree/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9">DeepInfer @ 9bd9cf2</a>(2026-10-21) 기준이다. 실행하거나 벤치마크한 것은 없다.</span></p>
+    <ul class="srcs">
+      <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/deepinfer/model_executor/models/v4_modules/engram.py">v4_modules/engram.py</a> — <code class="inl">CompressedTokenizer</code>, <code class="inl">NgramEmbedding</code>, <code class="inl">Engram</code>, <code class="inl">EngramRuntime</code></li>
+      <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/deepinfer/model_executor/models/v4_modules/engram_metadata.py">engram_metadata.py</a> — <code class="inl">CompressedVocabulary</code> normalisation, the prime table sizing</li>
+      <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/deepinfer/model_executor/models/v4_modules/engram_parameters.py">engram_parameters.py</a> — <code class="inl">EngramEmbedding</code>, the fused KV projection and gate weights</li>
+      <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/deepinfer/model_executor/models/deepseek.py">models/deepseek.py</a> — model-level hash + fetch orchestration</li>
+      <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/deepinfer/model_executor/models/decoder_layer.py">models/decoder_layer.py</a> — the <code class="inl">hc_post_intervention</code> attachment and the YOCO assertion</li>
+      <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/deepinfer/model_executor/parallel_utils/parallel_state.py">parallel_utils/parallel_state.py</a> — the engram process group</li>
+      <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/csrc/engine/zos.cpp">csrc/engine/zos.cpp</a> — host-side n-gram row construction incl. draft tokens</li>
+      <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/deepinfer/hugging_face/weights.py">hugging_face/weights.py</a> — row-chunked table loading</li>
+    </ul>
+    <h4><span class="en">Companion notes</span><span class="ko">함께 보는 노트</span></h4>
+    <ul class="srcs">
+      <li><a href="deepinfer-vllm-lineage.html"><span class="en">DeepInfer — what DeepSeek kept from vLLM, and why every kernel is a DSL</span><span class="ko">DeepInfer — DeepSeek 이 vLLM 에서 남긴 것, 그리고 커널이 전부 DSL 인 이유</span></a></li>
+      <li><a href="deepinfer-knowledge-graph.html"><span class="en">DeepInfer interactive knowledge graph</span><span class="ko">DeepInfer 인터랙티브 지식 그래프</span></a></li>
+    </ul>
+  </section>
+
+  <footer>
+    <p><span class="en">Reconstructed from DeepInfer <code class="inl">9bd9cf2</code> inference code, 2026-10-23. No training code or model evaluation was available.</span><span class="ko">DeepInfer <code class="inl">9bd9cf2</code> 추론 코드에서 재구성, 2026-10-23. 학습 코드나 모델 평가는 입수할 수 없었다.</span></p>
+  </footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>
