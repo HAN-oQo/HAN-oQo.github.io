@@ -103,7 +103,7 @@
     <time datetime="2026-08-24">2026-08-24</time>
     <span class="sep">·</span>
     <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
-    <time datetime="2026-08-28">2026-08-28</time>
+    <time datetime="2026-10-30">2026-10-30</time>
   </p>
 </header>
 
@@ -1472,6 +1472,329 @@ k = k * cos + rotate_half(k) * sin      # keys: rotated ONCE, then cached this w
       <h4><span class="en">The asymmetry that matters</span><span class="ko">중요한 비대칭</span></h4>
       <p><span class="en">Queries are re-rotated on every decode step and thrown away. <b>Keys are rotated once and stored rotated</b> — so the KV cache holds "meaning ⊗ position", permanently entangled. That single fact is what §7 is about.</span><span class="ko">query는 디코드 스텝마다 다시 회전되고 버려집니다. <b>key는 한 번 회전되어 회전된 채로 저장</b>됩니다 — 그래서 KV 캐시에는 "의미 ⊗ 위치"가 영구히 엉켜 있습니다. §7이 다루는 게 바로 이 사실 하나입니다.</span></p>
     </div>
+  </div>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">6.1 – 6.5 · in a real engine</span><span class="ko">6.1 – 6.5 · 실제 엔진에서</span></span>
+    <span class="en">The pseudo-code above is the idea. The next five subsections follow the same operation through vLLM's source — where it is called, what <code class="inl">forward_native</code> does to each tensor's shape, how the CUDA path differs, what the kernel body looks like, and how serving fuses it away. All links are pinned to vLLM commit <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c"><code class="inl">a0f1b9a</code></a> (2026-08-24). Shapes are for Llama-3-8B (32 query heads, 8 KV heads, head_size 128, base 500,000) and were printed by actually running the code, not worked out by hand.</span>
+    <span class="ko">위 의사 코드는 아이디어입니다. 다음 다섯 소절에서는 같은 연산을 vLLM 소스에서 따라갑니다. 어디서 호출되는지, <code class="inl">forward_native</code>가 각 텐서의 shape을 어떻게 바꾸는지, CUDA 경로는 무엇이 다른지, 커널 본체는 어떻게 생겼는지, 서빙에서는 어떻게 퓨전되어 사라지는지를 차례로 봅니다. 모든 링크는 vLLM 커밋 <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c"><code class="inl">a0f1b9a</code></a>(2026-08-24)에 고정했습니다. shape은 Llama-3-8B 기준(query head 32개, KV head 8개, head_size 128, base 500,000)이며, 손으로 계산한 값이 아니라 코드를 실제로 실행해서 출력한 값입니다.</span>
+  </div>
+
+  <h3><span class="en">6.1 — Where it is called: inside attention, right after the QKV projection</span>
+      <span class="ko">6.1 — 어디서 호출되나: attention 안, QKV projection 바로 다음</span></h3>
+
+  <p class="en">RoPE is not a layer of its own. Each attention module owns a <code class="inl">rotary_emb</code> object, built by <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/__init__.py#L33"><code class="inl">get_rope()</code></a> from the model config, and calls it on <code class="inl">q</code> and <code class="inl">k</code> between the projection and the attention kernel:</p>
+  <p class="ko">RoPE는 독립된 레이어가 아닙니다. 각 attention 모듈이 <code class="inl">rotary_emb</code> 객체를 하나씩 갖고 있습니다. 이 객체는 모델 config를 보고 <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/__init__.py#L33"><code class="inl">get_rope()</code></a>가 생성하며, projection과 attention 커널 사이에서 <code class="inl">q</code>와 <code class="inl">k</code>에 적용됩니다:</p>
+
+  <pre># vllm/model_executor/models/llama.py — LlamaAttention.forward
+qkv, _ = self.qkv_proj(hidden_states)                    # [N, 4096 + 1024 + 1024]
+q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+q, k = self.rotary_emb(positions, q, k)                  # ← RoPE: q and k only
+attn_output = self.attn(q, k, v)                         # k, v are written to the KV cache in here
+output, _ = self.o_proj(attn_output)</pre>
+  <p class="figcap"><span class="en">Source: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/models/llama.py#L221-L231">llama.py L221–231</a>. Almost every RoPE model in vLLM has this same three-line shape.</span><span class="ko">출처: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/models/llama.py#L221-L231">llama.py L221–231</a>. vLLM에 있는 RoPE 모델은 거의 모두 이 세 줄 구조를 똑같이 따릅니다.</span></p>
+
+  <p class="en">Two things to read off this. First, <code class="inl">v</code> never goes through RoPE. Second, the order is <b>rotate, then cache</b>: <code class="inl">self.attn</code> writes <code class="inl">k</code> into the paged KV cache, and by then it is already rotated. That ordering is the concrete reason §7 exists.</p>
+  <p class="ko">여기서 두 가지를 읽어낼 수 있습니다. 첫째, <code class="inl">v</code>는 RoPE를 거치지 않습니다. 둘째, 순서가 <b>회전한 다음 캐시에 쓰기</b>입니다. <code class="inl">self.attn</code>이 <code class="inl">k</code>를 paged KV cache에 기록하는 시점에는 이미 회전이 끝나 있습니다. 이 순서가 §7이 존재하는 구체적인 이유입니다.</p>
+
+  <p class="en">The cos/sin table is built <b>once</b>, when the module is constructed (<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L80-L104"><code class="inl">_compute_inv_freq</code> / <code class="inl">_compute_cos_sin_cache</code></a>). Note one layout difference from the pseudo-code above: vLLM does not store each cosine twice. Each row holds <b>64 cosines followed by 64 sines</b>, and the kernels broadcast them over both halves.</p>
+  <p class="ko">cos/sin 테이블은 모듈을 생성할 때 <b>한 번만</b> 만듭니다(<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L80-L104"><code class="inl">_compute_inv_freq</code> / <code class="inl">_compute_cos_sin_cache</code></a>). 위 의사 코드와 레이아웃이 한 가지 다릅니다. vLLM은 코사인을 두 번씩 저장하지 않습니다. 한 행에 <b>코사인 64개와 사인 64개</b>가 이어서 들어 있고, 커널이 이 값을 앞뒤 절반 양쪽에 broadcast합니다.</p>
+
+  <table>
+    <thead><tr><th><span class="en">tensor</span><span class="ko">텐서</span></th><th class="num">shape</th><th><span class="en">meaning</span><span class="ko">의미</span></th></tr></thead>
+    <tbody>
+      <tr><td><code class="inl">inv_freq</code></td><td class="num">(64,)</td><td><span class="en">θ<sub>j</sub> = base<sup>−2j/128</sup>, one speed per pair</span><span class="ko">θ<sub>j</sub> = base<sup>−2j/128</sup>, 쌍마다 회전 속도 하나</span></td></tr>
+      <tr><td><code class="inl">freqs = einsum(t, inv_freq)</code></td><td class="num">(8192, 64)</td><td><span class="en">angle m·θ<sub>j</sub> for every position m</span><span class="ko">모든 위치 m에 대한 각도 m·θ<sub>j</sub></span></td></tr>
+      <tr><td><code class="inl">cos_sin_cache = cat(cos, sin)</code></td><td class="num">(8192, 128)</td><td><span class="en">row m = [cos ×64 | sin ×64]</span><span class="ko">m번째 행 = [cos 64개 | sin 64개]</span></td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">8192 is <code class="inl">max_position_embeddings</code> for this run; a real Llama-3-8B config uses its own value. Scaling variants (YaRN, Llama-3 scaling, NTK…) in <code class="inl">rotary_embedding/*_rope.py</code> mostly change only how this table is computed — the apply step below is shared.</span><span class="ko">8192는 이번 실행에서 정한 <code class="inl">max_position_embeddings</code>이고, 실제 Llama-3-8B config에는 별도의 값이 들어 있습니다. <code class="inl">rotary_embedding/*_rope.py</code>에 있는 스케일링 변형(YaRN, Llama-3 스케일링, NTK 등)은 대부분 이 테이블을 계산하는 방식만 바꾸고, 아래의 적용 단계는 공유합니다.</span></p>
+
+  <h3><span class="en">6.2 — <code class="inl">forward_native</code>, step by step with shapes</span>
+      <span class="ko">6.2 — <code class="inl">forward_native</code>를 shape과 함께 한 단계씩</span></h3>
+
+  <p class="en"><code class="inl">rotary_emb</code> is a <code class="inl">RotaryEmbedding</code>, which is a vLLM <code class="inl">CustomOp</code>: one interface with a <code class="inl">forward_native</code> (plain PyTorch) and per-platform <code class="inl">forward_cuda</code> / <code class="inl">forward_hip</code> / … implementations. The native one is the easiest to read, and — as §6.5 shows — it is also what the default compiled server actually runs. It lives in two functions: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L161-L201"><code class="inl">RotaryEmbedding.forward_static</code></a> (gather, split heads, reassemble) and <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/common.py#L146-L184"><code class="inl">ApplyRotaryEmb.forward_static</code></a> (the rotation itself).</p>
+  <p class="ko"><code class="inl">rotary_emb</code>는 <code class="inl">RotaryEmbedding</code>이고, 이 클래스는 vLLM의 <code class="inl">CustomOp</code>입니다. 인터페이스는 하나지만 구현은 <code class="inl">forward_native</code>(순수 PyTorch)와 플랫폼별 <code class="inl">forward_cuda</code> / <code class="inl">forward_hip</code> 등으로 나뉩니다. 그중 native 구현이 가장 읽기 쉽고, §6.5에서 보듯이 기본 설정의 컴파일된 서버가 실제로 실행하는 것도 이 구현입니다. 코드는 두 함수에 나뉘어 있습니다. <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L161-L201"><code class="inl">RotaryEmbedding.forward_static</code></a>은 cos/sin을 꺼내고 head를 펼치고 다시 조립하며, <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/common.py#L146-L184"><code class="inl">ApplyRotaryEmb.forward_static</code></a>이 회전 자체를 계산합니다.</p>
+
+  <p class="en">Input for the run below: 5 tokens with <code class="inl">positions = [0, 1, 2, 17, 18]</code> — three prefill tokens of one request and two tokens of another. vLLM flattens every request in the step into one token axis, so <b>there is no batch dimension</b>; each token simply carries its own position.</p>
+  <p class="ko">아래 실행의 입력은 토큰 5개이고 <code class="inl">positions = [0, 1, 2, 17, 18]</code>입니다. 한 요청의 prefill 토큰 3개와 다른 요청의 토큰 2개를 섞은 상황입니다. vLLM은 한 스텝에 들어온 모든 요청을 토큰 축 하나로 이어 붙이므로 <b>batch 차원이 없습니다</b>. 토큰마다 자기 위치를 따로 갖고 있으면 충분합니다.</p>
+
+  <table>
+    <thead><tr><th>#</th><th><span class="en">code</span><span class="ko">코드</span></th><th class="num">shape</th><th><span class="en">what happened</span><span class="ko">일어난 일</span></th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><code class="inl">positions</code>, <code class="inl">query</code>, <code class="inl">key</code></td><td class="num">(5,) (5, 4096) (5, 1024)</td><td><span class="en">straight from <code class="inl">qkv.split</code>: 32×128 and 8×128 (GQA)</span><span class="ko"><code class="inl">qkv.split</code>에서 바로 온 값: 32×128과 8×128(GQA)</span></td></tr>
+      <tr><td>1</td><td><code class="inl">cos_sin_cache.index_select(0, positions)</code></td><td class="num">(5, 128)</td><td><span class="en">one table row per token</span><span class="ko">토큰마다 테이블 한 행</span></td></tr>
+      <tr><td>2</td><td><code class="inl">cos, sin = cos_sin.chunk(2, -1)</code></td><td class="num">(5, 64) ×2</td><td><span class="en">64 angles per token — one per pair</span><span class="ko">토큰당 각도 64개, 쌍마다 하나</span></td></tr>
+      <tr><td>3</td><td><code class="inl">query.view(N, -1, head_size)</code></td><td class="num">(5, 32, 128)</td><td><span class="en">expose the head axis (a view, no copy)</span><span class="ko">head 축을 드러냄(view라서 복사 없음)</span></td></tr>
+      <tr><td>4</td><td><code class="inl">query[..., :rotary_dim]</code> / <code class="inl">[..., rotary_dim:]</code></td><td class="num">(5, 32, 128) / (5, 32, 0)</td><td><span class="en">rot / pass split; pass is empty for full rotary</span><span class="ko">rot / pass 분리. full rotary라서 pass는 비어 있음</span></td></tr>
+      <tr><td>5</td><td><code class="inl">cos.unsqueeze(-2)</code></td><td class="num">(5, 1, 64)</td><td><span class="en">insert a head axis of size 1 → broadcast to all heads</span><span class="ko">크기 1인 head 축 삽입 → 모든 head로 broadcast</span></td></tr>
+      <tr><td>6</td><td><code class="inl">x1, x2 = torch.chunk(x, 2, dim=-1)</code></td><td class="num">(5, 32, 64) ×2</td><td><span class="en">NeoX: first half / second half = the 64 pairs</span><span class="ko">NeoX: 앞 절반 / 뒤 절반 = 쌍 64개</span></td></tr>
+      <tr><td>7</td><td><code class="inl">o1 = x1*cos - x2*sin</code><br><code class="inl">o2 = x2*cos + x1*sin</code></td><td class="num">(5, 32, 64) ×2</td><td><span class="en">the 2×2 rotation from §4, on all pairs at once</span><span class="ko">§4의 2×2 회전을 모든 쌍에 한꺼번에 적용</span></td></tr>
+      <tr><td>8</td><td><code class="inl">torch.cat((o1, o2), -1)</code></td><td class="num">(5, 32, 128)</td><td><span class="en">halves back together</span><span class="ko">두 절반을 다시 합침</span></td></tr>
+      <tr><td>9</td><td><code class="inl">cat((rot, pass), -1).reshape(query.shape)</code></td><td class="num">(5, 4096)</td><td><span class="en">identical to the input shape</span><span class="ko">입력 shape과 동일</span></td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">The key takes the same path with 8 heads: (5, 1024) → (5, 8, 128) → x1, x2 (5, 8, 64) → (5, 1024). Step 4 matters for partial-rotary models: with <code class="inl">rotary_dim = 64</code> it gives rot (5, 8, 64) and pass (5, 8, 64), and the pass half is never touched.</span><span class="ko">key도 head 8개로 같은 경로를 거칩니다: (5, 1024) → (5, 8, 128) → x1, x2 (5, 8, 64) → (5, 1024). 4단계는 partial rotary 모델에서 의미가 있습니다. <code class="inl">rotary_dim = 64</code>이면 rot (5, 8, 64)와 pass (5, 8, 64)로 나뉘고, pass 절반은 전혀 건드리지 않습니다.</span></p>
+
+  <svg class="fig" viewBox="0 0 880 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Shape flow of forward_native. On the left the query of shape 5 by 4096 is viewed as 5 by 32 by 128 and chunked into two halves of 5 by 32 by 64. On the right the cos-sin table of 8192 by 128 is indexed by position to 5 by 128, split into cos and sin of 5 by 64, then unsqueezed to 5 by 1 by 64 so it broadcasts over the 32 heads. At the bottom the two halves and the cos and sin combine into the rotation and are concatenated back to 5 by 4096.">
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">forward_native — every tensor's shape (Llama-3-8B, 5 tokens)</text>
+
+    <!-- LEFT: query path -->
+    <text x="20" y="46" font-size="11" font-weight="700" fill="#0c447c">query</text>
+    <text x="66" y="46" font-size="11" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(5, 4096)</text>
+    <rect x="20" y="54" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <rect x="20" y="61" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <rect x="20" y="68" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <rect x="20" y="75" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <rect x="20" y="82" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <text x="134" y="46" font-size="9.5" fill="#8a8f98">one stripe = one token</text>
+
+    <line x1="150" y1="92" x2="150" y2="112" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M146,107 L150,114 L154,107" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="160" y="107" font-size="10" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">.view(N, −1, 128)</text>
+
+    <rect x="28" y="126" width="264" height="96" rx="5" fill="#f3f1ea" stroke="#c2c0b6"/>
+    <rect x="24" y="122" width="264" height="96" rx="5" fill="#f7f5ef" stroke="#c2c0b6"/>
+    <rect x="20" y="118" width="264" height="96" rx="5" fill="#ffffff" stroke="#c2c0b6"/>
+    <rect x="28" y="126" width="124" height="12" fill="#e6f1fb" stroke="#85b7eb"/><rect x="152" y="126" width="124" height="12" fill="#eaf3de" stroke="#97c459"/>
+    <rect x="28" y="142" width="124" height="12" fill="#e6f1fb" stroke="#85b7eb"/><rect x="152" y="142" width="124" height="12" fill="#eaf3de" stroke="#97c459"/>
+    <rect x="28" y="158" width="124" height="12" fill="#e6f1fb" stroke="#85b7eb"/><rect x="152" y="158" width="124" height="12" fill="#eaf3de" stroke="#97c459"/>
+    <rect x="28" y="174" width="124" height="12" fill="#e6f1fb" stroke="#85b7eb"/><rect x="152" y="174" width="124" height="12" fill="#eaf3de" stroke="#97c459"/>
+    <text x="152" y="203" text-anchor="middle" font-size="12" fill="#8a8f98">⋮</text>
+    <text x="90" y="232" text-anchor="middle" font-size="9.5" fill="#0c447c">dims 0 … 63</text>
+    <text x="214" y="232" text-anchor="middle" font-size="9.5" fill="#27500a">dims 64 … 127</text>
+    <text x="300" y="138" font-size="11" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(5, 32, 128)</text>
+    <text x="300" y="156" font-size="10" fill="#6b6a63">one row = one head</text>
+    <text x="300" y="171" font-size="10" fill="#6b6a63">32 heads per token,</text>
+    <text x="300" y="186" font-size="10" fill="#6b6a63">5 token-plates stacked</text>
+
+    <line x1="150" y1="240" x2="150" y2="258" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M146,253 L150,260 L154,253" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="160" y="254" font-size="10" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">torch.chunk(x, 2, dim=−1)</text>
+
+    <rect x="20" y="266" width="124" height="40" rx="5" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.4"/>
+    <text x="82" y="284" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">x1</text>
+    <text x="82" y="299" text-anchor="middle" font-size="10" font-family="'SF Mono',Menlo,monospace" fill="#0c447c">(5, 32, 64)</text>
+    <rect x="160" y="266" width="124" height="40" rx="5" fill="#eaf3de" stroke="#97c459" stroke-width="1.4"/>
+    <text x="222" y="284" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">x2</text>
+    <text x="222" y="299" text-anchor="middle" font-size="10" font-family="'SF Mono',Menlo,monospace" fill="#27500a">(5, 32, 64)</text>
+    <text x="300" y="284" font-size="10" fill="#6b6a63">pair j = (x1[…, j], x2[…, j])</text>
+    <text x="300" y="299" font-size="9.5" fill="#8a8f98">GPT-J style: x[…, ::2], x[…, 1::2]</text>
+
+    <!-- RIGHT: cos/sin path -->
+    <text x="470" y="46" font-size="11" font-weight="700" fill="#6b4a06">cos_sin_cache</text>
+    <text x="560" y="46" font-size="11" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(8192, 128)</text>
+    <rect x="470" y="54" width="64" height="164" fill="#fbf0d9" stroke="#e6b54f"/>
+    <rect x="534" y="54" width="64" height="164" fill="#eeedfe" stroke="#afa9ec"/>
+    <rect x="470" y="58" width="128" height="3" fill="#b5651d"/>
+    <rect x="470" y="63" width="128" height="3" fill="#b5651d"/>
+    <rect x="470" y="68" width="128" height="3" fill="#b5651d"/>
+    <rect x="470" y="98" width="128" height="3" fill="#b5651d"/>
+    <rect x="470" y="103" width="128" height="3" fill="#b5651d"/>
+    <text x="466" y="68" text-anchor="end" font-size="9" fill="#b5651d">m = 0, 1, 2</text>
+    <text x="466" y="105" text-anchor="end" font-size="9" fill="#b5651d">m = 17, 18</text>
+    <text x="534" y="200" text-anchor="middle" font-size="12" fill="#8a8f98">⋮</text>
+    <text x="502" y="232" text-anchor="middle" font-size="9.5" fill="#6b4a06">cos ×64</text>
+    <text x="566" y="232" text-anchor="middle" font-size="9.5" fill="#3f1f72">sin ×64</text>
+
+    <line x1="602" y1="80" x2="650" y2="80" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M645,76 L652,80 L645,84" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="627" y="62" text-anchor="middle" font-size="9" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">index</text>
+    <text x="627" y="73" text-anchor="middle" font-size="9" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">_select</text>
+
+    <rect x="660" y="62" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="62" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <rect x="660" y="69" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="69" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <rect x="660" y="76" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="76" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <rect x="660" y="83" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="83" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <rect x="660" y="90" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="90" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <text x="796" y="82" font-size="11" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(5, 128)</text>
+
+    <line x1="724" y1="102" x2="724" y2="120" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M720,115 L724,122 L728,115" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="734" y="115" font-size="9.5" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">chunk(2)</text>
+
+    <rect x="660" y="126" width="60" height="36" rx="4" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.3"/>
+    <text x="690" y="142" text-anchor="middle" font-size="10.5" font-weight="700" fill="#6b4a06">cos</text>
+    <text x="690" y="155" text-anchor="middle" font-size="9" font-family="'SF Mono',Menlo,monospace" fill="#6b4a06">(5, 64)</text>
+    <rect x="728" y="126" width="60" height="36" rx="4" fill="#eeedfe" stroke="#afa9ec" stroke-width="1.3"/>
+    <text x="758" y="142" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3f1f72">sin</text>
+    <text x="758" y="155" text-anchor="middle" font-size="9" font-family="'SF Mono',Menlo,monospace" fill="#3f1f72">(5, 64)</text>
+
+    <line x1="724" y1="166" x2="724" y2="184" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M720,179 L724,186 L728,179" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="734" y="180" font-size="9.5" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">unsqueeze(−2)</text>
+
+    <rect x="660" y="192" width="128" height="10" fill="#fbf0d9" stroke="#e6b54f"/>
+    <rect x="660" y="207" width="128" height="10" fill="none" stroke="#e6b54f" stroke-dasharray="3 2"/>
+    <rect x="660" y="222" width="128" height="10" fill="none" stroke="#e6b54f" stroke-dasharray="3 2"/>
+    <text x="724" y="246" text-anchor="middle" font-size="12" fill="#8a8f98">⋮</text>
+    <text x="796" y="201" font-size="11" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(5, 1, 64)</text>
+    <text x="796" y="217" font-size="9.5" fill="#6b6a63">size-1 head axis →</text>
+    <text x="796" y="230" font-size="9.5" fill="#6b6a63">shared by all</text>
+    <text x="796" y="243" font-size="9.5" fill="#6b6a63">32 heads</text>
+
+    <!-- arrows into the combine box -->
+    <line x1="152" y1="310" x2="152" y2="336" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M148,331 L152,338 L156,331" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <line x1="724" y1="256" x2="724" y2="336" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M720,331 L724,338 L728,331" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+
+    <!-- BOTTOM: combine -->
+    <rect x="20" y="342" width="840" height="62" rx="9" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.5"/>
+    <text x="40" y="366" font-size="12.5" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#6b4a06">o1 = x1·cos − x2·sin</text>
+    <text x="40" y="390" font-size="12.5" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#6b4a06">o2 = x2·cos + x1·sin</text>
+    <text x="340" y="366" font-size="10.5" font-family="'SF Mono',Menlo,monospace" fill="#6b4a06">(5, 32, 64) ⊙ (5, 1, 64) → (5, 32, 64)</text>
+    <text x="340" y="390" font-size="10" fill="#6b4a06">pair j of every head rotated by angle m·θ_j of its own token</text>
+
+    <rect x="20" y="420" width="124" height="22" rx="4" fill="#e6f1fb" stroke="#85b7eb"/><text x="82" y="435" text-anchor="middle" font-size="10" font-weight="700" fill="#0c447c">o1</text>
+    <rect x="144" y="420" width="124" height="22" rx="4" fill="#eaf3de" stroke="#97c459"/><text x="206" y="435" text-anchor="middle" font-size="10" font-weight="700" fill="#27500a">o2</text>
+    <text x="282" y="435" font-size="10.5" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">cat → (5, 32, 128)   reshape → (5, 4096)</text>
+    <text x="282" y="456" font-size="10" fill="#6b6a63">same shape as the input — attention never sees that RoPE happened</text>
+  </svg>
+  <p class="figcap"><span class="en">Shape flow of <code class="inl">forward_native</code>. The only non-obvious move is step 5: cos/sin depend on the token's position but not on the head, so a size-1 head axis lets one row serve all 32 heads. Shapes printed by running the vLLM code path on CPU.</span><span class="ko"><code class="inl">forward_native</code>의 shape 흐름. 직관적이지 않은 단계는 5단계 하나뿐입니다. cos/sin은 토큰의 위치에만 의존하고 head와는 무관하므로, 크기 1인 head 축을 넣으면 한 행을 32개 head가 함께 씁니다. shape은 vLLM 코드 경로를 CPU에서 실행해 출력한 값입니다.</span></p>
+
+  <h3><span class="en">6.3 — <code class="inl">forward_cuda</code>: same math, one in-place kernel</span>
+      <span class="ko">6.3 — <code class="inl">forward_cuda</code>: 수학은 같고, in-place 커널 하나</span></h3>
+
+  <pre># vllm/model_executor/layers/rotary_embedding/base.py — RotaryEmbedding.forward_cuda
+if self.use_flashinfer:                      # False for plain RotaryEmbedding (see below)
+    torch.ops.vllm.flashinfer_rotary_embedding(positions, query, key, ...)
+    return query, key
+cos_sin_cache = self._match_cos_sin_cache_dtype(query)
+# ops.rotary_embedding() is an in-place operation
+# that updates the query and key tensors.
+ops.rotary_embedding(positions, query, key, self.head_size,
+                     cos_sin_cache, self.is_neox_style)
+return query, key                            # the SAME tensor objects that came in</pre>
+  <p class="figcap"><span class="en">Source: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L221-L252">base.py L221–252</a>, abridged.</span><span class="ko">출처: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L221-L252">base.py L221–252</a>, 일부 생략.</span></p>
+
+  <p class="en">The arithmetic is identical to 6.2. What changes is everything around it:</p>
+  <p class="ko">계산 자체는 6.2와 같습니다. 달라지는 것은 그 주변의 모든 것입니다:</p>
+
+  <table>
+    <thead><tr><th></th><th><code class="inl">forward_native</code></th><th><code class="inl">forward_cuda</code> → <code class="inl">ops.rotary_embedding</code></th></tr></thead>
+    <tbody>
+      <tr><td><span class="en">output</span><span class="ko">출력</span></td><td><span class="en">new tensors (<code class="inl">cat</code> + <code class="inl">reshape</code>)</span><span class="ko">새 텐서(<code class="inl">cat</code> + <code class="inl">reshape</code>)</span></td><td><span class="en"><b>in-place</b> — overwrites the (5, 4096) and (5, 1024) buffers</span><span class="ko"><b>in-place</b> — (5, 4096)와 (5, 1024) 버퍼를 덮어씀</span></td></tr>
+      <tr><td><span class="en">head axis</span><span class="ko">head 축</span></td><td><code class="inl">view(N, -1, 128)</code> + <span class="en">broadcast</span><span class="ko">broadcast</span></td><td><span class="en">no reshaping at all; the kernel computes addresses from <code class="inl">query_stride</code> and <code class="inl">head_stride</code>, so it accepts both <code class="inl">[N, H·D]</code> and <code class="inl">[N, H, D]</code></span><span class="ko">reshape을 전혀 하지 않음. 커널이 <code class="inl">query_stride</code>와 <code class="inl">head_stride</code>로 주소를 계산하므로 <code class="inl">[N, H·D]</code>와 <code class="inl">[N, H, D]</code>를 모두 받음</span></td></tr>
+      <tr><td><span class="en">kernel launches (eager)</span><span class="ko">커널 실행 횟수(eager)</span></td><td><span class="en">about a dozen small ops (index_select, 4 muls, sub, add, several cats)</span><span class="ko">작은 연산 십여 개(index_select, 곱셈 4번, 뺄셈, 덧셈, cat 여러 번)</span></td><td><span class="en"><b>one</b> launch that rotates q and k together</span><span class="ko">q와 k를 함께 회전하는 실행 <b>한 번</b></span></td></tr>
+      <tr><td><span class="en">precision</span><span class="ko">정밀도</span></td><td><span class="en">computes in the activation dtype (bf16) — cos/sin are cast down to <code class="inl">x.dtype</code></span><span class="ko">activation dtype(bf16)으로 계산 — cos/sin을 <code class="inl">x.dtype</code>으로 내려서 씀</span></td><td><span class="en">loads into <b>fp32</b>, rotates, casts back on store</span><span class="ko"><b>fp32</b>로 읽어서 회전한 뒤 저장할 때 원래 dtype으로 변환</span></td></tr>
+      <tr><td><span class="en">extras</span><span class="ko">부가 기능</span></td><td>—</td><td><span class="en"><code class="inl">inverse=True</code> (un-rotate) and <code class="inl">rope_dim_offset</code>, exposed through <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/_custom_ops.py#L201-L220"><code class="inl">_custom_ops.rotary_embedding</code></a></span><span class="ko"><code class="inl">inverse=True</code>(회전 되돌리기)와 <code class="inl">rope_dim_offset</code>. <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/_custom_ops.py#L201-L220"><code class="inl">_custom_ops.rotary_embedding</code></a>으로 노출됨</span></td></tr>
+    </tbody>
+  </table>
+
+  <p class="en">Which backend <code class="inl">forward_cuda</code> picks is narrower than it looks. The FlashInfer branch is <b>switched off</b> in the base class — the enabling condition is commented out with <i>"TODO(mgoin): disabled for now due to failures"</i> (<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L37-L48">base.py L37–48</a>) — and only the DeepSeek scaling variant turns it back on. On ROCm, <code class="inl">forward_hip</code> uses AITER's Triton rotary kernel only when <code class="inl">VLLM_ROCM_USE_AITER_TRITON_ROPE=1</code> (default off); otherwise it falls through to <code class="inl">forward_cuda</code> and the same C++ kernel, hipified.</p>
+  <p class="ko"><code class="inl">forward_cuda</code>가 고르는 백엔드는 보기보다 범위가 좁습니다. FlashInfer 분기는 기본 클래스에서 <b>꺼져 있습니다</b>. 활성화 조건이 <i>"TODO(mgoin): disabled for now due to failures"</i>라는 주석과 함께 주석 처리돼 있고(<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L37-L48">base.py L37–48</a>), DeepSeek 스케일링 변형만 이 분기를 다시 켭니다. ROCm에서 <code class="inl">forward_hip</code>은 <code class="inl">VLLM_ROCM_USE_AITER_TRITON_ROPE=1</code>일 때만(기본값은 꺼짐) AITER의 Triton rotary 커널을 쓰고, 그렇지 않으면 <code class="inl">forward_cuda</code>로 넘어가서 같은 C++ 커널을 hipify한 버전을 실행합니다.</p>
+
+  <h3><span class="en">6.4 — The kernel body: one block per token, one thread per (head, pair)</span>
+      <span class="ko">6.4 — 커널 본체: 토큰마다 블록 하나, (head, 쌍)마다 스레드 하나</span></h3>
+
+  <p class="en">The whole kernel is about 80 lines in <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/csrc/libtorch_stable/pos_encoding_kernels.cu#L1-L102"><code class="inl">csrc/libtorch_stable/pos_encoding_kernels.cu</code></a>, in three nested layers. The innermost is literally the 2×2 rotation from §4:</p>
+  <p class="ko">커널 전체는 <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/csrc/libtorch_stable/pos_encoding_kernels.cu#L1-L102"><code class="inl">csrc/libtorch_stable/pos_encoding_kernels.cu</code></a>에 있는 약 80줄이며, 세 단계로 겹쳐져 있습니다. 가장 안쪽 단계는 말 그대로 §4의 2×2 회전입니다:</p>
+
+  <pre>// innermost: rotate ONE pair of ONE head  (apply_token_rotary_embedding, L9–33)
+if (IS_NEOX) {                         // half-split: pair = (i, i + rot_dim/2)
+  x_index = rot_offset;
+  y_index = embed_dim + rot_offset;
+} else {                               // GPT-J interleaved: pair = (2i, 2i+1)
+  x_index = 2 * rot_offset;
+  y_index = 2 * rot_offset + 1;
+}
+cos_f = (float) cos_ptr[rot_offset];   // row m of cos_sin_cache, first half
+sin_f = (float) sin_ptr[rot_offset];   // same row, second half
+if (inverse) sin_f = -sin_f;           // R(−mθ) = R(mθ)ᵀ  → strips RoPE
+x_f = (float) arr[x_index];  y_f = (float) arr[y_index];
+arr[x_index] = x_f * cos_f - y_f * sin_f;
+arr[y_index] = y_f * cos_f + x_f * sin_f;
+
+// middle: loop over every (head, pair) of this token  (apply_rotary_embedding, L36–74)
+for (i = threadIdx.x; i &lt; num_heads * embed_dim; i += blockDim.x)
+  rotate(query + token*query_stride + (i / embed_dim)*head_stride, rot_offset = i % embed_dim);
+for (i = threadIdx.x; i &lt; num_kv_heads * embed_dim; i += blockDim.x)
+  rotate(key   + token*key_stride   + (i / embed_dim)*head_stride, rot_offset = i % embed_dim);
+
+// outer: one block per token  (rotary_embedding_kernel, L77–100)
+token_idx = blockIdx.x;
+cache_ptr = cos_sin_cache + positions[token_idx] * rot_dim;   // = index_select, for free
+
+// launch (L167–168)
+grid  = num_tokens;
+block = min(num_heads * rot_dim / 2, 512);</pre>
+  <p class="figcap"><span class="en">Abridged from the kernel source; template/dtype plumbing and <code class="inl">rope_dim_offset</code> removed.</span><span class="ko">커널 소스에서 발췌. 템플릿/dtype 처리 코드와 <code class="inl">rope_dim_offset</code>은 생략했습니다.</span></p>
+
+  <p class="en">Map 6.2's steps onto this. Step 1 (<code class="inl">index_select</code>) became a pointer offset. Steps 3–6 (view, split, chunk, unsqueeze) became index arithmetic — <code class="inl">i / embed_dim</code> is the head, <code class="inl">i % embed_dim</code> is the pair, and every head reads the same <code class="inl">cos_ptr[rot_offset]</code>, which <i>is</i> the broadcast. Steps 7–9 (rotate, cat, reshape) became two stores back into the original slots. Nothing is allocated.</p>
+  <p class="ko">6.2의 단계를 여기에 대응시켜 보면 다음과 같습니다. 1단계(<code class="inl">index_select</code>)는 포인터 오프셋 하나로 바뀌었습니다. 3–6단계(view, 분리, chunk, unsqueeze)는 인덱스 계산으로 바뀌었습니다. <code class="inl">i / embed_dim</code>이 head이고 <code class="inl">i % embed_dim</code>이 쌍이며, 모든 head가 같은 <code class="inl">cos_ptr[rot_offset]</code>을 읽는다는 사실이 <i>곧</i> broadcast입니다. 7–9단계(회전, cat, reshape)는 원래 자리에 값을 두 번 저장하는 것으로 바뀌었습니다. 새로 할당하는 메모리는 없습니다.</p>
+
+  <svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Thread mapping for Llama-3-8B. The grid has five blocks, one per token. Inside one block, 512 threads cover the 2048 query head-pair items in four strided passes, and then the 512 key items in a single pass.">
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Launch shape for Llama-3-8B, 5 tokens: grid = 5, block = min(32·64, 512) = 512</text>
+
+    <!-- grid of blocks -->
+    <text x="20" y="50" font-size="10.5" font-weight="700" fill="#6b6a63">grid</text>
+    <rect x="60" y="38" width="56" height="20" rx="4" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.8"/><text x="88" y="52" text-anchor="middle" font-size="9.5" fill="#6b4a06">m = 0</text>
+    <rect x="122" y="38" width="56" height="20" rx="4" fill="#f7f5ef" stroke="#c2c0b6"/><text x="150" y="52" text-anchor="middle" font-size="9.5" fill="#6b6a63">m = 1</text>
+    <rect x="184" y="38" width="56" height="20" rx="4" fill="#f7f5ef" stroke="#c2c0b6"/><text x="212" y="52" text-anchor="middle" font-size="9.5" fill="#6b6a63">m = 2</text>
+    <rect x="246" y="38" width="56" height="20" rx="4" fill="#f7f5ef" stroke="#c2c0b6"/><text x="274" y="52" text-anchor="middle" font-size="9.5" fill="#6b6a63">m = 17</text>
+    <rect x="308" y="38" width="56" height="20" rx="4" fill="#f7f5ef" stroke="#c2c0b6"/><text x="336" y="52" text-anchor="middle" font-size="9.5" fill="#6b6a63">m = 18</text>
+    <text x="378" y="52" font-size="10" fill="#6b6a63">one block per token; it reads only row m of cos_sin_cache</text>
+    <path d="M88,60 L40,84" fill="none" stroke="#e6b54f" stroke-width="1.2" stroke-dasharray="3 2"/>
+    <path d="M88,60 L860,84" fill="none" stroke="#e6b54f" stroke-width="1.2" stroke-dasharray="3 2"/>
+
+    <!-- zoom: query items -->
+    <rect x="20" y="86" width="840" height="196" rx="10" fill="#ffffff" stroke="#e6b54f" stroke-width="1.3"/>
+    <text x="36" y="108" font-size="11" font-weight="700" fill="#0c447c">query: 32 heads × 64 pairs = 2048 items</text>
+    <text x="330" y="108" font-size="10" fill="#6b6a63">512 threads stride over them → 4 passes</text>
+    <rect x="36" y="118" width="200" height="22" fill="#e6f1fb" stroke="#85b7eb"/><text x="136" y="133" text-anchor="middle" font-size="9.5" fill="#0c447c">pass 1: i = tid</text>
+    <rect x="236" y="118" width="200" height="22" fill="#d6e8f8" stroke="#85b7eb"/><text x="336" y="133" text-anchor="middle" font-size="9.5" fill="#0c447c">pass 2: i = tid + 512</text>
+    <rect x="436" y="118" width="200" height="22" fill="#e6f1fb" stroke="#85b7eb"/><text x="536" y="133" text-anchor="middle" font-size="9.5" fill="#0c447c">pass 3: i = tid + 1024</text>
+    <rect x="636" y="118" width="200" height="22" fill="#d6e8f8" stroke="#85b7eb"/><text x="736" y="133" text-anchor="middle" font-size="9.5" fill="#0c447c">pass 4: i = tid + 1536</text>
+    <text x="36" y="156" font-size="9.5" fill="#8a8f98">heads 0–7</text><text x="236" y="156" font-size="9.5" fill="#8a8f98">heads 8–15</text><text x="436" y="156" font-size="9.5" fill="#8a8f98">heads 16–23</text><text x="636" y="156" font-size="9.5" fill="#8a8f98">heads 24–31</text>
+
+    <text x="36" y="182" font-size="11" font-weight="700" fill="#27500a">key: 8 heads × 64 pairs = 512 items</text>
+    <text x="330" y="182" font-size="10" fill="#6b6a63">→ 1 pass, every thread one item</text>
+    <rect x="36" y="192" width="200" height="22" fill="#eaf3de" stroke="#97c459"/><text x="136" y="207" text-anchor="middle" font-size="9.5" fill="#27500a">i = tid</text>
+
+    <text x="36" y="240" font-size="10.5" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">item i  →  head = i / 64,  pair = i % 64  →  load (x, y, cos, sin) · 2 FMA pairs · store (x′, y′)</text>
+    <text x="36" y="262" font-size="10" fill="#6b6a63">All 32 heads of a token read the same 64 cos/sin values — that shared read is the broadcast from 6.2.</text>
+  </svg>
+  <p class="figcap"><span class="en">How the work is laid out for this model. With GQA the key loop is a quarter the size of the query loop, so the block spends most of its time on queries.</span><span class="ko">이 모델에서 작업이 배치되는 방식. GQA라서 key 루프가 query 루프의 4분의 1 크기이므로, 블록은 대부분의 시간을 query에 씁니다.</span></p>
+
+  <h3><span class="en">6.5 — In real serving: compiled from <code class="inl">forward_native</code>, or fused into its neighbours</span>
+      <span class="ko">6.5 — 실제 서빙: <code class="inl">forward_native</code>에서 컴파일되거나, 이웃 연산과 퓨전된다</span></h3>
+
+  <p class="en">The surprise first. Under vLLM's default settings, the C++ kernel from 6.4 is usually <b>not</b> what runs. The default compilation mode uses the Inductor backend, and in that mode vLLM sets <code class="inl">custom_ops = ["none"]</code> (<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L1462-L1468">vllm.py L1462–1468</a>). Every <code class="inl">CustomOp</code>, <code class="inl">RotaryEmbedding</code> included, then dispatches to <code class="inl">forward_native</code>; Dynamo traces the PyTorch code from 6.2 and Inductor generates a Triton kernel for it, free to merge it with adjacent elementwise work. The config docstring says so directly:</p>
+  <p class="ko">놀라운 사실부터 말씀드리겠습니다. vLLM 기본 설정에서는 6.4의 C++ 커널이 대개 실행되지 <b>않습니다</b>. 기본 컴파일 모드는 Inductor 백엔드를 쓰고, 이 모드에서 vLLM은 <code class="inl">custom_ops = ["none"]</code>으로 설정합니다(<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L1462-L1468">vllm.py L1462–1468</a>). 그러면 <code class="inl">RotaryEmbedding</code>을 포함한 모든 <code class="inl">CustomOp</code>이 <code class="inl">forward_native</code>로 분기합니다. Dynamo가 6.2의 PyTorch 코드를 추적하고, Inductor가 그 코드로 Triton 커널을 생성하며, 이때 인접한 원소별 연산과 합칠 수도 있습니다. config의 docstring에 이 내용이 그대로 적혀 있습니다:</p>
+
+  <blockquote class="q">
+    <p>"By default, all custom ops are enabled when running without Inductor and disabled when running with Inductor: mode&gt;CompilationMode.NONE and backend="inductor". Inductor generates (fused) Triton kernels for disabled custom ops."</p>
+    <cite>— <code class="inl">CompilationConfig.custom_ops</code> · <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/compilation.py#L495-L507">vllm/config/compilation.py L495–507</a></cite>
+  </blockquote>
+
+  <table>
+    <thead><tr><th><span class="en">how the server is launched</span><span class="ko">서버 실행 방식</span></th><th><span class="en">what actually computes RoPE</span><span class="ko">RoPE를 실제로 계산하는 것</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="en">default (compiled, Inductor)</span><span class="ko">기본값(컴파일, Inductor)</span></td><td><span class="en">Inductor-generated Triton kernel from <code class="inl">forward_native</code> — in a trace it shows up under a <code class="inl">triton_poi_fused_…</code>-style name, not as <code class="inl">rotary_embedding_kernel</code></span><span class="ko"><code class="inl">forward_native</code>에서 Inductor가 생성한 Triton 커널. 트레이스에서는 <code class="inl">rotary_embedding_kernel</code>이 아니라 <code class="inl">triton_poi_fused_…</code> 형태의 이름으로 보입니다</span></td></tr>
+      <tr><td><code class="inl">--enforce-eager</code></td><td><span class="en">custom ops default to <code class="inl">"all"</code> → <code class="inl">forward_cuda</code> → the C++ kernel from 6.4</span><span class="ko">custom op 기본값이 <code class="inl">"all"</code> → <code class="inl">forward_cuda</code> → 6.4의 C++ 커널</span></td></tr>
+      <tr><td><code class="inl">-cc.custom_ops+=+rotary_embedding</code></td><td><span class="en">compiled graph, but RoPE kept as the custom op → C++ kernel (or AITER on ROCm); this is also the precondition for the ROCm fusions below</span><span class="ko">그래프는 컴파일하되 RoPE는 custom op로 유지 → C++ 커널(ROCm에서는 AITER). 아래 ROCm 퓨전들의 전제 조건이기도 합니다</span></td></tr>
+    </tbody>
+  </table>
+
+  <p class="en">On top of that, <code class="inl">torch.compile</code> passes in <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion"><code class="inl">vllm/compilation/passes/fusion/</code></a> can pattern-match RoPE together with the ops on either side of it and swap in a single hand-written kernel. The logic is the same as any fusion: RoPE reads and writes q and k once, the next op (the cache write) reads k again, and fusing removes that round-trip through memory — which matters most for small decode batches, where launch overhead and memory traffic dominate.</p>
+  <p class="ko">여기에 더해 <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion"><code class="inl">vllm/compilation/passes/fusion/</code></a>에 있는 <code class="inl">torch.compile</code> 패스들이 RoPE와 그 앞뒤 연산을 패턴 매칭해서, 직접 작성한 커널 하나로 바꿔 넣을 수 있습니다. 원리는 일반적인 퓨전과 같습니다. RoPE가 q와 k를 한 번 읽고 쓰면, 다음 연산(캐시 쓰기)이 k를 다시 읽습니다. 퓨전하면 이 메모리 왕복이 사라집니다. 커널 실행 오버헤드와 메모리 트래픽이 비용을 좌우하는 작은 디코드 배치에서 효과가 가장 큽니다.</p>
+
+  <table>
+    <thead><tr><th><span class="en">pass</span><span class="ko">패스</span></th><th><span class="en">what gets merged into one kernel</span><span class="ko">커널 하나로 합쳐지는 것</span></th><th><span class="en">when it is on (at a0f1b9a)</span><span class="ko">켜지는 조건(a0f1b9a 기준)</span></th></tr></thead>
+    <tbody>
+      <tr><td><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion/qk_norm_rope_fusion.py#L197"><code class="inl">qk_norm_rope_fusion</code></a></td><td><span class="en">per-head Q/K RMSNorm + RoPE → <code class="inl">_C.fused_qk_norm_rope</code> (<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/csrc/libtorch_stable/fused_qknorm_rope_kernel.cu#L104">CUDA kernel</a>); for QK-norm models such as Qwen3</span><span class="ko">head별 Q/K RMSNorm + RoPE → <code class="inl">_C.fused_qk_norm_rope</code>(<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/csrc/libtorch_stable/fused_qknorm_rope_kernel.cu#L104">CUDA 커널</a>). Qwen3처럼 QK-norm이 있는 모델용</span></td><td><span class="en">opt-in only: <code class="inl">enable_qk_norm_rope_fusion</code> is <code class="inl">False</code> at every -O level</span><span class="ko">명시적으로 켜야 함: <code class="inl">enable_qk_norm_rope_fusion</code>이 모든 -O 레벨에서 <code class="inl">False</code></span></td></tr>
+      <tr><td><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion/rope_kvcache_fusion.py#L412"><code class="inl">rope_kvcache_fusion</code></a></td><td><span class="en">RoPE + writing k/v into the paged KV cache (optionally + static FP8 quant of q) → <code class="inl">fused_rope_and_unified_kv_cache_update</code></span><span class="ko">RoPE + paged KV cache에 k/v 쓰기(선택적으로 q의 static FP8 quant까지) → <code class="inl">fused_rope_and_unified_kv_cache_update</code></span></td><td><span class="en">ROCm with AITER, -O2/-O3, <b>and</b> <code class="inl">+rotary_embedding</code> enabled; only for batches ≤ <code class="inl">rope_kvcache_fusion_max_token_num</code> (256) — prefill-sized batches use the unfused path</span><span class="ko">ROCm + AITER, -O2/-O3, <b>그리고</b> <code class="inl">+rotary_embedding</code> 활성화. 배치가 <code class="inl">rope_kvcache_fusion_max_token_num</code>(256) 이하일 때만 적용되고, prefill 규모의 배치는 퓨전하지 않은 경로를 씀</span></td></tr>
+      <tr><td><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion/qk_norm_rope_kvcache_fusion.py#L415"><code class="inl">qk_norm_rope_kvcache_fusion</code></a></td><td><span class="en">QK-norm + RoPE + KV cache update in one AITER HIP kernel; supersedes the two rows above for layers that support it (e.g. Qwen3-MoE)</span><span class="ko">QK-norm + RoPE + KV cache 갱신을 AITER HIP 커널 하나로. 지원하는 레이어(예: Qwen3-MoE)에서는 위 두 패스를 대체함</span></td><td><span class="en">same conditions as the row above</span><span class="ko">위 행과 같은 조건</span></td></tr>
+      <tr><td><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion/mla_rope_kvcache_cat_fusion.py#L240"><code class="inl">mla_rope_kvcache_cat_fusion</code></a></td><td><span class="en">MLA (DeepSeek): RoPE on the decoupled <code class="inl">q_pe</code>/<code class="inl">k_pe</code> part + concatenating <code class="inl">k_pe</code> with the compressed latent <code class="inl">kv_c</code> + the cache write</span><span class="ko">MLA(DeepSeek): 분리된 <code class="inl">q_pe</code>/<code class="inl">k_pe</code>에 RoPE 적용 + <code class="inl">k_pe</code>와 압축 latent <code class="inl">kv_c</code> 이어 붙이기 + 캐시 쓰기</span></td><td><span class="en">-O2/-O3 when the KV-cache update is not a graph-splitting op (or Inductor graph partition is on)</span><span class="ko">-O2/-O3에서, KV cache 갱신이 그래프 분할 지점이 아닐 때(또는 Inductor graph partition이 켜져 있을 때)</span></td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Fusion passes that involve RoPE. Conditions read from <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L204-L252"><code class="inl">vllm/config/vllm.py</code> L204–252</a> and the -O level tables below them; the default level is -O2. The fused RoPE + cache op is only implemented by AITER-backed ROCm attention backends.</span><span class="ko">RoPE가 관련된 퓨전 패스. 조건은 <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L204-L252"><code class="inl">vllm/config/vllm.py</code> L204–252</a>와 그 아래의 -O 레벨 테이블에서 읽었습니다. 기본 레벨은 -O2입니다. RoPE + 캐시 퓨전 op는 AITER 기반 ROCm attention 백엔드만 구현합니다.</span></p>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">reading a profiler trace</span><span class="ko">프로파일러 트레이스 읽는 법</span></span>
+    <span class="en">If you are looking for RoPE in a trace and cannot find <code class="inl">rotary_embedding_kernel</code>, that is the expected case, not a bug. On a default CUDA server it is inside an Inductor-generated Triton kernel; on a tuned ROCm server it may be inside a fused RoPE + KV-cache kernel. To isolate it, rerun with <code class="inl">--enforce-eager</code>, where it appears as its own launch — one block per token, as in 6.4.</span>
+    <span class="ko">트레이스에서 RoPE를 찾는데 <code class="inl">rotary_embedding_kernel</code>이 보이지 않는다면, 그것은 버그가 아니라 정상적인 경우입니다. 기본 설정의 CUDA 서버에서는 Inductor가 생성한 Triton 커널 안에 들어 있고, 튜닝된 ROCm 서버에서는 RoPE + KV cache 퓨전 커널 안에 들어 있을 수 있습니다. RoPE만 따로 보고 싶다면 <code class="inl">--enforce-eager</code>로 다시 실행하면 됩니다. 그러면 6.4에서 본 것처럼 토큰마다 블록 하나를 쓰는 독립된 커널 실행으로 나타납니다.</span>
   </div>
 </section>
 
