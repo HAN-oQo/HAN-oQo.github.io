@@ -226,6 +226,9 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 - **기존 페이지를 수정하면 반드시 updated 날짜를 새로 단다** — hero 와 카드 양쪽.
   안 하면 push 가 차단된다(`post-meta-bump`: 원격에 있던 콘텐츠 페이지가 바뀌었는데
   `.post-meta` 가 그대로면 실패). created ≤ updated 여야 한다.
+- **예외 — 윤문(polish) 커밋**: 내용은 그대로 두고 문장·구성·그림만 다듬은 경우, 커밋
+  메시지에 `[polish]` 를 넣으면 갱신일을 올리지 않아도 된다. 그 파일을 바꾼 커밋이
+  **전부** `[polish]` 일 때만 면제되므로, 내용 수정과 윤문은 커밋을 분리한다.
 
 ## 새 페이지 체크리스트
 
@@ -269,7 +272,7 @@ Write 로 파일 전체를 뱉지 말고 **여러 조각으로 나눠 쓴다.** 
 | lockscreen | StatiCrypt 잠금 화면은 `#faf9f5`/`#1f1e1b` 템플릿 색 |
 | index-link | study/logs/infra/briefings 콘텐츠 페이지는 섹션 index 에 링크 필수 |
 | post-meta | 카드에 created `<time>` 필수, created ≤ updated, **페이지 hero 날짜 = 카드 날짜** |
-| post-meta-bump | (pre-push) 원격에 있던 콘텐츠 페이지를 고쳤으면 `.post-meta`(갱신일)도 바뀌어야 함 |
+| post-meta-bump | (pre-push) 원격에 있던 콘텐츠 페이지를 고쳤으면 `.post-meta`(갱신일)도 바뀌어야 함 — 단 `[polish]` 커밋만 건드린 파일은 면제 |
 | unencrypted | `*.unencrypted.html` 커밋/push 금지 |
 
 규칙을 바꾸고 싶다면: theme.css(값) 또는 check_theme.py(로직)를 고치고,

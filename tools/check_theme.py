@@ -252,6 +252,20 @@ def check_postmeta(tree, paths):
                     f"(둘을 같이 갱신하라)")
 
 
+POLISH_TAG = "[polish]"
+
+
+def polish_only(base, head, path):
+    """base..head 에서 path 를 바꾼 커밋이 전부 메시지에 [polish] 를 담고 있으면 True.
+    윤문(가독성만 개선, 내용 불변) 커밋은 갱신일 bump 를 면제한다 (CLAUDE.md)."""
+    try:
+        out = sh(["git", "log", "--format=%B%x00", f"{base}..{head}", "--", path])
+    except subprocess.CalledProcessError:
+        return False
+    msgs = [m for m in out.split("\x00") if m.strip()]
+    return bool(msgs) and all(POLISH_TAG in m for m in msgs)
+
+
 def bump_check(base, head, today=None):
     """수정된 콘텐츠 페이지는 갱신일이 '오늘'이어야 한다 — pre-push 강제용.
     base..head 사이에서 내용이 바뀐 study/logs/infra 콘텐츠 페이지는 post-meta 의
@@ -277,6 +291,8 @@ def bump_check(base, head, today=None):
             continue  # 신규/삭제/무변경
         if is_staticrypt(h):
             continue
+        if polish_only(base, head, p):
+            continue  # 윤문 전용 커밋([polish])만 이 파일을 바꿨으면 갱신일 면제
         mh = POSTMETA_BLOCK.search(h)
         d = postmeta_dates(mh.group(1)) if mh else None
         latest = max(x for x in (d or (None,)) if x) if d else None
