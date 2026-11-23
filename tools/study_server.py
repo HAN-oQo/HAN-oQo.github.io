@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Local study server for curriculum/ — static files + a tiny progress API.
+"""Local study server for onboarding/ — static files + a tiny progress API.
 
     python3 tools/study_server.py [--port 8000]
-    → http://localhost:8000/curriculum/
+    → http://localhost:8000/onboarding/
 
-GET  /api/state  → {"state": <curriculum/progress/state.json>, "feedback": <curriculum/progress/feedback.json>}
+GET  /api/state  → {"state": <onboarding/progress/state.json>, "feedback": <onboarding/progress/feedback.json>}
 POST /api/state  ← full state JSON (answers/checks/feedback/notes); written atomically.
 
-Progress files live in curriculum/progress/ which is gitignored — they never reach
+Progress files live in onboarding/progress/ which is gitignored — they never reach
 the public repo. Claude (study-session skill) reads state.json to grade written
 answers and writes feedback.json; the page shows feedback on reload.
 Binds to 127.0.0.1 only.
@@ -17,7 +17,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROG = os.path.join(ROOT, "curriculum", "progress")
+PROG = os.path.join(ROOT, "onboarding", "progress")
 STATE = os.path.join(PROG, "state.json")
 FEEDBACK = os.path.join(PROG, "feedback.json")
 MAX_BODY = 5 * 1024 * 1024
@@ -84,7 +84,7 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     a = ap.parse_args()
     httpd = ThreadingHTTPServer(("127.0.0.1", a.port), partial(Handler, directory=ROOT))
-    print(f"study server: http://localhost:{a.port}/curriculum/  (progress → {os.path.relpath(PROG, ROOT)}/)", flush=True)
+    print(f"study server: http://localhost:{a.port}/onboarding/  (progress → {os.path.relpath(PROG, ROOT)}/)", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

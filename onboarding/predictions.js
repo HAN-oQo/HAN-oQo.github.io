@@ -1,11 +1,11 @@
-/* curriculum/predictions.js — 예측 장부 (Prediction Log).
+/* onboarding/predictions.js — 예측 장부 (Prediction Log).
  * 측정 전에 예측을 쓰고, 측정 후 실제값·틀린 이유를 채워 보정도(calibration)를 추적한다.
  * 저장은 study.js 의 Store 를 그대로 사용 (로컬 서버: progress/state.json, 웹: localStorage).
  * 사용자 입력은 전부 textContent 로만 렌더한다.
  */
 (function () {
   "use strict";
-  var C = window.Curriculum, Store = C.Store, el = C.el, txt = C.txt;
+  var C = window.Onboarding, Store = C.Store, el = C.el, txt = C.txt;
   var CATS = {
     cost: "비용 모델 (roofline·바이트·FLOPs)",
     system: "시스템 모델 (큐잉·스케줄러·배칭)",
@@ -215,7 +215,7 @@
       var formBox = document.getElementById("p-form"), openBox = document.getElementById("p-open"),
         statBox = document.getElementById("p-stats"), closedBox = document.getElementById("p-closed"),
         qsel = document.getElementById("p-quarter"), mode = document.getElementById("p-mode");
-      mode.textContent = Store.mode === "server" ? "저장: 로컬 서버 (curriculum/progress/state.json — git 에 안 올라감)" : "저장: 이 브라우저 localStorage — 백업은 CSV/JSON 내보내기";
+      mode.textContent = Store.mode === "server" ? "저장: 로컬 서버 (onboarding/progress/state.json — git 에 안 올라감)" : "저장: 이 브라우저 localStorage — 백업은 CSV/JSON 내보내기";
       function fillQuarters() {
         var cur = qsel.value || "all"; qsel.innerHTML = "";
         var qs = {}; list().forEach(function (p) { if (p.closed) qs[quarter(p.closed)] = 1; });

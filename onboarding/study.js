@@ -1,16 +1,16 @@
-/* curriculum/study.js — 커리큘럼 학습 엔진 (빌드 없음).
+/* onboarding/study.js — Inference Onboarding 학습 엔진 (빌드 없음).
  *
  * 저장 모드 두 가지:
  *  - server : `python3 tools/study_server.py` 로 띄운 로컬 서버. 진행 상태를
- *             curriculum/progress/state.json 에, Claude 채점 결과를
- *             curriculum/progress/feedback.json 에서 읽는다 (둘 다 gitignore).
+ *             onboarding/progress/state.json 에, Claude 채점 결과를
+ *             onboarding/progress/feedback.json 에서 읽는다 (둘 다 gitignore).
  *  - local  : GitHub Pages 등 정적 호스팅. 브라우저 localStorage 에만 저장.
- * 콘텐츠(모듈·퀴즈)는 curriculum/data/*.json — 신뢰된 저자 콘텐츠라 HTML 허용.
+ * 콘텐츠(모듈·퀴즈)는 onboarding/data/*.json — 신뢰된 저자 콘텐츠라 HTML 허용.
  * 사용자 입력(답안)은 항상 textContent 로만 렌더한다.
  */
 (function () {
   "use strict";
-  var KEY = "curriculum-state-v1";
+  var KEY = "onboarding-state-v1";
   var EMPTY = function () { return { answers: {}, checks: {}, feedback: {}, notes: {}, predictions: [] }; };
 
   var Store = {
@@ -314,7 +314,7 @@
     if (mod.check && mod.check.length) {
       mod.check.forEach(function (q, i) { root.appendChild(renderQ(mod, q, i, refreshAll)); });
     } else {
-      root.appendChild(el("div", { class: "call warn" }, "확인 퀴즈는 진단 결과(약한 토픽)에 맞춰 <b>공부 세션에서 Claude가 생성</b>합니다. 레포에서 Claude를 열고 <code>공부 띄워줘</code> 또는 <code>" + mod.id.toUpperCase() + " 확인 퀴즈 만들어줘</code> 라고 하세요. 생성된 문항은 <code>curriculum/data/" + mod.id + ".json</code> 에 추가됩니다."));
+      root.appendChild(el("div", { class: "call warn" }, "확인 퀴즈는 진단 결과(약한 토픽)에 맞춰 <b>공부 세션에서 Claude가 생성</b>합니다. 레포에서 Claude를 열고 <code>공부 띄워줘</code> 또는 <code>" + mod.id.toUpperCase() + " 확인 퀴즈 만들어줘</code> 라고 하세요. 생성된 문항은 <code>onboarding/data/" + mod.id + ".json</code> 에 추가됩니다."));
     }
 
     /* ⑥ interview */
@@ -358,7 +358,7 @@
     var nx = root.querySelector("#next");
     if (nx && next) nx.innerHTML = '다음 할 일 → <a href="module.html?m=' + next.id + '"><b>' + next.id.toUpperCase() + ". " + next.title + "</b></a>";
     var md = root.querySelector("#mode");
-    if (md) md.textContent = Store.mode === "server" ? "저장 모드: 로컬 서버 (curriculum/progress/ — git 에 안 올라감)" : "저장 모드: 이 브라우저 localStorage (기기 간 동기화 안 됨 — 백업 버튼 사용)";
+    if (md) md.textContent = Store.mode === "server" ? "저장 모드: 로컬 서버 (onboarding/progress/ — git 에 안 올라감)" : "저장 모드: 이 브라우저 localStorage (기기 간 동기화 안 됨 — 백업 버튼 사용)";
 
     /* pending grading */
     var pend = [];
@@ -382,7 +382,7 @@
     var ex = root.querySelector("#btn-export"), im = root.querySelector("#btn-import"), fbb = root.querySelector("#btn-fb");
     if (ex) ex.onclick = function () {
       var blob = new Blob([JSON.stringify(Store.state, null, 2)], { type: "application/json" });
-      var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "curriculum-progress.json"; a.click();
+      var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "onboarding-progress.json"; a.click();
     };
     if (im) im.onclick = function () {
       var inp = document.createElement("input"); inp.type = "file"; inp.accept = "application/json";
@@ -402,7 +402,7 @@
   function alertBox(msg) { var m = document.getElementById("toast"); if (!m) return; m.textContent = msg; m.style.display = "block"; setTimeout(function () { m.style.display = "none"; }, 2200); }
 
   /* ---------- boot ---------- */
-  window.Curriculum = {
+  window.Onboarding = {
     Store: Store, el: el, txt: txt, copy: copy,
     bootModule: function () {
       var root = document.getElementById("app");
