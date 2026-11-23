@@ -1,0 +1,299 @@
+{
+ "id": "m5",
+ "week": 6,
+ "hours": 13,
+ "title": "스케줄러 II — PD 분리 · 우선순위 · SLO와 goodput",
+ "summary": "colocated+chunked prefill vs PD 분리 vs priority를 goodput으로 비교하는 시뮬레이터, 그리고 vLLM KV connector로 PD를 실제로 구성.",
+ "maps_to": [
+  "P/D·우선순위 스케줄링",
+  "요청 우선순위 조정"
+ ],
+ "jp": [
+  "Prefill/Decode分離",
+  "タスク優先度",
+  "SLO"
+ ],
+ "prereq": [
+  "M4"
+ ],
+ "goals": [
+  "TTFT/TPOT SLO 하의 goodput으로 정책을 비교한다",
+  "KV 전송 비용의 손익분기를 계산한다",
+  "실시간 음성(TTFA 엄격)과 배치 요청 혼재 시 정책을 설계한다"
+ ],
+ "diagnostic": [
+  {
+   "id": "m5-d1",
+   "type": "mcq",
+   "topic": "goodput",
+   "prompt": "DistServe가 최적화 목표로 삼은 goodput의 정의는?",
+   "options": [
+    "초당 생성 토큰 수",
+    "SLO(TTFT·TPOT)를 만족한 요청의 초당 처리량 (GPU당)",
+    "GPU 사용률",
+    "평균 지연의 역수"
+   ],
+   "answer": 1,
+   "explain": "SLO를 지킨 요청만 센다. PD 분리는 prefill과 decode가 서로의 SLO를 깨는 간섭을 없애 goodput을 올린다는 주장.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "DistServe — arXiv 2401.09670",
+     "url": "https://arxiv.org/abs/2401.09670",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m5-d2",
+   "type": "num",
+   "topic": "kvxfer",
+   "unit": "ms",
+   "tol": 0.08,
+   "prompt": "Llama-3.1-8B(128 KiB/token), 프롬프트 4,096 토큰의 KV를 prefill 노드에서 decode 노드로 <b>25 GB/s</b> 링크로 보낼 때 전송 시간은? (오버랩 없음)",
+   "answer": 21.5,
+   "explain": "4,096 × 131,072 B = 536.9 MB → /25e9 = <b>21.5 ms</b>. 이게 TTFT에 더해진다 — 레이어별 전송 오버랩, 더 빠른 링크(NVLink/RDMA), KV 압축이 PD 설계의 핵심 변수.",
+   "pitfall": "KV 전송을 공짜로 보고 PD 분리를 권하는 판단."
+  },
+  {
+   "id": "m5-d3",
+   "type": "mcq",
+   "topic": "priority",
+   "prompt": "vLLM <code>--scheduling-policy priority</code>에서 우선순위 값의 의미는? (v0.34.0)",
+   "options": [
+    "값이 클수록 먼저",
+    "값이 작을수록 먼저, 동률이면 도착 순",
+    "무작위",
+    "요청 길이에 반비례"
+   ],
+   "answer": 1,
+   "explain": "SchedulerConfig 문서: lower value = earlier handling, 동률은 도착 시간. 음성 실시간 요청에 작은 값을 주는 식으로 쓴다.",
+   "refs": [
+    {
+     "kind": "code",
+     "label": "SchedulerConfig.policy",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/config/scheduler.py#L171",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "PriorityRequestQueue",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/sched/request_queue.py#L131",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m5-d4",
+   "type": "text",
+   "topic": "pd",
+   "prompt": "PD 분리가 오히려 <b>손해</b>인 워크로드 조건을 세 가지 들어라.",
+   "rubric": [
+    "짧은 프롬프트·짧은 출력: prefill 간섭이 작아 분리 이득 < KV 전송·추가 hop 비용",
+    "낮은 부하: colocated에서도 SLO 충족, 분리하면 노드 활용률 하락",
+    "느린 인터커넥트/긴 프롬프트: KV 전송이 TTFT 지배; P:D 비율 고정으로 트래픽 변화에 취약"
+   ],
+   "model": "분리 이득(간섭 제거) vs 비용(KV 전송, 자원 분할 비효율, 운영 복잡도). chunked prefill이 간섭을 이미 많이 줄인다는 점도 언급.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "DistServe — arXiv 2401.09670",
+     "url": "https://arxiv.org/abs/2401.09670",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Splitwise — arXiv 2311.18677",
+     "url": "https://arxiv.org/abs/2311.18677",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Sarathi-Serve — arXiv 2403.02310",
+     "url": "https://arxiv.org/abs/2403.02310",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "topics": [
+  {
+   "id": "goodput",
+   "name": "SLO와 goodput",
+   "pitfall": "처리량 평균으로 정책을 고른다.",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "DistServe — arXiv 2401.09670",
+     "url": "https://arxiv.org/abs/2401.09670",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Splitwise — arXiv 2311.18677",
+     "url": "https://arxiv.org/abs/2311.18677",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "pd",
+   "name": "PD 분리 아키텍처",
+   "pitfall": "KV 전송·P:D 비율을 빼고 이득만 계산.",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "Mooncake — arXiv 2407.00079",
+     "url": "https://arxiv.org/abs/2407.00079",
+     "note": null
+    },
+    {
+     "kind": "blog",
+     "label": "DeepSeek Inference System Overview",
+     "url": "https://github.com/deepseek-ai/open-infra-index",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM disagg prefill 문서",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/features/disagg_prefill.md",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang disaggregation/",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/disaggregation",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "kvxfer",
+   "name": "KV connector 인터페이스",
+   "pitfall": "스케줄러 측/워커 측 책임을 섞어 설계.",
+   "body": "<p>vLLM의 KV connector는 스케줄러 쪽(외부에 몇 토큰이 있나, 언제 로드하나)과 워커 쪽(레이어별 save/load) 메서드로 나뉜다. ExampleConnector가 디스크에 저장/로드하는 최소 구현.</p>",
+   "read": [
+    {
+     "kind": "code",
+     "label": "KVConnectorBase_V1",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L182",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "ExampleConnector",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/distributed/kv_transfer/kv_connector/v1/example_connector.py#L87",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "priority",
+   "name": "우선순위·마이그레이션",
+   "pitfall": "priority만 주고 preemption·HOL blocking을 안 본다.",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "Llumnix — arXiv 2406.03243",
+     "url": "https://arxiv.org/abs/2406.03243",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "PriorityRequestQueue",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/sched/request_queue.py#L131",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "lab": {
+  "title": "ExampleConnector를 복제해 내 KV connector 만들기 → 1 GPU에서 prefill/decode 두 인스턴스",
+  "why": "PD 분리를 '읽은 것'에서 '구성해본 것'으로. connector 인터페이스는 오프로딩·캐시 공유에도 그대로 쓰인다.",
+  "steps": [
+   "<code>example_connector.py</code>를 읽고 스케줄러 측/워커 측 메서드를 표로 매핑",
+   "복제해 <code>MyConnector</code>: 저장 시 레이어별 바이트·시간 로깅 추가",
+   "<code>--kv-transfer-config</code>로 prefill 인스턴스(kv_producer)와 decode 인스턴스(kv_consumer)를 같은 GPU에 <code>--gpu-memory-utilization 0.4</code>씩 기동, <code>examples/disaggregated/disaggregated_serving/disagg_proxy_demo.py</code>로 프록시",
+   "colocated 단일 인스턴스와 TTFT/TPOT 비교, 전송 바이트를 m5-d2 계산과 대조"
+  ],
+  "gpu": "소형 모델(0.5B)로 위 절차. 같은 GPU 2인스턴스 구성은 <b>작성자 미검증</b> — 안 되면 디스크 connector로 '같은 인스턴스 재시작 후 KV 로드'로 대체.",
+  "nogpu": "1단계 매핑표 + 커넥터 코드 작성 후 단위 수준 검증(가짜 텐서 save/load) + M5 시뮬레이터에 측정 대신 계산된 전송 시간 투입.",
+  "read": [
+   {
+    "kind": "code",
+    "label": "ExampleConnector",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/distributed/kv_transfer/kv_connector/v1/example_connector.py#L87",
+    "note": null
+   },
+   {
+    "kind": "code",
+    "label": "disagg_proxy_demo.py",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/examples/disaggregated/disaggregated_serving/disagg_proxy_demo.py",
+    "note": null
+   }
+  ],
+  "done": [
+   "connector 메서드 매핑표",
+   "colocated vs PD 지연 비교(또는 시뮬레이션 대체)"
+  ]
+ },
+ "toy": {
+  "title": "PD·우선순위 정책 시뮬레이터 (discrete-event)",
+  "maps_to": "P/D·우선순위 스케줄링",
+  "hours": 7,
+  "spec": [
+   "step 시간 모델: M1 비용모델 + M4 실측으로 보정",
+   "정책: colocated FCFS / colocated+chunked prefill / PD 분리(P:D 비율 가변) / priority+preemption",
+   "워크로드: chat, long-prompt RAG, 짧은 음성 턴(TTFA SLO 엄격) 혼합",
+   "출력: TTFT/TPOT 분포, goodput, PD 손익 경계 그래프"
+  ],
+  "gpu": "mini-infer에 priority+preemption을 넣고 시뮬레이터 한 점을 실측 검증",
+  "nogpu": "시뮬레이터만으로 완결",
+  "done": [
+   "정책 4 × 워크로드 3 결과표",
+   "PD가 이기는/지는 경계 그래프",
+   "KV 전송 대역폭 손익분기 계산"
+  ],
+  "hints": [
+   "SimPy 없이 heapq 이벤트 큐로 충분.",
+   "먼저 모든 정책이 '부하 0에 가까울 때 같은 지연'을 내는지로 시뮬레이터를 검증.",
+   "음성 턴은 TTFT가 아니라 '첫 오디오'가 목표 — M8로 넘어갈 인터페이스를 지금 정해두라."
+  ]
+ },
+ "check": [],
+ "interview": [
+  {
+   "q": "PD 분리를 도입하자는 제안을 받았다. 무엇을 보고 결정하나?",
+   "skeleton": [
+    "워크로드 분포·SLO",
+    "chunked prefill 대비 이득",
+    "KV 전송 비용·링크",
+    "P:D 비율 운영·장애 영향"
+   ]
+  },
+  {
+   "q": "실시간 음성 요청과 배치 요약 요청이 섞인다. 스케줄링 정책을 설계하라.",
+   "skeleton": [
+    "우선순위 클래스",
+    "토큰 예산 예약",
+    "preemption 대상 규칙",
+    "SLO별 admission control"
+   ]
+  },
+  {
+   "q": "goodput과 throughput이 다른 결론을 낸 사례를 들어라.",
+   "skeleton": [
+    "처리량↑지만 p99 SLO 위반↑",
+    "측정 방법",
+    "결정"
+   ]
+  }
+ ],
+ "done": [
+  "진단·약한 토픽 자료",
+  "실전 랩",
+  "시뮬레이터 산출물",
+  "확인 퀴즈 75%+",
+  "면접 3문항"
+ ]
+}

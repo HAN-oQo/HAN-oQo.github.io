@@ -107,6 +107,17 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 각 섹션은 자체 `index.html`(카드 목록)을 갖고 루트 `index.html` 에서 링크된다.
 새 섹션을 추가하면 `check_theme.py` 의 섹션 튜플 3곳에도 추가한다.
 
+### curriculum/ — 데이터 구동 학습 섹션 (한국어 전용)
+
+- 페이지 타입 B(한국어 전용) 골격. `assets/i18n.js` 대신 `assets/ask.js` 를 직접 로드한다
+  (i18n 토글 없음, Ask AI 위젯은 유지). 섹션 전용 스타일/로직은 `curriculum/study.css`·`study.js`.
+- 모듈 콘텐츠·퀴즈는 `curriculum/data/*.json` 에 둔다 — 문항 추가는 JSON 만 고치면 되고
+  HTML(`module.html?m=…`)은 건드리지 않는다. 스키마와 튜터 진행 규칙은
+  `.claude/skills/study-session/SKILL.md`.
+- 진행 상태·답안·채점은 `curriculum/progress/` (gitignore) — **커밋 금지**. 로컬 서버:
+  `python3 tools/study_server.py` → `http://localhost:8000/curriculum/`.
+- 공개 페이지이므로 개인 이직 계획·지원 회사 등은 쓰지 않는다.
+
 ### C. 자체 내장 페이지 (study/ai-briefing-*.html 류)
 
 외부 asset 링크 없이 단일 파일로 완결되어야 할 때만 사용. 조건:

@@ -1,0 +1,416 @@
+{
+ "id": "m2",
+ "week": 2,
+ "hours": 12,
+ "title": "추론 비용 토대 II — MoE · Quantization · 디코딩/Spec decode",
+ "summary": "작은 배치에서 MoE가 왜 '활성 파라미터만큼' 싸지 않은지, 양자화가 어느 regime에서 이득인지, spec decode 이득이 배치에 따라 어떻게 꺾이는지.",
+ "maps_to": [
+  "추론 파라미터 조정",
+  "분산 추론(EP)"
+ ],
+ "jp": [
+  "MoE",
+  "量子化",
+  "投機的デコーディング"
+ ],
+ "prereq": [
+  "M1"
+ ],
+ "goals": [
+  "배치 크기별 활성 expert 수·expert당 토큰 수·grouped GEMM intensity를 계산한다",
+  "weight-only(W4A16) vs W8A8/FP8이 decode/prefill 각각에서 무엇을 줄이는지 판정한다",
+  "outlier channel이 생기는 위치와 SmoothQuant의 처방을 설명한다",
+  "배치가 커질수록 spec decode 이득이 줄어드는 이유를 roofline으로 설명한다"
+ ],
+ "diagnostic": [
+  {
+   "id": "m2-d1",
+   "type": "num",
+   "topic": "moe",
+   "unit": "experts",
+   "tol": 0.05,
+   "prompt": "DeepSeek-V3: routed expert 256개 중 토큰당 8개 활성. decode 배치 64토큰에서 라우팅이 균등·독립이라고 가정하면, 한 step에서 가중치를 읽어야 하는 <b>서로 다른 routed expert 수의 기댓값</b>은?",
+   "answer": 222,
+   "explain": "256 × (1 − (1 − 8/256)^64) = 256 × (1 − 0.969^64) ≈ 256 × 0.869 ≈ <b>222</b>. 배치 64면 이미 87%의 expert를 읽는다 → decode의 메모리 트래픽은 '활성 37B'가 아니라 거의 전체 가중치에 가깝다.",
+   "pitfall": "작은 배치 MoE decode 비용을 활성 파라미터로 계산해 수 배 과소평가하고, EP degree/배치 구성을 틀리게 잡는다.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "DeepSeek-V3 §2.1.2 (DeepSeekMoE) — arXiv 2412.19437",
+     "url": "https://arxiv.org/abs/2412.19437",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "vLLM try_get_optimal_moe_config",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/fused_moe/fused_moe.py#L1556",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m2-d2",
+   "type": "mcq",
+   "topic": "quant",
+   "prompt": "8B 모델, <b>배치 1~4의 decode</b>에서 FP16 대비 속도 이득이 더 큰 쪽은?",
+   "options": [
+    "W8A8 INT8 (INT8 Tensor Core 사용)",
+    "W4A16 (가중치만 4bit, 연산은 FP16)",
+    "둘이 같다",
+    "둘 다 이득 없음"
+   ],
+   "answer": 1,
+   "explain": "작은 배치 decode는 가중치 읽기 바이트가 지배 → 가중치를 1/4로 줄이는 W4A16이 1/2인 W8A8보다 유리. 큰 배치/prefill(compute-bound)에선 저정밀 Tensor Core를 쓰는 W8A8/FP8이 유리 — QServe가 이 두 regime을 함께 노린 설계(W4A8KV4).",
+   "pitfall": "regime을 안 보고 '비트 수가 낮으면 빠르다'로 판단 → 고부하 서빙에 W4A16 dequant 오버헤드로 오히려 느려지는 결정.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "AWQ — arXiv 2306.00978",
+     "url": "https://arxiv.org/abs/2306.00978",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "QServe — arXiv 2405.04532",
+     "url": "https://arxiv.org/abs/2405.04532",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "SmoothQuant — arXiv 2211.10438",
+     "url": "https://arxiv.org/abs/2211.10438",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m2-d3",
+   "type": "mcq",
+   "topic": "quant",
+   "prompt": "LLM activation 양자화를 어렵게 만드는 outlier는 주로 어디에 나타나나?",
+   "options": [
+    "무작위 토큰의 무작위 위치",
+    "특정 hidden 채널(feature 차원)에 체계적으로 — 토큰이 바뀌어도 같은 채널",
+    "softmax 출력에만",
+    "가중치에만, activation에는 없음"
+   ],
+   "answer": 1,
+   "explain": "LLM.int8()가 보고한 대로 특정 feature 차원에 큰 값이 체계적으로 나타난다 (모델 규모가 커지며 두드러짐). 그래서 per-tensor activation 양자화가 망가지고, SmoothQuant는 채널별 스케일을 가중치 쪽으로 '옮긴다'.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "LLM.int8() §3–4 — arXiv 2208.07339",
+     "url": "https://arxiv.org/abs/2208.07339",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "SmoothQuant §3 — arXiv 2211.10438",
+     "url": "https://arxiv.org/abs/2211.10438",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m2-d4",
+   "type": "text",
+   "topic": "specdec",
+   "prompt": "spec decoding(드래프트 k토큰, acceptance α)의 속도 이득이 <b>서빙 배치가 커질수록 줄어드는</b> 이유를 설명하라. (드래프트 학습 시스템을 만들어본 경험과 연결해도 좋다)",
+   "rubric": [
+    "작은 배치: target 검증 k+1토큰이 거의 같은 시간(memory-bound) → 여유 compute를 공짜로 씀",
+    "큰 배치: 이미 compute 여유가 줄어 검증 비용이 토큰 수에 비례해 늘고, 거절된 토큰의 연산이 순수 낭비",
+    "드래프트 실행·KV 관리 오버헤드는 배치와 함께 증가 → 임계 배치 이상에서 끄거나 k를 동적으로 줄이는 정책"
+   ],
+   "model": "spec decode는 memory-bound decode의 '남는 FLOPs'를 사는 기법. 배치가 커져 ridge point에 가까워지면 살 FLOPs가 없다 → 동적 k / 배치 임계 off.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "Leviathan et al. §3 (α와 기대 속도) — arXiv 2211.17192",
+     "url": "https://arxiv.org/abs/2211.17192",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "EAGLE — arXiv 2401.15077",
+     "url": "https://arxiv.org/abs/2401.15077",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "topics": [
+  {
+   "id": "moe",
+   "name": "MoE 라우팅과 배치 민감도",
+   "pitfall": "작은 배치에서도 '활성 파라미터만큼 싸다'고 보고 decode 비용·GPU 수를 과소평가한다.",
+   "body": "<p>expert당 토큰 수 = B·k/E (균등 가정). 이게 작으면 expert GEMM이 GEMV처럼 memory-bound. 실제 라우팅은 불균등 → hot expert가 step 시간을 결정(straggler). vLLM fused_moe는 (E, N, device) 별 튜닝된 블록 크기 JSON을 읽는다 — 없으면 경고 후 기본값.</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "Switch Transformer — arXiv 2101.03961",
+     "url": "https://arxiv.org/abs/2101.03961",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "GShard — arXiv 2006.16668",
+     "url": "https://arxiv.org/abs/2006.16668",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Mixtral — arXiv 2401.04088",
+     "url": "https://arxiv.org/abs/2401.04088",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "get_config_file_name — 튜닝 JSON 키",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/fused_moe/fused_moe.py#L1178",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "'Using default MoE config' 경고",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/fused_moe/fused_moe.py#L1254",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM fused MoE modular kernel 설계 문서",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/fused_moe_modular_kernel.md",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "ep",
+   "name": "Expert Parallelism과 로드 밸런싱",
+   "pitfall": "EP를 늘리면 all-to-all과 불균형 비용이 같이 커진다는 걸 놓친다.",
+   "body": "<p>EP: expert를 GPU에 나누고 토큰을 all-to-all로 보낸다. 불균형 → 핫 GPU가 병목 → 핫 expert 복제(EPLB). DeepSeek 추론 시스템은 prefill/decode에 서로 다른 EP 크기를 쓴다.</p>",
+   "read": [
+    {
+     "kind": "blog",
+     "label": "DeepSeek open-infra-index — Inference System Overview (1차: 운영사 공개 문서)",
+     "url": "https://github.com/deepseek-ai/open-infra-index",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "deepseek-ai/EPLB",
+     "url": "https://github.com/deepseek-ai/EPLB",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "deepseek-ai/DeepEP",
+     "url": "https://github.com/deepseek-ai/DeepEP",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang layers/moe/",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/layers/moe",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "quant",
+   "name": "Quantization의 구조적 전제",
+   "pitfall": "decode memory-bound regime에서 W8A8을, 고부하 compute-bound에서 W4A16을 고르는 반대 판단.",
+   "body": "<p>weight-only: 바이트↓, 연산은 고정밀(dequant 필요). W+A: 저정밀 Tensor Core로 FLOPs↑, 대신 activation outlier 처리 필요. FP8(E4M3)은 INT8보다 outlier에 관대 — 포맷 정의는 FP8 Formats 논문.</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "LLM.int8() — arXiv 2208.07339",
+     "url": "https://arxiv.org/abs/2208.07339",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "SmoothQuant — arXiv 2211.10438",
+     "url": "https://arxiv.org/abs/2211.10438",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "GPTQ — arXiv 2210.17323",
+     "url": "https://arxiv.org/abs/2210.17323",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "AWQ — arXiv 2306.00978",
+     "url": "https://arxiv.org/abs/2306.00978",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "FP8 Formats for Deep Learning — arXiv 2209.05433",
+     "url": "https://arxiv.org/abs/2209.05433",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "vLLM quantization/",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/quantization",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "kvquant",
+   "name": "KV cache quantization",
+   "pitfall": "긴 컨텍스트에서 KV가 가중치보다 큰데 가중치 양자화만 본다 (M1-c2).",
+   "body": "<p>KIVI: K는 채널별, V는 토큰별로 양자화(분포 차이). vLLM <code>--kv-cache-dtype fp8</code>은 KV 바이트를 절반으로 → 동시성 2배.</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "KIVI — arXiv 2402.02750",
+     "url": "https://arxiv.org/abs/2402.02750",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "QServe (KV4) — arXiv 2405.04532",
+     "url": "https://arxiv.org/abs/2405.04532",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "specdec",
+   "name": "디코딩 전략과 spec decode의 구조적 관계",
+   "pitfall": "고부하에서도 spec decode를 켜둬 처리량을 깎는다; beam search가 KV를 몇 배 쓰는지 놓친다.",
+   "body": "<p>이미 드래프트 학습 시스템을 만든 경험이 있으니 진단 통과 시 건너뛰기. 새로 볼 것: acceptance가 target의 엔트로피(태스크)와 드래프트의 feature 접근(EAGLE 계열)에 좌우된다는 점, 배치별 on/off 정책.</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "Leviathan et al. — arXiv 2211.17192",
+     "url": "https://arxiv.org/abs/2211.17192",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Chen et al. — Speculative Sampling — arXiv 2302.01318",
+     "url": "https://arxiv.org/abs/2302.01318",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "EAGLE — arXiv 2401.15077",
+     "url": "https://arxiv.org/abs/2401.15077",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "EAGLE-3 — arXiv 2503.01840",
+     "url": "https://arxiv.org/abs/2503.01840",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM spec decode 문서",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/features/speculative_decoding",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "lab": {
+  "title": "vLLM fused_moe 커널 튜닝 config를 내 GPU용으로 만들기",
+  "why": "새 GPU/새 MoE 모델이 들어오면 가속 엔지니어가 실제로 제일 먼저 하는 일 중 하나. 로그의 'Using default MoE config' 한 줄이 수십 % 차이를 만든다.",
+  "steps": [
+   "소형 MoE(OLMoE-1B-7B 또는 Qwen1.5-MoE-A2.7B)를 vLLM으로 기동 → 기동 로그에서 default config 경고 확인",
+   "<code>benchmarks/kernels/benchmark_moe.py --model ... --tune</code> 로 내 GPU용 JSON 생성 (키: E, N, device_name, dtype)",
+   "생성 JSON을 <code>VLLM_TUNED_CONFIG_FOLDER</code> 또는 configs/ 경로 규칙에 맞게 배치 → 배치 1/8/64/256 decode 마이크로벤치 비교",
+   "JSON에서 M(토큰 수)별로 BLOCK_SIZE_M/N/K, num_warps가 어떻게 바뀌는지 해석 → '작은 M에서 왜 작은 블록인가'를 M1 roofline으로 설명"
+  ],
+  "gpu": "위 절차. VRAM이 부족하면 4bit 양자화 모델 + <code>--dtype</code> 조정.",
+  "nogpu": "vLLM 저장소의 기존 튜닝 JSON(fused_moe/configs/, 300+개)을 A100/H100/MI300X 끼리 비교해 블록 크기 패턴을 표로 정리 + get_config_file_name 경로 규칙 독해.",
+  "read": [
+   {
+    "kind": "code",
+    "label": "benchmark_moe.py --tune",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/benchmarks/kernels/benchmark_moe.py#L1211",
+    "note": null
+   },
+   {
+    "kind": "code",
+    "label": "get_config_file_name",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/fused_moe/fused_moe.py#L1178",
+    "note": null
+   },
+   {
+    "kind": "code",
+    "label": "fused_moe/configs/ (튜닝 JSON 모음)",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/fused_moe/configs",
+    "note": null
+   }
+  ],
+  "done": [
+   "default vs tuned 배치별 latency 표",
+   "블록 크기 패턴을 roofline으로 설명한 메모 1단락"
+  ]
+ },
+ "toy": {
+  "title": "MoE 라우팅 시뮬레이터 + 양자화 regime 계산기",
+  "maps_to": "추론 파라미터 조정 · 분산 추론(EP)",
+  "hours": 5,
+  "spec": [
+   "실제 router logits 덤프 또는 Zipf 합성 분포로 배치 크기별 활성 expert 수, expert별 토큰 히스토그램, 불균형 계수(max/mean)",
+   "EP degree(1/2/4/8)별 GPU당 토큰 부하와 all-to-all 바이트 추정",
+   "kvcalc 확장: W16A16 / W4A16 / W8A8 / FP8 별 decode·prefill step 하한 비교"
+  ],
+  "gpu": "OLMoE-1B-7B로 실제 router logits 수집 (VRAM 부족 시 4bit)",
+  "nogpu": "CPU에서 짧은 프롬프트로 router logits 수집하거나 Zipf(s=0.8~1.2) 합성 분포",
+  "done": [
+   "배치 vs 활성 expert 그래프 (균등 이론선 vs 실측/합성)",
+   "DeepSeek-V3 decode 배치 1/32/256에서 expert GEMM이 memory/compute-bound인지 판정표",
+   "양자화 regime 표"
+  ],
+  "hints": [
+   "균등 가정 기댓값 E·(1−(1−k/E)^B)를 기준선으로 먼저 그려라.",
+   "expert GEMM intensity ≈ expert당 토큰 수 (FLOP/byte, BF16). 이걸 ridge point와 비교.",
+   "불균형 계수는 실제 라우팅에서 2~3배가 흔하다는 보고가 있으나 모델마다 다름 — 출처 미확인 — 작성자 추정, 실측으로 확인하라."
+  ]
+ },
+ "check": [],
+ "interview": [
+  {
+   "q": "MoE 모델의 decode 처리량이 배치 크기에 특히 민감한 이유는?",
+   "skeleton": [
+    "expert당 토큰 = B·k/E → 작으면 GEMV화",
+    "작은 배치에서도 대부분 expert를 읽음(기댓값 계산)",
+    "불균형 straggler",
+    "그래서 큰 배치/EP/DP-attention 구성"
+   ]
+  },
+  {
+   "q": "FP8 vs INT4 weight-only, 어떤 서빙 조건에서 무엇을 고르겠나?",
+   "skeleton": [
+    "regime: 저부하 decode(memory) vs 고부하/prefill(compute)",
+    "정확도: outlier, 그룹 크기",
+    "커널 지원·하드웨어(FP8 TC 유무)",
+    "측정 계획: 동일 SLO의 goodput"
+   ]
+  },
+  {
+   "q": "spec decode를 프로덕션에서 켤지 말지 어떻게 결정하나?",
+   "skeleton": [
+    "트래픽의 배치 분포",
+    "acceptance의 태스크 의존성 측정",
+    "동적 k/배치 임계 off",
+    "TPOT p99와 처리량 모두 비교"
+   ]
+  }
+ ],
+ "done": [
+  "진단·약한 토픽 자료",
+  "실전 랩 tuned config 비교",
+  "토이 3개 산출물",
+  "확인 퀴즈 75%+",
+  "면접 3문항"
+ ]
+}
