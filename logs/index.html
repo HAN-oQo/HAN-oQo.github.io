@@ -39,7 +39,10 @@
   <a class="card" href="cactus-defect-fix-plan.html">
     <span class="tag t-amber"><span class="en">Runbook · Cactus fix</span><span class="ko">런북 · Cactus 수정</span></span>
     <h2><span class="en">Cactus prefill non-invariance — problem, reproduction, fix</span><span class="ko">Cactus 프리필 비등가 결함 — 문제 · 재현 · 해결</span></h2>
-    <p><span class="en">A standalone write-up of one defect in the Cactus on-device engine, built for someone who has never seen the framework. Part 1 explains it in diagrams from first principles — what prefill and decode are, why prefix caching must not change the answer, and how Cactus ships the same maths as two separately compiled op graphs (2,303 vs 2,276 nodes over the same 537 weights) then routes tokens between them by how many were submitted at once. Part 2 reproduces it two ways: by just chatting with <code>cactus run</code>, and precisely with curl against two servers that differ only in tail routing, hitting the boundary the source predicts (<code>tail = prompt_tokens % 128</code>: identical 9/9 at tail ≤ 8, diverged 43/46 at tail ≥ 9) — plus an op-level test that refutes the padding hypothesis outright. Part 3 proposes fixes, recommends chunk-aligned prefix reuse with a bounded per-turn recompute, and specifies the invariance test whose absence let this ship.</span><span class="ko">Cactus 온디바이스 엔진의 결함 하나를, 이 프레임워크를 처음 보는 사람 기준으로 쓴 독립 문서. 1장은 그림으로 밑바닥부터 설명한다 — 프리필과 디코드가 뭔지, prefix caching 이 왜 답을 바꾸면 안 되는지, 그리고 Cactus 가 같은 수학을 별개로 컴파일된 op 그래프 두 벌(같은 가중치 537개 위에 노드 2,303 vs 2,276)로 만들어 놓고 한 번에 넣은 토큰 수에 따라 둘 사이로 라우팅한다는 것. 2장은 두 가지 재현 — <code>cactus run</code> 으로 그냥 대화하다 발견하는 법, 그리고 꼬리 라우팅만 다른 두 서버에 curl 로 소스가 예측한 경계를 맞히는 법(<code>tail = prompt_tokens % 128</code>: tail ≤ 8 은 9/9 일치, tail ≥ 9 는 43/46 불일치). 여기에 패딩 가설을 정면으로 반증하는 op 단위 테스트를 붙였다. 3장은 수정안 — 청크 정렬 프리픽스 재사용(턴당 재계산 상한 있음)을 권고하고, 이 결함이 통과해 온 이유인 불변식 테스트를 명세한다.</span></p>
+    <p>
+      <span class="en">A Cactus defect explained from scratch: answers change depending on which of two compiled prefill graphs handles the prompt tail, reproduced, with fixes.</span>
+      <span class="ko">Cactus가 같은 연산을 두 그래프로 따로 컴파일해서 프롬프트 꼬리 길이에 따라 답이 달라지는 결함을 기초부터 설명한다. 재현 방법과 해결안도 담았다.</span>
+    </p>
     <p class="post-meta">
       <time datetime="2026-07-30">2026-07-30</time>
       <span class="sep">·</span>
@@ -51,42 +54,60 @@
   <a class="card" href="cactus-language-switch-debug.html">
     <span class="tag t-green"><span class="en">Debug · Cactus</span><span class="ko">디버깅 · Cactus</span></span>
     <h2><span class="en">Cactus language-switch failure — model or framework?</span><span class="ko">Cactus 언어 전환 실패 — 모델 문제인가 프레임워크 문제인가</span></h2>
-    <p><span class="en">Root-cause analysis of <code>cactus run</code> refusing to switch from Japanese to Korean mid-conversation. Systematic elimination (history, chat template vs the bundled official jinja, tokenizer, KV compression, sliding window) narrows it to one thing: the engine's three prefill paths are not numerically equivalent, and every turn after the first is pinned to the degraded incremental-KV-reuse path — same messages cold-prefilled switch 5/5, warm 0/5. The defect is language-independent and proven in pure English: under greedy (argmax) decoding, where the two arms see an identical token sequence, warm and cold emit different text in 5 of 6 conversations. Also documents a separate confirmed bug where <code>cactus serve</code> / the Python bindings destroy all non-ASCII input. Every experiment is reproducible: full scripts, N=5 tallies, and commit-pinned code permalinks.</span><span class="ko">일본어로 시작한 대화에서 한국어 전환 요청이 먹히지 않는 <code>cactus run</code> 의 원인 분석. 히스토리·챗 템플릿(번들 동봉 공식 jinja 와 대조)·토크나이저·KV 압축·슬라이딩 윈도우를 차례로 소거하면 하나가 남는다 — 엔진의 프리필 경로 셋이 서로 수치적으로 등가가 아니고, 2턴 이후는 품질이 떨어지는 증분 KV 재사용 경로에 고정된다. 같은 메시지를 콜드로 넣으면 5/5 전환, warm 은 0/5. 이 결함은 언어와 무관하며 순수 영어로도 증명했다 — 두 갈래가 동일한 토큰 열을 보는 그리디(argmax) 디코딩에서 warm 과 cold 의 출력이 6개 중 5개에서 다르다. <code>cactus serve</code>/Python 바인딩이 모든 비-ASCII 입력을 파괴하는 별건 버그도 함께 확정. 전체 스크립트·N=5 집계·커밋 고정 퍼머링크로 전부 재현 가능.</span></p>
+    <p>
+      <span class="en">Why <code>cactus run</code> won't switch from Japanese to Korean mid-chat: not the model, but non-equivalent prefill paths that pin later turns to degraded KV reuse.</span>
+      <span class="ko"><code>cactus run</code>이 대화 도중 일본어에서 한국어로 못 바꾸는 원인을 추적한다. 모델이 아니라, 두 번째 턴부터 열화된 KV 재사용 경로에 묶이는 엔진 문제다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-07-30">2026-07-30</time></p>
   </a>
 
   <a class="card" href="tropical-reproducibility.html">
     <span class="tag t-amber"><span class="en">Reference · Tropical repro</span><span class="ko">레퍼런스 · Tropical 재현</span></span>
     <h2><span class="en">Tropical reimpl — reproducibility report &amp; full source</span><span class="ko">Tropical 재구현 — 재현 보고서 &amp; 전체 소스</span></h2>
-    <p><span class="en">A lab-notebook for the whole Tropical reimplementation so far: exact environment (mi250-052, vLLM-ROCm image, the ROCm gotchas), the in-container workload generator commands, the exact reproduce commands for every phase (0 / 0.5 / 2 / interference), a results recap, and the <b>complete verbatim source</b> of all 10 harness files (serve launcher, dispatcher, workload gen, replay, analyzer, the run scripts) pasted in §6 so it can be rebuilt or reviewed later.</span><span class="ko">지금까지의 Tropical 재구현 전체 실험 노트: 정확한 환경(mi250-052, vLLM-ROCm 이미지, ROCm 함정), in-container 워크로드 생성 명령, 각 Phase(0/0.5/2/간섭)의 정확한 재현 명령, 결과 요약, 그리고 하네스 10개 파일 전부(런처·디스패처·워크로드 생성·replay·분석기·run 스크립트)의 <b>완전한 verbatim 소스</b>를 §6에 붙여 나중에 재구성·검토 가능.</span></p>
+    <p>
+      <span class="en">A lab notebook for the Tropical reimplementation: environment, ROCm gotchas, reproduce commands for every phase and the full source of every harness file.</span>
+      <span class="ko">Tropical 재구현의 실험 노트다. 환경과 ROCm 함정, 단계별 재현 명령, 하네스 파일 전체 소스를 담았다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-26">2026-06-26</time></p>
   </a>
 
   <a class="card" href="tropical-phase2-slack-lever.html">
     <span class="tag t-amber"><span class="en">Hands-on · Tropical Phase 2</span><span class="ko">실습 · Tropical Phase 2</span></span>
     <h2><span class="en">Tropical reimpl — Phase 2: the prefill-budget knob is not the lever (negative)</span><span class="ko">Tropical 재구현 — Phase 2: prefill 예산 knob은 레버가 아니다 (네거티브)</span></h2>
-    <p><span class="en">Tested Tropical's Path ② idea — spend the pool's 4.4× idle decode TPOT-slack on the prefill queue — at the cheapest config level reachable on ROCm: raise <code>--max-num-batched-tokens</code> (2048→8192→16384) on the 4-worker chunked pool at the overloaded 24/32 rps. Result: the knob does nothing good — at 24 rps SLO drops 75%→55% (a bigger step is just slower, never adds capacity); TPOT stays flat under SLO the whole time. Honest negative that pins the lesson: Tropical's win is <b>architectural</b> (dedicated prefill workers as interference inhibitors + slack routing across heterogeneous workers, needing the Path ① KV handoff), not a tuning trick — and you can't shortcut it on a homogeneous pool. Next: heterogeneous ROCm pool + a working KV connector, or Path ① on NVIDIA.</span><span class="ko">Tropical Path ② 아이디어 — 풀의 유휴 decode TPOT-slack 4.4×를 prefill 큐에 쓰기 — 를 ROCm에서 가능한 가장 싼 config 레벨로 테스트: 4-워커 chunked 풀에서 과부하 24/32 rps에 <code>--max-num-batched-tokens</code>를 2048→8192→16384로. 결과: knob은 좋은 일을 안 함 — 24 rps에서 SLO 75%→55% 하락(큰 step은 그냥 느릴 뿐 용량을 안 만듦), TPOT는 내내 SLO 아래 평탄. 교훈을 못박는 정직한 네거티브: Tropical의 이득은 <b>아키텍처</b>(전용 prefill 워커=간섭 억제기 + 이종 워커 slack 라우팅, Path ① KV 핸드오프 필요)이지 튜닝 트릭이 아니며 동질 풀에선 지름길이 없다. 다음: ROCm 이종 풀 + 동작하는 KV 커넥터, 또는 NVIDIA에서 Path ①.</span></p>
+    <p>
+      <span class="en">Negative result: raising the prefill batch budget on a homogeneous MI250 pool does not recover SLO, so Tropical's win is architectural, not a tuning trick.</span>
+      <span class="ko">동질 MI250 풀에서 prefill 배치 예산을 키워도 SLO 달성률은 오히려 떨어졌다. Tropical의 이득은 튜닝이 아니라 구조에서 나온다는 네거티브 결과다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-26">2026-06-26</time></p>
   </a>
 
   <a class="card" href="tropical-phase05-pool-scaleout.html">
     <span class="tag t-amber"><span class="en">Hands-on · Tropical Phase 0.5</span><span class="ko">실습 · Tropical Phase 0.5</span></span>
     <h2><span class="en">Tropical reimpl — Phase 0.5: 4-worker scale-out + InFaaS dispatcher</span><span class="ko">Tropical 재구현 — Phase 0.5: 4-워커 스케일아웃 + InFaaS 디스패처</span></h2>
-    <p><span class="en">Built <code>dispatcher.py</code> (fewest-unfinished-tokens routing + SSE passthrough — the seed of the Tropical toggle) and <code>pool_up.sh</code> (4× vLLM-ROCm TP=2 on 8 GCDs), then swept colocated vs chunked through it at 8–40 rps. The picture from Phase 0 didn't change — it sharpened: <b>TPOT stays rock-flat at 100% (p90 ~17ms, 4.4× under SLO) while TTFT p90 explodes 144ms→8.8s→12.5s past 16 rps</b>; chunked ≈ colocated. Purely queuing/TTFT-bound at 4× scale too. Which is exactly Tropical's target: idle decode slack + drowning prefill queue → Path ② should spend the slack on the backlog. Next = the slack-guarded toggle.</span><span class="ko"><code>dispatcher.py</code>(미완토큰 최소 라우팅 + SSE 패스스루 — Tropical 토글의 씨앗)와 <code>pool_up.sh</code>(8 GCD에 vLLM-ROCm TP=2 4개) 구축 후 colocated vs chunked를 8–40 rps로 스윕. Phase 0 그림이 안 바뀌고 더 또렷해짐: <b>TPOT는 100%로 완전 평탄(p90 ~17ms, SLO의 4.4× 아래), TTFT p90은 16 rps 넘어 144ms→8.8초→12.5초로 폭발</b>; chunked ≈ colocated. 4× 규모에서도 순수 큐잉/TTFT-bound. 이게 정확히 Tropical의 표적: 노는 decode slack + 익사하는 prefill 큐 → Path ②가 slack을 적체에 써야. 다음 = slack-가드 토글.</span></p>
+    <p>
+      <span class="en">Scaling the Tropical baseline to four vLLM-ROCm workers behind a dispatcher shows TPOT stays flat while TTFT p90 explodes past 16 rps, a pure queuing problem.</span>
+      <span class="ko">디스패처 뒤에 vLLM-ROCm 워커 4개를 붙여 스윕했다. 16 rps를 넘으면 TPOT는 그대로인데 TTFT p90만 폭증한다. 병목은 순전히 큐잉이다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-26">2026-06-26</time></p>
   </a>
 
   <a class="card" href="tropical-phase0-baseline-bench.html">
     <span class="tag t-amber"><span class="en">Hands-on · Tropical Phase 0</span><span class="ko">실습 · Tropical Phase 0</span></span>
     <h2><span class="en">Tropical reimpl — Phase 0: baseline bench on vLLM-ROCm (MI250)</span><span class="ko">Tropical 재구현 — Phase 0: vLLM-ROCm 베이스라인 벤치 (MI250)</span></h2>
-    <p><span class="en">Step 0 of reimplementing Tropical (SLO-aware P/D multiplexing; no official code): the apples-to-apple baseline harness on the shared MI250 node, Docker-only. Built <code>serve_vllm_rocm.sh</code> / <code>gen_workload.py</code> / <code>analyze_slo.py</code> / <code>run_one.sh</code> (reusing the repo replay client), then swept colocated vs chunked-prefill on Qwen2.5-7B TP=2 over 2–10 rps with a 200-req ShareGPT trace, SLO = 5× light-load. Honest result: on a single instance <b>TPOT never breaks — everything is TTFT/queuing</b>, so chunked ≈ colocated; the paper's interference regime needs the 4×TP2 + dispatcher setup (next step). Records the ROCm walls (entrypoint, <code>--no-enable-chunked-prefill</code>, 360s health, AITER=0).</span><span class="ko">Tropical(SLO-aware P/D 멀티플렉싱; 공식 코드 없음) 재구현의 0단계: 공유 MI250 노드에 Docker 전용 apples-to-apple 베이스라인 하네스. <code>serve_vllm_rocm.sh</code> / <code>gen_workload.py</code> / <code>analyze_slo.py</code> / <code>run_one.sh</code> 구축(레포 리플레이 클라이언트 재활용) 후, Qwen2.5-7B TP=2에서 colocated vs chunked-prefill을 200-req ShareGPT 트레이스로 2–10 rps 스윕, SLO = 경부하 5×. 정직한 결과: 단일 인스턴스에선 <b>TPOT가 안 깨지고 전부 TTFT/큐잉</b>이라 chunked ≈ colocated; 논문의 간섭 체제는 4×TP2 + 디스패처가 필요(다음 단계). ROCm 벽(entrypoint, <code>--no-enable-chunked-prefill</code>, health 360초, AITER=0)도 기록.</span></p>
+    <p>
+      <span class="en">Phase 0 of reimplementing Tropical: a Docker-only baseline harness on MI250 showing a single vLLM instance is bound by TTFT and queuing, never TPOT.</span>
+      <span class="ko">Tropical 재구현 0단계로 MI250에 도커 기반 베이스라인 하네스를 만들었다. 단일 인스턴스에서는 TPOT가 아니라 TTFT와 큐잉이 병목이다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-26">2026-06-26</time></p>
   </a>
 
   <a class="card" href="claude-jira-team-best-practices.html">
     <span class="tag t-amber"><span class="en">Guide · Claude × Jira</span><span class="ko">가이드 · Claude × Jira</span></span>
     <h2><span class="en">Using Claude with Jira on a team — best practices</span><span class="ko">팀에서 Claude로 Jira 쓰기 — 베스트 프랙티스</span></h2>
-    <p><span class="en">A one-page team guide for driving Jira through Claude (Atlassian connector): one-account-per-person + RBAC, the read-free / write-gated rule (draft → review → execute, never bulk-run unreviewed), specific JQL prompting (assignees by account, custom-field metadata first), what it's genuinely good at (triage, spec→ticket drafts, standup reports, Confluence cross-ref), team conventions to lock down, an anti-pattern table, and a reference of the available Atlassian read/write tools.</span><span class="ko">Claude(Atlassian 커넥터)로 Jira를 다루는 팀용 한 장짜리 가이드: 1인 1계정·RBAC, 읽기는 자유·쓰기는 게이트(초안→검토→실행, 무검토 벌크 금지), 구체적 JQL 프롬프트(담당자는 계정으로·커스텀 필드 메타 먼저), 진짜 잘 맞는 용도(트리아지·스펙→티켓 초안·스탠드업 리포트·Confluence 교차참조), 못 박을 팀 컨벤션, 안티패턴 표, 쓸 수 있는 Atlassian 읽기/쓰기 도구 레퍼런스.</span></p>
+    <p>
+      <span class="en">A one-page team guide to driving Jira through Claude: per-person accounts, free reads but reviewed writes, precise JQL prompts, and anti-patterns.</span>
+      <span class="ko">팀에서 Claude로 Jira를 다루는 한 장짜리 가이드다. 읽기는 자유롭게, 쓰기는 검토한 뒤 실행하는 규칙과 안티패턴을 정리했다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-25">2026-06-25</time></p>
   </a>
 
@@ -97,7 +118,10 @@
       <span class="ko">비밀번호 필요</span>
     </span>
     <h2><span class="en">MoAI Performance Gateway — technical material (customer-facing flow)</span><span class="ko">MoAI Performance Gateway — 기술 설명 자료 (고객용 흐름)</span></h2>
-    <p><span class="en">Customer-facing technical material, smooth narrative flow: why it's needed (problems HIS users feel) → what AIGateway is → features → API compatibility → what changes from HIS(+Istio) + the numbers → an expanded NVIDIA Dynamo comparison (distributed KV, E/P/D maturity, roadmap control, when-which) → adoption & use cases. Figures + source links throughout; HIS assumed known.</span><span class="ko">고객용 기술 설명 자료, 매끄러운 서사 흐름: 왜 필요한가(HIS 사용자가 겪는 문제) → AIGateway란 → 특징 → API 호환성 → HIS(+Istio)에서 뭐가 바뀌나 + 숫자 → 비중 키운 NVIDIA Dynamo 비교(분산 KV·E/P/D 성숙도·로드맵 통제·언제 무엇을) → 도입·유스케이스. 그림+출처 링크, HIS는 아는 전제.</span></p>
+    <p>
+      <span class="en">Customer-facing material on the MoAI Performance Gateway: why it is needed, what changes from HIS with Istio, and how it compares with NVIDIA Dynamo.</span>
+      <span class="ko">고객용 MoAI Performance Gateway 설명 자료다. 왜 필요한지, HIS(+Istio)에서 무엇이 바뀌는지, NVIDIA Dynamo와 어떻게 다른지 정리했다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
 
@@ -108,7 +132,10 @@
       <span class="ko">비밀번호 필요</span>
     </span>
     <h2><span class="en">heimdall-aigateway — full PRD digest (tabbed)</span><span class="ko">heimdall-aigateway — PRD 전체 정리 (탭)</span></h2>
-    <p><span class="en">All ~35 PRDs under docs/PRDs/ digested into one tabbed page with figures and per-section source links: end-to-end request flow (token-in/out boundary), component map, the three API surfaces (OpenAI Chat/Responses, Anthropic Messages) and their gaps, token-in/out (renderers, parsers, output pipeline, streaming codec), the Filter→Scorer→Picker scheduler + SchedulingProfile CRD + prefix-cache scorer, PD disaggregation (coordinator, KV connectors, event store), discovery/CRD/observability, a highlights + config/defaults tab, and an <b>AIGateway vs heimdall-inference-scheduler (+Istio)</b> comparison tab.</span><span class="ko">docs/PRDs/ 35개를 그림·섹션별 출처 링크와 함께 한 탭 페이지로 정리: 전체 요청 흐름(토큰 in/out 경계), 컴포넌트 맵, 3개 API 표면(OpenAI Chat/Responses·Anthropic Messages)과 갭, token-in/out(렌더러·파서·output 파이프라인·스트리밍 코덱), Filter→Scorer→Picker 스케줄러 + SchedulingProfile CRD + prefix-cache scorer, PD 분리(코디네이터·KV 커넥터·이벤트 스토어), 디스커버리/CRD/관측성, 하이라이트+설정, 그리고 <b>AIGateway vs heimdall-inference-scheduler(+Istio) 비교</b> 탭.</span></p>
+    <p>
+      <span class="en">All ~35 heimdall-aigateway PRDs digested into one tabbed page, from request flow and scheduler to PD disaggregation and a comparison with the older scheduler.</span>
+      <span class="ko">heimdall-aigateway PRD 35개가량을 주제별 탭으로 묶어 한 페이지에 정리했다. 요청 흐름, 스케줄러, PD 분리, 기존 스케줄러와의 비교를 담았다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
 
@@ -119,7 +146,10 @@
       <span class="ko">비밀번호 필요</span>
     </span>
     <h2><span class="en">SRE — AI&amp; × Moreh AMD cluster buildout Q&amp;A, explained for non-infra readers</span><span class="ko">SRE — AI&amp; × Moreh AMD 클러스터 구축 질의 정리 (비전공자용 풀이)</span></h2>
-    <p><span class="en">A plain-language rewrite of the internal Confluence Q&amp;A on physically building an AMD (MI300X/MI355X) + NVIDIA (H200/B300/L40S) GPU cluster at Ome DC with ai&amp;: rack mounting, cabling &amp; power (C19-C20 counts), InfiniBand topology (XDR Q3400-RA, 144 ports), per-server NIC layout (IB 1:1 vs 2:1, ConnectX-8), GPU↔IB direct RDMA, provisioning (MAAS/PXE/Ansible), Ceph storage, and the open decisions. Big-picture diagram + a non-infra glossary (SRE, IB, RDMA, BMC, PXE, PDU, CIDR…) + section-by-section "in plain words."</span><span class="ko">ai&amp;와 함께 Ome DC에 AMD(MI300X/MI355X)+NVIDIA(H200/B300/L40S) GPU 클러스터를 물리적으로 구축하는 내부 Confluence 질의를 비전공자도 읽히게 풀어 씀: 랙 실장, 케이블·전원(C19-C20 개수), InfiniBand 토폴로지(XDR Q3400-RA, 144포트), 서버별 NIC 배치(IB 1:1 vs 2:1, ConnectX-8), GPU↔IB 직통 RDMA, 프로비저닝(MAAS/PXE/Ansible), Ceph 스토리지, 미결정 항목. 큰그림 다이어그램 + 비전공자용 용어사전(SRE·IB·RDMA·BMC·PXE·PDU·CIDR…) + 섹션별 "쉽게 말하면".</span></p>
+    <p>
+      <span class="en">A plain-language rewrite of the Q&amp;A on physically building an AMD and NVIDIA GPU cluster at Ome DC: racks, power, InfiniBand, NICs, provisioning and storage.</span>
+      <span class="ko">Ome DC에 AMD와 NVIDIA GPU 클러스터를 실제로 구축하는 질의응답을 비전공자도 읽게 풀었다. 랙, 전원, InfiniBand, NIC, 프로비저닝, 스토리지를 다룬다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
 
@@ -130,7 +160,10 @@
       <span class="ko">비밀번호 필요</span>
     </span>
     <h2><span class="en">AI widget / Ask-bot topology — current setup</span><span class="ko">AI 위젯 / Ask-bot 토폴로지 — 현재 구성</span></h2>
-    <p><span class="en">One diagram of how the "✦ Ask AI" widget actually connects end-to-end: browsers (han-oqo + ce-blog) → the company istio edge/k8s route → the shared ce-askbot systemd bot on ce-master → herom's subscription login → the model gateway (local vLLM + OpenRouter). Two-layer auth, two-step streaming, and why it's still one shared bot. SVG + ASCII + component table.</span><span class="ko">"✦ Ask AI" 위젯이 끝까지 어떻게 연결되는지 한 장: 브라우저(han-oqo+ce-blog) → 회사 istio 엣지/k8s 라우트 → ce-master의 공유 ce-askbot(systemd) → herom 구독 로그인 → 모델 게이트웨이(로컬 vLLM+OpenRouter). 2겹 인증, 2단계 스트리밍, 왜 아직 공유 봇 1개인지. SVG+ASCII+구성표.</span></p>
+    <p>
+      <span class="en">One diagram of how the site's Ask AI widget connects end to end, from browsers through the istio edge to the shared ce-askbot and the model gateway.</span>
+      <span class="ko">사이트 Ask AI 위젯이 브라우저부터 istio 엣지, 공용 ce-askbot 봇, 모델 게이트웨이까지 어떻게 이어지는지 한 장으로 보여 준다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
 
@@ -141,7 +174,10 @@
       <span class="ko">비밀번호 필요</span>
     </span>
     <h2><span class="en">MoAI Performance Gateway — technical material (draft)</span><span class="ko">MoAI Performance Gateway — 기술 설명 자료 (초안)</span></h2>
-    <p><span class="en">Draft explainer following the MoAI Inference Framework deep-dive flow: the "performance gateway" category and its high-level benefits (prefix-cache-aware routing, heterogeneous PD disaggregation, single-binary minimal overhead — 16× lower P99, &lt;1µs scheduling), the Heimdall scheduling pipeline (Profile Handler / Pre-Request / Post-Response / Filter / Scorer / Picker), Odin/Norns/Moreh vLLM, and a comparison with NVIDIA Dynamo (distributed KV, E/P/D maturity, roadmap control, risks) — with figures throughout.</span><span class="ko">MoAI Inference Framework 딥다이브 흐름을 따른 초안: "performance gateway" 카테고리와 고수준 이점(프리픽스 캐시 인지 라우팅, 이종 PD 분리, 단일 바이너리 최소 오버헤드 — P99 16배↓, 스케줄링 &lt;1µs), Heimdall 스케줄링 파이프라인(Profile Handler/Pre-Request/Post-Response/Filter/Scorer/Picker), Odin·Norns·Moreh vLLM, 그리고 NVIDIA Dynamo 비교(분산 KV, E/P/D 성숙도, 로드맵 통제, 리스크) — figure 포함.</span></p>
+    <p>
+      <span class="en">Draft explainer for the MoAI Performance Gateway: prefix-cache-aware routing, heterogeneous PD, the Heimdall scheduling pipeline and a comparison with NVIDIA Dynamo.</span>
+      <span class="ko">MoAI Performance Gateway 설명 자료 초안이다. 프리픽스 캐시 인지 라우팅, 이기종 PD 분리, Heimdall 스케줄링 파이프라인, NVIDIA Dynamo와의 비교를 다룬다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-15">2026-06-15</time></p>
   </a>
 
@@ -152,92 +188,137 @@
       <span class="ko">비밀번호 필요</span>
     </span>
     <h2><span class="en">&amp;Meter — andmeter document suite (7 docs, tabbed)</span><span class="ko">&amp;Meter — andmeter 자료 모음 (7개, 탭)</span></h2>
-    <p><span class="en">All seven &amp;Meter documents under one tabbed page (re-themed to the site palette): ce-master deploy runbook, taas functionality-test runbook, local serving report, full command log, gateway/model comparison results, scoring methodology, and the 60-item evaluation catalog.</span><span class="ko">&amp;Meter 문서 7개를 한 탭 페이지에 모음(사이트 팔레트로 리테마): ce-master 배포 런북, taas 기능 테스트 런북, 로컬 서빙 리포트, 전체 명령어 기록, 게이트웨이/모델 비교 결과, 점수 방식, 60개 평가 항목 카탈로그.</span></p>
+    <p>
+      <span class="en">All seven &amp;Meter documents on one tabbed page, from deploy and test runbooks to comparison results, the scoring method and the evaluation catalog.</span>
+      <span class="ko">&amp;Meter 문서 7개를 탭 한 페이지에 모았다. 배포와 테스트 런북부터 비교 결과, 채점 방법, 평가 항목 목록까지 있다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-15">2026-06-15</time></p>
   </a>
 
   <a class="card" href="ai-widget-claude-bot-setup.html">
     <span class="tag t-amber"><span class="en">Runbook · AI widget</span><span class="ko">런북 · AI 위젯</span></span>
     <h2><span class="en">Site "Ask AI" widget + my Claude bot — deploy / inspect / run (runbook)</span><span class="ko">사이트 AI 위젯 + 내 Claude 봇 — 배포·확인·실행 런북</span></h2>
-    <p><span class="en">How the floating "✦ Ask AI" widget gets auto-injected into every page at deploy (CI), the BYO-key multi-provider setup (Groq free / Claude / OpenAI / Gemini) plus a "My Claude bot" mode that runs on a Claude <b>subscription</b> via the Agent SDK (no API billing). Where it actually runs (tmux on the Mac), how to read the URL/token yourself, how to tell Claude to launch it, the manual steps, and the security model (only you can edit/push; live = read-only https tunnel).</span><span class="ko">플로팅 "✦ Ask AI" 위젯이 배포 시 CI로 모든 페이지에 자동 주입되는 법, BYO-key 멀티 프로바이더(Groq 무료/Claude/OpenAI/Gemini) + Agent SDK로 <b>구독</b>에서 도는 "내 Claude 봇" 모드(API 결제 X). 실제로 어디 떠있는지(맥 tmux), URL/토큰 직접 보는 법, Claude에게 자동으로 시키는 법, 수동 실행법, 보안 모델(편집·push는 나만; 라이브=읽기전용 https 터널)까지.</span></p>
+    <p>
+      <span class="en">Runbook for the site's Ask AI widget: how CI injects it, the bring-your-own-key providers, a mode that runs on a Claude subscription, and the security model.</span>
+      <span class="ko">사이트 Ask AI 위젯 런북이다. CI가 위젯을 넣는 방식, 직접 키를 넣는 여러 제공자, Claude 구독으로 도는 내 봇 모드, 보안 모델을 정리했다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-15">2026-06-15</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
   <a class="card" href="agentic-e-disagg.html">
     <span class="tag t-amber"><span class="en">Agentic RL · ⑤/5</span><span class="ko">에이전트 RL · ⑤/5</span></span>
     <h2><span class="en">Agentic RL ⑤ — disaggregation &amp; weight-sync scaling on MI250</span><span class="ko">에이전트 RL ⑤ — disaggregation & weight-sync 스케일링 (MI250)</span></h2>
-    <p><span class="en">Goal: split rollout GPUs from training GPUs across nodes and watch weight-sync become a network cost. True cross-node was blocked by image-distribution infra (053 lacks the image; no inter-node ssh/registry; 30GB relay impractical) — recorded honestly. As a single-node proxy, measured weight-sync scaling at 2/4/8 GCD: training (update_actor) halves with each GPU doubling but weight-sync stays ~1.5s flat, so its share grows 10%→20%. Weight-sync is the serial (Amdahl) term of the RL loop — exactly what disaggregated/async weight transfer targets. Closes the 5-part series.</span><span class="ko">목표: 롤아웃/학습 GPU를 노드 단위로 분리해 weight-sync가 네트워크 비용이 되는지 관찰. 진짜 크로스노드는 이미지 배포 인프라로 막힘(053 이미지 없음·노드간 ssh/registry 불가·30GB 릴레이 비현실) — 정직하게 기록. 단일노드 프록시로 2/4/8 GCD weight-sync 스케일링 측정: 학습(update_actor)은 GPU 2배마다 반감하나 weight-sync는 ~1.5s 평탄 → 비중 10%→20% 증가. weight-sync는 RL 루프의 직렬(Amdahl) 항 — disaggregated/async 가중치 전송이 노리는 지점. 5부작 마무리.</span></p>
+    <p>
+      <span class="en">Cross-node disaggregation was blocked by image distribution, so a single-node proxy shows weight-sync stays flat while training shrinks, the RL loop's serial term.</span>
+      <span class="ko">노드 간 분리는 이미지 배포 문제로 막혔다. 단일 노드 대체 실험에서 학습 시간은 GPU를 늘릴수록 줄지만 weight-sync는 그대로라 RL 루프의 직렬 구간이 된다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-15">2026-06-15</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
   <a class="card" href="agentic-a-tool-math.html">
     <span class="tag t-amber"><span class="en">Agentic RL · ①/5</span><span class="ko">에이전트 RL · ①/5</span></span>
     <h2><span class="en">Agentic RL ① — tool-using math agent (verl multi-turn) on MI250</span><span class="ko">에이전트 RL ① — 도구 쓰는 수학 에이전트 (verl multi-turn, MI250)</span></h2>
-    <p><span class="en">Extended single-turn GRPO into a multi-turn tool agent: the model calls a code-execution sandbox mid-reasoning. verl ToolAgentLoop + vLLM hermes tool-parser runs on MI250 ROCm (4 steps, 2–8 turns). Big finding: in async rollout, weight-sync surfaces as a ~20% step cost (hidden under colocate). But an untrained 0.5B barely calls the tool — infra works, tool-use is sparse without SFT.</span><span class="ko">단일턴 GRPO를 멀티턴 도구 에이전트로 확장 — 모델이 추론 중 코드실행 샌드박스를 호출. verl ToolAgentLoop + vLLM hermes 파서가 MI250 ROCm에서 동작(4스텝, 2–8턴). 핵심: async 롤아웃에선 weight-sync가 ~20% 비용으로 표면화(colocate에선 숨음). 단 미학습 0.5B는 도구를 거의 안 씀 — 인프라는 되나 SFT 없이는 도구사용 희소.</span></p>
+    <p>
+      <span class="en">Extends GRPO into a multi-turn tool-calling math agent with verl on MI250, and finds async rollout exposes weight-sync as about 20% of step time.</span>
+      <span class="ko">verl로 GRPO를 여러 턴에 걸쳐 도구를 부르는 수학 에이전트로 확장해 MI250에서 돌렸다. 비동기 rollout에서는 weight-sync가 스텝 시간의 약 20%로 드러난다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-14">2026-06-14</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
   <a class="card" href="agentic-d-genrm.html">
     <span class="tag t-amber"><span class="en">Agentic RL · ④/5</span><span class="ko">에이전트 RL · ④/5</span></span>
     <h2><span class="en">Agentic RL ④ — GenRM (reward model in the loop): a negative result with a lesson</span><span class="ko">에이전트 RL ④ — GenRM 보상모델 루프: negative result + 아키텍처 교훈</span></h2>
-    <p><span class="en">Tried to make the reward an LLM-as-judge (another model inference). It failed — instructively. Put the judge on GPU and it collides with FSDP training's RCCL collectives (NCCL timeout); put it on CPU and it's so slow it stalls the synchronized loop past the 1800s NCCL watchdog — even at 4 samples. The lesson: a model-based reward can't be inlined into a colocated GRPO trainer; it needs dedicated RM serving (its own GPU/process group), which is exactly how real GenRM systems are built. 4 attempts, all recorded.</span><span class="ko">보상을 LLM-as-judge(또 하나의 모델 추론)로 만들려다 실패 — 그러나 교훈적. judge를 GPU에 올리면 FSDP 학습 RCCL과 충돌(NCCL timeout), CPU에 올리면 너무 느려 1800초 NCCL watchdog까지 동기 루프 마비(4샘플에도). 교훈: 모델-보상은 colocate GRPO에 인라인 불가 — 전용 RM 서빙(자체 GPU/프로세스 그룹)이 필요하며, 실제 GenRM 시스템이 그렇게 만들어진 이유. 4회 시도 전부 기록.</span></p>
+    <p>
+      <span class="en">Putting an LLM judge inside a colocated GRPO loop fails on both GPU and CPU, showing a model-based reward needs dedicated reward-model serving.</span>
+      <span class="ko">LLM 판정 모델을 콜로케이션 GRPO 루프 안에 넣으면 GPU에서도 CPU에서도 실패한다. 모델 기반 보상에는 전용 보상 모델 서빙이 필요하다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-15">2026-06-15</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
   <a class="card" href="agentic-c-rag.html">
     <span class="tag t-amber"><span class="en">Agentic RL · ③/5</span><span class="ko">에이전트 RL · ③/5</span></span>
     <h2><span class="en">Agentic RL ③ — search (RAG) agent with BM25 tool + EM reward on MI250</span><span class="ko">에이전트 RL ③ — 검색(RAG) 에이전트, BM25 도구 + EM 보상 (MI250)</span></h2>
-    <p><span class="en">Swapped A's tool for a local BM25 retriever over HotpotQA (6.3k docs). The search agent is more multi-turn than the math agent (2.6 vs 2.1 turns) and actually calls the tool — but two honest results: local BM25 is ~7ms so it never bottlenecks rollout (real cost needs dense/web retrieval), and an untrained 0.5B can't solve HotpotQA multi-hop (EM=0). Infra works; the task is bigger than the model. 5 debugging rounds on the agent-path reward routing.</span><span class="ko">A의 도구를 HotpotQA(6.3k docs) 로컬 BM25 retriever로 교체. 검색 에이전트는 수학 에이전트보다 더 멀티턴(2.6 vs 2.1턴)이고 도구를 실제로 호출 — 단 정직한 결과 둘: 로컬 BM25는 ~7ms라 rollout을 못 막고(진짜 비용은 dense/웹 검색), 미학습 0.5B는 HotpotQA 멀티홉을 못 풂(EM=0). 인프라는 되나 과제가 모델보다 큼. agent 경로 보상 라우팅으로 디버깅 5회.</span></p>
+    <p>
+      <span class="en">A HotpotQA search agent with a BM25 tool on MI250 calls the tool more than the math agent, but local BM25 never bottlenecks and an untrained 0.5B scores EM 0.</span>
+      <span class="ko">MI250에서 BM25 검색 도구를 쓰는 HotpotQA 에이전트를 돌렸다. 도구는 더 자주 부르지만 로컬 BM25는 병목이 아니고, 학습 전 0.5B 모델은 문제를 풀지 못한다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-14">2026-06-14</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
   <a class="card" href="agentic-b-code.html">
     <span class="tag t-amber"><span class="en">Agentic RL · ②/5</span><span class="ko">에이전트 RL · ②/5</span></span>
     <h2><span class="en">Agentic RL ② — code agent with unit-test reward (RLVR) on MI250</span><span class="ko">에이전트 RL ② — 코드 에이전트, 유닛테스트 통과 보상 (RLVR, MI250)</span></h2>
-    <p><span class="en">Reward = run the model's code and check unit tests pass (MBPP, custom reward fn). On MI250 the 0.5B actually writes some passing solutions (score 1.0). Key finding: once the reward is external execution, the reward phase jumps from ≈0 (rule-match in A) to 14–24% of the step — and it fluctuates as failing code hangs to timeout. Verifier cost is a first-class term in the RL loop.</span><span class="ko">보상 = 모델 코드를 실행해 유닛테스트 통과 확인(MBPP, 커스텀 보상). MI250에서 0.5B가 일부 통과 코드를 실제로 작성(score 1.0). 핵심: 보상이 외부 실행이 되는 순간 reward 단계가 ≈0(A의 규칙일치)에서 스텝의 14~24%로 점프 — 실패-timeout이 많을수록 출렁인다. 검증기 비용은 RL 루프의 1급 항목.</span></p>
+    <p>
+      <span class="en">A code agent rewarded for passing unit tests on MI250 shows that once reward means running code, the reward phase grows to 14–24% of each step.</span>
+      <span class="ko">유닛 테스트 통과를 보상으로 받는 코드 에이전트를 MI250에서 돌렸다. 보상이 코드 실행이 되자 보상 단계가 스텝의 14~24%로 커진다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-14">2026-06-14</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
   <a class="card" href="rl-vllm-rollout-unsloth-verl-bench.html">
     <span class="tag t-amber"><span class="en">Hands-on · RL speed</span><span class="ko">실습 · RL 속도</span></span>
     <h2><span class="en">Anatomy of the RL loop — vLLM rollout · Unsloth · veRL on MI250</span><span class="ko">RL 루프 속도 해부 — vLLM rollout · Unsloth · veRL (MI250)</span></h2>
-    <p><span class="en">Actually ran GRPO on MI250 (Docker-only, ROCm 7.2.3) and dissected one step. The 2×2 (vLLM × Unsloth): turning on vLLM rollout is the one big lever — 4.4× generation, 3.7× the whole loop on a single GCD — while Unsloth full-param does almost nothing (it targets backward, but rollout is 80–92% of the step). Extended to bf16 LoRA + 4bit QLoRA: they shrink backward a little but slow the bottleneck (generation), so the loop only gets worse at this size — Unsloth's kernel path wouldn't even load on transformers 5.11. Then veRL flips the picture: with a fast rollout engine mandatory, generation is only ~27% and KL/ref forwards + reward share the cost. Input/output token lengths, every command, config, code-path, and ~9 debugging walls recorded.</span><span class="ko">MI250에서 GRPO를 실제로 돌려(Docker 전용, ROCm 7.2.3) 한 스텝을 분해. 2×2(vLLM × Unsloth): vLLM rollout 켜기가 거의 유일한 큰 레버 — 단일 GCD에서 생성 4.4×, 루프 전체 3.7× — 반면 Unsloth full-param은 사실상 무효과(backward를 노리지만 rollout이 스텝의 80–92%). bf16 LoRA·4bit QLoRA로 확장: 학습부는 조금 줄지만 병목(생성)을 더 느리게 해 이 규모에선 오히려 손해 — Unsloth 커널 경로는 transformers 5.11에서 로드조차 실패. veRL로 옮기면 그림이 뒤집힌다: 빠른 롤아웃 엔진이 기본이라 생성은 ~27%뿐이고 KL/ref forward·reward가 비용을 나눠 가진다. 입출력 토큰 길이·모든 명령·config·코드 흐름·디버깅 ~9회 기록.</span></p>
+    <p>
+      <span class="en">Dissects a GRPO step on MI250: vLLM rollout is the one big lever (4.4× generation), Unsloth barely helps because generation dominates, and veRL shifts the cost.</span>
+      <span class="ko">MI250에서 GRPO 스텝을 해부했다. vLLM rollout을 켜면 생성이 4.4배 빨라지고, 생성이 대부분이라 Unsloth는 거의 효과가 없다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-14">2026-06-14</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
   <a class="card" href="argocd-phase6-prodops.html">
     <span class="tag t-amber"><span class="en">Series · GitOps · Phase 6/6</span><span class="ko">시리즈 · GitOps · Phase 6/6</span></span>
     <h2><span class="en">Argo CD lab — Phase 6: prod-ops &amp; disaster recovery</span><span class="ko">ArgoCD 실습 — Phase 6: 실운영 &amp; 재해 복구</span></h2>
-    <p><span class="en">The payoff: delete the entire cluster, recreate it, apply ONE bootstrap app-of-apps, and watch the whole stack (hello + model server + llm-d control plane) repopulate from Git — live DR proof.</span><span class="ko">보상: 클러스터를 통째로 삭제·재생성하고 부트스트랩 app-of-apps 하나만 적용하면 전체 스택(hello + 모델 서버 + llm-d 컨트롤플레인)이 Git에서 복원 — 라이브 DR 증명.</span></p>
+    <p>
+      <span class="en">Argo CD lab Phase 6: delete the whole cluster, recreate it, apply one bootstrap app-of-apps, and watch the full stack come back from Git.</span>
+      <span class="ko">클러스터를 통째로 지우고 다시 만든 뒤 bootstrap app-of-apps 하나만 적용하자 전체 스택이 Git에서 되살아났다. 재해 복구를 실제로 검증했다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-12">2026-06-12</time></p>
   </a>
   <a class="card" href="argocd-phase5b-gpu-external.html">
     <span class="tag t-amber"><span class="en">Series · GitOps · Phase 5 follow-up</span><span class="ko">시리즈 · GitOps · Phase 5 후속</span></span>
     <h2><span class="en">Argo CD lab — Phase 5 follow-up: GPU under GitOps via external Service (it works)</span><span class="ko">ArgoCD 실습 — Phase 5 후속: 외부 Service로 GPU under GitOps (됨)</span></h2>
-    <p><span class="en">The Phase-5 fallback, executed: vLLM-ROCm in Docker on the MI250 (<code>VLLM_ROCM_USE_AITER=0</code> to dodge an aiter crash) + an Argo CD-managed nginx-proxy Service. A cluster pod gets a real completion from the GPU — "Served by MI250 through ArgoCD". Includes the Argo CD-excludes-Endpoints-by-default finding.</span><span class="ko">Phase 5 폴백 실행: MI250에 Docker vLLM-ROCm(<code>VLLM_ROCM_USE_AITER=0</code>로 aiter 크래시 회피) + ArgoCD 관리 nginx 프록시 Service. 클러스터 파드가 GPU로부터 실제 응답 — "Served by MI250 through ArgoCD". ArgoCD가 Endpoints를 기본 제외한다는 발견 포함.</span></p>
+    <p>
+      <span class="en">Phase 5 follow-up: vLLM-ROCm in Docker on the MI250 behind an Argo CD-managed proxy Service lets a cluster pod get real GPU completions.</span>
+      <span class="ko">MI250에서 도커로 띄운 vLLM-ROCm 앞에 Argo CD가 관리하는 프록시 Service를 두었다. 클러스터 파드가 실제 GPU 응답을 받는다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-12">2026-06-12</time></p>
   </a>
   <a class="card" href="argocd-phase5-gpu.html">
     <span class="tag t-amber"><span class="en">Series · GitOps · Phase 5/6</span><span class="ko">시리즈 · GitOps · Phase 5/6</span></span>
     <h2><span class="en">Argo CD lab — Phase 5: MI250 GPU passthrough (stretch, blocked)</span><span class="ko">ArgoCD 실습 — Phase 5: MI250 GPU passthrough (stretch, 막힘)</span></h2>
-    <p><span class="en">Honest negative result: a kind node won't boot with <code>/dev/kfd</code>+<code>/dev/dri</code> bind-mounted (systemd init breaks), while plain <code>docker run --device</code> passes the MI250 fine. Root cause + the two real fallbacks (external Service to a Docker GPU server, or real K8s + AMD device plugin).</span><span class="ko">정직한 negative result: kind 노드는 <code>/dev/kfd</code>+<code>/dev/dri</code> bind-mount하면 부팅 실패(systemd init 깨짐), 반면 평범한 <code>docker run --device</code>는 MI250 정상 전달. 근본원인 + 실제 폴백 둘(Docker GPU 서버로의 외부 Service, 또는 진짜 K8s + AMD device plugin).</span></p>
+    <p>
+      <span class="en">Negative result: a kind node won't boot with the MI250 device files bind-mounted, though plain <code>docker run --device</code> works, with the root cause and two fallbacks.</span>
+      <span class="ko">MI250 장치 파일을 바인드 마운트하면 kind 노드가 부팅되지 않는다. 일반 <code>docker run --device</code>는 되며, 원인과 대안 두 가지를 정리했다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-12">2026-06-12</time></p>
   </a>
   <a class="card" href="argocd-phase4-llmd.html">
     <span class="tag t-amber"><span class="en">Series · GitOps · Phase 4/6</span><span class="ko">시리즈 · GitOps · Phase 4/6</span></span>
     <h2><span class="en">Argo CD lab — Phase 4: llm-d control plane (app-of-apps + sync waves)</span><span class="ko">ArgoCD 실습 — Phase 4: llm-d 컨트롤플레인 (app-of-apps + sync waves)</span></h2>
-    <p><span class="en">The llm-d slice as code: one app-of-apps root brings up the GIE CRDs (wave 0) then an InferencePool CR (wave 1) selecting the Phase-3 pods. CRD-before-CR ordering, ServerSideApply, and the <code>endpointPickerRef.port</code> gotcha — dataplane scope called out honestly.</span><span class="ko">llm-d 조각을 코드로: app-of-apps 루트 하나가 GIE CRD(wave0) 후 InferencePool CR(wave1)을 올리고 Phase3 파드를 selector로. CRD→CR 순서, ServerSideApply, <code>endpointPickerRef.port</code> 함정 — 데이터플레인 범위는 정직하게 명시.</span></p>
+    <p>
+      <span class="en">Phase 4 brings up the llm-d control plane as code: one app-of-apps root applies the GIE CRDs before an InferencePool using sync waves.</span>
+      <span class="ko">llm-d 컨트롤플레인을 코드로 올린다. app-of-apps 루트 하나가 sync wave로 GIE CRD를 먼저, InferencePool을 나중에 적용한다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-12">2026-06-12</time></p>
   </a>
   <a class="card" href="argocd-phase3-vllm.html">
     <span class="tag t-amber"><span class="en">Series · GitOps · Phase 3/6</span><span class="ko">시리즈 · GitOps · Phase 3/6</span></span>
     <h2><span class="en">Argo CD lab — Phase 3: a real model server under GitOps</span><span class="ko">ArgoCD 실습 — Phase 3: GitOps 아래 진짜 모델 서버</span></h2>
-    <p><span class="en">An OpenAI-compatible model server (llama.cpp + Qwen2.5-0.5B GGUF) deployed by Argo CD, real completions on CPU, and a model version bump (q4_k_m→q5_0) as a commit with an automatic rolling update. Includes the llama.cpp <code>-hf</code> 401 gotcha.</span><span class="ko">OpenAI 호환 모델 서버(llama.cpp + Qwen2.5-0.5B GGUF)를 ArgoCD로 배포, CPU에서 실제 응답, 모델 버전업(q4_k_m→q5_0)을 커밋으로 자동 롤링 업데이트. llama.cpp <code>-hf</code> 401 함정 포함.</span></p>
+    <p>
+      <span class="en">Phase 3 deploys a real OpenAI-compatible model server (llama.cpp with Qwen2.5-0.5B) through Argo CD and ships a model version bump as a commit.</span>
+      <span class="ko">llama.cpp와 Qwen2.5-0.5B로 만든 OpenAI 호환 모델 서버를 Argo CD로 배포한다. 모델 버전 변경도 커밋 하나로 롤링 업데이트된다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-12">2026-06-12</time></p>
   </a>
   <a class="card" href="argocd-phase2-selfheal.html">
     <span class="tag t-amber"><span class="en">Series · GitOps · Phase 2/6</span><span class="ko">시리즈 · GitOps · Phase 2/6</span></span>
     <h2><span class="en">Argo CD lab — Phase 2: drift, self-heal, rollback</span><span class="ko">ArgoCD 실습 — Phase 2: drift · self-heal · 롤백</span></h2>
-    <p><span class="en">Our own GitOps repo as source of truth, then three live drills: commit→auto-sync, manual drift reverted by self-heal in ~2s, and rollback via <code>git revert</code> — every status captured.</span><span class="ko">우리 GitOps 저장소를 진실 공급원으로, 세 가지 라이브 드릴: commit→auto-sync, 수동 drift를 self-heal이 약 2초 만에 되돌림, <code>git revert</code> 롤백 — 모든 상태 캡쳐.</span></p>
+    <p>
+      <span class="en">Phase 2 runs three live GitOps drills on our own repo: commit to auto-sync, manual drift reverted by self-heal, and rollback via <code>git revert</code>.</span>
+      <span class="ko">직접 만든 GitOps 레포로 세 가지를 실습한다. 커밋 자동 동기화, 수동 변경을 되돌리는 self-heal, <code>git revert</code> 롤백이다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-12">2026-06-12</time></p>
   </a>
   <a class="card" href="argocd-phase1-bootstrap.html">
     <span class="tag t-amber"><span class="en">Series · GitOps · Phase 1/6</span><span class="ko">시리즈 · GitOps · Phase 1/6</span></span>
     <h2><span class="en">Argo CD lab — Phase 1: bootstrap (kind + Argo CD)</span><span class="ko">ArgoCD 실습 — Phase 1: 부트스트랩 (kind + ArgoCD)</span></h2>
-    <p><span class="en">Live: a throwaway kind cluster + Argo CD v3.4.3 on mi250-052, root-free, in ~1m51s — including the ApplicationSet-CRD 256 KiB install trap and the server-side-apply fix.</span><span class="ko">실측: mi250-052에 일회용 kind 클러스터 + ArgoCD v3.4.3를 root 없이 약 1분 51초 — ApplicationSet CRD 256 KiB 설치 함정과 server-side-apply 해결 포함.</span></p>
+    <p>
+      <span class="en">Phase 1 stands up a throwaway kind cluster and Argo CD on mi250-052 without root in under two minutes, including a CRD install trap and its fix.</span>
+      <span class="ko">mi250-052에 root 없이 kind 클러스터와 Argo CD를 2분 안에 띄운다. ApplicationSet CRD 설치 함정과 해결법도 담았다.</span>
+    </p>
     <p class="post-meta"><time datetime="2026-06-12">2026-06-12</time></p>
   </a>
   <a class="card" href="argocd-llm-d-gitops.html">
@@ -247,8 +328,8 @@
     </span>
     <h2><span class="en">Operating vLLM + llm-d with Argo CD — concept to a hands-on plan</span><span class="ko">ArgoCD로 vLLM + llm-d 운영하기 — 개념부터 실습 계획까지</span></h2>
     <p>
-      <span class="en">What Argo CD is and <i>why</i> GitOps matters when llm-d is a CRD-heavy, multi-component K8s stack (Gateway API + Inference Extension + EPP + vLLM pods). Push-vs-pull, the reconcile loop, self-heal, sync waves, app-of-apps — then a 6-phase lab→real-ops plan on a root-free <b>kind</b> cluster on mi250-052. Phase 1 executed live: kind + Argo CD v3.4.3 up in ~1m51s, including the classic ApplicationSet-CRD 256 KiB install trap and the server-side-apply fix.</span>
-      <span class="ko">ArgoCD가 뭐고, llm-d처럼 CRD 많고 컴포넌트 여러 개인 K8s 스택(Gateway API + Inference Extension + EPP + vLLM 파드)에서 GitOps가 <i>왜</i> 필요한지. push-vs-pull, reconcile 루프, self-heal, sync wave, app-of-apps — 그리고 mi250-052에 root 없는 <b>kind</b> 클러스터로 6단계 실습→실운영 계획. Phase 1 실제 실행: kind + ArgoCD v3.4.3 약 1분 51초 기동, ApplicationSet CRD 256 KiB 설치 함정과 server-side-apply 해결까지 포함.</span>
+      <span class="en">What Argo CD is and why GitOps matters for a CRD-heavy llm-d stack, followed by a six-phase hands-on plan on a kind cluster.</span>
+      <span class="ko">Argo CD가 무엇이고, CRD가 많은 llm-d 스택에 왜 GitOps가 필요한지 설명한다. kind 클러스터에서 진행할 6단계 실습 계획도 세웠다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-12">2026-06-12</time>
@@ -266,8 +347,8 @@
     </span>
     <h2><span class="en">MI250 PDD Follow-up — Bidirectional feasibility + TP=4+4 code analysis</span><span class="ko">MI250 PDD 후속 — Bidirectional 가능성 + TP=4+4 코드 분석</span></h2>
     <p>
-      <span class="en">Follow-up to the 1st PDD experiment (TP=1+1). Goal: TP=4+4 bidirectional. SSH to the GPU node was down — pivoted to deep static analysis of vLLM v0.10.0 source. Conclusion: vLLM v1's every KV connector is one-way (one instance = one role). 4 interpretations of "bidirectional" with code-level feasibility, 25 attempts with debug log, full TP=4+4 cmd ready for the moment SSH is back.</span>
-      <span class="ko">1차 PDD 실험 (TP=1+1) 후속. 목표는 TP=4+4 bidirectional. SSH 가 끊겨 → vLLM v0.10.0 source 정적 분석으로 전환. 결론: vLLM v1 의 모든 KV connector 가 단방향 (한 instance = 한 role). "Bidirectional" 의 4 가지 해석 + 각각 코드 차원 가능 여부, 25 회 시도 + 디버깅 기록, SSH 복구 즉시 실행 가능한 TP=4+4 cmd 전부 작성.</span>
+      <span class="en">With the GPU node unreachable, static analysis of vLLM v0.10.0 shows every v1 KV connector is one-way, and a TP=4+4 command is staged for later.</span>
+      <span class="ko">GPU 노드 접속이 막혀 vLLM v0.10.0 소스를 정적 분석했다. v1의 KV 커넥터는 모두 단방향이라 인스턴스 하나는 역할 하나만 맡는다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-12">2026-06-12</time>
@@ -281,8 +362,8 @@
     </span>
     <h2><span class="en">P/D Disaggregation Experiment on MI250 (8 GPU)</span><span class="ko">MI250 8 GPU 에서 P/D Disaggregation 실험</span></h2>
     <p>
-      <span class="en">Real experiment on mi250-052 — 4 GPU prefill + 4 GPU decode with small model. Goals: (1) how to run, (2) does it work + monitoring captures, (3) where/how KV cache actually transfers between GCDs, (4) what's the throughput effect vs single instance. Docker-only (no pip on the shared node). All commands, failures, and observations recorded as it happens.</span>
-      <span class="ko">mi250-052 노드 위에서 진짜 실험 — 4 GPU prefill + 4 GPU decode 로 작은 모델 P/D. 목표: (1) 어떻게 돌리는지, (2) 잘 도는지 + 모니터링 캡쳐, (3) KV cache 가 GCD 간 어디서 어떻게 전송되는지, (4) 단일 instance 대비 throughput 효과. 공유 노드라 Docker 전용 (pip X). 모든 명령어 / 실패 / 관찰 진행하면서 기록.</span>
+      <span class="en">A real P/D disaggregation run on mi250-052, half the GPUs for prefill and half for decode: how to run it, whether it works, how KV moves and the throughput effect.</span>
+      <span class="ko">mi250-052에서 prefill 4 GPU, decode 4 GPU로 P/D 분리를 실제로 돌렸다. 실행법, 동작 여부, KV 전송 경로, 처리량 효과를 기록했다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-11">2026-06-11</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
@@ -294,8 +375,8 @@
     </span>
     <h2><span class="en">Trying vLLM PD Disaggregation on Apple Silicon</span><span class="ko">Apple Silicon 에서 vLLM PD Disaggregation 시도</span></h2>
     <p>
-      <span class="en">Can we split Prefill and Decode across two vllm-metal instances on a Mac? Survey of all 9 vLLM KV transfer connectors → only ExampleConnector (filesystem) is GPU-agnostic → tried it → vllm-metal worker's KV connector handshake metadata API is NotImplemented. Mechanism demo itself is not possible without NVIDIA Linux + NIXL. Includes the analysis of why and what to do in a real GPU environment.</span>
-      <span class="ko">Mac 에서 Prefill 과 Decode 를 두 vllm-metal instance 로 분리할 수 있을까? vLLM 의 9 KV transfer connector 모두 검토 → GPU 무관 후보는 ExampleConnector (filesystem) 뿐 → 시도 → vllm-metal worker 의 KV connector handshake metadata API 가 NotImplemented. NVIDIA Linux + NIXL 없이는 mechanism 시연도 불가. 왜 안 됐는지 분석 + 실 GPU 환경에서 무엇을 해야 하는지.</span>
+      <span class="en">Trying vLLM PD disaggregation on a Mac with vllm-metal shows it can't work: the only GPU-agnostic connector hits an unimplemented handshake API.</span>
+      <span class="ko">Mac에서 vllm-metal로 PD 분리를 시도했다. GPU에 무관한 유일한 커넥터도 vllm-metal의 핸드셰이크 API가 구현되지 않아 막힌다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-11">2026-06-11</time>
@@ -309,8 +390,8 @@
     </span>
     <h2><span class="en">Trying vLLM / llm-d / Dynamo on CPU + tiny model</span><span class="ko">CPU + 작은 모델로 vLLM / llm-d / Dynamo 따라해보기</span></h2>
     <p>
-      <span class="en">No GPU, no cluster — yet aiming to feel how each layer (vLLM engine / Dynamo orchestrator / llm-d K8s gateway) actually works. Step 1: vLLM CPU + Qwen2.5-0.5B-Instruct single instance. Step 2: two instances + nginx LB. Step 3: minikube + llm-d chart (disk permitting). All commands, errors, and observations recorded as they happen.</span>
-      <span class="ko">GPU 없음, cluster 없음 — 그래도 각 layer (vLLM engine / Dynamo orchestrator / llm-d K8s gateway) 가 실제로 어떻게 동작하는지 손으로 체득. Step 1: vLLM CPU + Qwen2.5-0.5B-Instruct 단일 instance. Step 2: 두 instance + nginx LB. Step 3: minikube + llm-d (디스크 여유 봐서). 모든 명령어/오류/관찰 진행하면서 그대로 기록.</span>
+      <span class="en">Getting a feel for vLLM, Dynamo and llm-d without a GPU: a CPU vLLM with Qwen2.5-0.5B, then two instances behind nginx, then minikube with llm-d.</span>
+      <span class="ko">GPU 없이 vLLM, Dynamo, llm-d의 각 계층을 체험한다. CPU vLLM 단일 인스턴스부터 nginx 로드밸런싱, minikube 위 llm-d까지 단계별로 기록했다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-11">2026-06-11</time>
@@ -324,8 +405,8 @@
     </span>
     <h2>Frontier (NetX-lab) — <span class="en">codebase deep-dive + run attempt</span><span class="ko">코드베이스 딥다이브 + 실행 시도</span></h2>
     <p>
-      <span class="en">89K-LoC Python discrete-event LLM serving simulator (arXiv:2605.21312). 5 scenarios traced deeply: cluster simulator + event loop, profiling system (81 files, 5 op categories), execution time predictor (cost-table lookup + sklearn fallback), 4-level scheduler hierarchy, cc_backend + modern runtime (CUDA Graph / spec dec / prefix cache / MoE / quantization). Direct comparison with LLMServingSim. The run attempt walks through Python 3.9-induced ImportError → diagnosis → Python 3.12 venv → successful smoke runs across 4 scenarios (Dense / MoE / Thinking / MoE+SpecDec) with results table and analysis.</span>
-      <span class="ko">89K LoC Python discrete-event LLM 서빙 simulator (arXiv:2605.21312). 5 시나리오 깊이 분석: cluster simulator + event loop, profiling system (81 files, 5 op category), execution time predictor (cost-table + sklearn fallback), 4-level scheduler hierarchy, cc_backend + modern runtime (CUDA Graph / spec dec / prefix cache / MoE / quantization). LLMServingSim 과 직접 비교. 실행 시도 — Python 3.9 venv 실패 → 진단 → Python 3.12 venv → 4 시나리오 (Dense / MoE / Thinking / MoE+SpecDec) smoke run 모두 성공 + 결과 표 + 분석.</span>
+      <span class="en">A deep dive into Frontier's 89K-line simulator codebase across five scenarios, a comparison with LLMServingSim, and smoke runs after fixing a Python version error.</span>
+      <span class="ko">Frontier 시뮬레이터 코드베이스를 다섯 시나리오로 깊이 읽고 LLMServingSim과 비교한다. Python 버전 오류를 고친 뒤 스모크 실행까지 했다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-11">2026-06-11</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
@@ -341,8 +422,8 @@
     </span>
     <h2>heimdall-inference-scheduler — <span class="en">codebase deep-dive</span><span class="ko">코드베이스 딥다이브</span></h2>
     <p>
-      <span class="en">Go-based llm-d Router (EPP) fork. 127K LoC, 91K in pkg/epp alone. Map + domain + architecture, then five scenarios traced with file:line citations &amp; weakness critique: ext-proc request lifecycle, flow control (the differentiator vs aigateway — queue/fairness/EDF/SLO/saturation/eviction), scheduling pipeline with 14 scorers + 3 profile handlers, P/D + E/P/D disaggregation, DataLayer + Moreh-specific plugins (ResponsesStore, RunningRequestsDetector).</span>
-      <span class="ko">Go 기반 llm-d Router (EPP) fork. 127K LoC, pkg/epp 만 91K. 코드 지도 + 도메인 + 아키텍처, 그 다음 5개 시나리오를 file:line 인용 + 약점 비판으로 분석: ext-proc 요청 lifecycle, <strong>Flow Control</strong> (aigateway 와의 가장 큰 차이 — 큐잉/fairness/EDF/SLO/saturation/eviction), 14 scorer + 3 profile handler 스케줄링, P/D + E/P/D 분리, DataLayer + Moreh 특화 plugin (ResponsesStore, RunningRequestsDetector).</span>
+      <span class="en">A deep dive into heimdall-inference-scheduler, a Go fork of the llm-d router, tracing five scenarios with file:line citations, flow control included.</span>
+      <span class="ko">llm-d 라우터를 Go로 포크한 heimdall-inference-scheduler를 다섯 시나리오로 추적한다. aigateway와 갈리는 지점인 flow control도 짚는다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-11">2026-06-11</time>
@@ -360,8 +441,8 @@
     </span>
     <h2>heimdall-aigateway — <span class="en">codebase deep-dive</span><span class="ko">코드베이스 딥다이브</span></h2>
     <p>
-      <span class="en">Rust K8s-native LLM gateway (45K LoC, 6 crates, 27 PRDs). Codebase map + domain model + architecture diagrams, then five core scenarios traced function-by-function with file:line citations and design-weakness critique: request lifecycle, scheduler hot-reload, P/D selection &amp; KV transfer (NIXL/LMCache/Mooncake/SGLang), prefix-cache scorer, sidecar→CR→gateway discovery.</span>
-      <span class="ko">Rust K8s-native LLM 게이트웨이 (45K LoC, 6 크레이트, 27 PRD). 코드 지도 + 도메인 모델 + 아키텍처 다이어그램, 그 다음 5개 핵심 시나리오를 함수별 file:line 인용 + 설계 약점 비판으로 분석: 요청 lifecycle, scheduler hot-reload, P/D selection &amp; KV transfer (NIXL/LMCache/Mooncake/SGLang), prefix-cache scorer, 사이드카→CR→게이트웨이 발견.</span>
+      <span class="en">A deep dive into heimdall-aigateway, a Rust K8s-native LLM gateway, tracing five core scenarios function by function with a design critique.</span>
+      <span class="ko">Rust로 만든 K8s 네이티브 LLM 게이트웨이 heimdall-aigateway를 핵심 시나리오 다섯 개로 함수 단위까지 추적하고 설계 약점을 짚는다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-11">2026-06-11</time>
@@ -375,8 +456,8 @@
     </span>
     <h2>LLMServingSim 예측 vs 실 vLLM — <span class="en">accuracy comparison (in progress)</span><span class="ko">정확도 비교 (진행 중)</span></h2>
     <p>
-      <span class="en">Run the same 300-request ShareGPT workload through (a) LLMServingSim and (b) real vLLM on a matching GPU, then diff per-request TTFT/TPOT/latency. Includes the JSONL replay client and CSV-diff script. <strong>Currently waiting on GPU access to fill in the real-vLLM half.</strong></span>
-      <span class="ko">같은 300-req ShareGPT 워크로드를 (a) LLMServingSim 예측, (b) 매칭되는 실 GPU의 vLLM으로 측정 후 per-request TTFT/TPOT/latency diff. JSONL replay 클라이언트 + CSV diff 스크립트 포함. <strong>현재 vLLM 측 채울 GPU 확보 대기.</strong></span>
+      <span class="en">Compares LLMServingSim predictions with real vLLM on the same 300-request ShareGPT workload, still waiting on GPU access for the real half.</span>
+      <span class="ko">같은 ShareGPT 요청 300개로 LLMServingSim 예측과 실제 vLLM을 비교하는 진행 중 기록이다. 실측 쪽은 GPU 접근을 기다리고 있다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-10">2026-06-10</time>
@@ -390,8 +471,8 @@
     </span>
     <h2>LLMServingSim 2.0 × Qwen3 — <span class="en">execution runbook</span><span class="ko">실행 런북</span></h2>
     <p>
-      <span class="en">Reproducible step-by-step: clone &amp; build LLMServingSim, run sims for Qwen3-32B (dense) and Qwen3-30B-A3B (MoE) on a shipped RTXPRO6000 profile — <strong>no real GPU used</strong>. Every command, every issue (dtype, ZeroDivisionError, missing config), every CSV output, and a 4-way sweep comparing prefix cache on/off and dense vs MoE.</span>
-      <span class="ko">재현 가능한 단계별: LLMServingSim 클론·빌드, RTXPRO6000용 내장 프로파일로 Qwen3-32B(dense) + Qwen3-30B-A3B(MoE) 시뮬 — <strong>실 GPU 0대 사용</strong>. 모든 명령, 모든 이슈(dtype, ZeroDivisionError, config 부재), CSV 출력 해석, prefix cache on/off · dense vs MoE 4-way 비교.</span>
+      <span class="en">A reproducible runbook for simulating Qwen3-32B and Qwen3-30B-A3B in LLMServingSim from a shipped profile, with no real GPU, plus every issue hit.</span>
+      <span class="ko">실제 GPU 없이 제공된 프로파일로 LLMServingSim에서 Qwen3-32B와 Qwen3-30B-A3B를 시뮬레이션하는 재현 런북이다. 겪은 문제도 모두 적었다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-10">2026-06-10</time>
@@ -405,8 +486,8 @@
     </span>
     <h2>LLMServingSim — <span class="en">profiling guide (inventory + new HW × model)</span><span class="ko">프로파일링 가이드 (인벤토리 + 새 HW × 모델)</span></h2>
     <p>
-      <span class="en">What (HW × model × variant × TP) profiles ship with the repo today, and the full step-by-step for adding new ones: vLLM container setup, <code>profile.sh</code> variables, supported model-architecture YAMLs, time/cost estimates, and how to wire the resulting CSVs into a new cluster config so sims run without further GPU access.</span>
-      <span class="ko">레포에 현재 들어있는 (HW × 모델 × variant × TP) 프로파일 인벤토리, 그리고 새 조합 추가하는 step-by-step: vLLM 컨테이너 설정, <code>profile.sh</code> 변수, 지원되는 model architecture YAML, 시간/비용 추정, 산출 CSV를 새 cluster config에 연결해서 GPU 없이 sim 돌리는 법까지.</span>
+      <span class="en">Which hardware and model profiles ship with LLMServingSim, and step by step how to add new ones so simulations run without further GPU access.</span>
+      <span class="ko">LLMServingSim에 어떤 하드웨어와 모델 프로파일이 들어 있는지, 새 프로파일을 어떻게 추가해 GPU 없이 시뮬레이션하는지 단계별로 정리한다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-10">2026-06-10</time>
@@ -420,8 +501,8 @@
     </span>
     <h2>LLMServingSim — <span class="en">single-request code flow analysis</span><span class="ko">단일 요청 코드 흐름 분석</span></h2>
     <p>
-      <span class="en">Walks the actual source (commit <code>8b5b943a3a37</code>) for the simplest scenario — Qwen3-32B, 1 instance, 1 request — from <code>python -m serving</code> through cluster config, profile-CSV load, router, scheduler, trace generation, ASTRA-Sim subprocess, back to the per-request CSV row. Every step has file:line citations and short code excerpts so you can follow along reading the repo.</span>
-      <span class="ko">가장 단순한 시나리오 — Qwen3-32B, 1 인스턴스, 요청 1개 — 를 실제 소스(commit <code>8b5b943a3a37</code>) 따라가며: <code>python -m serving</code> 진입 → cluster config 파싱 → 프로파일 CSV 로드 → router → scheduler → trace 생성 → ASTRA-Sim subprocess → 결과 CSV 한 줄까지. 모든 단계가 file:line 인용 + 짧은 코드 발췌로 묶여 있어서 레포 열어두고 같이 읽기 좋음.</span>
+      <span class="en">Walks LLMServingSim's source for one Qwen3-32B request, from <code>python -m serving</code> through router, scheduler and ASTRA-Sim to the output CSV row.</span>
+      <span class="ko">Qwen3-32B 요청 하나가 <code>python -m serving</code>에서 라우터, 스케줄러, ASTRA-Sim을 거쳐 결과 CSV에 남기까지 LLMServingSim 소스를 따라간다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-10">2026-06-10</time>
@@ -439,8 +520,8 @@
     </span>
     <h2>LMeterX × TaaS — <span class="en">benchmarking runbook</span><span class="ko">벤치마킹 런북</span></h2>
     <p>
-      <span class="en">Step-by-step session record: identifying a LiteLLM-Proxy endpoint, hunting the real model name behind a wildcard <code>/v1/models</code>, standing up the LMeterX Docker stack, kicking off a 5-user streaming load test against Qwen3.6-27B, and ten issues encountered along the way.</span>
-      <span class="ko">실제 세션 기록: LiteLLM Proxy 엔드포인트 파악, 와일드카드 <code>/v1/models</code> 뒤에 숨은 실제 모델명 추적, LMeterX Docker 스택 기동, Qwen3.6-27B 대상 5 동시성 스트리밍 부하 테스트 실행, 그리고 그 와중에 만난 이슈 10개.</span>
+      <span class="en">A session record of load-testing Qwen3.6-27B behind a LiteLLM proxy with LMeterX, from finding the real model name to the issues hit along the way.</span>
+      <span class="ko">LiteLLM 프록시 뒤의 Qwen3.6-27B를 LMeterX로 부하 테스트한 기록이다. 실제 모델 이름 찾기부터 도중에 겪은 문제까지 담았다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-10">2026-06-10</time>

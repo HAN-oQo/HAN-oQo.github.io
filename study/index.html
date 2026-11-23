@@ -46,8 +46,8 @@
       <span class="ko">DeepSeek V4 패밀리 — CSA 부터 Engram 까지, 새 용어 전부</span>
     </h2>
     <p>
-      <span class="en">Three models in five months — V4-Flash 284B, V4-Pro 1.6T, V4.1-Flash 552B — and almost every component has a new acronym: CSA, HCA, CSA2, mHC, CED, Engram, DSpark. This note takes them from the published configs rather than the names, and one field turns out to decode most of the attention vocabulary by itself: <code>compress_ratios</code> gives each layer an integer saying how many tokens collapse into one KV entry, so <b>"CSA" is just ratio 4 and "HCA" is ratio 128</b>, strictly alternating down the stack. The residual connection is the other break — <b>mHC replaces <code>x + F(x)</code> with four parallel streams</b> mixed by a matrix held near-doubly-stochastic by 20 Sinkhorn iterations, which is why DeepSeek's own engine shapes hidden states as <code>[tokens, 4, n_embed]</code>. V4.1 then splits the stack into a <b>20-layer causal encoder and 20-layer decoder</b> where only 4 of 40 layers build global KV and the decoder borrows the encoder's — 1M context at <b>3.125 KiB per token</b>, 42% less than V4-Flash at twice the size. On Engram, the config alone reconstructs the whole structure: 196B parameters in exactly two layers, and <code>engram_num_embeddings</code> turns out to be the <b>exact sum of 24 consecutive primes above 16M</b> (layer 14 continuing where layer 1 stopped, difference zero) — 8 heads × 3 n-gram orders of coprime hash tables, keyed on a lowercased accent-stripped vocabulary compressed from 129,280 to 99,092. Figures redrawn from Raschka's architecture gallery; every number cross-checked against DeepSeek's own inference engine. Ends with lineage from V2/V3/V3.2 and an honest read of where the benchmark actually lands.</span>
-      <span class="ko">다섯 달 사이 모델 셋 — V4-Flash 284B, V4-Pro 1.6T, V4.1-Flash 552B — 그리고 거의 모든 구성요소에 새 약어가 붙었다: CSA, HCA, CSA2, mHC, CED, Engram, DSpark. 이 노트는 이름이 아니라 공개 config 에서 출발하는데, 필드 하나가 attention 용어 대부분을 혼자 해독해 준다. <code>compress_ratios</code> 가 레이어마다 "토큰 몇 개를 KV 항목 하나로 접는지" 를 정수로 주고, 따라서 <b>"CSA" 는 그냥 비율 4, "HCA" 는 비율 128</b> 이며 스택을 따라 엄격히 번갈아 나온다. 또 하나의 단절은 residual connection 이다 — <b>mHC 가 <code>x + F(x)</code> 를 4개의 병렬 스트림으로 대체</b>하고 Sinkhorn 20회 반복으로 거의 이중확률행렬에 묶인 행렬이 그걸 섞는다. DeepSeek 자체 엔진이 hidden state 를 <code>[tokens, 4, n_embed]</code> 로 잡는 이유다. V4.1 은 스택을 <b>20층 causal encoder + 20층 decoder</b> 로 쪼개 40개 레이어 중 4개만 전역 KV 를 만들고 decoder 는 encoder 것을 빌린다 — 토큰당 <b>3.125 KiB</b> 로 1M 컨텍스트, 두 배 크기인데 V4-Flash 보다 42% 적다. Engram 은 config 만으로 구조 전체가 복원된다: 정확히 두 레이어에 196B 파라미터, 그리고 <code>engram_num_embeddings</code> 가 <b>1600만 위 연속 소수 24개의 정확한 합</b>(레이어 14가 레이어 1이 멈춘 자리에서 이어받음, 차이 0) — 헤드 8 × n-gram 차수 3 의 서로소 해시 테이블이고, 키는 129,280 에서 99,092 로 압축된 소문자·악센트 제거 어휘다. 그림은 Raschka 아키텍처 갤러리를 바탕으로 다시 그렸고 모든 수치를 DeepSeek 자체 추론 엔진과 대조했다. 마지막은 V2/V3/V3.2 로부터의 계보와, 벤치마크가 실제로 어디 있는지에 대한 정직한 읽기.</span>
+      <span class="en">Decodes every new DeepSeek V4-family term from the published configs, from CSA and HCA (just two KV compression ratios) through mHC to Engram.</span>
+      <span class="ko">DeepSeek V4 패밀리의 새 용어(CSA, HCA, mHC, Engram 등)를 공개 config로 풀어 본다. CSA와 HCA는 KV 압축 비율이 다를 뿐이다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-10-29">2026-10-29</time></p>
   </a>
@@ -62,10 +62,12 @@
       <span class="ko">SGLang-Omni — 다단계 음성 서빙 런타임은 무엇을 설계했나</span>
     </h2>
     <p>
-      <span class="en">Open the repo looking for "how do I build a voice agent" and you land in the cascade — <b>3,683 lines out of 271,850</b>, which makes it look like an orchestrator. It is not: 66% of the code runs models directly, because a speech model is not one transformer but five stages whose compute profiles conflict. This note reads the code alongside the two official design blogs and redraws their figures: the <b>stage graph</b> (why <code>talker</code> and <code>code predictor</code> cannot be separate stages — per-step feedback would cost a round trip every decode step), the <b>SPG topology</b> <i>T = (G, π, r, q, μ)</i> that turns EPD disaggregation, colocation and replication into points in one space, and the <b>two planes</b> where a ZMQ descriptor travels but the tensor never does (five relay backends, one chosen at runtime). Then the part worth copying: the cascaded session's state machine. Why the silence threshold is 800 ms and not 500 ("a pause after a comma or a short 'Sorry.' often runs past 500 ms"), why a truncated reply must be cut at a <i>sentence</i> boundary rather than the exact heard millisecond ("after a few interruptions it replies with fragments"), and why <code>interrupt</code> has to reach both the LLM and the TTS. Ends with a build order for doing it yourself, and the two code facts that let you take almost none of SGLang-Omni with you.</span>
-      <span class="ko">"voice agent 를 어떻게 만드나"를 찾으며 저장소를 열면 캐스케이드에 닿습니다. <b>271,850 줄 가운데 3,683 줄</b>이라 오케스트레이터처럼 보이지만 아닙니다. 코드의 66% 가 모델을 직접 돌리며, 음성 모델이 하나의 트랜스포머가 아니라 계산 성격이 상충하는 다섯 단계이기 때문입니다. 이 노트는 코드와 공식 설계 블로그 두 편을 함께 읽고 그 그림들을 다시 그립니다. <b>스테이지 그래프</b>(<code>talker</code> 와 <code>code predictor</code> 가 왜 별도 스테이지가 될 수 없는지 — 매 스텝 피드백이라 경계마다 디코드 스텝마다 왕복 비용이 붙습니다), EPD 분리와 동거와 복제를 한 공간의 점들로 만드는 <b>SPG 토폴로지</b> <i>T = (G, π, r, q, μ)</i>, 그리고 ZMQ 로는 서술자만 가고 텐서는 결코 가지 않는 <b>두 평면</b>(relay 백엔드 다섯 중 런타임에 하나 선택). 그다음이 베낄 가치가 있는 부분인 캐스케이드 세션의 상태 기계입니다. 침묵 임계값이 왜 500ms 가 아니라 800ms 인지("쉼표 뒤의 멈춤이나 짧은 'Sorry.' 가 500ms 를 넘기는 일이 잦다"), 잘린 답변을 왜 들린 밀리초가 아니라 <i>문장</i> 경계에서 잘라야 하는지("몇 번 끊기고 나면 조각난 문장으로 답하기 시작한다"), <code>interrupt</code> 가 왜 LLM 과 TTS 양쪽에 닿아야 하는지를 다룹니다. 직접 만들 때의 작업 순서와, SGLang-Omni 를 거의 가져오지 않아도 되게 해 주는 코드상의 두 사실로 끝맺습니다.</span>
+      <span class="en">Shows SGLang-Omni is an engine for multi-stage speech models, not an orchestrator, and which parts of its cascaded voice session are worth copying.</span>
+      <span class="ko">SGLang-Omni는 오케스트레이터가 아니라 다단계 음성 모델을 직접 돌리는 엔진이다. 캐스케이드 음성 세션에서 베낄 만한 설계를 코드로 짚는다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-10-28">2026-10-28</time></p>
+  </a>
+
   <a class="card" href="deepinfer-vllm-lineage.html">
     <span class="tag t-green">
       <span class="en">Deep dive · fork-delta</span>
@@ -76,8 +78,8 @@
       <span class="ko">DeepInfer — DeepSeek 이 vLLM 에서 남긴 것, 그리고 커널이 전부 DSL 인 이유</span>
     </h2>
     <p>
-      <span class="en">DeepSeek open-sourced the engine behind its production service. Not a vLLM fork — but <b>23 files still carry <code>#&nbsp;Derived&nbsp;from&nbsp;vLLM</code></b>, and <i>where</i> they sit is the whole story: <code>entrypoints/</code> and <code>distributed/</code> are 100% derived by LOC, <code>worker/</code> 81%, <code>engine/</code> 58% — but <code>model_executor/</code>, three quarters of the codebase, is <b>4%</b>. DeepSeek kept vLLM's request lifecycle and rebuilt everything that touches the model. The fork point pins to a six-week window and turns out not to be a single point at all: <code>parallel_utils/</code> was <i>removed</i> from vLLM on 2024-04-10 and <code>shm_broadcast.py</code> <i>added</i> on 2024-06-21, so DeepInfer holds code from two sides of a boundary that never coexisted upstream — an early v0 skeleton plus selective later cherry-picks. Then the surprise: <b>there is not one <code>.cu</code> file in the repo.</b> Every GPU kernel is TileLang, and the 5,908 LOC of C++ is the <i>scheduler</i>, not kernels. Kernels went up into a DSL, the scheduler came down into C++ — each move aimed at the constraint that actually binds in that layer. On the "why TileLang" question: the answer is <b>Ascend</b>, not latency. 29 kernels exist twice (<code>cuda/</code> 4,968 LOC · <code>asc/</code> 7,418) behind a 32-line dispatcher, and there is <b>zero GEMM</b> in TileLang — dense math is delegated to DeepGEMM and FlashMLA. Closes with how far the Ascend port actually got: graph timers throw "not implemented yet", FlashMLA and DeepSelect have no Ascend twin, and one line pinning <code>TILELANG_DEFAULT_TARGET</code> exists because <code>torch.cuda.is_available()</code> returns True on a machine with no NVIDIA GPU.</span>
-      <span class="ko">DeepSeek 이 프로덕션 서비스를 돌리는 엔진을 공개했다. vLLM 포크는 아니지만 <b>23개 파일이 아직 <code>#&nbsp;Derived&nbsp;from&nbsp;vLLM</code></b> 을 달고 있고, 그것들이 <i>어디</i> 모였는지가 전부다 — LOC 기준으로 <code>entrypoints/</code>·<code>distributed/</code> 100%, <code>worker/</code> 81%, <code>engine/</code> 58%, 그런데 코드베이스의 4분의 3인 <code>model_executor/</code> 는 <b>4%</b>. 요청 수명주기만 남기고 모델에 닿는 것은 전부 다시 썼다. 포크 시점은 6주 구간으로 좁혀지는데, 알고 보면 단일 시점이 아니다 — <code>parallel_utils/</code> 는 2024-04-10 에 vLLM 에서 <i>삭제</i>됐고 <code>shm_broadcast.py</code> 는 2024-06-21 에 <i>추가</i>됐다. 업스트림에서 공존한 적 없는 경계의 양쪽 코드를 DeepInfer 가 함께 갖고 있다 &mdash; 초기 v0 골격 + 이후 선택적 체리픽. 그리고 놀라운 사실: <b>레포에 <code>.cu</code> 파일이 하나도 없다.</b> 모든 GPU 커널이 TileLang 이고, C++ 5,908 LOC 는 커널이 아니라 <i>스케줄러</i>다. 커널은 DSL 로 올리고 스케줄러는 C++ 로 내렸다 &mdash; 각 계층에서 실제로 걸리는 제약을 겨냥한 이동이다. "왜 TileLang 인가" 의 답은 지연이 아니라 <b>Ascend</b> 다. 커널 29개가 32줄 디스패처 뒤에 두 번씩 존재하고(<code>cuda/</code> 4,968 LOC · <code>asc/</code> 7,418), TileLang 안에 <b>GEMM 은 0개</b> &mdash; dense 연산은 DeepGEMM·FlashMLA 에 위임한다. 마지막은 Ascend 이식의 실제 진도: graph timer 는 "not implemented yet" 을 던지고, FlashMLA·DeepSelect 엔 Ascend 쌍이 없으며, NVIDIA GPU 없는 기계에서 <code>torch.cuda.is_available()</code> 이 True 를 반환하기 때문에 <code>TILELANG_DEFAULT_TARGET</code> 을 고정하는 한 줄이 존재한다.</span>
+      <span class="en">DeepSeek's open-sourced DeepInfer keeps vLLM's request lifecycle but rebuilds everything that touches the model; every GPU kernel is TileLang, and the reason is Ascend, not latency.</span>
+      <span class="ko">DeepSeek가 공개한 DeepInfer는 vLLM의 요청 수명주기만 남기고 모델에 닿는 부분은 전부 다시 썼다. GPU 커널은 모두 TileLang인데, 이유는 지연이 아니라 Ascend 지원이다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-10-23">2026-10-23</time></p>
   </a>
@@ -92,8 +94,8 @@
       <span class="ko">Engram — DeepSeek V4.1 의 해시 메모리 레이어, 그리고 자기 병렬 축이 필요한 이유</span>
     </h2>
     <p>
-      <span class="en">Reading DeepInfer's parallelism code, one axis has no counterpart in any other serving engine: beside data, context and expert parallel sits <code>engram_parallel</code> — and <code>world_size</code> is the <b>max</b> of the model's rank count and engram's, so the table can span <i>more</i> ranks than the model does. That only makes sense for something bounded by <b>memory capacity</b>, not compute. Following it leads to a component that is not an optimisation but part of the model: a bank of hashed n-gram embeddings. The key construction is deliberately lossy — NFKC → NFD → strip accents → <b>lowercase</b> → collapse whitespace, so "The", "THE" and "thé" hit the same row, while byte pieces that decode to invalid UTF-8 keep their raw spelling so they cannot be folded. Collisions are handled the classic way: each head gets its own <b>distinct prime-sized table</b> (<code>nextprime</code>, never reused), so patterns that collide mod <i>p</i> have no reason to collide mod <i>q</i>. The table is sharded across ranks in a DeepEP userbuffer as FP8 with packed ue8m0 scales, written once and the local copy released. At runtime it hashes and fetches <b>once at model level before the layer loop</b>, returning not tensors but <b>hooks</b> — so the cross-rank all-to-all overlaps every layer preceding the first engram layer, the same prefetch discipline MoE dispatch uses on the same fabric. Injection is a trunk intervention hook after the mHC post-mix, gated by one fused kernel, with image tokens masked out. Honest about the limit: the repo has no training code, no paper, no evaluation — table sizes, head counts and whether it earns its memory are all unanswerable from inference code alone.</span>
-      <span class="ko">DeepInfer 의 병렬화 코드를 읽다 보면 다른 어떤 서빙 엔진에도 대응물이 없는 축이 있다 &mdash; data·context·expert 옆의 <code>engram_parallel</code>. 게다가 <code>world_size</code> 가 모델 rank 수와 engram rank 수의 <b>최댓값</b>이라, 테이블이 모델보다 <i>더 많은</i> rank 에 걸칠 수 있다. 연산이 아니라 <b>메모리 용량</b>으로 제한되는 대상에서만 말이 되는 설계다. 따라가면 최적화가 아니라 모델의 일부인 구성요소가 나온다 &mdash; 해시된 n-gram 임베딩 뱅크. 키 구성이 의도적으로 손실적이다: NFKC → NFD → 악센트 제거 → <b>소문자화</b> → 공백 축약. "The"·"THE"·"thé" 가 같은 행에 닿고, 깨진 UTF-8 조각만 원 철자를 유지해 합쳐지지 않는다. 충돌은 고전적으로 처리한다 &mdash; 헤드마다 <b>서로 다른 소수 크기 테이블</b>(<code>nextprime</code>, 재사용 금지). <i>p</i> 에서 충돌한 패턴이 <i>q</i> 에서도 충돌할 이유가 없다. 테이블은 DeepEP userbuffer 에 FP8 + 팩된 ue8m0 스케일로 rank 간 샤딩되고, 한 번 쓴 뒤 로컬 사본은 해제된다. 런타임에는 <b>레이어 루프 전 모델 레벨에서 한 번</b> 해시·fetch 하고 텐서가 아니라 <b>훅</b>을 돌려준다 &mdash; 덕분에 rank 간 all-to-all 이 첫 engram 레이어 앞 레이어들과 겹친다. MoE dispatch 가 같은 패브릭에서 쓰는 바로 그 prefetch 규율이다. 주입은 mHC post-mix 이후의 trunk 개입 훅이고, 융합 커널 하나가 게이팅하며 이미지 토큰은 마스킹된다. 한계도 명시했다 &mdash; 레포에 학습 코드도 논문도 평가도 없어서 테이블 크기·헤드 수·메모리값을 하는지는 추론 코드만으로 답할 수 없다.</span>
+      <span class="en">Follows DeepInfer's unique <code>engram_parallel</code> axis to Engram, DeepSeek V4.1's hash-indexed n-gram memory, and how it is sharded and prefetched.</span>
+      <span class="ko">DeepInfer에만 있는 <code>engram_parallel</code> 축을 따라가 DeepSeek V4.1의 해시 n-gram 메모리 Engram을 어떻게 샤딩하고 프리페치하는지 본다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-10-23">2026-10-23</time></p>
   </a>
@@ -108,8 +110,8 @@
       <span class="ko">DeepInfer 지식 그래프 — DeepSeek 프로덕션 추론 엔진 지도</span>
     </h2>
     <p>
-      <span class="en">A machine-built structural map of <code>deepseek-ai/DeepInfer</code> @ <code>9bd9cf2</code>, scoped to the engine core — <b>317 files, 1,281 nodes, 2,910 edges</b>, with the six <code>vendor/</code> submodules excluded as separate repositories. Drag the force graph, click any node for its summary, defined symbols and neighbours, or skip to the <b>Layers</b> and <b>Tour</b> tabs. The 11 layers follow the architecture rather than the directory tree, and the split the analysis kept arguing for is visible directly: <b>TileLang Op Interface / CUDA SM100 Backend / Ascend 950 Backend</b> as three peer layers with zero imports crossing between the two backends, the <b>C++ Scheduling Core</b> standing apart from everything it schedules, and <b>Parallelism &amp; Expert Balancing</b> at just 9 files carrying an axis set with no tensor-parallel member. The 15-step tour starts from what DeepSeek did <i>not</i> release and builds toward Engram. Companion to the two DeepInfer deep dives.</span>
-      <span class="ko"><code>deepseek-ai/DeepInfer</code> @ <code>9bd9cf2</code> 의 구조 지도를 기계로 만들었다. 엔진 코어로 범위를 좁혀 <b>파일 317개, 노드 1,281개, 엣지 2,910개</b>. <code>vendor/</code> 서브모듈 여섯 개는 별도 레포라 제외했다. force 그래프를 끌고, 노드를 눌러 요약·정의 심볼·이웃을 보고, <b>계층</b>·<b>투어</b> 탭으로 건너뛸 수 있다. 11개 계층은 디렉터리 트리가 아니라 아키텍처를 따르며, 분석이 거듭 주장한 분할이 눈으로 보인다 &mdash; <b>TileLang Op Interface / CUDA SM100 백엔드 / Ascend 950 백엔드</b> 가 서로 import 가 0건인 동급 계층 셋으로 서 있고, <b>C++ Scheduling Core</b> 가 자기가 스케줄하는 모든 것과 따로 서 있으며, <b>Parallelism &amp; Expert Balancing</b> 은 파일 9개뿐인데 tensor-parallel 멤버가 없는 축 집합을 들고 있다. 15단계 투어는 DeepSeek 이 공개하지 <i>않은</i> 것에서 출발해 Engram 으로 쌓아 올라간다. DeepInfer 딥다이브 두 편의 동반 노트.</span>
+      <span class="en">An interactive map of DeepSeek's DeepInfer engine core: force graph, architectural layers and a guided tour that builds toward Engram.</span>
+      <span class="ko">DeepSeek 추론 엔진 DeepInfer 코어를 그래프, 레이어, 투어 세 가지 뷰로 탐색하는 인터랙티브 지도다. 투어는 Engram으로 이어진다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-10-23">2026-10-23</time></p>
   </a>
@@ -124,8 +126,8 @@
       <span class="ko">vLLM Prefill Context Parallel (PCP) — 실제 동작 방식</span>
     </h2>
     <p>
-      <span class="en">PCP splits a long prompt across ranks to cut TTFT, and the merged implementation is <b>not</b> the ring-attention design its own RFCs describe. It shards the <b>query</b> tokens with a head/tail pairing the code calls <b>DualChunkSwap</b>, all-gathers the <b>KV latent every layer</b>, and therefore needs <b>no LSE merge at all</b> — each rank attends over the complete key range, so its output is final. That also answers the KV-cache question in an unexpected way: the cache is <b>replicated, not sharded</b>, there is no prefill→decode redistribution step, and the cost is capacity (−33% to −18×) rather than time. Traced at a pinned SHA with the enablement flags, the PCP ⊥ DCP rules, and source diagrams. On the numbers it stays honest: the blog's 2.65× is prose-only, the measured merged range is <b>1.17×–2.10×</b> (the strongest row is n=3, self-labelled a smoke check), PCP is <b>slower than TP below ~4K</b>, decode is always worse, and stacking DCP erased the entire TTFT gain.</span>
-      <span class="ko">PCP 는 긴 프롬프트를 여러 rank 에 나눠 TTFT 를 줄인다. 그런데 머지된 구현은 자신의 RFC 가 설명하는 ring attention 방식이 <b>아니다.</b> 코드가 <b>DualChunkSwap</b> 이라 부르는 머리·꼬리 짝짓기로 <b>쿼리</b> 토큰을 쪼개고, <b>KV latent 는 레이어마다 all-gather</b> 하므로 <b>LSE 병합이 아예 필요 없다.</b> 각 rank 가 키 전체에 어텐션하니 출력이 그 자체로 최종값이기 때문이다. KV 캐시 질문의 답도 뜻밖이다. 캐시는 <b>샤딩되지 않고 복제</b>되며, 프리필에서 디코드로 넘어갈 때 재배치 단계가 없고, 대가는 시간이 아니라 용량(33% 감소에서 18배 감소)이다. 고정된 SHA 기준으로 코드를 따라가며 활성화 플래그와 PCP ⊥ DCP 규칙, 출처 그림을 함께 실었다. 수치는 정직하게 적었다. 블로그의 2.65배는 서술 문장뿐이고, 머지된 범위의 실측 구간은 <b>1.17~2.10배</b>이며(가장 강한 행은 표본 3건에 작성자가 스모크 체크라고 표기했다), <b>4K 미만에서는 TP 보다 느리고</b>, 디코드는 항상 손해이며, DCP 를 얹으면 TTFT 이득이 전부 사라졌다.</span>
+      <span class="en">vLLM's merged PCP shards queries and all-gathers KV every layer instead of using ring attention, so the KV cache is replicated and TTFT gains are 1.17×–2.10×.</span>
+      <span class="ko">vLLM PCP 실제 구현은 ring attention이 아니라 쿼리를 나누고 매 레이어 KV를 all-gather한다. 그래서 KV 캐시는 복제되고 TTFT 개선은 1.17~2.10배다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-10-13">2026-10-13</time>
@@ -142,8 +144,8 @@
       <span class="ko">Decision models — Jev and the vLLM Semantic Router</span>
     </h2>
     <p>
-      <span class="en">A model class that answers <b>typed questions</b> (Choice · Score · Noul) instead of writing text, read from both sides: TypeSafe AI's proprietary <b>Jev</b> and the open <b>vLLM Semantic Router</b>. What each one is, how it was trained, what the architecture looks like, what one inference costs, and how a request flows. Jev's economics are structural — it reads the state once, so 13 questions cost <b>1.06×</b> of one, at $0.042/1M input tokens with output free — but its architecture and training are <b>unpublished</b>, and RLCD is a name without a formulation. The router discloses more, though not uniformly: full recipes for its 307M routing encoders (1,200 steps, lr 1e-5), and weights plus architecture diagrams for the decision models — but <b>no training code for the decision family itself</b>. Its three papers describe a Rust/Candle architecture <b>deleted from the repo on 2026-10-06</b>, and its own launch benchmark puts hosted Jev (81.05) <b>ahead of every open model it ships</b> (Lux-9B 76.94). Between them sits <b>arXiv:2609.24965</b>, which scores Jev against eleven other configurations and finds the real gap is <b>resources, not accuracy</b> (4.1× faster and 51× cheaper than the next clean configuration, while six of twelve tie at 100%). Its sharpest result: across 588 responses <b>every final label was correct while seven downstream counts were wrong</b> — a label-only test would have stayed green.</span>
-      <span class="ko">텍스트를 생성하는 대신 <b>타입이 정해진 질문</b>(Choice · Score · Noul)에 답하는 모델 계열을 양쪽에서 읽었다. TypeSafe AI의 독점 모델 <b>Jev</b>와 오픈 진영의 <b>vLLM Semantic Router</b>를 두고 각각의 정체와 학습 방식, 모델 구조, 추론 한 번의 비용, 요청이 흐르는 경로를 정리했다. Jev의 경제성은 구조에서 나온다. 상태를 한 번만 읽기 때문에 질문 13개의 비용이 1개의 <b>1.06배</b>에 그치고, 입력 100만 토큰당 0.042달러에 출력은 무료다. 그러나 구조와 학습은 <b>공개되지 않았고</b>, RLCD는 수식 없는 이름뿐이다. 라우터는 더 많이 공개하지만 균일하지는 않다. 307M 라우팅 인코더는 레시피 전체(1,200스텝, 학습률 1e-5)가 있고 결정 모델은 가중치와 구조 도식이 공개되어 있으나, <b>결정 모델 자체의 학습 코드는 없다.</b> 이 프로젝트의 논문 세 편은 <b>2026년 10월 6일 저장소에서 삭제된</b> Rust·Candle 구조를 설명하며, 자체 출시 벤치마크는 호스팅 Jev(81.05)를 <b>자사가 배포하는 모든 오픈 모델보다 위에</b> 둔다(Lux-9B 76.94). 그 사이에 <b>arXiv:2609.24965</b>가 놓인다. Jev를 열한 개 구성과 비교한 결과 진짜 격차는 <b>정확도가 아니라 자원</b>이었다. 비교 가능한 다음 구성보다 4.1배 빠르고 51배 저렴했으며, 정확도는 12개 중 6개가 100%로 동률이었다. 가장 날카로운 결과는 따로 있다. 응답 588건에서 <b>최종 라벨은 전부 정답이었는데 하위 수치 일곱 개가 틀렸다.</b> 라벨만 확인하는 테스트였다면 그대로 통과했을 것이다.</span>
+      <span class="en">Compares TypeSafe AI's closed Jev and the open vLLM Semantic Router, models that answer typed questions, and finds the real gap is cost and speed, not accuracy.</span>
+      <span class="ko">타입 있는 질문에 답하는 decision model인 Jev와 vLLM Semantic Router를 비교한다. 진짜 차이는 정확도가 아니라 속도와 비용에서 난다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-10-12">2026-10-12</time>
@@ -160,8 +162,8 @@
       <span class="ko">KVCR 지식 그래프 — NVIDIA 분산 KV 캐시 런타임 지도</span>
     </h2>
     <p>
-      <span class="en">A structural map of <b>ai-dynamo/kvcr</b> at commit <code>09cce3f</code> — NVIDIA's framework-neutral <b>KV Cache Runner</b>, which treats KV cache as a system-wide distributed resource across memory and storage tiers rather than something that lives and dies with one engine process. The whole repository: 47 files, <b>411 nodes, 949 relationships</b>, 60 file-level nodes grouped into <b>10 role-based layers</b> and a 13-step reading tour. The flat <code>src/kvcr/</code> package hides the real structure, so the layers were derived from verified topology instead of directories — <code>types.py</code>/<code>config.py</code> as true leaves, <code>core.py</code> as the sole orchestrator, and <b>three sibling storage tiers</b> (local DRAM / local disk / remote peer DRAM) that provably never import each other. The tour builds toward what makes KVCR unusual: <b>KVCR-Guard</b>, an active-passive sidecar that outlives an engine crash and keeps serving KV cache remotely, backed by a shared-memory recovery journal. Same three views as the ATOM and nano-vLLM graphs — force-directed graph, layer browser with per-file Korean summaries, and the guided tour.</span>
-      <span class="ko">커밋 <code>09cce3f</code> 기준 <b>ai-dynamo/kvcr</b>의 구조 지도 — NVIDIA의 framework-neutral <b>KV Cache Runner</b>다. KV 캐시를 엔진 프로세스와 함께 태어나고 죽는 것이 아니라, memory·storage tier 전반에 걸친 시스템 차원의 분산 자원으로 다룬다. 레포 전체: 파일 47개, <b>노드 411개, 관계 949개</b>. 파일 레벨 노드 60개를 <b>역할 기반 10개 계층</b>과 13단계 읽기 투어로 엮었다. 평평한 <code>src/kvcr/</code> 패키지가 실제 구조를 가려서, 계층은 디렉터리가 아니라 검증된 토폴로지에서 끌어냈다 — <code>types.py</code>·<code>config.py</code>가 진짜 leaf, <code>core.py</code>가 유일한 조정자, 그리고 <b>서로를 전혀 import 하지 않는 세 형제 tier</b>(local DRAM / local disk / remote peer DRAM). 투어는 KVCR을 특이하게 만드는 지점으로 수렴한다: 엔진이 죽어도 살아남아 KV 캐시를 원격으로 계속 서빙하는 active-passive 사이드카 <b>KVCR-Guard</b>와 그것을 받치는 공유메모리 recovery journal. 뷰는 ATOM·nano-vLLM 그래프와 동일하다 — force-directed 그래프, 파일별 한국어 요약이 붙은 계층 브라우저, 그리고 가이드 투어.</span>
+      <span class="en">An interactive map of NVIDIA's KVCR, which treats KV cache as a distributed multi-tier resource, with a tour ending at the crash-surviving KVCR-Guard sidecar.</span>
+      <span class="ko">KV 캐시를 여러 계층에 걸친 분산 자원으로 다루는 NVIDIA KVCR의 인터랙티브 지도다. 투어는 엔진이 죽어도 캐시를 서빙하는 KVCR-Guard로 끝난다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-09-03">2026-09-03</time></p>
   </a>
@@ -176,8 +178,8 @@
       <span class="ko">AMD 의 4-bit KV in LMCache — 수치가 말하는 것, 그리고 업스트림에 실제로 있는 것</span>
     </h2>
     <p>
-      <span class="en">AMD reports <b>2× serving goodput</b> on 2×MI355X (385 vs 189 requests, p95 TTFT 53 s vs 140 s) by packing KV to 4 bits and letting LMCache catch the overflow in a 128 GB DRAM tier. TurboQuant keeps the first two and last two layers in bf16 and packs the middle 58 to 4-bit, making each token ~3.76× smaller — which puts <b>3.2× more KV resident in HBM</b> (648k vs 201k tokens). This note summarises the post, then checks its central code claim against the LMCache tree, and the check changes the reading: <b>upstream LMCache already has TurboQuant</b> — presets, Hadamard + Lloyd-Max codebook, even the exact <code>skip_first_layers=2 / skip_last_layers=2</code> split — but it's a <i>serde</i> on the L1→L2 path, so it saves storage and bandwidth and does <b>not</b> increase HBM residency. The group-aware connector that does is <b>not</b> upstream (no <code>group_aware</code>/<code>transfer_group</code> anywhere in the tree); it lives in AMD's fork, which is why they ship a pinned Docker image. So the headline 3.2× is a vLLM-side property, not an LMCache one. Also surfaces what the framing buries: at a 68 GB DRAM tier <b>plain FP8 beat 4-bit on goodput</b> in AMD's own numbers, so the honest claim is "4-bit wins when DRAM is the binding constraint," and the durable argument is efficiency (same goodput at ¼ the RAM). Accuracy holds within ~1 pt (RULER ≤0.4 pt); the bit-exact DRAM round-trip result follows trivially from byte-transparency rather than being evidence about tiering. Vendor-reported throughout — code claims verified, performance claims not.</span>
-      <span class="ko">AMD 는 MI355X 2장에서 KV 를 4비트로 압축하고 128 GB DRAM 계층이 넘치는 분량을 받아내게 해 <b>서빙 goodput 2배</b>(385 대 189 요청, p95 TTFT 53초 대 140초)를 보고한다. TurboQuant 는 처음 두 개·마지막 두 개 레이어를 bf16 으로 두고 가운데 58개를 4비트로 압축해 토큰당 약 3.76배를 줄이고, 그 결과 <b>HBM 상주 KV 가 3.2배</b>(64.8만 대 20.1만 토큰)가 된다. 이 노트는 글을 정리한 뒤 핵심 코드 주장을 LMCache 트리에 직접 대조했고, 그 대조가 해석을 바꾼다 &mdash; <b>업스트림 LMCache 에 TurboQuant 는 이미 있다</b>. 프리셋도, Hadamard + Lloyd-Max 코드북도, 심지어 <code>skip_first_layers=2 / skip_last_layers=2</code> 분할까지 그대로. 그런데 그건 L1→L2 경로의 <i>serde</i> 라서 저장 용량과 대역폭을 아낄 뿐 HBM 상주량을 늘리지는 <b>않는다</b>. 그걸 해내는 group-aware 커넥터는 업스트림에 <b>없다</b>(트리 어디에도 <code>group_aware</code>/<code>transfer_group</code> 없음). AMD 포크에 있고, 그래서 고정 Docker 이미지를 배포한다. 결국 헤드라인 3.2배는 vLLM 쪽 속성이지 LMCache 쪽이 아니다. 글의 구성이 묻어 둔 것도 짚는다: DRAM 68 GB 지점에선 AMD 자신의 수치에서도 <b>평범한 FP8 이 4비트를 goodput 으로 이겼다</b>. 정직한 주장은 "DRAM 이 병목일 때 4비트가 이긴다" 이고, 오래 가는 논거는 효율(RAM 1/4 로 같은 goodput)이다. 정확도는 약 1 pt 이내(RULER 0.4 pt 이하) 유지. 비트 정확한 DRAM 왕복 결과는 계층화에 대한 증거가 아니라 바이트 투명성에서 자명하게 따라 나온다. 전부 벤더 보고 수치 &mdash; 코드 주장은 검증했고 성능 주장은 하지 않았다.</span>
+      <span class="en">Checks AMD's 2× goodput claim for 4-bit KV in LMCache against the code: upstream TurboQuant only shrinks storage, and the HBM gain lives in AMD's fork.</span>
+      <span class="ko">AMD가 주장한 4-bit KV 굿풋 2배를 코드로 확인한다. 업스트림 LMCache의 TurboQuant는 저장 용량만 줄이고 HBM 이득은 AMD 포크에 있다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-09-02">2026-09-02</time></p>
   </a>
@@ -192,8 +194,8 @@
       <span class="ko">nano-vLLM에서 ATOM까지 — 1,385줄이 42만 줄이 되기까지</span>
     </h2>
     <p>
-      <span class="en">ATOM's README credits <b>nano-vllm</b> as its origin in one sentence and stops there. This note reads all <b>1,385 lines</b> of nano-vLLM to establish what the starting point actually was — and it is not "a small vLLM", it is <b>the shape of vLLM with everything hard removed</b>: one model, no MoE, no quantization, no server, no speculative decoding, temperature-only sampling with greedy <i>explicitly forbidden</i> by an assert, and tensor parallelism over a single hardcoded 1 MB shared-memory segment on a hardcoded port (so two instances cannot coexist on one machine). Its famous "comparable to vLLM" benchmark turns out to run Qwen3-0.6B on a laptop GPU with <b>random token IDs</b> — exercising none of the prefix caching it advertises, in exactly the regime where a thin engine wins by construction. Then the delta, measured file by file: <code>attention</code> 75 → 18,821 lines (250×), <code>Config</code> 25 → 2,132 (85×), <code>Scheduler</code> 92 → 3,146 (34×) — plus 15 subsystems with no counterpart at all, most of which AMD did not invent but <b>re-imported from vLLM</b>. Finally the ATOM components the earlier deep dive excluded: <b>ATOMesh</b> (a routing gateway that is itself a fork of SGLang's <code>sgl-model-gateway</code>, still depending on seven SGLang-published crates — so ATOM's lineage runs through <i>two</i> forks, not one; its docs and quickstart route to SGLang while AMD's own nightly CI routes to ATOM, and <code>--api-key</code> turns out to authenticate nothing inbound), the plugin bridges (the SGLang one is <i>larger</i> than the vLLM one; the vLLM one pins an exact commit, makes 176 imports including private symbols, and monkey-patches nine modules — two of which reverse vLLM's own ROCm decisions), and the diffusion engine. Ends on a consolidated weakness analysis.</span>
-      <span class="ko">ATOM README는 <b>nano-vllm</b>을 출발점으로 한 문장 밝히고 만다. 이 노트는 nano-vLLM <b>1,385줄 전부</b>를 읽어 출발점이 실제로 무엇이었는지 확인한다 — "작은 vLLM"이 아니라 <b>어려운 걸 전부 걷어낸 vLLM의 형태</b>다. 모델 1개, MoE 없음, quantization 없음, 서버 없음, speculative decoding 없음, temperature 샘플링만 되고 greedy는 assert로 <i>명시적 금지</i>, tensor parallel은 하드코딩된 1 MB 공유메모리와 하드코딩된 포트로 구현돼 한 머신에 인스턴스 둘을 못 띄운다. 유명한 "vLLM에 준한다" 벤치마크는 노트북 GPU에서 Qwen3-0.6B를 <b>무작위 토큰 ID</b>로 돌린 것이라, 광고하는 prefix caching을 전혀 건드리지 않으며 얇은 엔진이 구조적으로 이기는 구간에서 측정됐다. 이어서 파일 단위로 잰 델타 — <code>attention</code> 75 → 18,821줄(250배), <code>Config</code> 25 → 2,132(85배), <code>Scheduler</code> 92 → 3,146(34배), 그리고 대응물이 아예 없는 서브시스템 15개. 그중 대부분은 AMD가 발명한 게 아니라 <b>vLLM에서 다시 가져온</b> 것이다. 마지막으로 앞선 딥다이브가 제외했던 ATOM 구성요소들 — <b>ATOMesh</b>(그 자체가 SGLang <code>sgl-model-gateway</code>의 포크이고 지금도 SGLang 배포 크레이트 7개에 의존하는 라우팅 게이트웨이 — 즉 ATOM의 계보는 포크 <i>둘</i>을 지난다. 문서와 퀵스타트는 SGLang으로 보내는데 AMD 자체 nightly CI는 ATOM으로 보내고, <code>--api-key</code>는 인바운드로 아무것도 인증하지 않는다), 플러그인 브리지(SGLang용이 vLLM용보다 <i>크다</i>. vLLM용은 정확한 커밋을 핀으로 박고 private 심볼 포함 176개를 import하며 모듈 9개를 monkey-patch하는데, 그중 둘은 vLLM 자체 ROCm 결정을 뒤집는다), 그리고 diffusion 엔진. 약점 종합 분석으로 마무리.</span>
+      <span class="en">Reads all of nano-vLLM, ATOM's starting point, then measures file by file how ATOM grew, largely by re-importing vLLM, and covers ATOMesh and the plugins.</span>
+      <span class="ko">ATOM의 출발점인 nano-vLLM 1,385줄을 다 읽고 ATOM이 파일별로 얼마나 커졌는지 잰다. 늘어난 부분 상당수는 vLLM에서 다시 들여온 것이다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-09-02">2026-09-02</time>
@@ -213,8 +215,8 @@
       <span class="ko">nano-vLLM 지식 그래프 — 출발점 프로젝트 전체 지도</span>
     </h2>
     <p>
-      <span class="en">A structural map of <b>GeeeekExplorer/nano-vllm</b> at commit <code>bb823b3</code> — the ~1,200-line teaching reimplementation of vLLM that ATOM was forked from. Unlike the ATOM graph, which had to be scoped to 310 of 1,114 files, this one is <b>the complete repository</b>: all 23 files, 64 nodes, 163 relationships, grouped into 6 layers and a 10-step reading tour that walks the whole engine from the 5-line public API through the scheduler, the xxhash64 block manager, the global forward context and the 1 MB shared-memory tensor-parallel RPC, ending on a critical read of the benchmark. Same three views as the ATOM graph — force-directed graph, layer browser with per-file Korean summaries, and the guided tour.</span>
-      <span class="ko">커밋 <code>bb823b3</code> 기준 <b>GeeeekExplorer/nano-vllm</b>의 구조 지도 — ATOM이 갈라져 나온, vLLM을 ~1,200줄로 다시 쓴 학습용 구현체다. 1,114개 중 310개로 범위를 좁혀야 했던 ATOM 그래프와 달리 이건 <b>레포 전체</b>다. 파일 23개, 노드 64개, 관계 163개를 6개 계층과 10단계 읽기 투어로 엮었다. 투어는 5줄짜리 공개 API에서 시작해 scheduler, xxhash64 block manager, 전역 forward context, 1 MB 공유메모리 tensor-parallel RPC를 지나 벤치마크를 비판적으로 읽는 데서 끝난다. 세 가지 뷰는 ATOM 그래프와 같다 — force 그래프, 파일별 한국어 요약이 붙은 계층 브라우저, 가이드 투어.</span>
+      <span class="en">An interactive map of the whole nano-vLLM repository, the teaching reimplementation ATOM forked from, with a tour from the public API to the benchmark.</span>
+      <span class="ko">ATOM이 갈라져 나온 교육용 vLLM 재구현 nano-vLLM 레포 전체를 그래프와 10단계 투어로 훑는 인터랙티브 지도다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-09-02">2026-09-02</time>
@@ -231,8 +233,8 @@
       <span class="ko">ATOM (ROCm) — AMD의 추론 엔진: 아키텍처·코드 흐름·실행법·계보</span>
     </h2>
     <p>
-      <span class="en">A code-walk of <b>ROCm/ATOM</b> (AiTer Optimized Model), AMD's LLM inference engine for Instinct GPUs, pinned at commit <code>cd161f1</code>. Starts with the lineage, which the repo states outright: ATOM was <b>adapted from nano-vllm</b>, a ~1,200-line teaching reimplementation of vLLM — and its <code>pyproject.toml</code> still carries nano-vllm's tagline verbatim. Then the architecture: the <code>openai_server → LLMEngine → CoreManager → EngineCore → Scheduler → ModelRunner</code> spine, fanned out over a process tree wired with ZMQ (one EngineCore per DP rank, one ModelRunner subprocess per TP rank). Traces one request end to end in 11 steps with commit-pinned permalinks, including the details the docs no longer describe — preemption as a full rollback, the 26-entry model registry, the cross-DP prefill delayer. Then the part that is genuinely AMD-specific: <b>106 files of AITER kernel bindings</b> (ASM / Composable Kernel / Triton), with the GEMM and attention dispatch tables reconstructed; and the compilation subsystem, where attention is deliberately marked opaque to Dynamo so piecewise CUDA-graph capture can work at all. Ends with how to actually run it (install, serve, benchmark, profile, or install it <i>into</i> vLLM as a plugin) and an honest comparison against vLLM, SGLang and vLLM-on-ROCm. That last part is the real story: AMD's <i>first</i> RFC asked to put ATOM <b>in-tree</b> in vLLM and was <b>rejected</b> on governance grounds — the plugin is the settlement. The only apple-to-apple numbers AMD ever published are <b>+2.8% to +6.9%</b>, and the README's old "2–3× vs vLLM" tables were deleted ~12.5 hours after a vLLM maintainer asked why the RFC's gains were so much smaller. AITER's own README ranks vLLM and SGLang on ROCm as <b>Production</b> and ATOM as <b>Active development</b>; SemiAnalysis InferenceX — the one same-harness head-to-head that exists — has a section titled "AMD ATOM Inference Engine Disappointment", though it also records the recovery. Companion interactive knowledge graph linked from the note.</span>
-      <span class="ko">AMD Instinct GPU용 LLM 추론 엔진 <b>ROCm/ATOM</b>(AiTer Optimized Model)의 코드 분석, 커밋 <code>cd161f1</code> 고정. 계보에서 출발한다 — 레포가 직접 밝히듯 ATOM은 vLLM을 ~1,200줄로 재구현한 학습용 레포 <b>nano-vllm에서 갈라져 나왔고</b>, <code>pyproject.toml</code>엔 아직도 nano-vllm의 한 줄 소개가 글자 그대로 남아 있다. 이어서 아키텍처: <code>openai_server → LLMEngine → CoreManager → EngineCore → Scheduler → ModelRunner</code> 척추가 ZMQ로 엮인 프로세스 트리(DP rank마다 EngineCore 하나, TP rank마다 ModelRunner 서브프로세스 하나)로 펼쳐진다. 요청 하나의 경로를 커밋 고정 permalink와 함께 11단계로 추적하고, 문서엔 더 이상 없는 것들까지 짚는다 — 완전 롤백인 preemption, 26개짜리 모델 레지스트리, cross-DP prefill delayer. 그다음이 진짜 AMD 전용인 부분: <b>AITER 커널 바인딩 106개 파일</b>(ASM / Composable Kernel / Triton)과 GEMM·attention 디스패치 표 재구성, 그리고 piecewise CUDA graph 캡처가 가능하도록 attention을 일부러 Dynamo에 불투명하게 표시하는 컴파일 서브시스템. 마지막은 실제 실행법(설치·서빙·벤치마크·프로파일링, 또는 vLLM <i>안에</i> 플러그인으로 설치)과 vLLM·SGLang·vLLM-on-ROCm 과의 솔직한 비교. 진짜 이야기는 이 마지막 부분에 있다 — AMD의 <i>첫</i> RFC는 ATOM을 vLLM에 <b>in-tree</b>로 넣자는 것이었고 거버넌스를 근거로 <b>거절당했다</b>. 플러그인은 그 합의의 결과다. AMD가 공개한 유일한 동일 조건 수치는 <b>+2.8%~+6.9%</b>이고, README에 있던 "vLLM 대비 2~3배" 표는 vLLM 메인테이너가 "RFC 수치는 왜 이렇게 작냐"고 물은 지 약 12.5시간 뒤에 삭제됐다. AITER 자체 README는 ROCm의 vLLM·SGLang을 <b>Production</b>, ATOM을 <b>Active development</b>로 매긴다. 존재하는 유일한 동일 하네스 정면 비교인 SemiAnalysis InferenceX에는 "AMD ATOM Inference Engine Disappointment"라는 제목의 절이 있다 — 다만 회복 과정도 함께 기록한다. 짝이 되는 인터랙티브 지식 그래프를 노트에서 링크한다.</span>
+      <span class="en">A commit-pinned code walk of AMD's ATOM engine: architecture, AITER kernels, how to run it, and why its only apples-to-apples gain over vLLM is +2.8–6.9%.</span>
+      <span class="ko">AMD 추론 엔진 ATOM의 구조, AITER 커널, 실행법을 코드로 따라간다. vLLM과 같은 조건으로 비교한 이득은 +2.8~6.9%에 그친다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-09-01">2026-09-01</time>
@@ -252,8 +254,8 @@
       <span class="ko">ATOM 지식 그래프 — AMD 추론 엔진 인터랙티브 지도</span>
     </h2>
     <p>
-      <span class="en">The companion artifact to the ATOM deep dive: a machine-built structural map of <b>ROCm/ATOM</b>'s core inference engine at commit <code>cd161f1</code>. All 310 source files were read and summarised in Korean, then grouped into <b>20 architectural layers</b> and threaded into a <b>14-step reading tour</b> — 1,683 nodes and 4,200 relationships in total, covering 301 files, 500 classes and 861 functions. Three views: a draggable force-directed <b>graph</b> where nodes are coloured by layer and clicking one shows what that file does, the classes and functions it defines, and its connections; a <b>layers</b> browser listing every file with its summary and a link to the real source; and the guided <b>tour</b>, which walks the engine in reading order from the OpenAI server down through the scheduler, the AITER kernel layer and the compilation subsystem. Scope is the core engine only — ATOMesh (Rust), the vLLM/SGLang plugin bridges and the diffusion subsystem are excluded.</span>
-      <span class="ko">ATOM 딥다이브의 짝이 되는 자료 — 커밋 <code>cd161f1</code> 시점 <b>ROCm/ATOM</b> 코어 추론 엔진의 구조 지도를 기계로 만들었다. 소스 파일 310개를 전부 읽어 한국어로 요약한 뒤 <b>20개 아키텍처 계층</b>으로 묶고 <b>14단계 읽기 투어</b>로 엮었다. 노드 1,683개, 관계 4,200개로 파일 301·클래스 500·함수 861개를 담았다. 세 가지 뷰: 계층별로 색을 입힌 노드를 끌어볼 수 있고 클릭하면 그 파일이 하는 일·정의한 클래스와 함수·연결 관계가 뜨는 <b>그래프</b>, 모든 파일을 요약과 실제 소스 링크와 함께 나열하는 <b>계층</b> 브라우저, 그리고 OpenAI 서버에서 스케줄러·AITER 커널 계층·컴파일 서브시스템까지 읽는 순서대로 안내하는 <b>투어</b>. 범위는 코어 엔진만이다 — ATOMesh(Rust), vLLM·SGLang 플러그인 브리지, diffusion 서브시스템은 제외.</span>
+      <span class="en">An interactive map of ATOM's core inference engine: every source file summarized, grouped by architectural layer and threaded into a reading tour.</span>
+      <span class="ko">ATOM 코어 엔진의 소스 파일 310개를 요약해 레이어별로 묶고 읽기 투어로 엮은 인터랙티브 지도다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-09-01">2026-09-01</time>
@@ -270,8 +272,8 @@
       <span class="ko">Exploring Speculative Decoding in vLLM on AMD GPUs</span>
     </h2>
     <p>
-      <span class="en"><b>An unofficial Korean translation</b> of the vLLM blog post by AMD and Embedded LLM (2026-08-23) — a practical guide to speculative decoding on AMD Instinct MI300X / MI355X. The EN toggle shows the original wording, the KO toggle the translation; the three figures are served from vllm.ai. Covers the draft-and-verify mechanic end to end, then the five drafting methods and what actually separates them: <b>native MTP</b> (model-native auxiliary path, sequential), <b>Gemma 4 MTP</b> (separate checkpoint that shares the target's KV cache), <b>EAGLE-3</b> (fuses early/middle/late target hidden states, drafts autoregressively), <b>DFlash</b> (turns the fused target context into extra K/V available in <i>every</i> draft layer and predicts a whole masked block in one pass), and <b>DSpark</b> (DFlash backbone plus a lightweight Markov head so later tokens depend on earlier ones — its confidence head was inactive in these runs). Then the practical half: <code>--speculative-config</code> for each method, memory notes, where the pretrained draft checkpoints live (Google, Red Hat AI, Z-Lab, DeepSeek DeepSpec, LightSeek, Inferact), the full coverage matrix across nine targets, and the measurements — up to <b>2.87×</b> (DFlash on gemma-4-26B-A4B-it) and <b>2.68×</b> (DFlash on Kimi-K2.5), with some settings landing <i>below</i> baseline. Closes with tuning guidance (per-position acceptance is the signal to watch; N=7 was often near the peak for DFlash) and the speculator-training workflow. Appendix heatmaps are interactive and stay in the original.</span>
-      <span class="ko">AMD와 Embedded LLM이 2026-08-23 vLLM 블로그에 올린 글의 <b>비공식 한국어 번역</b> — AMD Instinct MI300X / MI355X에서의 speculative decoding 실무 가이드. EN 토글은 원문 그대로, KO 토글은 번역이고, 그림 3개는 vllm.ai에서 불러온다. draft-and-verify 동작을 처음부터 끝까지 다룬 뒤, 다섯 가지 드래프팅 방법과 그 실질적 차이를 설명한다: <b>native MTP</b>(모델 내장 보조 경로, 순차), <b>Gemma 4 MTP</b>(타깃의 KV 캐시를 공유하는 별도 체크포인트), <b>EAGLE-3</b>(타깃의 앞·중간·뒤 hidden state를 융합해 자기회귀적으로 draft), <b>DFlash</b>(융합된 타깃 문맥을 <i>모든</i> draft 레이어에서 쓸 수 있는 추가 K/V로 바꾸고 마스킹된 블록 전체를 한 번에 예측), <b>DSpark</b>(DFlash backbone에 가벼운 Markov head를 얹어 뒤 토큰이 앞 토큰에 의존하게 함 — 이번 실험에서 confidence head는 비활성). 이어서 실무 절반: 방법별 <code>--speculative-config</code>, 메모리 주의사항, 사전학습 draft 체크포인트 배포처(Google, Red Hat AI, Z-Lab, DeepSeek DeepSpec, LightSeek, Inferact), 타깃 9종에 대한 전체 커버리지 표, 그리고 측정치 — 최대 <b>2.87×</b>(gemma-4-26B-A4B-it의 DFlash), <b>2.68×</b>(Kimi-K2.5의 DFlash). 일부 설정은 기준선 <i>아래</i>로 떨어지기도 했다. 마지막으로 튜닝 지침(위치별 수용률이 볼 신호, DFlash는 N=7이 최고점 근처인 경우가 많음)과 speculator 학습 워크플로. 부록 히트맵은 인터랙티브라 원문에 남겨 뒀다.</span>
+      <span class="en">An unofficial Korean translation of the AMD and Embedded LLM vLLM blog on speculative decoding on MI300X/MI355X, comparing five drafting methods, up to 2.87×.</span>
+      <span class="ko">AMD와 Embedded LLM의 vLLM speculative decoding 블로그(MI300X/MI355X)를 비공식 번역했다. 드래프트 방식 다섯 가지를 비교하며 최대 2.87배 빨라진다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-08-28">2026-08-28</time>
@@ -291,8 +293,8 @@
       <span class="ko">A Year in LLM Serving: Workload Evolution, Caching and Load-Balancing</span>
     </h2>
     <p>
-      <span class="en">Not a system — a <b>measurement</b>. UChicago / Harvard / Chutes (arXiv:2608.13573) release the first LLM serving trace that is simultaneously long (12 months), unsampled (every request), broad (9,174 models incl. the long tail) and attributed (user <i>and</i> serving-instance IDs): <b>6.12B requests, 314,970 users, 875,921 instances</b>. Aggregate input:output runs <b>14.2 : 1</b> by token volume — this platform reads context far more than it writes. Seven numbered findings; two change designs. <b>Finding 5:</b> prefix reuse is so purely recency-driven that FIFO and LRU match or beat ARC, S3FIFO, LHD, GDSF and Sieve — a prefix is born, reused within seconds, then dead forever, so frequency-aware policies are throwing signal away. <b>Finding 7:</b> "larger caches alone cannot recover reuse when routing scatters session state across replicas" — cache-aware routing is a <i>prerequisite</i>, not an optimization on top of more KV memory; the measured price of locality is only <b>5–7% imbalance</b>, though the paper flags that this is subsidized by abundant single-turn traffic. Also: request-level hit ratios are <b>bimodal</b> (all or nothing, partial hits rare), <b>99% of repeat arrivals return within 15 min</b>, and overload hits <b>prefill only</b> (P90 TTFT explodes past a tokens/s threshold while P90 decode barely notices) — which argues for token-weighted, phase-specific routing under P/D. Walks the token-arithmetic session reconstruction that makes the simulations possible. No paper repo and <b>the trace is not yet released</b>; the simulator (libCacheSim, a co-author's, GPL-3.0) is pinned, where the paper's algorithm list turns out to name LRU twice — the second is almost certainly <b>LRB</b>. Paper states no limitations, so §4.6 is my own list. 5 original diagrams.</span>
-      <span class="ko">시스템이 아니라 <b>측정</b>이다. UChicago / Harvard / Chutes (arXiv:2608.13573)가 동시에 길고(12개월), 샘플링 없고(모든 요청), 넓고(롱테일 포함 9,174개 모델), 귀속 가능한(사용자 <i>및</i> 서빙 인스턴스 ID) 최초의 LLM 서빙 트레이스를 공개: <b>요청 61.2억, 사용자 314,970명, 인스턴스 875,921개</b>. 토큰 총량 기준 입력:출력이 <b>14.2 : 1</b> — 이 플랫폼은 쓰기보다 컨텍스트 읽기가 압도적이다. 번호 붙은 발견 일곱 중 둘이 설계를 바꾼다. <b>Finding 5:</b> prefix 재사용이 너무 순수하게 최근성 기반이라 FIFO·LRU가 ARC·S3FIFO·LHD·GDSF·Sieve와 비슷하거나 낫다 — prefix는 태어나 몇 초 안에 재사용되고 영원히 죽으므로, 빈도를 고려하는 정책은 신호를 버리는 셈이다. <b>Finding 7:</b> "라우팅이 세션 상태를 흩뿌리면 캐시를 키워도 재사용을 되찾을 수 없다" — 캐시 인식 라우팅은 KV 메모리 증설 위에 얹는 최적화가 아니라 <i>전제조건</i>이다. 측정된 지역성의 대가는 <b>불균형 5~7%</b>뿐이지만, 논문 스스로 이게 풍부한 단발 트래픽에 보조받은 값이라고 밝힌다. 그 외: 요청 단위 히트율이 <b>이봉분포</b>(전부 아니면 전무, 부분 히트 드묾), <b>반복 도착의 99%가 15분 내 복귀</b>, 과부하는 <b>prefill만</b> 때린다(P90 TTFT는 tokens/s 임계를 넘으면 폭발하는데 P90 decode는 거의 무반응) — P/D에서 토큰 가중·단계별 라우팅을 해야 한다는 논거. 시뮬레이션을 가능하게 만든 토큰 산술 기반 세션 복원도 따라간다. 논문 레포는 없고 <b>트레이스도 아직 미공개</b>. 시뮬레이터(공저자의 libCacheSim, GPL-3.0)를 커밋 고정해 확인했고, 논문의 알고리즘 목록이 LRU를 두 번 적는데 두 번째는 거의 확실히 <b>LRB</b>다. 논문에 한계 절이 없어 §4.6은 내가 도출한 목록. 직접 그린 다이어그램 5개.</span>
+      <span class="en">An unsampled year-long trace of 6.12B requests shows prefix reuse is purely recency-driven, so FIFO/LRU beat fancier policies and cache-aware routing comes first.</span>
+      <span class="ko">1년치 요청 61.2억 건을 빠짐없이 담은 트레이스를 분석한다. 프리픽스 재사용은 최근성만 따르고, 캐시를 키우기보다 캐시 인지 라우팅이 먼저다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-08-28">2026-08-28</time>
@@ -312,8 +314,8 @@
       <span class="ko">FreeToken: Efficient Edge-Native MoE Serving with Bandwidth-Adaptive Execution</span>
     </h2>
     <p>
-      <span class="en">A Berkeley-led team (arXiv:2608.16157 — Yang, Keutzer, Song Han, Zaharia, Stoica) asks what a personal PC could serve if the software stopped treating it as a small datacenter GPU: <b>753B GLM-5.2 on one workstation card, 284B on a gaming desktop, 35B on an 8 GB laptop at 39 tok/s</b> — past Codex's 33 tok/s production median. MoE makes this thinkable (DSV4-Flash: 6 of 256 experts, 13B of 284B active) and impossible at once — sparsity is per-token, so over a long prompt the routes union together and prefill goes <b>dense</b>, streaming ~140 GB. Every prior system competes on <i>predicting</i> misses better; the paper's reframe is that a missed expert is also <b>work that can run where it already sits</b>, so it splits each step's misses between PCIe fill and CPU execution at <code>q* = m·B_P/B_H</code>, from two bandwidths measured on the actual machine. I work the derivation through and add an identity the paper leaves implicit — <b>T(q*) = mS/B_H</b>, i.e. the split is <i>free</i>: it hits the host-bandwidth floor while warming the cache for nothing. Plus full-layer double-buffered prefill (transfer-bound at the PCIe ceiling) and recurrent-state checkpoints anchored at the <b>block boundaries agent harnesses actually truncate</b>. Results: 1.5–2.3× decode, within 12% of single-turn under agentic load where KTransformers loses 31%, and worst-case TTFT <b>&lt;44 s vs 946 s</b> — which the paper rightly calls an availability boundary, not a latency statistic, since OpenClaw's watchdog fires at 120 s. Code-walked at Apache-2.0 commit <code>2757bb5f9115</code>, where the shipped q* turns out to <b>refine</b> Eq. 4 by measuring the two bandwidths <i>concurrently</i> instead of modelling contention. The paper states no limitations at all, so §4.5 is my own list (three of six "consumer" boxes are throttled rented servers; no accuracy parity check; q* uses statically profiled bandwidths on hardware the paper itself argues fluctuates). 8 original diagrams.</span>
-      <span class="ko">버클리 주도 팀(arXiv:2608.16157 — Yang, Keutzer, Song Han, Zaharia, Stoica)이 던지는 질문: 소프트웨어가 개인 PC를 작은 데이터센터 GPU로 취급하기를 그만두면 무엇까지 서빙되는가. <b>워크스테이션 카드 한 장으로 753B GLM-5.2, 게이밍 데스크톱으로 284B, 8 GB 노트북으로 35B를 39 tok/s</b> — 프로덕션 Codex 중앙값 33 tok/s를 넘긴다. MoE가 이걸 가능하게 하면서 동시에 불가능하게 만든다(DSV4-Flash: 256개 중 6개, 284B 중 13B 활성). 희소성은 토큰 단위라서 긴 프롬프트에서는 라우팅이 합쳐져 prefill이 <b>조밀</b>해지고 ~140 GB를 스트리밍한다. 기존 시스템은 전부 미스를 더 잘 <i>예측</i>하는 경쟁을 했는데, 이 논문의 전환은 미스 난 expert가 <b>이미 있는 자리에서 실행할 수 있는 일감</b>이기도 하다는 것. 그래서 매 스텝 미스를 PCIe fill과 CPU 실행 사이에 <code>q* = m·B_P/B_H</code>로 나눈다 — 실제 기계에서 측정한 두 대역폭에서. 유도를 끝까지 따라가면서 논문이 암묵적으로 남긴 항등식을 덧붙였다: <b>T(q*) = mS/B_H</b>, 즉 이 분배는 <i>공짜</i>다. 호스트 대역폭 하한을 달성하면서 캐시까지 덤으로 데운다. 여기에 레이어 단위 이중 버퍼 prefill(PCIe 상한에서 전송 바운드)과 <b>에이전트 하네스가 실제로 자르는 블록 경계</b>에 앵커를 박은 recurrent state 체크포인트. 결과: 디코드 1.5~2.3배, KTransformers가 31%를 잃는 에이전트 부하에서 단일턴 대비 12% 이내 유지, 최악 TTFT <b>44초 미만 vs 946초</b> — OpenClaw watchdog이 120초에 터지므로 논문 말대로 지연 통계가 아니라 가용성 경계다. Apache-2.0 커밋 <code>2757bb5f9115</code>로 코드 확인했고, 배포된 q*가 경합을 모델링하는 대신 두 대역폭을 <i>동시에</i> 측정해 Eq. 4를 <b>개선</b>하고 있었다. 논문에 한계 절이 아예 없어서 §4.5는 내가 도출한 목록이다(6대 중 3대가 스레드를 조인 임대 서버, 정확도 동등성 검사 없음, 논문 스스로 요동친다고 주장한 하드웨어에서 q*는 정적 프로파일 대역폭 사용). 직접 그린 다이어그램 8개.</span>
+      <span class="en">FreeToken serves huge MoE models on personal PCs by splitting missed experts between PCIe transfer and CPU execution, even 753B GLM-5.2 on one workstation card.</span>
+      <span class="ko">FreeToken은 놓친 expert를 PCIe로 옮길지 CPU에서 바로 돌릴지 나눠 개인 PC에서 거대 MoE를 서빙한다. 워크스테이션 GPU 한 장에서 753B GLM-5.2까지 돌린다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-08-25">2026-08-25</time>
@@ -337,8 +339,8 @@
       <span class="ko">LLM Inference Onboarding</span>
     </h2>
     <p>
-      <span class="en">A question-driven onboarding sheet for LLM inference — prefill/decode, KV cache, roofline, the optimisation techniques, the engines, and how it all maps onto our stack. 40 questions in B0–B6 (27 written, 7 worked by hand, 6 hands-on with vLLM), each with its answer and marking points.</span>
-      <span class="ko">LLM 추론 온보딩 질문지 — prefill/decode·KV cache·roofline·최적화 기법·엔진, 그리고 우리 스택 연결까지. B0~B6 40문항(서술형 27 · 손으로 푸는 계산형 7 · vLLM 실습 6)과 각 문항의 정답·채점 포인트.</span>
+      <span class="en">A question-driven LLM inference onboarding sheet, from prefill/decode and KV cache to engines and our stack, with 40 answered questions.</span>
+      <span class="ko">prefill/decode, KV 캐시, roofline부터 엔진과 우리 스택까지 40개 질문과 답으로 익히는 LLM 추론 온보딩 시트다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-08-28">2026-08-28</time>
@@ -355,8 +357,8 @@
       <span class="ko">PD 와 KV 오프로드를 동시에 — MultiConnector + NIXL + LMCache → Mooncake</span>
     </h2>
     <p>
-      <span class="en">One vLLM engine doing two jobs usually discussed apart: disaggregated prefill/decode over NIXL RDMA, <i>and</i> KV offload into a MooncakeStore-backed shared cache. A code walk across three repos at pinned SHAs. The composition policy is one sentence — <b>load from the first child that reports a hit (config order), save to all</b> — and everything follows from it, including a trap: <code>LMCacheMPConnector</code> returns <code>None</code> while its async lookup is in flight, and <code>MultiConnector</code>'s loop <b>discards an already-found NIXL hit</b> when any child does that, costing a scheduler step even when the prefiller had the blocks ready. Traces both wire flows separately — NIXL's ZMQ REQ/REP agent-metadata handshake then one-sided RDMA READ (and why <code>NixlConnector</code> <i>is</i> <code>NixlPullConnector</code>, an alias), versus the offload leg's ZMQ DEALER control plane with a CUDA-IPC data plane, POSIX-shm L1, and a Mooncake hop that is <b>C++ not Python</b> — the adapter file is config-only, and <code>preregister_l1_memory()</code> is what makes the RDMA zero-copy. Then one request end to end in 13 pinned steps, resolving to the six-call worker loop every connector shares. Closes with five traps (<code>BUILD_MOONCAKE=1</code> is not the default; the <code>--kv-offloading-backend</code> shortcut <b>silently overwrites</b> your MultiConnector) and a three-route comparison for reaching Mooncake. Complements the connector taxonomy and the v0.22.0 NIXL walk without repeating them.</span>
-      <span class="ko">보통 따로 다루는 두 일을 vLLM 엔진 하나가 동시에 하게 만들기 — NIXL RDMA 로 prefill/decode 분리, <i>그리고</i> MooncakeStore 기반 공유 캐시로 KV 오프로드. 레포 3개를 SHA 고정으로 훑는 코드 워크. 합성 정책은 한 문장이다 &mdash; <b>설정 순서상 첫 히트에서 읽고, 전부에 저장</b> &mdash; 그리고 함정까지 여기서 파생된다: <code>LMCacheMPConnector</code> 는 비동기 lookup 중에 <code>None</code> 을 반환하고, <code>MultiConnector</code> 의 루프는 자식이 그러면 <b>이미 찾은 NIXL 히트를 버린다</b>. prefiller 가 블록을 준비해 뒀어도 스케줄러 스텝 하나를 더 쓴다. 통신 흐름을 둘로 나눠 추적한다 &mdash; NIXL 의 ZMQ REQ/REP agent 메타데이터 핸드셰이크 뒤 단방향 RDMA READ(그리고 <code>NixlConnector</code> 가 <i>왜</i> <code>NixlPullConnector</code> 의 별칭인지), 대(對) 오프로드 쪽의 ZMQ DEALER 컨트롤 플레인 + CUDA IPC 데이터 플레인 + POSIX shm L1 + <b>파이썬이 아니라 C++</b> 인 Mooncake 홉 &mdash; 어댑터 파일은 설정뿐이고, RDMA 를 무복사로 만드는 건 <code>preregister_l1_memory()</code> 다. 이어 요청 하나를 고정 링크 13단계로 끝까지 따라가, 모든 커넥터가 공유하는 6-호출 워커 루프로 수렴시킨다. 마지막은 함정 5개(<code>BUILD_MOONCAKE=1</code> 은 기본이 아니다, <code>--kv-offloading-backend</code> 단축 플래그가 MultiConnector 를 <b>조용히 덮어쓴다</b>)와 Mooncake 도달 경로 3개 비교. 커넥터 분류 노트와 v0.22.0 NIXL 워크를 반복하지 않고 보완한다.</span>
+      <span class="en">How one vLLM engine runs NIXL PD and LMCache→Mooncake offload together via MultiConnector, and the trap where an in-flight lookup discards a NIXL hit.</span>
+      <span class="ko">vLLM 엔진 하나가 MultiConnector로 NIXL PD와 LMCache→Mooncake 오프로드를 함께 돌리는 경로를 따라간다. 비동기 조회 중이면 찾은 NIXL 히트를 버리는 함정도 있다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-08-25">2026-08-25</time></p>
   </a>
@@ -371,8 +373,8 @@
       <span class="ko">RoPE 처음부터 — 회전으로 위치를 심는 법</span>
     </h2>
     <p>
-      <span class="en">Attention is blind to word order, and the obvious fix leaks: expand <code>&lt;q+p_m, k+p_n&gt;</code> and two terms depend on <b>m alone and n alone</b>. RoPE multiplies instead of adding — rotate each query and key by an angle proportional to its position, and the conjugate inside the inner product flips one sign so the absolute positions <b>cancel and leave only m−n</b>. This note derives that from the design goal: the 2-D complex-number solve step by step, then <code>R(a)ᵀR(b) = R(b−a)</code> with both underlying facts (angle addition, orthogonality) proved out, checked against real numbers. Then the extension to 128 dims as <b>64 two-dimensional pairs with geometric frequencies</b> — a clock with 64 hands, where fast pairs resolve neighbouring tokens (λ≈6) and slow pairs carry document-scale position (λ≈54K), tiling log-distance evenly. Also: the <code>rotate_half</code> elementwise form the kernels really run (O(d), not O(d²) — only 1.6% of the 128×128 matrix is nonzero), the interleaved-vs-half-split convention trap that silently breaks weight ports, and why long-context models raise the base. Closes on KV-cache reuse: keys are cached <i>already rotated</i>, orthogonality makes stripping exact and free, and my own arc computation shows <b>28 of 64 pairs only ever see a partial arc</b> in a 1K calibration window — which is precisely why a fit on rotated keys cannot extrapolate to 32K. 4 original diagrams. Companion to the KV-transfer paper note.</span>
-      <span class="ko">어텐션은 어순을 못 본다. 그런데 가장 뻔한 해법은 새어나간다: <code>&lt;q+p_m, k+p_n&gt;</code>을 전개하면 두 항이 <b>m만, n만</b>에 의존한다. RoPE는 더하는 대신 곱한다 — 각 query와 key를 위치에 비례한 각도만큼 회전시키면, 내적 안의 켤레가 한쪽 부호를 뒤집어 절대 위치가 <b>상쇄되고 m−n만 남는다</b>. 이 노트는 그걸 설계 목표에서부터 유도한다: 2차원 복소수 해법을 단계별로, 그다음 <code>R(a)ᵀR(b) = R(b−a)</code>를 받치는 두 사실(각도 덧셈, 직교성)까지 증명하고 실제 숫자로 검산한다. 이어서 128차원 확장을 <b>등비 주파수를 가진 2차원 쌍 64개</b>로 — 바늘 64개짜리 시계다. 빠른 쌍은 옆 토큰 순서를(λ≈6), 느린 쌍은 문서 규모 위치를(λ≈54K) 담으며 로그 거리 축을 균일하게 덮는다. 그리고 커널이 실제로 돌리는 <code>rotate_half</code> 원소별 형태(O(d²)가 아니라 O(d) — 128×128 행렬에서 0이 아닌 성분이 1.6%뿐), 가중치 이식을 조용히 깨뜨리는 interleaved vs half-split 규약 함정, 긴 컨텍스트 모델이 base를 올리는 이유. 마무리는 KV 캐시 재사용: key는 <i>이미 회전된 채로</i> 캐시되고, 직교성 덕에 벗겨내기가 정확하고 공짜이며, 직접 계산해 보면 1K 캘리브레이션 창에서 <b>64개 쌍 중 28개가 원의 일부만 본다</b> — 회전된 key로 피팅한 매핑이 32K로 외삽되지 않는 이유가 바로 이것이다. 직접 그린 다이어그램 4개. KV 전이 논문 정리의 부록.</span>
+      <span class="en">Derives RoPE from its design goal, showing why rotating queries and keys leaves only the relative position m−n, through to the kernel form and long-context limits.</span>
+      <span class="ko">RoPE를 설계 목표부터 유도해 쿼리와 키를 회전하면 왜 상대 위치 m−n만 남는지 보여 준다. 커널 구현 형태와 긴 컨텍스트에서의 한계도 다룬다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-08-24">2026-08-24</time>
@@ -392,8 +394,8 @@
       <span class="ko">Goodput 관점에서의 PD 효용성 (GLM5.2 실측데이터 활용)</span>
     </h2>
     <p>
-      <span class="en">A spreadsheet of GLM-5.2 serving sweeps (ISL 8192 / OSL 1024) turned into something you can interrogate. Two tables — colocated, and the PD-disaggregation primitives measured as prefill-only and decode-only — each with its own SW / HW / Config dropdown so you can put different configurations side by side. Type in a TTFT and TPOT SLO and the rows that actually fed the calculation light up in both tables, so every number is traceable back to a measured row. The third card compares colocated&nbsp;&times;&nbsp;(n+m) against nP&nbsp;mD in one table and one chart: the two capacity constraints cross where the optimal split sits, and the bars that clear the dashed baseline are where disaggregation wins. Preset chips jump straight to the winning combinations. A step-by-step numeric trace substitutes the real values so the arithmetic can be followed by hand, and the derived columns come with their formulas and what they mean — including why Little&rsquo;s law says effective concurrency is Output&nbsp;Thr &times; TPOT, and why the decode-only columns disagree with each other by 1.9&times; on two of the vendors. States what the model leaves out: KV transfer cost, prefix-cache hit ratio, and tail latency. A ⓪ preamble now sits ahead of the tables — what goodput is and why the largest number is the wrong one to pick, what interference costs when prefill and decode share a node, and the per-request node-seconds that set the ideal n:m — plus a data-first answer to &ldquo;isn&rsquo;t PD just slower?&rdquo;</span>
-      <span class="ko">GLM-5.2 서빙 스윕 스프레드시트(ISL 8192 / OSL 1024)를 직접 캐물을 수 있는 형태로 옮겼다. 표는 둘 — colocated, 그리고 prefill only / decode only 로 따로 잰 PD disaggregation 프리미티브 — 이고 각각 SW / HW / Config 드롭다운을 따로 갖고 있어 서로 다른 설정을 위아래로 놓고 볼 수 있다. TTFT 와 TPOT SLO 를 넣으면 계산에 실제로 들어간 행이 두 표에서 색으로 표시되므로, 모든 숫자를 실측 행까지 되짚을 수 있다. 세 번째 카드는 colocated&nbsp;&times;&nbsp;(n+m) 과 nP&nbsp;mD 를 한 표와 한 그래프에서 비교한다 — 두 용량 제약이 교차하는 곳이 최적 분할이고, 점선 baseline 을 넘는 막대가 disaggregation 이 이기는 구간이다. 프리셋 칩을 누르면 이기는 조합으로 바로 간다. 숫자를 그대로 대입한 단계별 추적으로 손으로 따라갈 수 있게 했고, 파생 열마다 계산식과 뜻을 붙였다 — effective concurrency 가 왜 Output&nbsp;Thr &times; TPOT 인지(Little&rsquo;s law), 그리고 decode only 두 열이 두 벤더에서 왜 1.9&times; 어긋나는지까지. 이 모델이 담지 않는 것도 적었다 — KV transfer 비용, prefix-cache hit ratio, tail latency. 표 앞에는 ⓪ 프리앰블을 뒀다 — goodput 이 무엇이고 왜 가장 큰 숫자를 집으면 안 되는지, prefill 과 decode 를 한 노드에 섞으면 무엇을 잃는지, 그리고 이상 n:m 을 정하는 요청당 노드 시간. &ldquo;PD 하면 더 느려지는 것 아닌가&rdquo; 에는 숫자부터 놓고 답했다.</span>
+      <span class="en">An interactive goodput calculator on measured GLM-5.2 sweeps: enter TTFT and TPOT SLOs and see where nP mD disaggregation beats colocated serving.</span>
+      <span class="ko">GLM-5.2 실측 스윕으로 만든 goodput 계산기다. TTFT와 TPOT SLO를 넣으면 PD 분리가 콜로케이션보다 나은 구간이 보인다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-08-21">2026-08-21</time>
@@ -413,8 +415,8 @@
       <span class="ko">AgentX 방법론 — 실제 Claude Code 트레이스를 재현 가능한 벤치마크로 바꾸는 법</span>
     </h2>
     <p>
-      <span class="en">A full read of the SemiAnalysis InferenceX AgentX methodology page, with all 21 of its figures. Starts from the number that reframes everything: across 3.41M requests and 613B tokens of real Claude Code traffic, <b>95.18% of tokens are cache reads and 0.41% are output</b> — a 320:1 input-to-output ratio at the median request, which means a benchmark sending independent prompts is not measuring a slower version of this workload but a different one. Walks how you replay a session you are not allowed to read (64-token chained hash blocks preserve prefix sharing while discarding content; median reconstructed/provider token ratio 1.004), how AIPerf turns each trace into a spawn/join DAG, and why "concurrency" here means live agent clients rather than in-flight requests — so the server can hold more requests than the configured number. Covers the warmup protocol that exists because cache state decides the result (seeded 25–75% start, max_tokens=1 primer, 10 warmup requests, one-hour window, and the cache-bust marker that stops recycled plays from faking a shared prefix), the forced acceptance-length fix merged upstream into SGLang, TensorRT-LLM, vLLM and ATOM so synthetic payloads cannot distort speculative decoding, and the DRAM rules that block the obvious way to game an offload benchmark. Flags the closed-loop confound the page discloses in one sentence — faster systems measure a different request mix — and notes where the Pareto chart switches KV offload on.</span>
-      <span class="ko">SemiAnalysis InferenceX 의 AgentX 방법론 페이지를 그림 21개와 함께 통독한 정리. 모든 걸 다시 보게 만드는 숫자에서 시작한다 — 실제 Claude Code 트래픽 341만 요청·6,132억 토큰에서 <b>토큰의 95.18%가 캐시 읽기이고 출력은 0.41%</b>다. 중앙값 요청 기준 입력:출력 320:1 이고, 이는 독립 프롬프트를 쏘는 벤치마크가 이 워크로드의 느린 버전이 아니라 아예 다른 워크로드를 재고 있다는 뜻이다. 읽으면 안 되는 세션을 어떻게 재생하는지(64토큰 연쇄 해시 블록이 내용은 버리고 프리픽스 공유만 남긴다, 재구성/공급자 토큰 비율 중앙값 1.004), AIPerf 가 트레이스를 spawn/join DAG 로 어떻게 바꾸는지, 그리고 여기서 "동시성" 이 in-flight 요청이 아니라 살아 있는 에이전트 클라이언트를 뜻해 서버가 설정값보다 많은 요청을 물고 있을 수 있다는 점을 따라간다. 캐시 상태가 결과를 정하기 때문에 존재하는 워밍업 프로토콜(시드로 고른 25–75% 시작점, max_tokens=1 프라이머, 워밍업 10건, 1시간 창, 재활용 재생이 가짜 공유 프리픽스를 만들지 못하게 막는 캐시 무효화 표식), 합성 페이로드가 speculative decoding 을 왜곡하지 못하도록 SGLang·TensorRT-LLM·vLLM·ATOM 에 업스트림 병합한 강제 수용 길이, 오프로드 벤치마크를 속이는 뻔한 방법을 막는 DRAM 규칙까지 다룬다. 페이지가 한 문장으로 공개한 닫힌 루프 교란(빠른 시스템은 다른 요청 구성을 잰다)을 짚고, 파레토 차트에서 KV 오프로드가 켜지는 지점도 함께 본다.</span>
+      <span class="en">How SemiAnalysis replays real Claude Code traces as a benchmark, starting from the fact that 95.18% of their tokens are cache reads.</span>
+      <span class="ko">SemiAnalysis가 실제 Claude Code 트레이스를 재현 가능한 벤치마크로 바꾸는 방법을 정리한다. 이 트래픽은 토큰의 95.18%가 캐시 읽기다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-08-24">2026-08-24</time></p>
   </a>
@@ -429,8 +431,8 @@
       <span class="ko">TPOT 중심 동적 P/D — SLO 하나를 지키려고 엔진을 prefill 과 decode 사이로 옮기기</span>
     </h2>
     <p>
-      <span class="en">Prefill/decode disaggregation makes you pick how many engines go to each role, and the right split flips depending on the traffic — 2P4D wins on 1k prompts, 4P2D wins on 4k prompts, same hardware. A write-up of a scheduler that stops guessing: instead of forecasting the workload with a time-series model, it simulates the decode queue every 100&nbsp;ms from work already in the system, turns the TPOT target into a maximum decode batch size, and converts an engine between roles when the predicted batch crosses that line. Walks the whole loop — the two arrival/departure estimates, the n vs n&minus;1 rule, cancelling a switch mid-flight, and the three transition modes including the overlap mode that was built, measured, and left switched off because it slowed decode down. Measured on a 3-node MI250 cluster it converges to the best static split on short, long, and mixed workloads without being told which is which, and on the mixed run it beats static 3P3D at the same ratio — a routing gain, not a ratio gain. Reproduces the author's own limitations slide in full, including the honest one: throughput is not the objective, so at saturation it gives some away. Ends by contrasting the 0.1&nbsp;s simulation loop with the ARIMA forecasting used by DOPD and NVIDIA Dynamo (which re-decides every 3 minutes) and with xLLM's monitoring-driven switch. Figures reproduced from the original deck.</span>
-      <span class="ko">Prefill/decode 분리는 어느 역할에 엔진을 몇 대 줄지 고르게 만드는데, 정답이 트래픽에 따라 뒤집힌다 — 같은 하드웨어에서 1k 프롬프트는 2P4D 가, 4k 프롬프트는 4P2D 가 이긴다. 추측을 그만두는 스케줄러를 정리했다. 시계열 모델로 워크로드를 예측하는 대신, 이미 시스템 안에 있는 일로 100&nbsp;ms 마다 decode 큐를 시뮬레이션하고, TPOT 목표를 최대 decode 배치 크기로 번역한 뒤, 예상 배치가 그 선을 넘으면 엔진의 역할을 바꾼다. 루프 전체를 따라간다 — 유입·이탈 두 추정, n 대 n&minus;1 규칙, 전환 도중 취소, 그리고 세 가지 전환 방식(만들어서 재 봤더니 decode 가 느려져서 꺼 둔 overlap 방식 포함). 3노드 MI250 실측에서 short·long·mixed 어느 쪽인지 알려 주지 않아도 각각의 최적 정적 분할로 수렴하고, mixed 에서는 같은 3P3D 비율인데도 정적 3P3D 를 이긴다 — 비율 이득이 아니라 라우팅 이득이다. 저자의 한계 슬라이드를 통째로 옮겼다. 정직한 항목 하나 포함 — throughput 은 목적함수가 아니라서 포화 시 그만큼 내준다. 마지막에 0.1&nbsp;s 시뮬레이션 루프를 DOPD·NVIDIA Dynamo 의 ARIMA 예측(3분 주기 재판단) 및 xLLM 의 모니터링 기반 전환과 대조한다. 그림은 원 자료 그대로.</span>
+      <span class="en">A scheduler that simulates the decode queue every 100 ms and moves engines between prefill and decode to hold a TPOT SLO, converging to the best static split.</span>
+      <span class="ko">100ms마다 decode 큐를 시뮬레이션해 TPOT SLO를 지키도록 엔진을 prefill과 decode 사이로 옮기는 스케줄러다. 워크로드를 몰라도 최적 고정 비율에 수렴한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-08-21">2026-08-21</time></p>
   </a>
@@ -445,8 +447,8 @@
       <span class="ko">Mooncake 실전 — 실행 경로, 설계 자산, 고객 가치</span>
     </h2>
     <p>
-      <span class="en">The practitioner's companion to the design note, written for someone who has never met a KV cache or RDMA — chapter 0 builds both from zero, including what actually happens on a normal network send and why registering memory with the NIC is the whole trick. Four questions: what actually executes when a request hits a vLLM instance wired to a Mooncake store; which specific Mooncake capability each step leans on and what would break without it; how you would <b>see</b> it working; and what to honestly tell a customer. A dedicated chapter maps the communication stack: an offload deployment has four channels — a <code>ipc://</code> unix socket between scheduler and worker (so they cannot be split across nodes), small RPC to the master, connection-setup traffic to the metadata service, and the RDMA data plane that carries effectively all the bytes — plus two more (bootstrap, worker side channel) once PD disaggregation is on. It also untangles the config trap where <code>master_server_address</code> and <code>metadata_server</code> are two different services in the same JSON file. The code walk is step-by-step with a plain-language box before every snippet — including why registering GPU memory with the NIC removes the serialization step entirely, and why the key embeds <code>tp_rank</code> so mixed parallel layouts silently stop sharing. The evaluation chapter is the part most benchmarks get wrong: vLLM counts <code>prefix_cache_hits</code> and <code>external_prefix_cache_hits</code> separately, and if the GPU-local cache absorbs the traffic first the store never sees a request — so "no effect" usually means the working set never exceeded GPU KV capacity. Chapter 0 also unpacks zero-copy — what a copy actually costs, the three things you save (memory, compute, latency) and the three ways the property breaks. Ends with a fit matrix, six qualifying questions, the upstream 46× figure quoted as a ceiling with the four caveats it needs, and an animated end-to-end figure: a multi-turn session whose turn 1 lands on one node and turn 2 on another, with each hop colour-coded by which channel carries it. A final chapter re-reads the whole path in Mooncake's own documented vocabulary — Segment, BatchTransfer, Topology Aware Path Selection, Lease, Soft Pin, AllocationStrategy, Object Groups — with an animated five-stage feature map showing which named features each call touches and, more usefully, which ones this connector never invokes at all.</span>
-      <span class="ko">설계 노트의 실무 짝. KV 캐시도 RDMA 도 처음 보는 사람 기준으로 썼다 — 0장이 둘 다 밑바닥부터 쌓는다. 평소 네트워크 전송에서 실제로 무슨 일이 벌어지는지, 메모리를 NIC 에 등록하는 게 왜 핵심인지까지. 질문 넷 — Mooncake 스토어에 물린 vLLM 에 요청이 오면 실제로 무엇이 실행되는가, 각 단계가 Mooncake 의 어떤 능력에 기대며 그게 없으면 뭐가 깨지는가, 동작을 <b>어떻게 확인</b>하는가, 고객에게 정직하게 뭐라 말할 것인가. 통신 스택을 전담 장으로 뺐다 — 오프로드 배포에는 채널이 넷이다. 스케줄러↔워커의 <code>ipc://</code> 유닉스 소켓(그래서 둘을 다른 노드에 못 둔다), master 로의 작은 RPC, metadata service 로의 연결 수립 트래픽, 그리고 사실상 모든 바이트를 나르는 RDMA 데이터 평면. PD 분리를 켜면 bootstrap 과 워커 사이드 채널 둘이 더 붙는다. <code>master_server_address</code> 와 <code>metadata_server</code> 가 같은 JSON 안의 서로 다른 서비스라는 설정 함정도 풀어놨다. 코드 워크는 스니펫마다 앞에 쉬운 설명 박스를 두고 한 단계씩 — GPU 메모리를 NIC 에 등록하면 왜 직렬화 단계가 아예 사라지는지, 키에 <code>tp_rank</code> 가 박혀서 왜 레이아웃이 섞이면 공유가 조용히 멈추는지까지. 평가 장이 대부분의 벤치마크가 틀리는 지점이다 — vLLM 은 <code>prefix_cache_hits</code> 와 <code>external_prefix_cache_hits</code> 를 따로 센다. GPU 로컬 캐시가 트래픽을 먼저 흡수하면 스토어는 요청을 구경도 못 하므로, "효과 없음" 은 대개 워킹셋이 GPU KV 용량을 넘지 않았다는 뜻이다. 0장은 zero-copy 도 풀어 쓴다 — 복사가 실제로 무슨 비용인지, 아끼는 게 셋(메모리·연산·지연)이라는 것, 그리고 그 성질이 깨지는 세 가지 경우. 적합도 매트릭스, 자격 질문 6개, 업스트림 46배 수치를 필요한 단서 4개와 함께 천장으로 인용하고, 마지막에 애니메이션 도해로 마친다 — 1턴이 한 노드에, 2턴이 다른 노드에 떨어지는 멀티턴 세션을 홉마다 어느 채널이 나르는지 색으로 구분해 보여준다. 마지막 장은 전체 경로를 Mooncake 문서의 어휘로 다시 읽는다 — Segment, BatchTransfer, Topology Aware Path Selection, Lease, Soft Pin, AllocationStrategy, Object Groups. 다섯 단계 애니메이션 기능 지도로 각 호출이 어떤 기능에 닿는지, 그리고 더 쓸모 있게는 이 커넥터가 아예 부르지 않는 기능이 무엇인지 보여준다.</span>
+      <span class="en">A from-zero practitioner's guide to what runs when vLLM uses a Mooncake store, how to see it working, and what to honestly tell a customer.</span>
+      <span class="ko">vLLM이 Mooncake 스토어를 쓸 때 실제로 무엇이 실행되는지, 효과를 어떻게 확인하는지, 고객에게 무엇을 말할지 기초부터 정리한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-08-10">2026-08-10</time></p>
   </a>
@@ -461,8 +463,8 @@
       <span class="ko">vLLM 속의 Mooncake — 설계, 코드 흐름, 그리고 LMCache 와 무엇이 다른가</span>
     </h2>
     <p>
-      <span class="en">Mooncake pools a cluster's idle CPU DRAM and SSD into <b>one shared KV cache</b>, so a prefix computed on instance A is reusable by instance B minutes later. vLLM ships <b>two</b> Mooncake integrations — <code>MooncakeConnector</code> (P2P, for PD hand-off) and <code>MooncakeStoreConnector</code> (the shared pool) — and the documented XpYd setup <b>stacks both</b> under <code>MultiConnector</code> rather than choosing. Walks the real path at vllm <code>ba1cdcf</code> with commit-pinned permalinks: <code>register_buffer</code> hands the raw KV tensor storage to the NIC at startup, the scheduler reuses vLLM's own block hashes as store keys, and a value is literally <code>base_addr + block_id × block_len</code> — so RDMA lands inside the live KV tensor with no staging buffer and no SMs. Names five design decisions, including the one with teeth: the key embeds <code>tp_rank</code>/<code>pp_rank</code>, so two instances share cache only at the <b>same parallel layout</b> — a silent hit-rate cliff, not an error. The LMCache contrast is structural, not a benchmark: a 354-line shim over a thick external daemon (compression, CacheBlend non-prefix reuse) versus ~6,100 lines of logic inside vLLM over four verbs of raw-address storage. Blog numbers (3.8× throughput, 46× P50 TTFT, hit rate 1.7% → 92.2%) quoted with the caveats they need — first-party, best-case agentic traces, a 1.7% baseline, and never measured with the store isolated from the P2P connector.</span>
-      <span class="ko">Mooncake 는 클러스터에서 놀고 있는 CPU DRAM 과 SSD 를 묶어 <b>하나의 공유 KV 캐시</b>로 만든다. 인스턴스 A 가 계산한 프리픽스를 몇 분 뒤 인스턴스 B 가 재사용한다. vLLM 에는 Mooncake 통합이 <b>둘</b> 있고 — <code>MooncakeConnector</code>(P2P, PD 인계용)와 <code>MooncakeStoreConnector</code>(공유 풀) — 문서의 XpYd 구성은 하나를 고르는 대신 <code>MultiConnector</code> 아래 <b>둘 다 겹쳐</b> 쓴다. vllm <code>ba1cdcf</code> 의 실제 경로를 커밋 고정 permalink 로 따라간다: 기동 시 <code>register_buffer</code> 가 KV 텐서 저장소를 NIC 에 넘기고, 스케줄러는 vLLM 자신의 블록 해시를 그대로 스토어 키로 쓰며, 값은 말 그대로 <code>base_addr + block_id × block_len</code> 이라 RDMA 가 staging buffer 도 SM 소모도 없이 살아 있는 KV 텐서 안으로 내려앉는다. 설계 결정 다섯 가지를 짚는데 그중 이빨 있는 것 하나 — 키에 <code>tp_rank</code>/<code>pp_rank</code> 가 박혀서 두 인스턴스는 <b>같은 병렬 레이아웃</b>일 때만 캐시를 공유한다. 에러가 아니라 조용한 히트율 절벽이다. LMCache 와의 비교는 벤치마크가 아니라 구조 비교다: 두꺼운 외부 데몬(압축, CacheBlend 비-프리픽스 재사용) 위의 354줄 껍데기 vs 생주소 위 동사 네 개를 두고 vLLM 안에 들어앉은 약 6,100줄. 블로그 수치(처리량 3.8배, P50 TTFT 46배, 히트율 1.7% → 92.2%)는 필요한 단서와 함께 인용 — 1차 당사자 발표, 최선의 에이전트 트레이스, 베이스라인이 1.7%, 그리고 스토어를 P2P 커넥터와 분리해 측정한 적은 없다는 점.</span>
+      <span class="en">Walks vLLM's two Mooncake connectors in code, shows how RDMA lands straight in the live KV tensor, and why the design differs structurally from LMCache.</span>
+      <span class="ko">vLLM의 Mooncake 커넥터 두 개를 코드로 따라가며 RDMA가 KV 텐서에 바로 쓰이는 구조를 본다. LMCache와는 설계부터 다르다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-08-10">2026-08-10</time></p>
   </a>
@@ -477,8 +479,8 @@
       <span class="ko">Cross-Model KV Cache Transfer in LLM Families</span>
     </h2>
     <p>
-      <span class="en">NVIDIA (arXiv:2608.03893) asks whether a router that hands a conversation from Qwen3-14B up to 32B really needs the 32B to re-read the prompt — or whether the 14B's KV cache can just be <b>translated</b>. Their finding: within a family the cross-model KV relationship is <b>mostly linear</b>, so a per-head <b>ridge regression</b> — closed form, no backprop, fit on 500 FineWeb-Edu documents in ~1 hour — lets the receiver decode straight from the mapped cache. Three ingredients: top-<b>k</b> source layers per target layer (the biggest contributor by far), <b>RoPE stripped</b> so the fit is position-free and survives 1K→32K, and ridge for conditioning. Result: <b>73–98% of standalone accuracy on four of six pairs at 2.7–25× less prefill latency</b> — and a hard collapse to ~42% on two Ministral pairs. The best part is the diagnosis: retention is decided by <b>where the mapping error lands, not how big it is</b>. Calibration R² is uncorrelated with success (r=−0.20); <b>attention-output cosine</b> predicts it (r=+0.57), and an MLP buys +37 pp purely by pushing error into directions attention ignores. Includes the deployment bill (4–12 GB per ordered pair, quadratic in fleet size) and the caveats behind the 25×. No public code.</span>
-      <span class="ko">NVIDIA (arXiv:2608.03893): 라우터가 대화를 Qwen3-14B에서 32B로 넘길 때 32B가 정말 프롬프트를 다시 읽어야 하나, 아니면 14B의 KV 캐시를 <b>번역</b>하면 되나? 발견: 같은 패밀리 안에서 모델 간 KV 관계는 <b>대체로 선형</b>이라, head별 <b>릿지 회귀</b> — 닫힌 해, 역전파 없음, FineWeb-Edu 문서 500개로 ~1시간 피팅 — 만으로 받는 쪽이 매핑된 캐시에서 바로 디코딩할 수 있다. 재료 셋: 타깃 레이어마다 top-<b>k</b> 소스 레이어(압도적 1등 기여), <b>RoPE 분리</b>로 위치와 무관한 피팅(1K로 맞춰도 32K에서 동작), 그리고 조건수를 위한 릿지. 결과: <b>6쌍 중 4쌍에서 정확도 73~98% 유지, prefill 지연 2.7~25배 감소</b> — 그리고 Ministral 2쌍에서는 ~42%로 붕괴. 백미는 진단이다: retention을 가르는 건 <b>오차의 크기가 아니라 오차가 떨어지는 위치</b>. 캘리브레이션 R²은 성공과 무상관(r=−0.20)이고 <b>어텐션 출력 코사인</b>이 예측하며(r=+0.57), MLP는 오차를 어텐션이 무시하는 방향으로 밀어내는 것만으로 +37 pp를 번다. 배포 청구서(순서쌍당 4~12 GB, 플릿 크기의 제곱)와 25배 뒤의 단서들도 정리. 공개 코드 없음.</span>
+      <span class="en">NVIDIA translates KV cache between models of one family with per-head ridge regression, cutting prefill latency up to 25×, though two Ministral pairs collapse.</span>
+      <span class="ko">같은 계열 모델 사이에서 KV 캐시를 헤드별 ridge 회귀로 변환해 prefill을 최대 25배 줄인다. 성패는 오차 크기가 아니라 오차가 어디 놓이는지가 가른다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-08-10">2026-08-10</time>
@@ -498,8 +500,8 @@
       <span class="ko">Speculative Prefill (SpecPrefill) — turbocharging TTFT by dropping prompt tokens</span>
     </h2>
     <p>
-      <span class="en">Paper note on <b>SpecPrefill</b> (arXiv:2502.02789, ICML 2025 — Liu, Chen, Zhang). A cheap <b>speculator</b> (Llama-3.1-8B) reads the whole prompt, scores each token by aggregated attention, and only the top ~10% — with their <b>original position ids</b> — are fed to the big target model's prefill, cutting TTFT up to <b>7.66×</b> (~7× max QPS) on Llama-3.1-405B-FP8. The non-obvious premise: prefill is <b>compute-bound</b> and its bottleneck is the <b>MLP + tensor-parallel all-reduce</b>, not self-attention — so unlike sparse-attention methods, dropping <i>tokens</i> shrinks the part that hurts. Covers the 4-ingredient method (look-ahead to de-bias attention · max-mean aggregation · chunk-select + pooling · position restoration), a code-walk of the Llama-only vLLM-V0 monkey-patch (pinned to c1d6bd3), and where it breaks (aggregation/counting, multi-turn, fixed keep-ratio). Training-free. 5 original visual diagrams; verbatim quotes with arXiv anchors.</span>
-      <span class="ko"><b>SpecPrefill</b>(arXiv:2502.02789, ICML 2025 — Liu, Chen, Zhang) 논문 정리. 싼 <b>speculator</b>(Llama-3.1-8B)가 프롬프트 전체를 읽고 각 토큰을 집계된 attention으로 점수 매겨, 상위 ~10%만(<b>원래 위치 id</b>와 함께) 큰 target 모델 prefill에 넣어 Llama-3.1-405B-FP8에서 TTFT를 최대 <b>7.66×</b>(~7× max QPS) 줄인다. 비직관적 전제: prefill은 <b>연산 바운드</b>이고 병목이 self-attention이 아니라 <b>MLP + tensor-parallel all-reduce</b>라는 것 — 그래서 sparse-attention 기법과 달리 <i>토큰</i>을 버리면 아픈 부분이 줄어든다. 4재료 방법(attention 편향 제거용 look-ahead · max-mean 집계 · chunk 선택 + pooling · 위치 복원), Llama 전용 vLLM-V0 monkey-patch 코드워크(c1d6bd3 고정), 깨지는 곳(집계/카운팅·멀티턴·고정 keep-ratio)까지. 학습 불필요. 직접 그린 시각 다이어그램 5개; verbatim 인용 + arXiv 앵커.</span>
+      <span class="en">SpecPrefill has a small speculator pick only the most important prompt tokens for the big model's prefill, cutting TTFT up to 7.66× without training.</span>
+      <span class="ko">작은 speculator가 중요한 프롬프트 토큰만 골라 큰 모델 prefill에 넘긴다. 학습 없이 TTFT를 최대 7.66배 줄인다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-08-25">2026-08-25</time></p>
   </a>
@@ -514,8 +516,8 @@
       <span class="ko">NVIDIA CMX (ICMSP) — KV 캐시를 NVMe까지 계층화하기</span>
     </h2>
     <p>
-      <span class="en">A summary of NVIDIA's <b>CMX</b> "Context Memory Storage Platform" (announcement long-form: <b>I</b>CMSP), unveiled at CES 2026 — from the Spheron guide, cross-checked against NVIDIA's own release. Framed around two questions: <b>why now</b> and <b>what's new</b>. Why now: long context + reasoning + agents pushed the KV cache past GPU memory — at a 1M-token context one Llama-70B user needs ~320 GB, <b>4× an H100's HBM</b> — and reloading a cached prefix from NVMe (~6 s) is now <i>faster than recomputing it</i> (~11 s for 128K). What CMX is: standardized <b>three-tier KV</b> (GPU HBM → CPU DRAM → NVMe), moved by <b>cuFile</b> (GPU↔NVMe direct), scheduled by a <b>BlueField-4 DPU</b> off the host CPU, shared across nodes by <b>NIXL</b>. What's actually new: not the idea (LMCache / Mooncake / DeepSeek already tier KV to disk) but the <b>standardization + hardware offload</b>. Vendor 5×/20× claims flagged; 3 original diagrams (memory wall, load-vs-recompute, the tier hierarchy).</span>
-      <span class="ko">CES 2026에서 공개된 NVIDIA <b>CMX</b> "Context Memory Storage Platform"(발표 롱폼: <b>I</b>CMSP) 요약 — Spheron 가이드 기반, NVIDIA 공식 발표로 교차검증. 두 질문으로: <b>왜 지금</b>, <b>뭐가 새로운가</b>. 왜 지금: 긴 컨텍스트 + 추론 + 에이전트가 KV 캐시를 GPU 메모리 밖으로 밀어냈고 — 1M 토큰에서 Llama-70B 사용자 한 명이 ~320 GB, <b>H100 HBM의 4배</b> — NVMe에서 캐시된 prefix를 다시 읽는 게(~6초) 이제 <i>재계산보다 빠르다</i>(128K 재계산 ~11초). CMX란: 표준화된 <b>3계층 KV</b>(GPU HBM → CPU DRAM → NVMe), <b>cuFile</b>(GPU↔NVMe 직접)로 이동, <b>BlueField-4 DPU</b>가 호스트 CPU 밖에서 스케줄링, <b>NIXL</b>로 노드 간 공유. 진짜 새로운 건: 아이디어가 아니라(LMCache/Mooncake/DeepSeek이 이미 KV를 디스크로 계층화) <b>표준화 + 하드웨어 오프로드</b>. 벤더 5×/20× 수치 표기; 직접 그린 다이어그램 3개(메모리 벽, 로드 vs 재계산, 계층 위계).</span>
+      <span class="en">NVIDIA's CMX standardizes a GPU→DRAM→NVMe KV cache hierarchy with DPU offload: why now, and why the novelty is standardization rather than the idea.</span>
+      <span class="ko">NVIDIA CMX는 GPU, DRAM, NVMe 3계층 KV 캐시를 표준화하고 DPU로 오프로드한다. 새로운 건 아이디어가 아니라 표준화와 하드웨어 오프로드다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-08-25">2026-08-25</time></p>
   </a>
@@ -530,8 +532,8 @@
       <span class="ko">Kimi K3: Open Frontier Intelligence</span>
     </h2>
     <p>
-      <span class="en">Paper note on Moonshot AI's Kimi K3 (arXiv:2607.24653) — the first open <b>3-trillion-parameter-class</b> model: a 2.8T MoE (104B active), native vision, 1M context. Explained in plain language for an AI-model audience: it scales "information flow" along three axes — <b>Kimi Delta Attention</b> (gated linear attention that keeps a fixed-size state instead of a growing KV cache, on 69 of 93 layers), <b>Attention Residuals</b> (attention across depth), and <b>Stable LatentMoE</b> (896 experts / 16 active, kept from exploding by RMSNorm + bounded SiTU-GLU + quantile balancing) — for a claimed ~2.5× scaling efficiency over K2. Covers the config, the math (in plain terms), training infra (MoonEP, 51M agentic-RL sandboxes), evals (trails Claude Fable 5 / GPT-5.6 Sol, beats Opus 4.8 / GLM-5.2; #1 open on WebDev Arena), a code-walk of the open KDA kernel in flash-linear-attention (Kimi's own code is closed), and a lineage (K2 → K2.5 → K2.6 → K2.7-Code → K3) + GLM-5.2 comparison. Diagrams; numbers are the paper's own (arXiv HTML not yet live).</span>
-      <span class="ko">Moonshot AI의 Kimi K3(arXiv:2607.24653) 논문 정리 — 최초의 오픈 <b>3조 파라미터급</b> 모델: 2.8T MoE(104B 활성), 네이티브 비전, 1M 컨텍스트. AI 모델 독자를 위해 쉬운 말로: "정보 흐름"을 세 축으로 확장 — <b>Kimi Delta Attention</b>(93레이어 중 69에서 커지는 KV 캐시 대신 고정 크기 상태를 유지하는 게이트 선형 어텐션), <b>Attention Residuals</b>(깊이 방향 어텐션), <b>Stable LatentMoE</b>(896 전문가 중 16 활성, RMSNorm + 유계 SiTU-GLU + 분위수 밸런싱으로 폭발 방지) — K2 대비 ~2.5× 스케일링 효율 주장. 설정, 수식(쉬운 말로), 학습 인프라(MoonEP, 5100만 에이전트-RL 샌드박스), 평가(Claude Fable 5 / GPT-5.6 Sol엔 뒤지고 Opus 4.8 / GLM-5.2는 이김; WebDev Arena 오픈 1위), flash-linear-attention의 오픈 KDA 커널 코드 분석(Kimi 자체 코드는 비공개), 그리고 계보(K2 → K2.5 → K2.6 → K2.7-Code → K3) + GLM-5.2 비교. 다이어그램; 수치는 논문 자체(arXiv HTML 미공개).</span>
+      <span class="en">Kimi K3, a 2.8T open MoE with native vision and long context, explained in plain terms: Kimi Delta Attention, Attention Residuals and Stable LatentMoE.</span>
+      <span class="ko">2.8T 오픈 MoE인 Kimi K3를 쉽게 풀어 쓴다. Kimi Delta Attention, Attention Residuals, Stable LatentMoE 세 축이 핵심이다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
   </a>
@@ -546,8 +548,8 @@
       <span class="ko">vLLM structured output &amp; tool calling — 토큰을 제약하고, 텍스트를 파싱한다</span>
     </h2>
     <p>
-      <span class="en">A code-level study of how vLLM guarantees JSON-schema-valid output, calls tools, and separates a reasoning model's thinking from its answer — traced on the <b>latest main</b> (commit 34bb795, 2026-07-31) via three fanned-out code-analysis passes. The organizing idea: the whole area splits across the <b>sampler</b> into two planes — <b>structured/guided output</b> constrains generation at the <i>logit</i> level in the engine (a per-step token bitmask forcing illegal tokens to <code>−inf</code>), while <b>tool &amp; reasoning parsing</b> is pure <i>post-processing</i> of decoded text in the serving layer. Covers the 4 grammar backends (xgrammar / guidance / outlines / lm-format-enforcer) and their <code>auto</code>-fallback; how the FSM survives speculative decoding (validate → temp-advance → rollback); the newly-unified <code>DelegatingParser</code>; the 42-parser tool zoo (Hermes XML / Llama pythonic / Mistral <code>[TOOL_CALLS]</code> / Harmony) and streaming partial-JSON diffing; the two ways <code>tool_choice="required"</code> forces valid JSON (JSON-schema path vs structural-tag path — the guarantee lives in structured output, not the parser); and the single <code>reasoning_ended</code> gate that turns the grammar on only after <code>&lt;/think&gt;</code>. Includes a worked-example gallery — every structured-output request type and every <code>tool_choice</code> mode, from the <code>curl</code> to the token-by-token generation, plus a token-level look at exactly when a constrained answer begins after <code>&lt;/think&gt;</code>. 18 original SVGs; permalinks pinned to 34bb795 (Apache-2.0).</span>
-      <span class="ko">vLLM이 JSON-스키마 유효 출력을 보장하고, 도구를 호출하고, 추론 모델의 생각을 답에서 분리하는 방식을 <b>최신 main</b>(커밋 34bb795, 2026-07-31)에서 3갈래 코드분석으로 추적한 스터디. 핵심: 이 영역은 <b>sampler</b>를 기준으로 두 평면으로 갈린다 — <b>structured/guided output</b>은 엔진에서 <i>logit</i> 레벨로 생성을 제약(스텝마다 토큰 bitmask로 불법 토큰을 <code>−inf</code>), <b>tool &amp; reasoning 파싱</b>은 서빙에서 디코드된 텍스트를 <i>후처리</i>. 4개 문법 백엔드(xgrammar / guidance / outlines / lm-format-enforcer)와 <code>auto</code>-fallback; FSM이 speculative decoding을 견디는 법(validate → 임시전진 → rollback); 새로 통합된 <code>DelegatingParser</code>; 42개 tool 파서 동물원(Hermes XML / Llama pythonic / Mistral <code>[TOOL_CALLS]</code> / Harmony)과 스트리밍 부분-JSON 디핑; <code>tool_choice="required"</code>가 유효 JSON을 강제하는 두 경로(JSON-스키마 vs structural-tag — 보장은 파서가 아니라 structured output에); 그리고 <code>&lt;/think&gt;</code> 후에만 문법을 켜는 단일 <code>reasoning_ended</code> 게이트. worked-example 갤러리 포함 — 모든 structured-output 요청 타입과 모든 <code>tool_choice</code> 모드를 <code>curl</code>부터 토큰 생성까지, 그리고 <code>&lt;/think&gt;</code> 뒤 제약 답변이 정확히 언제 시작되는지 토큰 단위로. 직접 그린 SVG 18개; permalink는 34bb795(Apache-2.0)에 핀 고정.</span>
+      <span class="en">How vLLM splits structured output (token bitmasks in the engine) from tool and reasoning parsing (post-processing decoded text), traced in code.</span>
+      <span class="ko">vLLM은 구조화 출력을 엔진에서 토큰 비트마스크로 제약하고, 툴 호출과 reasoning은 디코딩된 텍스트를 사후 파싱한다. 이 두 경로를 코드로 따라간다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-07-31">2026-07-31</time>
@@ -567,8 +569,8 @@
       <span class="ko">vLLM 스케줄러 — prefill과 decode가 매 스텝을 함께 나눠 쓰는 법</span>
     </h2>
     <p>
-      <span class="en">The scheduler companion to the block-management and PagedAttention notes — <b>who decides what runs each step</b>. Answered with worked examples and 5 diagrams. The one idea: V1 has <b>no prefill phase and no decode phase</b> — each request just carries <code>num_computed_tokens</code> vs <code>num_tokens</code>, and every step hands it enough new tokens to catch up (a big chunk = "prefill", N=1 = "decode"). So the headline question — <b>can a step take more than one prefill?</b> — answer: <b>yes, as many as fit</b>; the waiting-queue <code>while</code> loop admits new requests until the shared <b>token budget</b> (<code>max_num_batched_tokens</code>) is spent or the running count hits <code>max_num_seqs</code> — there's no per-step prefill cap (V0's <code>max_num_partial_prefills</code> is gone). A worked 2048-token example shows four short prompts starting together vs one long prompt chunked across steps; plus preemption (block exhaustion → pop a running request), the real V0→V1 story (<b>continuous batching ≠ mixing</b> — chunked prefill is the mix), and code-level defaults (class fallback 2048/128/block-16 vs the hardware/usage overrides: 8192/1024 on a big-GPU server) with the block-size trade-off. Pinned to vLLM 8700f86 (Apache-2.0).</span>
-      <span class="ko">block 관리·PagedAttention 노트의 스케줄러 짝 — <b>매 스텝 무엇을 돌릴지 누가 정하는가</b>. 예시와 다이어그램 5개로 답한다. 핵심 하나: V1엔 <b>prefill 단계도 decode 단계도 없다</b> — 각 요청은 <code>num_computed_tokens</code> vs <code>num_tokens</code>만 지니고, 매 스텝 따라잡을 만큼 새 토큰을 받는다(큰 청크 = "prefill", N=1 = "decode"). 그래서 핵심 질문 — <b>한 스텝이 prefill을 1개 넘게 받나?</b> — 답: <b>들어맞는 만큼 받는다</b>; waiting 큐의 <code>while</code> 루프가 공유 <b>token budget</b>(<code>max_num_batched_tokens</code>)이 소진되거나 running 수가 <code>max_num_seqs</code>에 닿을 때까지 새 요청을 admit — 스텝당 prefill 상한은 없다(V0의 <code>max_num_partial_prefills</code>는 사라짐). 2048토큰 예시로 짧은 프롬프트 4개 동시 시작 vs 긴 프롬프트 하나가 스텝에 걸쳐 청크되는 걸 보여주고; preemption(block 고갈 → running 요청 pop), 진짜 V0→V1 이야기(<b>continuous batching ≠ 혼합</b> — chunked prefill이 혼합), 코드 레벨 기본값(클래스 fallback 2048/128/block-16 vs 하드웨어·용도 오버라이드 8192/1024)과 block-size 트레이드오프까지. vLLM 8700f86(Apache-2.0)에 핀 고정.</span>
+      <span class="en">vLLM V1 has no separate prefill or decode phase, so one step takes as many prefills as the shared token budget allows, shown with worked examples.</span>
+      <span class="ko">vLLM V1에는 prefill 단계와 decode 단계 구분이 없다. 그래서 한 스텝에 토큰 예산이 허락하는 만큼 여러 prefill이 들어간다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
   </a>
@@ -583,8 +585,8 @@
       <span class="ko">vLLM의 KV 캐시 block 관리 — KVCacheManager &amp; BlockPool, 처음부터</span>
     </h2>
     <p>
-      <span class="en">The engine-side companion to the PagedAttention note: that one was the GPU kernel that <i>reads</i> the block table; this one is <b>who owns and manages the blocks</b> — the CPU-side control plane in vLLM's V1 engine. Answers, from scratch: <b>how many blocks does the engine even get?</b> (a startup <b>memory-profiling</b> pass — <code>gpu_mem_util × total − weights − peak activation − overhead</code>, ÷ per-block bytes × layers — not a config knob); the <b>BlockPool</b> and its doubly-linked <b>free queue used as an LRU</b>; how <code>allocate_slots</code> hands out blocks every step and returns <code>None</code> to trigger preemption; how <b>reference counts</b> let two requests sharing a prefix point at the <i>same</i> physical blocks (and where <b>copy-on-write</b> actually kicks in — sub-block partial hits only); lazy <b>eviction</b> off the LRU tail; and how <code>req_to_blocks</code> is <b>one block table per sequence, stacked across every layer</b> (why the byte budget divides by <code>num_layers</code>). Six original diagrams; code flow with permalinks pinned to vLLM commit 8700f86 (Apache-2.0).</span>
-      <span class="ko">PagedAttention 노트의 엔진 쪽 짝: 그건 block table을 <i>읽는</i> GPU 커널이었고, 이건 <b>block을 소유·관리하는 주체</b> — vLLM V1 엔진의 CPU 쪽 컨트롤 플레인이다. 처음부터 답한다: <b>엔진은 애초에 block을 몇 개 갖나?</b>(시작 시 <b>메모리 프로파일링</b> — <code>gpu_mem_util × 전체 − 가중치 − 피크 활성 − 오버헤드</code>, ÷ block당 바이트 × 레이어 — 설정 노브가 아님); <b>BlockPool</b>과 <b>LRU로 쓰는 이중 연결 free 큐</b>; <code>allocate_slots</code>가 스텝마다 block을 나눠주고 <code>None</code>을 반환해 선점을 부르는 법; <b>참조 카운트</b>로 prefix를 공유하는 두 요청이 <i>같은</i> 물리 block을 가리키는 법(그리고 <b>copy-on-write</b>가 실제 발동하는 지점 — sub-block partial hit만); LRU 꼬리에서의 지연 <b>축출</b>; <code>req_to_blocks</code>가 <b>시퀀스마다 block table 하나, 전 레이어에 걸쳐 쌓임</b>(바이트 예산을 <code>num_layers</code>로 나누는 이유). 직접 그린 다이어그램 6개; vLLM 커밋 8700f86(Apache-2.0)에 핀된 permalink 코드 흐름.</span>
+      <span class="en">How vLLM's V1 engine sizes, allocates, shares and evicts KV cache blocks through KVCacheManager and BlockPool, from memory profiling to reference counts.</span>
+      <span class="ko">vLLM V1 엔진이 KVCacheManager와 BlockPool로 KV 캐시 블록 수를 정하고 할당, 공유, 축출하는 과정을 처음부터 따라간다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-31">2026-07-31</time></p>
   </a>
@@ -599,8 +601,8 @@
       <span class="ko">vLLM PagedAttention v1 vs v2 — 두 디코드 커널이 뭐가 다른가, 그리고 어디로 갔나</span>
     </h2>
     <p>
-      <span class="en">vLLM's original attention had two CUDA kernels, <code>paged_attention_v1</code> and <code>v2</code>; they compute the same paged-KV decode attention but parallelize differently. <b>v1</b> = one GPU block per (sequence, head) sweeps the whole context in one pass — fine when there are enough blocks to fill the GPU. <b>v2</b> = split each sequence's KV into 512-token <b>partitions</b>, compute partial softmax per partition in parallel, then a <b>reduction kernel</b> stitches them via log-sum-exp — this is <b>Flash-Decoding</b>, for small-batch long-context decode where v1 leaves most SMs idle. Covers the exact <code>use_v1</code> dispatch heuristic, and the twist: at HEAD (2026-07-30) the CUDA kernels have been <b>deleted</b> (PR #47361 "Delete PagedAttention" — body: "It is time"), replaced by FlashAttention/FlashInfer/Triton; the v1/v2 split now survives in vLLM's <b>ROCm/AITER</b> path (partition 256). Written for an AI-model audience (SM, occupancy, warp, split-K unpacked); diagram + code flow with permalinks pinned to pre-deletion commits.</span>
-      <span class="ko">vLLM의 초기 어텐션엔 CUDA 커널이 둘, <code>paged_attention_v1</code>과 <code>v2</code>가 있었다; 같은 paged-KV 디코드 어텐션을 계산하지만 병렬화가 다르다. <b>v1</b> = (시퀀스, 헤드)당 GPU 블록 하나가 전체 컨텍스트를 한 번에 훑음 — 블록이 GPU를 채울 만큼 많으면 괜찮다. <b>v2</b> = 각 시퀀스의 KV를 512 토큰 <b>파티션</b>으로 쪼개 파티션마다 부분 softmax를 병렬 계산한 뒤 <b>reduction 커널</b>이 log-sum-exp로 이어 붙임 — 이게 <b>Flash-Decoding</b>, v1이 SM 대부분을 놀리는 작은 배치·긴 컨텍스트 디코드용. 정확한 <code>use_v1</code> dispatch 휴리스틱과 반전을 다룬다: HEAD(2026-07-30)에선 CUDA 커널이 <b>삭제</b>됨(PR #47361 "Delete PagedAttention" — 본문: "It is time"), FlashAttention/FlashInfer/Triton으로 대체; v1/v2 구분은 이제 vLLM의 <b>ROCm/AITER</b> 경로(파티션 256)에 생존. AI 모델 독자용(SM·occupancy·warp·split-K 풀이); 다이어그램 + 삭제 전 커밋에 핀된 permalink 코드 흐름.</span>
+      <span class="en">How vLLM's PagedAttention v1 and v2 decode kernels parallelize differently (v2 is Flash-Decoding), and why the split now survives only on ROCm/AITER.</span>
+      <span class="ko">vLLM PagedAttention v1과 v2 디코드 커널의 병렬화 차이를 본다. v2는 Flash-Decoding이고, CUDA 커널이 삭제된 지금은 ROCm/AITER 경로에만 남았다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-07-31">2026-07-31</time>
@@ -620,8 +622,8 @@
       <span class="ko">Cactus — 온디바이스 AI 추론 엔진, 풀어 읽기</span>
     </h2>
     <p>
-      <span class="en">The mirror image of the datacenter-serving notes: an engine (mostly C/C++, source-available) for running LLMs, vision, and speech models <b>directly on a phone, watch, Mac, or Raspberry Pi</b> — no server, offline. Written for a reader who knows AI models but not systems jargon (kernel, SIMD, FFI, KV cache… all unpacked). Walks the stack — hand-written ARM-NEON + Metal <b>Kernels</b>, a zero-copy <b>Graph</b> ("PyTorch for mobile"), an <b>Engine</b> with an OpenAI-compatible API — and the headline: <b>rotation-based quantization</b> (CQ) that stays usable at 2-bit where GPTQ/AWQ/HQQ collapse and shrinks Gemma-4-E2B 4.79 GB → ~0.9 GB, plus the research-preview <b>TurboQuant-H</b> (Hadamard rotation for 2-bit embeddings). Also the distinctive <b>cloud handoff</b> (confidence-gated routing to a cloud model). End-to-end code flow with permalinks pinned to commit 8e0eec1; diagrams + device benchmarks. Vendor-reported numbers; source-available (not permissive OSS).</span>
-      <span class="ko">데이터센터 서빙 노트의 거울상: LLM·비전·음성 모델을 <b>폰·워치·Mac·Raspberry Pi에서 직접</b> 돌리는 엔진(대부분 C/C++, 소스 공개형) — 서버 없이, 오프라인. AI 모델은 알지만 시스템 용어는 모르는 독자를 위해(kernel, SIMD, FFI, KV cache… 전부 풀이). 스택을 훑는다 — 손으로 짠 ARM-NEON + Metal <b>Kernels</b>, zero-copy <b>Graph</b>("모바일용 PyTorch"), OpenAI 호환 API의 <b>Engine</b> — 그리고 핵심: GPTQ/AWQ/HQQ가 무너지는 2비트에서도 쓸 만하고 Gemma-4-E2B를 4.79 GB → ~0.9 GB로 줄이는 <b>회전 기반 양자화</b>(CQ), 더해 연구 프리뷰 <b>TurboQuant-H</b>(2비트 임베딩용 Hadamard 회전). 독특한 <b>클라우드 핸드오프</b>(confidence 게이팅으로 클라우드 모델 라우팅)도. 커밋 8e0eec1에 핀된 permalink로 짚는 end-to-end 코드 흐름; 다이어그램 + 기기 벤치마크. 벤더 보고 수치; 소스 공개형(관대한 OSS 아님).</span>
+      <span class="en">Cactus runs LLM, vision and speech models directly on phones and small devices, and its rotation-based quantization stays usable at 2-bit where GPTQ/AWQ collapse.</span>
+      <span class="ko">휴대폰과 소형 기기에서 LLM, 비전, 음성 모델을 직접 돌리는 엔진 Cactus를 풀어 읽는다. 회전 기반 양자화는 2비트에서도 쓸 만하다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-30">2026-07-30</time></p>
   </a>
@@ -636,8 +638,8 @@
       <span class="ko">Cerebras는 사내 지식베이스를 어떻게 만들었나 — 쉬운 말로 풀어 읽기</span>
     </h2>
     <p>
-      <span class="en">Despite coming from the fast-chip company, this is <b>not about hardware</b> — it's a practical <b>RAG</b> (retrieval-augmented generation) story: an internal search system employees ask 15,000+ questions a day, over data scattered across Slack, code, and docs. Written for a reader who knows AI models but not every retrieval term (embedding, IDF, RRF, reranker, MCP…), each unpacked in a glossary. Two ideas carry it: "meet data where it lives" (pull from each tool directly, no single source of truth) and one Postgres embeddings table everything lands in. The real engineering is retrieval quality — plain vector search wasn't enough, so they layer full-text + embeddings + rarity + age-decay, distill Slack threads with an LLM, fuse with Reciprocal Rank Fusion, then rerank and synthesize; and they expose the pieces as MCP tools so an agent (Claude Code) orchestrates. Diagrams + cited sources. No code-walk (internal tool, no public repo); single vendor blog, almost no perf numbers.</span>
-      <span class="ko">빠른 칩 회사에서 나왔지만 <b>하드웨어 얘기가 아니다</b> — 실전 <b>RAG</b>(검색 증강 생성) 이야기: 직원들이 하루 15,000개 이상 질문하는, Slack·코드·문서에 흩어진 데이터 위 사내 검색 시스템. AI 모델은 알지만 검색 용어(embedding, IDF, RRF, reranker, MCP…)는 모르는 독자를 위해 용어집으로 하나씩 풀었다. 두 아이디어: "데이터가 사는 곳으로"(각 도구에서 직접 긁어옴, 단일 진실 공급원 없음)와 모든 게 안착하는 Postgres 임베딩 테이블 하나. 진짜 엔지니어링은 검색 품질 — 단순 벡터 검색으론 부족해 full-text + 임베딩 + 희귀도 + 시간감쇠를 쌓고, LLM으로 Slack 스레드를 증류하고, Reciprocal Rank Fusion으로 융합한 뒤 rerank·종합; 부품을 MCP 도구로 노출해 에이전트(Claude Code)가 오케스트레이션. 다이어그램 + 인용 출처. 코드 분석 없음(사내 도구, 공개 저장소 없음); 단일 벤더 블로그, 성능 수치 거의 없음.</span>
+      <span class="en">Cerebras' internal knowledge base is a RAG story, not hardware: hybrid retrieval, rank fusion and reranking, exposed as MCP tools for an agent.</span>
+      <span class="ko">Cerebras 사내 지식베이스는 하드웨어가 아니라 RAG 이야기다. 여러 검색을 섞고 재정렬한 뒤 MCP 도구로 에이전트에 연결한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-29">2026-07-29</time></p>
   </a>
@@ -652,8 +654,8 @@
       <span class="ko">Netflix의 자체 LLM 서빙 — 쉬운 말로 풀어 읽기</span>
     </h2>
     <p>
-      <span class="en">Most companies just call a hosted LLM API; Netflix runs the whole serving stack itself — built on open-source <b>vLLM + NVIDIA Triton</b> and plugged into the same JVM system that already serves their recommendation models, so "an LLM is not a special snowflake." Written for a reader who knows AI models but not systems jargon: every term (JVM, gRPC, the GIL, batching, KV cache, cold start…) is unpacked in plain language with a big glossary and diagrams. Walks the architecture box by box, the four design decisions (engine choice on operational fit, packaging, the OpenAI-compatible API, deployment strategies), the production-only gotchas (version pinning, a silently-dropped <code>response_format</code>, model caching, merged metrics), and the highlight: enforcing valid JSON <i>inside</i> the decode loop, and the Python-GIL CPU bottleneck — invisible in single-request tests — that only a batch-level C++ rewrite (vLLM V1) fixed. No Netflix repo (proprietary) → architecture-and-lessons explainer, not a code-walk. Single vendor blog, no perf numbers.</span>
-      <span class="ko">대부분의 회사는 호스팅 LLM API를 불러 쓰지만, Netflix는 서빙 스택 전체를 직접 굴린다 — 오픈소스 <b>vLLM + NVIDIA Triton</b> 위에, 이미 추천 모델을 서빙하던 같은 JVM 시스템에 꽂아 "LLM은 특별한 눈송이가 아니다"를 실현. AI 모델은 알지만 시스템 용어는 모르는 독자를 위해: 모든 용어(JVM, gRPC, GIL, 배칭, KV 캐시, 콜드 스타트…)를 큰 용어집과 다이어그램으로 쉽게 풀었다. 아키텍처를 상자 하나씩, 네 가지 설계 결정(운영 적합성 기반 엔진 선택·패키징·OpenAI 호환 API·배포 전략), 프로덕션에서만 터진 것들(버전 핀 고정, 조용히 버려진 <code>response_format</code>, 모델 캐싱, 메트릭 병합), 그리고 하이라이트: 디코드 루프 <i>안</i>에서 올바른 JSON 강제와, 단일 요청 테스트엔 안 보이고 배치 레벨 C++ 재작성(vLLM V1)만이 고친 Python-GIL CPU 병목. Netflix 저장소 없음(비공개) → 코드 분석이 아니라 아키텍처·교훈 해설. 단일 벤더 블로그, 성능 수치 없음.</span>
+      <span class="en">How Netflix serves LLMs in-house on vLLM and Triton inside its existing JVM stack, and the production gotchas, including a Python GIL bottleneck.</span>
+      <span class="ko">Netflix가 vLLM과 Triton으로 기존 JVM 서빙 스택 안에서 LLM을 직접 서빙하는 구조와 운영에서 겪은 함정을 쉽게 풀어 쓴다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-29">2026-07-29</time></p>
   </a>
@@ -668,8 +670,8 @@
       <span class="ko">SGLang HiSparse — 희소 어텐션을 위한 계층적 KV 오프로딩</span>
     </h2>
     <p>
-      <span class="en">Sparse attention (top-k) is <b>capacity-bound, not compute-bound</b> — the full KV cache must stay in HBM even though only top-k is active per step, capping batch size. HiSparse is SGLang's decode-side fix: keep a small hot KV buffer on the GPU, offload the full history to host (CPU pinned) RAM, and swap each step's top-k back with a custom CUDA kernel + LRU. Covers the theory (with the similarly-named <b>HySparse</b> Xiaomi architecture paper as backbone — a <i>different</i> work), the hot-buffer/host-pool/swap-in mechanism, the honest effects (vendor-reported &gt;3× @256 conc / up to 5× long-context, but a documented regression at low concurrency), flags &amp; serve commands, and the end-to-end SGLang code flow with permalinks pinned to commit fc8b328. For DSA models (DeepSeek-V3.2/V4, GLM-5.x), PD-decode only, experimental. Diagrams + cited sources.</span>
-      <span class="ko">희소 어텐션(top-k)은 <b>연산 바운드가 아니라 용량 바운드</b> — 스텝당 top-k만 활성이어도 전체 KV 캐시가 HBM에 남아야 해 배치 크기를 막는다. HiSparse는 SGLang의 decode 측 해법: GPU엔 작은 hot KV 버퍼, 전체 히스토리는 호스트(CPU pinned) RAM으로 오프로드, 매 스텝 top-k를 커스텀 CUDA 커널 + LRU로 다시 불러온다. 이론(이름 비슷한 <b>HySparse</b> Xiaomi 아키텍처 논문을 backbone으로 — <i>별개</i> 연구), hot 버퍼/호스트 풀/swap-in 메커니즘, 정직한 효과(벤더 보고 256동시성 3배↑ / 롱컨텍스트 최대 5배, 단 낮은 동시성에선 문서화된 회귀), 플래그·실행 커맨드, 그리고 커밋 fc8b328에 핀된 permalink로 짚는 SGLang end-to-end 코드 흐름. DSA 모델(DeepSeek-V3.2/V4, GLM-5.x), PD-decode 전용, 실험적. 다이어그램 + 인용 출처.</span>
+      <span class="en">SGLang HiSparse keeps a small hot KV buffer on GPU, offloads the rest to host RAM and swaps in each step's top-k, so sparse-attention decode can batch bigger.</span>
+      <span class="ko">SGLang HiSparse는 GPU에 작은 KV 버퍼만 두고 나머지는 호스트 RAM으로 내린 뒤 매 스텝 top-k만 가져온다. 그만큼 희소 어텐션 decode의 배치를 키운다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-29">2026-07-29</time></p>
   </a>
@@ -684,8 +686,8 @@
       <span class="ko">AutoVLA — 적응형 추론과 강화 미세조정으로 만든 end-to-end 자율주행</span>
     </h2>
     <p>
-      <span class="en">NeurIPS 2025, UCLA. The <b>Rung 4</b> paper for anyone asking how the action representation shapes inference: AutoVLA clusters <b>2,048 real half-second vehicle manoeuvres into an action codebook and puts them in the LLM vocabulary</b>, so a 5-second plan is exactly ten autoregressive tokens — feasible by construction, no separate planner, no digits written as text. Then a <b>GRPO stage with a CoT-length penalty</b> teaches it to skip reasoning on easy scenes: <b>+10.6% PDMS and −66.8% runtime</b> at once, with fast mode at 1.07 s against slow mode's 10.5 s. Includes the head-to-head we wanted (<b>K-disk vs FAST/DCT vs RT-1 bins</b>, Tables 4 &amp; 6), a full dissection of all four benchmarks and what each metric actually rewards (<b>NAVSIM/PDMS · nuScenes L2 · Waymo RFS · Bench2Drive closed-loop</b>), the honest reading that it is <b>SOTA closed-loop but 4th on open-loop PDMS</b>, and a six-level hands-on ladder whose first two rungs need no GPU.</span>
-      <span class="ko">NeurIPS 2025, UCLA. "행동 표현이 추론을 어떻게 결정하나"를 묻는 사람을 위한 <b>Rung 4</b> 논문: AutoVLA는 <b>실제 차량의 0.5초 동작 2,048개를 클러스터링해 액션 코드북을 만들고 그걸 LLM vocab에 넣는다</b> — 그래서 5초 계획이 정확히 autoregressive 토큰 10개다. 구조적으로 실현 가능하고, 별도 planner도 없고, 숫자를 텍스트로 쓰지도 않는다. 여기에 <b>CoT 길이 페널티를 넣은 GRPO 단계</b>가 쉬운 장면에서 추론을 건너뛰도록 가르친다: <b>PDMS +10.6%와 런타임 −66.8%를 동시에</b>, fast 모드 1.07초 대 slow 모드 10.5초. 우리가 원했던 직접 비교(<b>K-disk vs FAST/DCT vs RT-1 bin</b>, Table 4·6), 네 벤치마크 전부와 각 지표가 실제로 보상하는 것에 대한 해부(<b>NAVSIM/PDMS · nuScenes L2 · Waymo RFS · Bench2Drive closed-loop</b>), <b>closed-loop는 SOTA지만 open-loop PDMS는 4위</b>라는 정직한 독법, 그리고 첫 두 칸은 GPU가 필요 없는 6단계 실습 사다리 포함.</span>
+      <span class="en">AutoVLA puts real vehicle manoeuvres into the LLM vocabulary and uses GRPO to skip reasoning on easy scenes, cutting runtime by 66.8%.</span>
+      <span class="ko">AutoVLA는 실제 차량 기동을 LLM 어휘에 넣고 GRPO로 쉬운 장면에서는 추론을 건너뛰게 한다. 실행 시간이 66.8% 준다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-28">2026-07-28</time></p>
   </a>
@@ -700,8 +702,8 @@
       <span class="ko">VLA 지형도 — Vision-Language-Action 모델이란 무엇이고, 어떻게 추론하나</span>
     </h2>
     <p>
-      <span class="en"><b>Rung 0</b> of the VLA study plan — the orientation note for LLM-inference people new to robotics. What a VLA is (a closed-loop policy from camera + instruction to a 7-DoF action), the full lineage <b>RT-1 → RT-2 → Open X-Embodiment → Octo → OpenVLA → π0/FAST/OFT → GR00T N1 → Gemini Robotics</b> (timeline + cited comparison table), and the inference thesis this site cares about: a VLA runs <b>batch-1 inside a real-time control loop</b>, so latency — not throughput — is the target, and <b>latency is accuracy</b>. Includes the action-head cost taxonomy (autoregressive tokens vs diffusion vs flow matching vs continuous parallel-decode) that explains the 2024→25 shift to fast heads. Every model fact cited to its arXiv source; anatomy + control-loop + timeline diagrams.</span>
-      <span class="ko"><b>0번째 칸</b> — LLM 추론은 알지만 로보틱스는 처음인 사람을 위한 오리엔테이션 노트. VLA가 무엇인지(카메라 + 지시 → 7-DoF 행동의 폐루프 정책), 전체 계보 <b>RT-1 → RT-2 → Open X-Embodiment → Octo → OpenVLA → π0/FAST/OFT → GR00T N1 → Gemini Robotics</b>(타임라인 + 인용 비교표), 그리고 이 사이트가 신경 쓰는 추론 명제: VLA는 <b>실시간 제어 루프 안에서 batch-1</b>로 돌아 처리량이 아니라 지연이 목표이고 <b>지연이 곧 정확도</b>다. 2024→25의 빠른 헤드 전환을 설명하는 행동 헤드 비용 분류(자기회귀 토큰 vs 디퓨전 vs 플로우 매칭 vs 연속 병렬 디코드) 포함. 모든 모델 사실은 arXiv 출처 인용; 해부·제어 루프·타임라인 다이어그램.</span>
+      <span class="en">An orientation to Vision-Language-Action models for LLM-inference people: the lineage from RT-1 to Gemini Robotics, and why latency, not throughput, is the target.</span>
+      <span class="ko">LLM 추론 관점에서 본 VLA 입문이다. RT-1부터 Gemini Robotics까지 계보를 훑고, 왜 처리량이 아니라 레이턴시가 목표인지 설명한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-14">2026-07-14</time></p>
   </a>
@@ -716,8 +718,8 @@
       <span class="ko">OpenVLA: An Open-Source Vision-Language-Action Model</span>
     </h2>
     <p>
-      <span class="en">The first open-source generalist VLA, read through an inference lens — <b>rung 1</b> of the VLA study plan. A 7B model (fused DINOv2+SigLIP → Llama-2) that emits robot actions as <b>256-bin discretized tokens</b> (the last 256 Llama vocab ids), trained on 970k Open X-Embodiment demos; beats the closed 55B RT-2-X by <b>16.5% absolute</b> at 7× fewer params, and is first to show LoRA (1.4% of params) and int4 (7 GB) for VLAs. The inference reality: <b>batch-1, one action = 7 autoregressive tokens, vision-once-then-KV-cache, ~6 Hz</b> on a 4090 — plus the int8 "trap" where a 1.2 Hz engine scores worse than int4 purely from falling behind the control loop (latency = accuracy). Full 5-part note: action-tokenizer math, reconstructed headline/LoRA/quant tables, a SHA-pinned code-walk of <code>predict_action</code> + de-tokenization, and a <code>/understand</code> knowledge-graph map (285 nodes, 13 layers). Stanford · Berkeley · TRI · Google DeepMind · Physical Intelligence · MIT.</span>
-      <span class="ko">최초의 오픈소스 제너럴리스트 VLA를 추론 관점으로 읽은 <b>1번째 칸</b> — VLA 공부 계획. 7B 모델(융합 DINOv2+SigLIP → Llama-2)이 로봇 행동을 <b>256구간 이산화 토큰</b>(가장 안 쓰는 Llama 어휘 256개)으로 내놓고, 970k Open X-Embodiment 시연으로 학습; 닫힌 55B RT-2-X를 <b>절대 16.5%</b> 앞서면서 파라미터 7× 적고, VLA 최초로 LoRA(파라미터 1.4%)·int4(7 GB)를 보였다. 추론의 현실: <b>batch-1, 행동 하나 = 자기회귀 토큰 7개, 비전 한 번 뒤 KV-캐시, 4090에서 ~6 Hz</b> — 그리고 1.2 Hz 엔진이 제어 루프에 뒤처진 이유만으로 int4보다 낮은 점수를 받는 int8 "함정"(지연 = 정확도). 5부 노트 전체: 액션 토크나이저 수식, 재구성한 헤드라인/LoRA/양자화 표, <code>predict_action</code>+디토크나이즈의 SHA 고정 코드 워크, <code>/understand</code> 지식 그래프 맵(노드 285, 레이어 13). Stanford · Berkeley · TRI · Google DeepMind · Physical Intelligence · MIT.</span>
+      <span class="en">OpenVLA, the first open generalist VLA, read through an inference lens: batch-1, seven autoregressive tokens per action, and why latency equals accuracy.</span>
+      <span class="ko">첫 오픈소스 범용 VLA인 OpenVLA를 추론 관점에서 읽는다. 배치 1로 동작 하나에 토큰 7개를 생성하며, 레이턴시가 곧 정확도다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-13">2026-07-13</time></p>
   </a>
@@ -732,8 +734,8 @@
       <span class="ko">Vision-Language-Action 추론 — 공부 계획</span>
     </h2>
     <p>
-      <span class="en">A breadth-first study ladder for someone who knows LLM serving but is new to robotics: <b>seven rungs</b> from "what is a VLA" to the reality that VLA inference is <b>batch-1, latency-bound, inside a real-time control loop</b> — the mirror image of throughput-batched LLM serving. Anchored on <b>OpenVLA</b> (DINOv2+SigLIP → Llama-2 → discretized action tokens), branching to <b>π0</b> (flow matching, chunk H=50 @ 50 Hz), FAST, Octo and GR00T for contrasts. Covers action chunking &amp; async serving, action-representation × inference cost, edge/4-bit deployment, and fleet serving. Reading + one study note per rung; hands-on deferred (Docker on MI250 when ready). SVG ladder, glossary, phase table.</span>
-      <span class="ko">LLM 서빙은 알지만 로보틱스는 처음인 사람을 위한 '넓게 먼저' 스터디 사다리: "VLA란 무엇인가"에서 VLA 추론이 <b>제어 루프 안 batch-1·지연 바운드</b>라는 현실까지 <b>일곱 칸</b> — 처리량 배치 LLM 서빙의 거울상. <b>OpenVLA</b>(DINOv2+SigLIP → Llama-2 → 이산화 행동 토큰)에 앵커를 두고 <b>π0</b>(플로우 매칭, 청크 H=50 @ 50 Hz), FAST, Octo, GR00T로 대조 확장. 행동 청킹·비동기 서빙, 행동 표현 × 추론 비용, 엣지/4-bit 배포, 플릿 서빙 다룸. 칸마다 읽기 + 스터디 노트 하나; 실습은 뒤로(준비되면 MI250에서 Docker). SVG 사다리, 용어집, 단계 표.</span>
+      <span class="en">A seven-rung study ladder for LLM-serving people new to robotics, anchored on OpenVLA, toward batch-1, latency-bound VLA inference.</span>
+      <span class="ko">LLM 서빙은 알지만 로보틱스는 처음인 사람을 위한 7단계 VLA 추론 공부 계획이다. OpenVLA를 중심에 두고 π0, FAST 등으로 넓힌다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-13">2026-07-13</time></p>
   </a>
@@ -748,8 +750,8 @@
       <span class="ko">The Red Queen Gödel Machine: Co-Evolving Agents and Their Evaluators</span>
     </h2>
     <p>
-      <span class="en">A fixed judge caps agentic self-improvement. RQGM makes evaluation a <b>moving target</b>: agents <i>and</i> their evaluators co-evolve in a shared multi-agent workspace, via <b>controlled utility evolution</b> — search is chopped into epochs (one evaluator frozen within an epoch, so per-epoch guarantees hold), and at exponentially-spaced checkpoints a challenger evaluator replaces the incumbent only if it beats it on a ground-truth anchor, then <b>selective erasure</b> discards records scored by the displaced judge. On Polyglot: 71.7% vs HGM-H's 69.9% at <b>1.35–1.72× fewer</b> tokens; paper-writing acceptance 21.8% → 40.5%. Replacements act as a curriculum and fix reviewer self-preference bias. 4 figures from the paper (arch, headline, lineage, keeps-vs-reranks); verbatim quotes; editor's-note read. Cambridge · NVIDIA · Flower · MBZUAI · Inria.</span>
-      <span class="ko">고정된 심판은 에이전트 자기개선을 정체시킨다. RQGM은 평가를 <b>움직이는 표적</b>으로 만든다: 에이전트 <i>와</i> 평가자가 공유 멀티에이전트 워크스페이스에서 공진화하는 <b>controlled utility evolution</b> — 탐색을 에폭으로 쪼개(에폭 내 평가자는 고정이라 에폭별 보장 성립), 지수 간격 체크포인트마다 도전 평가자가 ground-truth 앵커에서 이길 때만 기존 평가자를 교체하고 <b>selective erasure</b>로 밀려난 심판이 매긴 기록을 삭제. Polyglot에서 HGM-H 69.9% 대비 71.7%를 <b>1.35–1.72× 적은</b> 토큰으로; 논문 작성 수락률 21.8% → 40.5%. 교체는 커리큘럼처럼 작동하고 리뷰어 self-preference 편향을 고친다. 논문 원본 그림 4개(구조·헤드라인·계통·keeps-vs-reranks), 원문 인용, 편집자 관점 포함. Cambridge · NVIDIA · Flower · MBZUAI · Inria.</span>
+      <span class="en">RQGM co-evolves agents and their evaluators so a fixed judge stops capping self-improvement, beating HGM-H on Polyglot with fewer tokens.</span>
+      <span class="ko">RQGM은 에이전트와 평가자를 함께 진화시켜 고정된 평가자가 자기 개선을 가로막는 문제를 푼다. Polyglot에서 더 적은 토큰으로 HGM-H를 앞선다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-06">2026-07-06</time></p>
   </a>
@@ -764,8 +766,8 @@
       <span class="ko">MCP Server Architecture Patterns for LLM-Integrated Applications</span>
     </h2>
     <p>
-      <span class="en">An experience paper that gives MCP servers a <b>pattern language</b>. From a survey of many real servers it distills <b>5 patterns</b> (Resource Gateway, Tool Orchestrator, and more) and <b>4 anti-patterns</b>, each written in the classic Gang-of-Four template (Context · Problem · Solution · Consequences · Known Uses), plus cross-cutting concerns like authentication and versioning. Inter-rater agreement κ=0.76; also measures latency and the tool-count-vs-accuracy trade-off. Ends with a decision guide for picking a pattern. Verbatim quotes with jump anchors; figures from the paper; has an official repo.</span>
-      <span class="ko">MCP 서버에 <b>패턴 언어</b>를 부여한 experience paper. 실제 서버 다수를 조사해 <b>패턴 5개</b>(Resource Gateway, Tool Orchestrator 등)와 <b>안티패턴 4개</b>를 뽑아 각각 고전 Gang-of-Four 템플릿(Context · Problem · Solution · Consequences · Known Uses)으로 정리하고, 인증·버저닝 같은 횡단 관심사도 다룬다. 평가자 간 일치 κ=0.76; 지연시간과 tool 개수-정확도 트레이드오프도 측정. 마지막에 패턴 선택 결정 가이드. 점프 앵커가 달린 원문 인용, 논문 그림, 공식 레포 포함.</span>
+      <span class="en">An experience paper that distills MCP server patterns and anti-patterns from real servers in Gang-of-Four form, ending with a decision guide.</span>
+      <span class="ko">실제 MCP 서버들에서 설계 패턴과 안티패턴을 뽑아 GoF 형식으로 정리한 경험 논문이다. 패턴 선택 가이드로 끝난다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-06">2026-07-06</time></p>
   </a>
@@ -780,8 +782,8 @@
       <span class="ko">The Verification Horizon: No Silver Bullet for Coding Agent Rewards</span>
     </h2>
     <p>
-      <span class="en">Qwen work arguing that in coding-agent RL, generating solutions is easy but <b>reliably verifying them is the bottleneck</b> — and reward hacking is a <b>moving target</b>, so the verifier must co-evolve with the generator. It studies four reward constructions along three axes (scalability, faithfulness, robustness), shows how each gets hacked, and introduces <b>Span-KTO</b>, which wins by filtering rewards at the span level. Figures from the paper (co-evolution, SWE-bench curves, RL result curves, task-quality distribution); verbatim quotes with anchors; editor's-note read on reward as core RL infrastructure.</span>
-      <span class="ko">Qwen 연구 — 코딩 에이전트 RL에서 해답 생성은 쉽지만 <b>그것을 신뢰성 있게 검증하는 게 병목</b>이며, reward hacking은 <b>움직이는 표적</b>이라 검증기가 생성기와 공진화해야 한다는 주장. 리워드 구성 4가지를 세 축(scalability·faithfulness·robustness)으로 분석해 각각 어떻게 해킹되는지 보이고, span 단위로 리워드를 거르는 <b>Span-KTO</b>를 제안·우승. 논문 원본 그림(co-evolution·SWE-bench 곡선·RL 결과 곡선·task-quality 분포), 앵커 달린 원문 인용, 리워드=RL 핵심 인프라라는 편집자 관점 포함.</span>
+      <span class="en">Qwen argues that verifying, not generating, is the bottleneck in coding-agent RL, shows how four reward designs get hacked, and introduces Span-KTO.</span>
+      <span class="ko">코딩 에이전트 RL의 병목은 생성이 아니라 검증이라고 주장한다. 보상 설계 네 가지가 어떻게 해킹되는지 보이고 Span-KTO를 제안한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-06">2026-07-06</time></p>
   </a>
@@ -796,8 +798,8 @@
       <span class="ko">Towards Automating Scientific Review with Google's Paper Assistant Tool</span>
     </h2>
     <p>
-      <span class="en">Human peer review can't scale to AI-accelerated science, so Google automates <b>verification</b> (objective error-finding), not subjective ranking. PAT is a 4-stage agentic pipeline on Gemini Deep Think: <b>segment → adaptively budget compute (Light/Medium/High Thinking) → deep-review each segment with the full paper as context → globally synthesize with de-dup + search-grounding</b> — deliberately avoiding single-call (context-limited) and Pass@k (precision-killing) baselines. On a math+proof subset of SPOT it hits <b>89.7%</b> detection recall (zero-shot 55.2%, prior SOTA 21.1%); piloted at STOC + ICML as an author tool with &gt;90% finding it helpful. Real Figure 1 (pipeline) from the paper; reconstructed result tables; a ladder of AI-human roles + risks. Google-internal, closed tool.</span>
-      <span class="ko">사람 피어리뷰는 AI-가속 과학의 속도를 못 따라가므로, 구글은 주관적 순위가 아니라 <b>검증</b>(객관적 오류 찾기)을 자동화한다. PAT는 Gemini Deep Think 위 4단계 에이전트 파이프라인: <b>분할 → 컴퓨트 적응 배분(Light/Medium/High Thinking) → 전체 논문을 컨텍스트로 세그먼트별 심층 검토 → 중복 제거·검색 그라운딩으로 전역 종합</b> — 단일 호출(컨텍스트 제한)과 Pass@k(정밀도 파괴)를 의도적으로 회피. SPOT의 수학+증명 부분집합에서 탐지 재현율 <b>89.7%</b>(zero-shot 55.2%, 이전 SOTA 21.1%); STOC + ICML에서 저자 도구로 파일럿, 90%+ 가 유용하다 평가. 논문 원본 Figure 1(파이프라인), 재구성한 결과 표, AI-사람 역할 사다리와 위험 논의. 구글 내부 비공개 도구.</span>
+      <span class="en">Google's Paper Assistant Tool automates error-finding in papers with an agentic Gemini Deep Think pipeline, reaching 89.7% detection recall on a SPOT subset.</span>
+      <span class="ko">Google PAT는 Gemini Deep Think 기반 에이전트 파이프라인으로 논문 오류 찾기를 자동화한다. SPOT 수학 부분집합에서 탐지 재현율 89.7%를 낸다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-06">2026-07-06</time></p>
   </a>
@@ -812,8 +814,8 @@
       <span class="ko">AutoMem: Automated Learning of Memory as a Cognitive Skill</span>
     </h2>
     <p>
-      <span class="en">Stanford work treating memory management not as a fixed module but a <b>trainable skill</b> ("metamemory"). The agent uses the file system as memory (file-ops are actions), and two automated meta-learning loops improve it: <b>Loop 1</b> — a meta-LLM code reviewer reads full traces and rewrites the scaffold; <b>Loop 2</b> — a meta-LLM training engine curates SFT data and finetunes a separable <b>memory specialist</b> (LoRA) while the task model stays frozen, so gains stack without hurting task competence. Reports <b>~2×–4×</b> progression gains from memory alone, lifting Qwen2.5-32B to frontier level on long-horizon BALROG games (Crafter/MiniHack/NetHack). Figures from the paper; verbatim quotes with anchors.</span>
-      <span class="ko">Stanford 연구 — 메모리 관리를 고정 모듈이 아니라 <b>학습 가능한 스킬</b>("metamemory")로 본다. 에이전트는 파일시스템을 메모리로 쓰고(파일 조작이 행동), 두 자동 메타러닝 루프가 이를 개선한다: <b>루프 1</b> — 메타-LLM 코드 리뷰어가 전체 트레이스를 읽고 스캐폴드를 재작성; <b>루프 2</b> — 메타-LLM 학습 엔진이 SFT 데이터를 큐레이션해 분리 가능한 <b>memory specialist</b>(LoRA)를 파인튜닝하되 태스크 모델은 고정, 그래서 이득이 태스크 능력을 해치지 않고 쌓인다. 메모리만으로 <b>~2×–4×</b> 진행도 이득, Qwen2.5-32B를 장기 BALROG 게임(Crafter/MiniHack/NetHack)에서 frontier급으로 끌어올림. 논문 그림, 앵커 달린 원문 인용.</span>
+      <span class="en">AutoMem treats memory as a trainable skill, using two meta-learning loops to improve the scaffold and finetune a separate memory specialist.</span>
+      <span class="ko">AutoMem은 메모리 관리를 학습 가능한 기술로 본다. 두 메타러닝 루프로 스캐폴드를 고치고 별도 메모리 전문 모델을 미세조정한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-06">2026-07-06</time></p>
   </a>
@@ -828,8 +830,8 @@
       <span class="ko">Reinforcement Learning with Metacognitive Feedback Elicits Faithful Uncertainty Expression in LLMs</span>
     </h2>
     <p>
-      <span class="en">A Google + Yale collaboration (RLMF) that turns a model's <b>own metacognition into the RL training signal</b>. The distinction it draws is <b>faithful vs factual</b> calibration: not "is the answer right" but "does the stated confidence match the model's own internal belief." A two-stage GRPO recipe calibrates self-reported confidence so the model expresses uncertainty faithfully <b>without losing accuracy</b>, reaching SOTA faithful calibration and beating frontier models on it. Figures from the paper (reliability diagrams, z-curves); verbatim quotes with anchors; the math (reward shaping) explained in plain language.</span>
-      <span class="ko">Google + Yale 협업(RLMF) — 모델의 <b>자체 metacognition을 RL 학습 신호로</b> 전환한다. 핵심 구분은 <b>faithful vs factual</b> 캘리브레이션: "정답이냐"가 아니라 "표명한 confidence가 모델 내부 믿음과 일치하냐". 2단계 GRPO 레시피로 자기보고 confidence를 캘리브레이션해 <b>정확도를 잃지 않고</b> 불확실성을 충실히 표현, faithful calibration에서 SOTA 달성·frontier 모델을 능가. 논문 원본 그림(reliability diagram·z-curve), 앵커 달린 원문 인용, 리워드 셰이핑 수식을 쉬운 말로 설명.</span>
+      <span class="en">RLMF uses a model's own metacognition as the RL signal, so its stated confidence matches its internal belief without losing accuracy.</span>
+      <span class="ko">RLMF는 모델의 메타인지를 RL 보상으로 써서 말로 밝힌 확신도가 내부 믿음과 맞게 만든다. 정확도는 떨어지지 않는다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-06">2026-07-06</time></p>
   </a>
@@ -844,8 +846,8 @@
       <span class="ko">NVIDIA Dynamo — 이슈 1.5K·PR 9K로 읽는 한계점과 방향성</span>
     </h2>
     <p>
-      <span class="en">We scraped every issue (1,478) and PR (9,000) from <code class="inl">ai-dynamo/dynamo</code>, classified them into 9 major areas, and read the highest-signal ones. The finding in one line: <b>almost every hard limitation traces to one root — Dynamo was built as an in-process, single-replica-optimal system and is now retrofitting distributed-systems properties (shared state, failover, multi-vendor, autoscaling) onto that core.</b> Router affinity, the prefix index, and the KV cache all live inside a single process, so at scale it leaks (prefix tree ~20 GB/h → OOM #10774), scatters sessions behind an LB (#11035), and loses cache on crash. The cure the project is betting on is <b>GMS (GPU Memory Service)</b> — externalize KV/state so engines become stateless and restartable. 5 cross-cutting limitations (state-locality, bolt-on fault tolerance, the 3-engine "moving contract" tax, an untrustworthy Planner, topology/security debt) + a per-area table with GitHub evidence links + a 6–12mo direction prediction. Diagrams theme-drawn; every #N links to the live issue/PR. Method + caveats included (label undercounting, snapshot). Editorial read: the team that finishes state-externalization + failover wins the disagg race — GMS's completion is the variable to watch.</span>
-      <span class="ko"><code class="inl">ai-dynamo/dynamo</code>의 모든 이슈(1,478)·PR(9,000)을 긁어 9개 대분류로 나누고 신호 큰 것들을 읽었다. 한 줄 결론: <b>어려운 한계점 거의 전부가 한 뿌리 — Dynamo는 "프로세스 내부·단일 레플리카 최적"으로 만들어졌고 지금 분산 시스템 속성(공유 상태·failover·멀티벤더·오토스케일)을 그 코어에 후행 이식 중.</b> 라우터 affinity·prefix 인덱스·KV 캐시가 다 단일 프로세스 안에 있어, 스케일에서 새고(prefix 트리 ~20GB/h → OOM #10774), LB 뒤에서 세션이 흩어지고(#11035), 크래시 시 캐시를 잃는다. 프로젝트가 거는 처방은 <b>GMS(GPU Memory Service)</b> — KV/상태를 외부화해 엔진을 스테이트리스·재시작 가능하게. 5대 횡단 한계점(상태 지역성, 땜빵 fault tolerance, 3-엔진 "움직이는 계약" 세금, 신뢰 불가 Planner, 토폴로지/보안 부채) + GitHub 근거 링크가 달린 영역별 표 + 6~12개월 방향성 예측. 다이어그램은 테마로 직접, 모든 #N은 실제 이슈/PR로 링크. 분석 방법·한계(라벨 과소집계, 스냅샷) 포함. 편집자 관점: disagg 경쟁은 state 외부화+failover를 먼저 끝내는 쪽이 이긴다 — GMS 완주가 지켜볼 변수.</span>
+      <span class="en">Reading every Dynamo issue and PR shows most of NVIDIA Dynamo's hard limits trace to its in-process, single-replica core, with GMS as the fix to watch.</span>
+      <span class="ko">NVIDIA Dynamo 이슈와 PR 전체를 읽어 보면 한계 대부분이 단일 프로세스, 단일 레플리카 중심 설계에서 나온다. 해법으로 걸고 있는 것은 GMS다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-03">2026-07-03</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-07-06">2026-07-06</time></p>
   </a>
@@ -860,8 +862,8 @@
       <span class="ko">TileRT — 타일 기반 초저지연 LLM 런타임 (오픈 vs 바이너리)</span>
     </h2>
     <p>
-      <span class="en">What TileRT (from the TileLang team) is, from scratch — starting with <b>what a "tile" even is</b> (GPU tiling: reuse a sub-block in fast on-chip memory), then the runtime that treats a whole model as fine-grained tile-level tasks overlapped across 8 GPUs for millisecond TPOT (1000+ tok/s on a 1T model). Purpose, usage (binary wheel, weight sharding, generate CLI + MTP), and a commit-pinned code-walk (@242f7b3) of the honest boundary: the repo is a thin Python orchestration layer, the whole forward is ONE binary op (<code>dsa_show_hands</code>), 86 <code>torch.ops.tilert.*</code> sites, zero TileLang in the shipping path — the runtime + every kernel + the tile scheduling are a closed <code>.so</code>. Vendor speed numbers flagged; TileLang/TileScale are the open pieces. Diagrams: tiling, the overlap/persistent-engine idea, the Python↔binary wall.</span>
-      <span class="ko">TileRT(TileLang 팀)를 기초부터 — <b>"타일"이 뭔지</b>(GPU 타일링: 하위 블록을 빠른 온칩 메모리에서 재사용)부터 시작해, 모델 전체를 잘게 쪼갠 타일 단위 태스크로 보고 8-GPU에 겹쳐 밀리초 TPOT(1T 모델 1000+ tok/s)를 내는 런타임까지. 목적, 사용법(바이너리 휠·가중치 샤딩·generate CLI + MTP), 그리고 커밋 핀 코드 분석(@242f7b3)으로 솔직한 경계: 레포는 얇은 Python 오케스트레이션 층, forward 전체는 바이너리 op 하나(<code>dsa_show_hands</code>), <code>torch.ops.tilert.*</code> 86곳, 배포 경로에 TileLang 0 — 런타임·모든 커널·타일 스케줄링은 닫힌 <code>.so</code>. 벤더 속도 수치는 표시; TileLang/TileScale이 오픈 조각. 그림: 타일링·겹침/persistent-engine·Python↔바이너리 벽.</span>
+      <span class="en">Explains TileRT from GPU tiling up, then a code walk shows the open repo is a thin Python layer over one closed binary that runs the whole forward pass.</span>
+      <span class="ko">GPU 타일링 개념부터 TileRT를 설명한다. 공개 레포는 얇은 Python 계층이고 forward 전체는 닫힌 바이너리 하나에서 돈다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-01">2026-07-01</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-07-03">2026-07-03</time></p>
   </a>
@@ -880,8 +882,8 @@
       <span class="ko">MoAI-Fabric — vLLM 0.22.1 크로스벤더 P/D 패치, 라인 바이 라인</span>
     </h2>
     <p>
-      <span class="en">How Moreh's MoAI-Fabric makes prefill↔decode disaggregated inference work <b>across vendors</b> — an H100/CUDA prefill feeding an MI300/ROCm decode over InfiniBand RDMA — with three small patches on stock vLLM 0.22.1. Line-by-line, with code snippets, diagrams, before/after and the principle of each fix: (1) signed <code>block_size_ratio</code>; (2) the NIXL connector — a handshake-exchanged capability dataclass (fail loud on fatal mismatch), a per-peer fp8 <code>e4m3 fn↔fnuz</code> byte LUT (CUDA and ROCm encode fp8 differently), and bidirectional HND↔NHD layout permute; (3) injecting <code>UCX_IB_GPU_DIRECT_RDMA=yes</code> at import because 0.22.1 scrubs <code>UCX_*</code> from the worker env, so only GDR-direct composes cross-vendor. Plus the not-yet-ported PR2 (MLA cross-block scatter) and the <code>enforce_handshake_compat</code> gotcha. Pinned to repo commit 4917a08.</span>
-      <span class="ko">Moreh의 MoAI-Fabric이 prefill↔decode 분리 추론을 <b>벤더를 넘어</b> 돌리는 법 — H100/CUDA prefill이 MI300/ROCm decode에 InfiniBand RDMA로 KV를 넘김 — 스톡 vLLM 0.22.1 위 작은 패치 3개로. 라인 바이 라인, 코드 스니펫·그림·전후·원리와 함께: (1) 부호 있는 <code>block_size_ratio</code>; (2) NIXL 커넥터 — 핸드셰이크 교환 capability 데이터클래스(치명적 불일치는 즉시 실패), peer별 fp8 <code>e4m3 fn↔fnuz</code> 바이트 LUT(CUDA·ROCm의 fp8 인코딩 차이), 양방향 HND↔NHD 레이아웃 permute; (3) 0.22.1이 worker env에서 <code>UCX_*</code>를 지워 GDR-direct만 크로스벤더로 성립하기에 import 시 <code>UCX_IB_GPU_DIRECT_RDMA=yes</code> 주입. 미이식 PR2(MLA 교차 블록 scatter)와 <code>enforce_handshake_compat</code> 함정까지. 레포 커밋 4917a08 핀.</span>
+      <span class="en">Reads, line by line, the three small MoAI-Fabric patches on vLLM 0.22.1 that let an H100 prefill feed an MI300 decode over RDMA.</span>
+      <span class="ko">H100 prefill이 RDMA로 MI300 decode에 KV를 넘기게 만든 MoAI-Fabric의 vLLM 0.22.1 패치 세 개를 줄 단위로 읽는다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-07-01">2026-07-01</time></p>
   </a>
@@ -896,8 +898,8 @@
       <span class="ko">Sakana Fugu Technical Report — 다른 모델을 부르는 오케스트레이터 모델</span>
     </h2>
     <p>
-      <span class="en">Sakana AI's Fugu and Fugu-Ultra aren't new foundation models — they're <b>orchestrator LMs</b> that decide <i>which</i> frontier model(s) to call, treating each as a black box (no weights). <b>Fugu</b> = a lightweight "selection head" that outputs one logit per worker and dispatches the single best (latency ≈ one call); <b>Fugu-Ultra</b> = a "Conductor" that writes a full ≤5-step natural-language multi-agent workflow per query. Trained SFT → sep-CMA-ES evolution (Fugu) and GRPO with no-KL (Fugu-Ultra) over a pool of Gemini-3.1-Pro / Opus-4.8 / GPT-5.5. 5-part note: the problem (models diverging in specialization; "behavioral model merging" vs weight merging), the selection-head + Conductor method (with the real Fig 2 parametrization), the three training objectives in plain language, and the results — reconstructed Table 1 (SWE-Bench Pro 73.7, Terminal Bench 82.1, GPQA-D 95.5…), the per-task routing distribution, AutoResearch/kana/CAD/Rubik/chess/trading demos — plus the honest caveat that Fig 1's Fable 5 bar sometimes tops Fugu, and that it's a closed report + closed API (no weights). Figures pulled straight from the arXiv HTML with attribution.</span>
-      <span class="ko">Sakana AI의 Fugu·Fugu-Ultra는 새 파운데이션 모델이 아니라, <i>어떤</i> 프론티어 모델을 부를지 결정하는 <b>오케스트레이터 LM</b>이다 — 각 모델을 블랙박스로 취급(가중치 없음). <b>Fugu</b> = 워커마다 로짓 하나를 내 가장 좋은 하나로 넘기는 가벼운 "selection head"(레이턴시 ≈ 단일 호출); <b>Fugu-Ultra</b> = 쿼리마다 ≤5단계 자연어 멀티 에이전트 워크플로 전체를 써내는 "Conductor". Gemini-3.1-Pro / Opus-4.8 / GPT-5.5 풀 위에서 SFT → sep-CMA-ES 진화(Fugu), no-KL GRPO(Fugu-Ultra)로 학습. 5부 노트: 문제(전문성으로 갈라지는 모델들; 가중치 머징 대비 "행동 수준 머징"), selection-head + Conductor 방법(실제 Fig 2 파라미터화 포함), 세 학습 목적함수를 쉬운 말로, 그리고 결과 — 재구성한 Table 1(SWE-Bench Pro 73.7, Terminal Bench 82.1, GPQA-D 95.5…), 과제별 라우팅 분포, AutoResearch/카나/CAD/루빅/체스/트레이딩 데모 — 여기에 Fig 1의 Fable 5 막대가 때로 Fugu를 앞선다는 정직한 단서, 그리고 닫힌 리포트 + 닫힌 API(가중치 미공개)라는 점. 그림은 arXiv HTML에서 출처 표기와 함께 직접 가져옴.</span>
+      <span class="en">Sakana's Fugu and Fugu-Ultra are not new foundation models but orchestrators that pick or chain black-box frontier models, covered from training to results.</span>
+      <span class="ko">Sakana의 Fugu와 Fugu-Ultra는 새 기반 모델이 아니라 어떤 프런티어 모델을 부를지 정하는 오케스트레이터다. 학습 방식과 결과, 한계를 정리한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-29">2026-06-29</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-07-01">2026-07-01</time></p>
   </a>
@@ -912,8 +914,8 @@
       <span class="ko">Are We Ready For An Agent-Native Memory System?</span>
     </h2>
     <p>
-      <span class="en">A survey <b>and</b> benchmark (SJTU / Tsinghua / MemTensor) that treats LLM-agent memory as a <b>data-management system</b>, not a retrieval add-on — decomposing it into four modules <code class="inl">⟨Representation&amp;Storage, Extraction, Retrieval&amp;Routing, Maintenance⟩</code> and putting 12 systems + 2 baselines (MemoChat, Mem0, Zep, Cognee, MemOS, MemoryOS, A-MEM, Letta, LightMem… vs Long Context / RAG) through 5 workloads / 11 datasets (LoCoMo, LongMemEval, DB-Bench, LongBench). 5-part note with the real taxonomy figures (Figs 2–6), the reconstructed Table 1 + Table 2 robustness, and the five findings: <b>no architecture dominates</b>; retrieval is evidence-completion not top-1 ranking; no-lifecycle stores return stale facts ("hallucinations of the past"); <b>raw long-context still beats memory on time-dependent queries</b> because consolidation destroys chronological cues; and heavily-structured systems cost orders-of-magnitude more latency (cost tracks write-propagation, not structure). Backbone-invariant (grounding happens before generation). Testbed open-sourced. Figures pulled straight from the arXiv HTML with attribution.</span>
-      <span class="ko">LLM 에이전트 메모리를 검색 부가기능이 아니라 <b>데이터 관리 시스템</b>으로 다루는 서베이 <b>겸</b> 벤치마크(SJTU / Tsinghua / MemTensor) — 네 모듈 <code class="inl">⟨표현·저장, 추출, 검색·라우팅, 유지관리⟩</code>로 분해하고, 시스템 12개 + 기준선 2개(MemoChat, Mem0, Zep, Cognee, MemOS, MemoryOS, A-MEM, Letta, LightMem… vs Long Context / RAG)를 5개 워크로드 / 11개 데이터셋(LoCoMo, LongMemEval, DB-Bench, LongBench)에 돌린다. 실제 분류 체계 그림(Fig 2–6), 재구성한 Table 1 + Table 2 강건성, 그리고 다섯 발견을 담은 5부 노트: <b>지배 아키텍처 없음</b>; 검색은 top-1 순위가 아니라 증거 완성; 라이프사이클 없는 저장소는 낡은 사실을 반환("과거의 환각"); 통합이 시간 단서를 파괴해 <b>시간 의존 쿼리에선 순정 롱컨텍스트가 메모리를 이김</b>; 고도 구조화 시스템은 자릿수 단위 더 큰 레이턴시(비용은 구조가 아니라 쓰기 전파를 따름). 백본 불변(grounding은 생성 이전). 테스트베드 오픈소스. 그림은 arXiv HTML에서 출처 표기와 함께 직접 가져옴.</span>
+      <span class="en">A survey and benchmark that treats agent memory as data management finds no architecture dominates, and raw long context still wins on time-dependent queries.</span>
+      <span class="ko">에이전트 메모리를 데이터 관리 시스템으로 보고 12개 시스템을 벤치마크한다. 압도적인 구조는 없고, 시간 의존 질문에는 긴 컨텍스트가 여전히 낫다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-29">2026-06-29</time></p>
   </a>
@@ -928,8 +930,8 @@
       <span class="ko">Parallelism in LLM inference — Deep dive</span>
     </h2>
     <p>
-      <span class="en">A diagram-first, presentation-ready extract (§1–3) of the full parallelism note: (1) the communication primitives (all-reduce / all-gather / reduce-scatter / all-to-all / p2p) with an animated data-grid and the alpha-beta cost model; (2) what DP / TP / EP / CP each split, compute, and communicate — an interactive per-strategy diagram with a summary strip + a closed-form per-GPU cost model (compute <code>F_layer = F_dense + F_attn</code>, params/KV/activation memory, comm volume in b·s·h), the EP all-to-all load-imbalance picture, the CP ring-attention animation, and SP-vs-CP / TP-KV-vs-DP-attention Q&amp;A callouts; (3) each strategy on the metal — its NCCL/RCCL collective, the link it rides (NVLink/xGMI vs IB), its ceiling, and the verify command. Figures &amp; animations unchanged from the full note.</span>
-      <span class="ko">풀 병렬화 노트의 §1–3을 그림 중심·발표용으로 발췌: (1) 통신 primitive(all-reduce / all-gather / reduce-scatter / all-to-all / p2p)를 애니메이션 데이터 격자 + alpha-beta 비용모델로; (2) DP / TP / EP / CP가 각각 무엇을 쪼개고·계산하고·통신하는지 — 전략별 인터랙티브 다이어그램 + 요약 스트립 + GPU당 비용 모델(연산 <code>F_layer = F_dense + F_attn</code>, 파라미터/KV/활성값 메모리, 통신량 b·s·h), EP all-to-all 부하 불균형 그림, CP ring-attention 애니메이션, SP-vs-CP / TP-KV-vs-DP-attention Q&amp;A 콜아웃; (3) 각 전략을 하드웨어 위에서 — NCCL/RCCL collective, 타는 링크(NVLink/xGMI vs IB), 성능 상한, 확인 명령. 그림·애니메이션은 풀 노트 그대로.</span>
+      <span class="en">A diagram-first extract of the parallelism note: communication primitives, what DP/TP/EP/CP each split and send, and the hardware links they ride.</span>
+      <span class="ko">병렬화 노트에서 다이어그램 위주로 뽑은 발표용 요약이다. 통신 primitive, DP/TP/EP/CP가 무엇을 나누고 주고받는지, 어떤 링크를 타는지 본다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-26">2026-06-26</time><span class="sep">&middot;</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-10-13">2026-10-13</time>
@@ -946,8 +948,8 @@
       <span class="ko">RL Methods for LLMs — The Hitchhiker's Guide to Agentic AI Part II</span>
     </h2>
     <p>
-      <span class="en">A comprehensive, tabbed digest of <b>only Part II "RL Methods for LLMs"</b> from Haggai Roitman's book (arXiv:2606.24937, CC BY-SA 4.0) — chapters 4–12, <b>one tab per chapter</b>: RLHF foundations &amp; the MDP view, PPO (clipped objective + the 6-step derivation + the failure-mode knobs), DPO (the Z(x)-cancels derivation + all 8 variants f-DPO/Robust/TR-DPO/EXO/NCA/SLiC-HF/RPO/SimPO), GRPO (group-relative advantage + all 12 variants DAPO/GSPO/Dr.GRPO/2-GRPO/…), the preference-optimization zoo (KTO/IPO/ORPO/Best-of-N + the alignment-method decision table), reward modeling (Bradley-Terry, PRM vs ORM, RLVR rule-based, Plackett-Luce listwise), SFT (packing/templates/masking + forgetting vs alignment tax + "SFT is the RL ceiling"), the full systems chapter (4-model 1.5 TB memory math, DP/TP/SP/PP/FSDP, the generation roofline at 0.6% of peak, decoupled gen/train, the RL-optimizer mantra), and agentic/trajectory RL (STaR/Reflexion/ReAct/LATS/Voyager/RLEF + GRPO-for-SWE + turn-level credit). Math explained in plain language, variant families as tables, verbatim quotes cited by §section·page. Built as an interactive tabbed page; covers Part II only.</span>
-      <span class="ko">Haggai Roitman 책(arXiv:2606.24937, CC BY-SA 4.0)에서 <b>Part II "RL Methods for LLMs"만</b> 빠짐없이 탭으로 정리 — 4–12장, <b>장마다 탭 하나</b>: RLHF 토대와 MDP 관점, PPO(clipped 목적함수 + 6단계 유도 + 실패모드 손잡이), DPO(Z(x) 소거 유도 + 8개 변형 전부 f-DPO/Robust/TR-DPO/EXO/NCA/SLiC-HF/RPO/SimPO), GRPO(그룹 상대 advantage + 12개 변형 전부 DAPO/GSPO/Dr.GRPO/2-GRPO/…), 선호최적화 동물원(KTO/IPO/ORPO/Best-of-N + 정렬방법 결정표), 보상 모델링(Bradley-Terry, PRM vs ORM, RLVR 규칙 기반, Plackett-Luce listwise), SFT(패킹/템플릿/마스킹 + 망각 vs 정렬세 + "SFT가 RL 천장"), 전체 시스템 장(4모델 1.5 TB 메모리 계산, DP/TP/SP/PP/FSDP, 피크 0.6%의 생성 roofline, 분리형 gen/train, RL-optimizer 만트라), 그리고 에이전트/trajectory RL(STaR/Reflexion/ReAct/LATS/Voyager/RLEF + SWE용 GRPO + 턴 단위 credit). 수식은 쉬운 말로, 변형 계열은 표로, 원문 인용은 §섹션·페이지로. 인터랙티브 탭 페이지; Part II만 다룸.</span>
+      <span class="en">A tabbed digest of Part II of The Hitchhiker's Guide to Agentic AI, one tab per chapter, from RLHF and PPO through DPO and GRPO variants to agentic RL.</span>
+      <span class="ko">The Hitchhiker's Guide to Agentic AI 2부를 장마다 탭 하나로 정리했다. RLHF, PPO부터 DPO, GRPO 변형, 에이전트 RL까지 다룬다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-25">2026-06-25</time></p>
   </a>
@@ -962,8 +964,8 @@
       <span class="ko">KVEraser — Steering KV Cache for Efficient Localized Context Erasing</span>
     </h2>
     <p>
-      <span class="en">You prefilled 32K tokens, then discovered one span must be erased. Full recomputation costs 17.6× the original prefill. KVEraser trains a second Qwen3-8B to produce <b>steering states</b> that replace only the contaminated KV interval — leaving the suffix cache untouched — and cuts the overhead to <b>+24%</b>. The key insight: suffix tokens attended to the erased span during prefill and are "contaminated"; steering states compensate without recomputation. EM 0.879 across 1K–32K context lengths (NIAH + QA). ICML 2026 Workshop (Oral).</span>
-      <span class="ko">32K 토큰을 prefill하고 나서 특정 구간을 삭제해야 한다는 걸 알았다. 전체 재계산은 원래 prefill의 17.6배. KVEraser는 두 번째 Qwen3-8B를 학습시켜 오염된 KV 구간만 교체하는 <b>스티어링 상태</b>를 생성하고, suffix 캐시는 그대로 두면서 오버헤드를 <b>+24%</b>로 줄인다. 핵심 통찰: suffix 토큰들은 prefill 중 삭제 구간에 어텐션해 "오염"됐지만, 스티어링 상태가 재계산 없이 이를 보정한다. 1K–32K 컨텍스트 길이에서 EM 0.879(NIAH + QA). ICML 2026 Workshop (Oral).</span>
+      <span class="en">KVEraser trains a model to produce steering states that replace only an erased span's KV, so removing context costs +24% instead of a full re-prefill.</span>
+      <span class="ko">KVEraser는 지울 구간의 KV만 갈아 끼우는 steering state를 별도 모델로 생성한다. 전체를 다시 prefill하지 않고 +24% 비용으로 컨텍스트를 지운다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-18">2026-06-18</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-25">2026-06-25</time></p>
   </a>
@@ -978,8 +980,8 @@
       <span class="ko">GLM-5.2 — 장기 에이전트 코딩을 위한 744B/40B 희소 어텐션 MoE</span>
     </h2>
     <p>
-      <span class="en">Z.ai (Zhipu AI)'s flagship open-weights model (3rd in the GLM-5 line) — <b>text-only</b>, 744B-total/40B-active MoE on <b>DeepSeek Sparse Attention</b> with the headline trick <b>IndexShare</b> (reuse one sparse-attention indexer across every 4 layers → ~2.9× fewer per-token FLOPs at 1M context). Independent Artificial Analysis ranks it <b>#1 open-weights</b>, ahead of MiniMax M3 / DeepSeek-V4-Pro / Kimi, approaching Opus 4.8 / GPT-5.5 on coding marathons (Terminal-Bench 2.1 81.0, SWE-bench Pro 62.1 — best open-source). The 7-part report: meaning &amp; position, architecture (config.json: 78 layers, 256 experts/top-8, DSA/MLA dims, 1M ctx), training (IndexShare + its own paper arXiv:2603.12201, critic-PPO, a caught reward-hacking story), compute/inference (DSA+IndexShare, MTP acceptance +20%, vLLM/SGLang, AA's token-inefficiency flag), scores table, open-source release (MIT-ish, BF16+FP8), world reaction (HK stock +32.8%). Modality stated up front; official architecture/MTP/RL-pipeline figures embedded with attribution. Sources marked vendor vs independent. First note made with the new model-deep-dive skill.</span>
-      <span class="ko">Z.ai(Zhipu AI)의 플래그십 오픈웨이트 모델(GLM-5 계열 3번째) — <b>텍스트 전용</b>, <b>DeepSeek Sparse Attention</b> 위의 744B 총/40B 활성 MoE, 핵심 트릭 <b>IndexShare</b>(희소 어텐션 indexer 하나를 4개 레이어마다 재사용 → 1M 컨텍스트에서 토큰당 FLOPs ~2.9배 감소). 독립 Artificial Analysis가 <b>오픈웨이트 1위</b>로 평가 — MiniMax M3 / DeepSeek-V4-Pro / Kimi를 앞서고 코딩 마라톤에서 Opus 4.8 / GPT-5.5에 근접(Terminal-Bench 2.1 81.0, SWE-bench Pro 62.1 — 오픈소스 최고). 7부 리포트: 의미·위치, 구조(config.json: 78 레이어, expert 256/top-8, DSA/MLA 차원, 1M ctx), 학습(IndexShare + 전용 논문 arXiv:2603.12201, critic-PPO, 잡힌 보상해킹 일화), 연산·추론(DSA+IndexShare, MTP acceptance +20%, vLLM/SGLang, AA의 토큰 비효율 지적), 점수 표, 오픈소스 릴리스(MIT 계열, BF16+FP8), 세상의 반응(홍콩 주가 +32.8%). 모달리티 먼저 표기; 공식 아키텍처/MTP/RL-파이프라인 그림을 출처 표기와 함께 임베드. 출처는 벤더 vs 독립 구분. 새 model-deep-dive 스킬로 만든 첫 노트.</span>
+      <span class="en">Z.ai's text-only 744B/40B MoE GLM-5.2: DeepSeek Sparse Attention with IndexShare, training, inference, benchmarks and where it ranks among open-weights models.</span>
+      <span class="ko">Z.ai의 텍스트 전용 744B/40B MoE GLM-5.2를 정리한다. DeepSeek Sparse Attention과 IndexShare 구조, 학습, 추론, 벤치마크를 다룬다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-18">2026-06-18</time></p>
   </a>
@@ -994,8 +996,8 @@
       <span class="ko">SGLang Context Parallelism — 긴 컨텍스트에 왜 필요한가, 그리고 main에 실제로 뭐가 있나</span>
     </h2>
     <p>
-      <span class="en">Context parallelism (CP) is the one parallelism that splits a <b>single sequence</b> across GPUs along the token axis — the only fix for a context so long its KV won't fit on a GPU (KV grows linearly) or its prefill is too slow (attention is O(length²)). TP/DP/PP can't: TP keeps full-length KV per rank, DP splits requests, PP splits layers. Explains the why first (with KV-size numbers: Llama-3 70B @1M ≈ 328 GB), the CP attention menu (ring attention vs all-to-all/Ulysses vs all-gather), then — honestly — <b>what SGLang merged vs the #21788 roadmap</b>: the merged path is <b>prefill-only, all-gather-KV (NOT ring attention), FA3-only, single-machine tp≤8, Hopper-experimental</b>, so it splits prefill compute, not KV memory. Decode CP / Helix / ring seq-dim KV sharding (#25846) and the unified <code class="inl">layers/cp/</code> module are still NotImplementedError stubs. Diagrams + code flow with permalinks @ d86a7e7. Driven by issue #21788.</span>
-      <span class="ko">Context parallelism(CP)은 <b>하나의 시퀀스</b>를 토큰 축으로 GPU들에 쪼개는 유일한 병렬화 — 컨텍스트가 너무 길어 KV가 GPU에 안 들어가거나(KV 선형 증가) prefill이 너무 느릴(어텐션 O(길이²)) 때의 유일한 해법. TP/DP/PP는 못 함: TP는 rank마다 전체 길이 KV 유지, DP는 요청 분할, PP는 레이어 분할. 먼저 왜(KV 크기: Llama-3 70B @1M ≈ 328 GB), CP 어텐션 메뉴(ring attention vs all-to-all/Ulysses vs all-gather), 그다음 — 정직하게 — <b>SGLang 머지 vs #21788 로드맵</b>: 머지된 경로는 <b>prefill 전용, all-gather-KV(ring attention 아님), FA3 전용, 단일 머신 tp≤8, Hopper 실험적</b>이라 KV 메모리가 아니라 prefill 연산을 나눔. Decode CP / Helix / ring seq-dim KV 샤딩(#25846), 통합 <code class="inl">layers/cp/</code> 모듈은 아직 NotImplementedError 스텁. 다이어그램 + permalink 코드 흐름 @ d86a7e7. 이슈 #21788 기반.</span>
+      <span class="en">Why long context needs context parallelism, and what SGLang actually merged: prefill-only all-gather KV, not ring attention, so it splits compute but not KV memory.</span>
+      <span class="ko">긴 컨텍스트에 context parallelism이 왜 필요한지 설명하고 SGLang main의 실제 구현을 본다. prefill 전용 all-gather 방식이라 KV 메모리는 나누지 못한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time></p>
   </a>
@@ -1010,8 +1012,8 @@
       <span class="ko">SGLang LPLB — MoE expert parallelism을 위한 선형계획 부하 분산기</span>
     </h2>
     <p>
-      <span class="en">What commit <code class="inl">92b42c8</code> (PR #24515) actually does — and it's <b>not</b> context parallelism, it's MoE expert-parallel load balancing. Under EP, routing skew makes one GPU's experts "hot" → that GPU is a straggler and the all-to-all combine waits on it. DeepSeek's EPLB fixes the static part (duplicate hot experts); <b>LPLB</b> (also DeepSeek's, ported here) fixes the dynamic per-batch part: each MoE layer solves a tiny <b>linear program on a single GPU SM</b> (interior-point, cuBLASDx/cuSolverDx) to split each token's load across an expert's replicas so the busiest GPU is minimized. Covers the straggler why, the LP/IPM mechanism, what this commit ports into SGLang (<code class="inl">--ep-dispatch-algorithm lp</code>, empty-rank deadlock handling, model allowlist), code flow @ 92b42c8, and an honest read: DeepSeek built it for <i>training</i>, SGLang applies it to inference, NVIDIA-only, and the PR's speedup is an n=3 self-bench with p&gt;0.05 (not significant).</span>
-      <span class="ko">커밋 <code class="inl">92b42c8</code>(PR #24515)이 실제로 하는 일 — 그리고 이건 context parallelism이 <b>아니라</b> MoE expert-parallel 부하 분산이다. EP에서 라우팅 쏠림이 한 GPU의 expert를 "hot"하게 → 그 GPU가 straggler가 되고 all-to-all combine이 그걸 기다린다. DeepSeek의 EPLB가 정적 부분 해결(hot expert 복제); <b>LPLB</b>(역시 DeepSeek 것, 여기로 포팅)가 동적 per-batch 부분 해결: 매 MoE 레이어가 <b>GPU SM 하나에서 작은 선형계획</b>(interior-point, cuBLASDx/cuSolverDx)을 풀어 각 토큰 부하를 expert 복제본들에 나눠 가장 바쁜 GPU를 최소화. straggler 왜, LP/IPM 메커니즘, 이 커밋이 SGLang에 포팅하는 것(<code class="inl">--ep-dispatch-algorithm lp</code>, 빈 rank deadlock 처리, 모델 allowlist), 코드 흐름 @ 92b42c8, 정직한 해석: DeepSeek은 <i>학습용</i>, SGLang은 추론에 적용, NVIDIA 전용, PR 속도 향상은 n=3 셀프벤치 p&gt;0.05(유의하지 않음).</span>
+      <span class="en">SGLang's LPLB port solves a tiny linear program per MoE layer to spread token load across expert replicas, and its claimed speedup is not statistically significant.</span>
+      <span class="ko">SGLang에 들어온 LPLB는 MoE 레이어마다 작은 선형계획을 풀어 expert 복제본에 토큰 부하를 나눈다. PR이 내세운 속도 향상은 통계적으로 유의하지 않다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time></p>
   </a>
@@ -1026,8 +1028,8 @@
       <span class="ko">Service-Induced Congestion in Memory-Constrained LLM Serving</span>
     </h2>
     <p>
-      <span class="en">A 101-page math.OC theory paper (Ao, Dong, Luo, Simchi-Levi — MIT/Columbia/PKU) modeling continuous-batching serving as a discrete-time dynamical system where each request's KV cache grows one token per decode step — so service creates its own future congestion, something classical fixed-capacity queueing never sees. Main results: (1) homogeneous workloads — the eviction-free equilibrium is provably unstable; greedy admission rolls to a worst-case eviction limit cycle losing up to 50% throughput (Theorem 2, via imbalance amplification). (2) Heterogeneous — the equilibrium is stable iff the decode lengths are coprime (Theorem 3, GCD condition); a shared divisor synchronizes completions into memory pulses (roots on the unit circle), and the finite-input stability threshold scales as l₁,₂³ (Prop 4). Two cheap fixes: rate-limited admission (cap at the eviction-free rate x*) and request mixing (route coprime lengths together). Vidur+A800 confirm: rate-limiting cut evictions 2,232→0 and raised throughput +28.3%; coprime mixing cut evictions −94.2%. Plain-language math throughout (the 4-step map, the GCD/roots-of-unity mechanism, the cubic threshold), verbatim quotes + anchors, diagrams. No code (theory). The "why" behind the cascades CacheWise/Tropical engineer around.</span>
-      <span class="ko">101쪽 math.OC 이론 논문(Ao, Dong, Luo, Simchi-Levi — MIT/컬럼비아/베이징대). continuous-batching 서빙을, 각 요청 KV 캐시가 decode 스텝마다 토큰 하나씩 자라는 이산시간 동역학계로 모델링 — 서비스가 제 미래 혼잡을 만든다, 고전 고정용량 큐잉은 못 보는 현상. 주요 결과: (1) 동질 워크로드 — 무축출 평형이 증명 가능하게 불안정; 탐욕 admission이 처리량 최대 50% 잃는 최악의 축출 주기로 굴러감(정리 2, 불균형 증폭). (2) 이질 — 평형은 decode 길이가 서로소일 때만 안정(정리 3, GCD 조건); 공약수는 완료를 메모리 펄스로 동기화(단위원 위 근), 유한 입력 안정 임계는 l₁,₂³로 스케일(명제 4). 값싼 처방 둘: rate-limited admission(무축출 속도 x*로 캡)과 request mixing(서로소 길이를 같이 라우팅). Vidur+A800 확인: rate-limiting은 축출 2,232→0, 처리량 +28.3%; 서로소 mixing은 축출 −94.2%. 수식 쉬운 설명 전반(4단계 사상, GCD/단위근 메커니즘, 세제곱 임계), 원문 인용+앵커, 다이어그램. 코드 없음(이론). CacheWise/Tropical이 우회 설계하는 cascade의 "왜".</span>
+      <span class="en">A theory paper showing that growing KV caches make continuous batching create its own congestion, fixable by rate-limited admission or coprime request mixing.</span>
+      <span class="ko">KV 캐시가 디코드마다 자라서 연속 배칭이 스스로 혼잡을 만든다는 이론 논문이다. admission 속도를 제한하거나 디코드 길이가 서로소인 요청을 섞으면 막을 수 있다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-25">2026-06-25</time></p>
   </a>
@@ -1042,8 +1044,8 @@
       <span class="ko">Tropical — SLO-aware multiplexing for disaggregated LLM serving</span>
     </h2>
     <p>
-      <span class="en">Disaggregation (separate prefill/decode workers) kills prefill→decode interference but piles up prefill queuing; co-location (vLLM) kills queuing but suffers interference — neither meets both the TTFT and TPOT SLO (arXiv:2606.16264, DAC, Shanghai AI Lab et al.). Tropical's "multiplexing toggle" borrows a decode worker's spare TPOT slack to piggyback short prefills: it predicts each prefill's cost and co-locates only when slack ≥ cost (else routes to dedicated prefill workers), with HBM-watermark + chunked-prefill guards and a no-migration design (decode→prefill switching is the expensive direction it avoids). Result: up to 2.09× more requests at 90% SLO, 9× lower P90 TTFT vs DistServe, 2.33–2.8× lower P90 TPOT vs vLLM. Plain-language math (SLO-attainment intersection, slack), verbatim quotes + anchors, Pareto/timeline/architecture diagrams. Honest read: abstract vs body numbers differ, no ablations, no public code (built on vLLM). The "when" to the vLLM P/D note's "how".</span>
-      <span class="ko">분리형(prefill/decode 워커 분리)은 prefill→decode 간섭을 없애지만 prefill 큐잉이 쌓이고, 코로케이션(vLLM)은 큐잉을 없애지만 간섭에 시달림 — 어느 쪽도 TTFT와 TPOT SLO를 동시에 못 맞춤(arXiv:2606.16264, DAC, 상하이 AI Lab 외). Tropical의 "멀티플렉싱 토글"은 decode 워커의 여유 TPOT slack을 빌려 짧은 prefill을 얹는다: 각 prefill 비용을 예측해 slack ≥ 비용일 때만 코로케이션(아니면 전용 prefill 워커로), HBM-watermark + chunked-prefill 가드와 무(無)마이그레이션 설계(피하는 비싼 방향이 decode→prefill 전환). 결과: 90% SLO에서 최대 2.09× 더 많은 요청, DistServe 대비 P90 TTFT 9×, vLLM 대비 P90 TPOT 2.33–2.8×. 수식 쉬운 설명(SLO 달성률 교집합·slack), 원문 인용+앵커, Pareto/타임라인/아키텍처 다이어그램. 정직한 해석: 초록 vs 본문 수치 차이, 분해 실험 없음, 공개 코드 없음(vLLM 기반). vLLM P/D 노트의 "어떻게"에 대한 "언제".</span>
+      <span class="en">Tropical piggybacks short prefills on decode workers only when TPOT slack covers their cost, serving up to 2.09× more requests within SLO.</span>
+      <span class="ko">Tropical은 decode 워커의 TPOT 여유가 비용을 감당할 때만 짧은 prefill을 얹는다. SLO를 지키며 최대 2.09배 많은 요청을 처리한다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-25">2026-06-25</time></p>
   </a>
@@ -1058,8 +1060,8 @@
       <span class="ko">CacheWise — KVCache management for serving LLM coding agents</span>
     </h2>
     <p>
-      <span class="en">A coding-agent session is a closed loop (tool-initiated turns ~20× user turns, prefixes ~21× more prefill-heavy than chat) that replays one huge, growing prefix across dozens of turns — and vLLM's FCFS+LRU thrash that cache (arXiv:2606.16824, UW + UVA). CacheWise adds two inference-node knobs: prefix-aware scheduling (dispatch the request reusing the most resident cache, ≈SJF) + predictive eviction (evict the session whose cache stays idle longest, estimating time-to-next-reuse from the tool's name+args via TF-IDF+KMeans survival curves). Result: 2–2.6× fewer evictions, up to 3.5× lower session completion at N&gt;10, negligible CPU overhead. Plain-language math (the residual-life conditional expectation), verbatim quotes + anchors, a formal-model diagram, and a code-walk of the open-sourced predictor (CATraces dataset @181c435) — the system vLLM fork stays unreleased. The per-node twin of the llm-d Agentic Serving note.</span>
-      <span class="ko">코딩 에이전트 세션은 닫힌 루프(tool 촉발 턴이 사용자 턴의 ~20×, 프리픽스는 채팅보다 ~21× prefill 편중)로, 거대하고 자라는 프리픽스 하나를 수십 턴에 재생 — vLLM의 FCFS+LRU는 이 캐시를 갈아엎는다(arXiv:2606.16824, 워싱턴대 + 버지니아대). CacheWise는 추론 노드의 두 손잡이를 더한다: prefix-aware 스케줄링(남은 캐시를 가장 많이 재사용하는 요청을 먼저, ≈SJF) + 예측 축출(캐시가 가장 오래 놀 세션을 축출하되, 다음 재사용까지 시간을 tool 이름+인자로 TF-IDF+KMeans 생존곡선으로 추정). 결과: 축출 2–2.6× 감소, N&gt;10에서 세션 완료 최대 3.5× 단축, CPU 오버헤드 미미. 수식 쉬운 설명(잔여수명 조건부 기댓값), 원문 인용+앵커, 형식 모델 다이어그램, 공개된 예측기 코드 워크(CATraces 데이터셋 @181c435) — 시스템 vLLM 포크는 미공개. llm-d Agentic Serving 노트의 노드-내 쌍둥이.</span>
+      <span class="en">CacheWise serves coding agents with prefix-aware scheduling and eviction that predicts each session's next reuse from the tool call, cutting evictions 2–2.6×.</span>
+      <span class="ko">CacheWise는 프리픽스 인지 스케줄링과, 툴 호출로 다음 재사용 시점을 예측하는 축출 정책으로 코딩 에이전트를 서빙한다. 축출이 2~2.6배 준다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-25">2026-06-25</time></p>
   </a>
@@ -1074,8 +1076,8 @@
       <span class="ko">vLLM MLA × TRT-LLM Ragged Prefill — 무엇인지·동작 원리·코드 흐름</span>
     </h2>
     <p>
-      <span class="en">MLA models (DeepSeek-V2/V3, GLM) cache the KV as a compressed latent, so their prefill needs an up-projection and has asymmetric q/k-vs-v head dims — not a drop-in for FlashAttention. <code class="inl">TrtllmRaggedPrefillBackend</code> is one of <b>four pluggable MLA-prefill backends</b>; it wraps FlashInfer's <code>trtllm_ragged_attention_deepseek</code> (a TRT-LLM-gen kernel), <b>Blackwell SM100-only</b>, running prefill over flat un-padded ("ragged") batches keyed by cu_seqlens — both the non-causal context-chunk pass and the causal new-tokens pass in one kernel. Covers what ragged/MLA-prefill mean, the mechanism, how it's selected (FlashAttention still wins auto), honest effects (the one +12.7% qps number is a small-model single-GPU self-bench; no isolated kernel bench; irrelevant to MI250), usage, and the code flow with permalinks pinned to 4bf699d. Diagrams + cited sources (vLLM PRs #26397/#32623, DeepSeek-V2, FlashInfer).</span>
-      <span class="ko">MLA 모델(DeepSeek-V2/V3, GLM)은 KV를 압축 latent로 캐시 → prefill에 up-projection이 필요하고 q/k vs v head 차원이 비대칭 → FlashAttention에 그대로 못 들어감. <code class="inl">TrtllmRaggedPrefillBackend</code>는 <b>4개 pluggable MLA-prefill 백엔드 중 하나</b>로, FlashInfer의 <code>trtllm_ragged_attention_deepseek</code>(TRT-LLM-gen 커널)을 감싸 <b>Blackwell SM100 전용</b>으로 cu_seqlens로 주소를 매기는 평평한 무패딩("ragged") 배치에서 prefill을 돌림 — 비인과 context-chunk 패스와 인과 new-tokens 패스를 커널 하나로. ragged/MLA-prefill의 의미, 메커니즘, 선택 방식(auto에선 FlashAttention이 여전히 이김), 정직한 효과(유일한 +12.7% qps는 작은 모델·단일 GPU 셀프벤치; 분리 커널 벤치 없음; MI250엔 무관), 사용법, 4bf699d에 핀된 permalink 코드 흐름. 다이어그램 + 인용 출처(vLLM PR #26397/#32623, DeepSeek-V2, FlashInfer).</span>
+      <span class="en">What vLLM's Blackwell-only TrtllmRaggedPrefillBackend for MLA models does, how it gets selected, and why its one speedup number is weak evidence.</span>
+      <span class="ko">MLA 모델용 vLLM 백엔드 TrtllmRaggedPrefillBackend가 무엇을 하고 언제 선택되는지 코드로 본다. Blackwell 전용이고 성능 근거는 약하다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time></p>
   </a>
@@ -1090,8 +1092,8 @@
       <span class="ko">병렬화 × 통신 — DP/TP/EP/CP, 통신 primitive, vLLM 코드 경로, 그 아래 하드웨어</span>
     </h2>
     <p>
-      <span class="en">The full path from theory to silicon, with <b>step-by-step animated</b> diagrams. (1) The communication primitives shown as a data grid (all-gather / reduce-scatter / all-reduce / all-to-all) + the alpha-beta cost model, ring-vs-tree, and the all-reduce = reduce-scatter + all-gather identity. (2) What DP/TP/EP/CP each split and which collective they need where: TP = 2 all-reduce/layer, EP = 2 all-to-all/MoE-layer, DP = ~0, CP (long context) = ring-p2p / all-to-all of K/V (vLLM <code>-dcp</code>). (3) vLLM main traced layer → <code>tensor_model_parallel_all_reduce</code> → pynccl → the <code>ncclAllReduce</code> ctypes binding, permalinks pinned @6607a80 (RCCL same path). (4) Which physical link the call hits (NCCL P2P→SHM→NET transport pick), max bandwidth per link, and how to check it — <code>nvidia-smi topo -m</code> / <code>rocm-smi --shownodesbw</code> / <code>ibstat</code> / nccl-tests busbw — with a live MI250 (mi250-052) topology example. Sources inline.</span>
-      <span class="ko">이론에서 실리콘까지 한 줄로, <b>단계별 애니메이션</b> 그림. (1) 통신 primitive를 데이터 격자로(all-gather / reduce-scatter / all-reduce / all-to-all) + alpha-beta 비용모델, ring vs tree, all-reduce = reduce-scatter + all-gather 항등식. (2) DP/TP/EP/CP가 무엇을 쪼개고 어디서 어떤 collective를 쓰는지: TP=레이어당 all-reduce 2회, EP=MoE 레이어당 all-to-all 2회, DP≈0, CP(롱컨텍스트)=K/V를 ring-p2p / all-to-all (vLLM <code>-dcp</code>). (3) vLLM main을 layer → <code>tensor_model_parallel_all_reduce</code> → pynccl → <code>ncclAllReduce</code> ctypes 바인딩까지 추적, permalink @6607a80 핀(RCCL 동일경로). (4) 그 호출이 어떤 물리 링크를 타는지(NCCL P2P→SHM→NET 선택), 링크별 최대 대역폭, 확인법 — <code>nvidia-smi topo -m</code> / <code>rocm-smi --shownodesbw</code> / <code>ibstat</code> / nccl-tests busbw — MI250(mi250-052) 실측 토폴로지 예시 포함. 출처 인라인.</span>
+      <span class="en">Traces parallelism from theory to silicon: the collectives DP/TP/EP/CP need, vLLM's path down to <code>ncclAllReduce</code>, and which link the call hits.</span>
+      <span class="ko">DP/TP/EP/CP에 필요한 통신 primitive부터 vLLM이 <code>ncclAllReduce</code>를 부르는 경로, 실제로 타는 하드웨어 링크까지 따라간다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-16">2026-06-16</time>
@@ -1111,8 +1113,8 @@
       <span class="ko">Neither Parallel Nor Sequential — how DiffusionGemma actually commits tokens</span>
     </h2>
     <p>
-      <span class="en">Inference-only interpretability of <code>google/diffusiongemma-26B-A4B-it</code> (arXiv:2606.14620, Transformer Lab). Hook the sampler, measure the commit order: it's neither clean parallel nor clean L→R — a partial, granularity-dependent left-to-right bias (token Kendall τ_b 0.43–0.60, well below a 0.94–0.96 block-sequential control), big parallel commit batches (13–26 tok/call), JSON ≈ order-independent, aggressive early stop (≪48 steps), confidence predicts correctness on math but not factual. The empirical companion to the diffusion-LLM note. Plain-language math (τ_b, entropy, AUROC), verbatim quotes + anchors; no code released.</span>
-      <span class="ko"><code>google/diffusiongemma-26B-A4B-it</code> 추론-전용 해석(arXiv:2606.14620, Transformer Lab). 샘플러에 훅 걸어 커밋 순서 측정: 깨끗한 병렬도 좌→우도 아님 — 부분적·해상도 의존 좌→우 편향(토큰 Kendall τ_b 0.43–0.60, block-seq 통제 0.94–0.96보다 훨씬 낮음), 큰 병렬 커밋 배치(call당 13–26토큰), JSON ≈ 순서무관, 공격적 조기종료(≪48스텝), 확신도는 수학에선 정답 예측 사실회상엔 아님. diffusion-LLM 노트의 경험적 짝. 수식 쉬운 설명(τ_b·엔트로피·AUROC), 원문 인용+앵커; 코드 미공개.</span>
+      <span class="en">Hooking DiffusionGemma's sampler shows it commits tokens neither in parallel nor left to right, but in big batches with a partial left-to-right bias.</span>
+      <span class="ko">DiffusionGemma 샘플러를 후킹해 토큰 확정 순서를 재 보니 완전 병렬도 순차도 아니다. 큰 묶음으로 확정하며 왼쪽 우선 경향이 일부 있다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-25">2026-06-25</time></p>
   </a>
@@ -1127,8 +1129,8 @@
       <span class="ko">Parallel-Synthesis — synthesizing directly from parallel workers' KV caches</span>
     </h2>
     <p>
-      <span class="en">Agent workflows fan out into parallel branches then merge by concatenating branch text — discarding structure and re-prefilling done work (arXiv:2606.14672, Georgia Tech &amp; Meta). Parallel-Synthesis instead lets the synthesizer consume the workers' KV caches directly, via RoPE positional re-encoding + a learnable cache mapper + a synthesizer LoRA trained to mimic the text route. On 9 datasets (Qwen3-14B): matches/beats text synthesis on 7, beats voting on 8, and cuts TTFT 2.5×–11×. The agent-side mirror of prefix-cache reuse. Plain-language math, verbatim quotes + anchors; no code released.</span>
-      <span class="ko">에이전트 워크플로우는 병렬 브랜치로 펼쳐졌다 텍스트를 이어붙여 합침 — 구조 버리고 한 일을 re-prefill(arXiv:2606.14672, Georgia Tech &amp; Meta). Parallel-Synthesis는 대신 합성기가 워커 KV cache를 직접 소비 — RoPE 위치 재인코딩 + 학습형 cache mapper + 텍스트 경로 모사 합성기 LoRA. 9개 데이터셋(Qwen3-14B): 7개에서 텍스트 합성 동등/상회, 8개에서 투표 상회, TTFT 2.5×–11× 단축. prefix-cache 재사용의 에이전트측 거울. 수식 쉬운 설명, 원문 인용+앵커; 코드 미공개.</span>
+      <span class="en">Parallel-Synthesis merges parallel agent branches straight from their KV caches instead of concatenating text, cutting TTFT 2.5×–11×.</span>
+      <span class="ko">Parallel-Synthesis는 병렬 에이전트 브랜치를 텍스트로 이어 붙이지 않고 KV 캐시에서 바로 합친다. TTFT가 2.5~11배 준다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-06-25">2026-06-25</time></p>
   </a>
@@ -1143,8 +1145,8 @@
       <span class="ko">llm-d Agentic Serving — 코딩 에이전트 well-lit path는 일반 LLM 서빙과 뭐가 다른가</span>
     </h2>
     <p>
-      <span class="en">Coding agents resend a ~160K-token context ~540× with 15 s idle gaps, so the bottleneck is cache-hit rate, not FLOPs. llm-d's answer is the "Agentic Serving" path — a composition of prefix-cache-aware routing (EPP scorer weight 3 vs load 2/2; approximate LRU → precise vLLM KV-events over ZMQ) + KV offloading + P/D. Covers what a well-lit path is, why agentic ≠ chat, the exact tuned knobs, config/code flow with permalinks (llm-d / inference-scheduler / kv-cache-manager), deploy steps, and the TPU-v7 benchmark (TTFT −92.4%). Naming corrected: it's "Agentic Serving", coding agents are its reference workload.</span>
-      <span class="ko">코딩 에이전트는 ~16만 토큰 컨텍스트를 15초 유휴를 끼고 ~540회 재전송 → 병목은 FLOPs가 아니라 캐시 적중률. llm-d의 답은 "Agentic Serving" path — prefix-cache-aware 라우팅(EPP scorer weight 3 vs 부하 2/2; approximate LRU → precise vLLM KV-events ZMQ) + KV offload + P/D의 조합. well-lit path란, agentic ≠ chat인 이유, 정확한 튜닝 knob, permalink 코드/설정 흐름(llm-d / inference-scheduler / kv-cache-manager), 배포 단계, TPU-v7 벤치(TTFT −92.4%). 이름 정정: "Agentic Serving"이고 코딩 에이전트는 레퍼런스 워크로드.</span>
+      <span class="en">Why coding agents make cache-hit rate the bottleneck, and how llm-d's Agentic Serving path combines prefix-aware routing, KV offload and P/D.</span>
+      <span class="ko">코딩 에이전트에서는 FLOPs보다 캐시 히트율이 병목이다. llm-d Agentic Serving 경로가 프리픽스 인지 라우팅, KV 오프로드, P/D를 어떻게 묶는지 본다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
@@ -1159,8 +1161,8 @@
       <span class="ko">vLLM의 Diffusion LLM — 트랜스포머와 뭐가 다른가, forward 횟수, KV cache, 코드 흐름</span>
     </h2>
     <p>
-      <span class="en">A diffusion LLM un-masks many tokens in parallel over a few denoising steps instead of one-at-a-time left-to-right. Same Transformer backbone — the differences are bidirectional attention + a masked-denoising objective (Dream is even AR-initialized from Qwen). Covers: is the architecture the same (yes), how many forwards make N tokens (T denoising steps, not N), why bidirectional attention breaks the KV cache and how block diffusion fixes it, and what vLLM ships today — DiffusionGemma, which reuses the speculative-decoding path and runs the backbone as a causal KV-writing encoder + a bidirectional read-only decoder. Code flow with permalinks @ f4359a7, diagrams, cited sources (LLaDA, Dream, BD3-LM, Fast-dLLM).</span>
-      <span class="ko">Diffusion LLM은 좌→우 한 토큰씩이 아니라 몇 번의 denoising 스텝에 걸쳐 여러 토큰을 병렬로 un-mask한다. 백본은 같은 트랜스포머 — 차이는 양방향 어텐션 + 마스크 denoising 목적함수(Dream은 AR Qwen에서 초기화). 다룸: 아키텍처 동일한가(예), N토큰에 forward 몇 번인가(N이 아니라 T denoising 스텝), 왜 양방향 어텐션이 KV cache를 깨고 block diffusion이 어떻게 해결하는가, vLLM이 지원하는 것 — speculative-decoding 경로를 재사용하고 백본을 causal KV-write encoder + bidirectional read-only decoder로 돌리는 DiffusionGemma. permalink @ f4359a7 코드 흐름, 다이어그램, 인용 출처(LLaDA, Dream, BD3-LM, Fast-dLLM).</span>
+      <span class="en">How diffusion LLMs differ from autoregressive ones (T denoising forwards, not N), why bidirectional attention breaks the KV cache, and how vLLM runs DiffusionGemma.</span>
+      <span class="ko">Diffusion LLM이 자기회귀 모델과 어떻게 다른지, 양방향 어텐션이 왜 KV 캐시를 깨는지 설명한다. vLLM이 DiffusionGemma를 돌리는 코드 흐름도 따라간다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
@@ -1175,8 +1177,8 @@
       <span class="ko">vLLM Dual Batch Overlap (DBO) — 이론·효과·코드 흐름·구현 상태</span>
     </h2>
     <p>
-      <span class="en">DBO splits a batch into two micro-batches and overlaps one's MoE all-to-all communication with the other's compute — hiding comm behind compute in DP+EP MoE serving (it does <b>not</b> touch TP all-reduce). Covers the theory (why all-to-all dominates at scale, DeepSeek's ≈1:1 comp:comm), the honest pros/cons (helps multi-node high-EP; one single-node measurement <i>regressed</i> 38→49 ms; the 1.5k→2.2k tok/s figure is combined, not DBO-alone), how to enable it, the end-to-end code flow with vLLM permalinks pinned to commit f4359a7, and implementation status. Diagrams + cited sources (vLLM docs/PRs, DeepSeek-V3, NanoFlow, TokenWeave, Ladder-residual).</span>
-      <span class="ko">DBO는 배치를 두 마이크로배치로 쪼개 한쪽의 MoE all-to-all 통신을 다른 쪽 연산과 겹쳐, DP+EP MoE 서빙에서 통신을 연산 뒤에 숨긴다(TP all-reduce는 <b>건드리지 않음</b>). 이론(스케일에서 all-to-all이 왜 지배적인가, DeepSeek ≈1:1 연산:통신), 정직한 장단점(멀티노드 고-EP에 이득; 단일노드 측정 하나는 38→49ms <i>회귀</i>; 1.5k→2.2k tok/s는 합산이지 DBO 단독 아님), 켜는 법, 커밋 f4359a7에 핀된 vLLM permalink로 짚는 end-to-end 코드 흐름, 구현 상태. 다이어그램 + 인용 출처(vLLM docs/PR, DeepSeek-V3, NanoFlow, TokenWeave, Ladder-residual).</span>
+      <span class="en">vLLM's Dual Batch Overlap hides MoE all-to-all behind compute using two micro-batches, which helps multi-node EP but regressed in one single-node test.</span>
+      <span class="ko">vLLM DBO는 배치를 둘로 나눠 MoE all-to-all 통신을 연산 뒤에 숨긴다. 멀티노드 EP에는 도움이 되지만 단일 노드 측정에서는 오히려 느려졌다.</span>
     </p>
     <p class="post-meta"><time datetime="2026-06-16">2026-06-16</time></p>
   </a>
@@ -1191,8 +1193,8 @@
       <span class="ko">Do Transformers Need Three Projections?</span>
     </h2>
     <p>
-      <span class="en">A systematic study of QKV projection-sharing (BrainChip, ICML 2026). Tie Key=Value (Q-K=V) → cache only K → 50% KV-cache cut for +3.1% perplexity (−0.41% downstream), and it stacks on GQA/MQA → up to 96.9% with Q-MQA. Why K=V works (K,V already redundant, cos 0.73) but Q=K breaks causal attention. Problem, method, results, takeaways — verbatim quotes + source anchors.</span>
-      <span class="ko">QKV projection 공유의 체계적 연구(BrainChip, ICML 2026). Key=Value 묶기(Q-K=V) → K만 캐시 → KV-cache 50% 절감(perplexity +3.1%, 다운스트림 −0.41%), GQA/MQA와 겹쳐 Q-MQA로 최대 96.9%. K=V는 왜 되고(K·V 이미 중복, cos 0.73) Q=K는 왜 인과 어텐션을 깨는지. 문제·방법·결과·시사점 — 원문 인용 + 출처 앵커.</span>
+      <span class="en">Tying the Key and Value projections lets a model cache only K, halving the KV cache at a small perplexity cost, and it stacks with GQA/MQA.</span>
+      <span class="ko">Key와 Value 프로젝션을 묶으면 K만 캐시하면 되어 KV 캐시가 절반으로 준다. 성능 손실은 작고 GQA/MQA와 함께 쓸 수 있다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-14">2026-06-14</time>
@@ -1212,8 +1214,8 @@
       <span class="ko">vLLM KV-cache 커넥터 — 전송 방향 지도</span>
     </h2>
     <p>
-      <span class="en">Every KV connector in vLLM's current main branch, classified by transfer pattern — push (prefill→decode), pull (decode→prefill), bidirectional (kv_both), or store-mediated / offload — by reading the source, with a GitHub permalink per row. Pull: Nixl(Pull); Push: NixlPush/Mooncake/MoRIIO; bidirectional: Mooncake. P2pNccl &amp; SharedStorage are gone from main.</span>
-      <span class="ko">vLLM 현재 main 브랜치의 모든 KV 커넥터를 전송 패턴별로 분류 — push(prefill→decode)·pull(decode→prefill)·양방향(kv_both)·스토어경유/오프로드 — 소스를 직접 읽고 행마다 GitHub permalink. Pull: Nixl(Pull); Push: NixlPush/Mooncake/MoRIIO; 양방향: Mooncake. P2pNccl·SharedStorage는 main에서 제거됨.</span>
+      <span class="en">A map of every KV connector in vLLM main by transfer direction (push, pull, bidirectional or store-mediated), with a source permalink per row.</span>
+      <span class="ko">vLLM main의 KV 커넥터 전부를 push, pull, 양방향, 스토어 경유로 나눈 지도다. 행마다 소스 링크가 붙어 있다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-13">2026-06-13</time>
@@ -1233,8 +1235,8 @@
       <span class="ko">MiniMax M3 — 네이티브 멀티모달·1M 컨텍스트 코딩/에이전트 모델 (MSA)</span>
     </h2>
     <p>
-      <span class="en"><b>Modality: text + image + video + computer-use (native).</b> MiniMax's "first open-weight model" to combine frontier coding/agentic ability, a 1M context, and native multimodality — a <b>~428B/23B MoE</b>. The engineering core is MSA (MiniMax Sparse Attention) — ~1/20 per-token compute at 1M, &gt;9× prefill / &gt;15× decode — explained with a diagram. Paid API + open weights (license <code class="inl">minimax-community</code>). Weights on HF + report arXiv:2606.13392 now out.</span>
-      <span class="ko"><b>모달리티: 텍스트 + 이미지 + 비디오 + 컴퓨터 사용 (네이티브).</b> 프런티어 코딩/에이전트 + 1M 컨텍스트 + 네이티브 멀티모달을 합친 MiniMax의 "최초 오픈웨이트 모델" — <b>~428B/23B MoE</b>. 핵심은 MSA(희소 어텐션) — 1M에서 토큰당 ~1/20, 프리필 &gt;9× / 디코드 &gt;15× — 그림으로 설명. 유료 API + 오픈 가중치(라이선스 <code class="inl">minimax-community</code>). 가중치 HF + 리포트 arXiv:2606.13392 공개됨.</span>
+      <span class="en">MiniMax M3, a natively multimodal open-weight MoE for coding and agents, and how MiniMax Sparse Attention cuts per-token compute at 1M context.</span>
+      <span class="ko">네이티브 멀티모달 오픈 웨이트 MoE인 MiniMax M3를 정리한다. MiniMax Sparse Attention은 1M 컨텍스트에서 토큰당 연산을 약 1/20로 줄인다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-15">2026-06-15</time>
@@ -1251,8 +1253,8 @@
       <span class="ko">Nemotron 3 Ultra — NVIDIA의 550B-A55B 하이브리드 Mamba-MoE</span>
     </h2>
     <p>
-      <span class="en">NVIDIA's open 550B-total / 55B-active model with a hybrid Mamba-Attention backbone, built for throughput-per-accuracy on long-running agents (~6× the inference throughput of peers at on-par accuracy, 1M context). Significance, positioning, architecture, the NVFP4 + MOPD training, inference points, scores, and the world's reaction — sourced from the tech report, GitHub, HF cards, and Artificial Analysis.</span>
-      <span class="ko">NVIDIA의 오픈 550B·활성 55B 모델. 하이브리드 Mamba-Attention 백본으로 장시간 에이전트의 정확도 대비 처리량을 노림(동급 대비 추론 처리량 ~6배·정확도 동등·1M 컨텍스트). 의미·위치·구조·NVFP4+MOPD 학습·추론 포인트·점수·세상의 반응 — 테크 리포트·GitHub·HF 카드·Artificial Analysis 출처.</span>
+      <span class="en">NVIDIA's open 550B-A55B hybrid Mamba-MoE Nemotron 3 Ultra, built for throughput per accuracy on long-running agents: architecture, training, scores and reception.</span>
+      <span class="ko">NVIDIA의 오픈 550B-A55B 하이브리드 Mamba-MoE Nemotron 3 Ultra를 정리한다. 장기 에이전트에서 정확도 대비 처리량을 노린 구조, 학습, 점수를 다룬다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-12">2026-06-12</time>
@@ -1272,8 +1274,8 @@
       <span class="ko">MiMo-V2.5-Pro Ultra Speed — 1T 모델을 1000 tok/s로</span>
     </h2>
     <p>
-      <span class="en">Xiaomi MiMo's 1.02T / 42B-active MoE made to decode at 1000+ tok/s on one 8×B200 node — an inference-systems story: FP4 (MXFP4) experts + DFlash block-parallel speculation (Z-Lab) + the TileRT runtime (tile-ai). Base config, the three speed levers with correct provenance, acceptance lengths, published numbers, and the reception — sourced from the blog, HF cards, the DFlash paper, and press.</span>
-      <span class="ko">샤오미 MiMo의 1.02T·활성 42B MoE를 8×B200 노드 한 대에서 1000+ tok/s로 디코드 — 추론 시스템 이야기: FP4(MXFP4) 전문가 + DFlash 블록 병렬 추측(Z-Lab) + TileRT 런타임(tile-ai). 베이스 구성, 세 속도 지렛대와 정확한 출처, 수용 길이, 공개 수치, 세상의 반응 — 블로그·HF 카드·DFlash 논문·언론 출처.</span>
+      <span class="en">How Xiaomi decodes its 1T MiMo-V2.5-Pro at 1000+ tok/s on one 8×B200 node: FP4 experts, DFlash speculation and the TileRT runtime.</span>
+      <span class="ko">Xiaomi가 1T 모델 MiMo-V2.5-Pro를 B200 노드 하나에서 초당 1000토큰 넘게 디코딩한 방법이다. FP4 expert, DFlash, TileRT가 핵심이다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-12">2026-06-12</time>
@@ -1293,8 +1295,8 @@
       <span class="ko">Software Aging in GPU-Based LLM Serving</span>
     </h2>
     <p>
-      <span class="en">Cotroneo &amp; Cukic's 216-hour campaign: vLLM standalone, Triton-wrapped vLLM, and a naive PyTorch server all develop statistically significant memory leaks — invisible in latency/throughput, spanning two orders of magnitude, worst when Triton wraps the legacy V0 engine. Problem, method, results, takeaways, with verbatim quotes per claim.</span>
-      <span class="ko">Cotroneo &amp; Cukic의 216시간 캠페인: vLLM 단독, Triton 래핑 vLLM, 순정 PyTorch 서버 전부에서 통계적으로 유의한 메모리 누수 확인 — 레이턴시/스루풋에는 안 보이고, 배포 구성에 따라 두 자릿수 배율로 갈리며, Triton+V0 조합이 최악. 문제·방법·결과·시사점을 원문 인용과 함께.</span>
+      <span class="en">A 216-hour test finds statistically significant memory leaks in vLLM, Triton-wrapped vLLM and a plain PyTorch server, invisible in latency and throughput.</span>
+      <span class="ko">216시간 동안 돌려 보니 vLLM, Triton 래핑 vLLM, 순정 PyTorch 서버 모두에서 메모리 누수가 나왔다. 레이턴시나 처리량 지표로는 보이지 않는다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-12">2026-06-12</time>
@@ -1314,8 +1316,8 @@
       <span class="ko">Frontier — 종합 LLM 추론 시뮬레이터</span>
     </h2>
     <p>
-      <span class="en">A discrete-event simulator built for disaggregated serving (PDD / AFD), runtime opts (CUDA Graphs, speculative), and stateful workloads (reasoning, agents, RL rollouts). 3-plane architecture, ±4% throughput vs vLLM on 16-H800, scalable to 1K+ GPUs on CPU. Four worked use cases.</span>
-      <span class="ko">분리형 서빙(PDD / AFD), 런타임 최적화(CUDA Graphs · speculative), 상태 보존 워크로드(reasoning · 에이전트 · RL rollout)를 위한 이산 사건 시뮬레이터. 3-plane 구조, 16× H800에서 vLLM 대비 ±4% throughput, CPU에서 GPU 1K+까지 확장. 4가지 use case 정리.</span>
+      <span class="en">Frontier is a discrete-event simulator for disaggregated serving, runtime optimizations and stateful workloads, within ±4% of vLLM throughput.</span>
+      <span class="ko">Frontier는 분리형 서빙, 런타임 최적화, 상태 있는 워크로드까지 다루는 이산 사건 시뮬레이터다. vLLM 대비 처리량 오차는 ±4%다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-10">2026-06-10</time>
@@ -1332,8 +1334,8 @@
       <span class="ko">LLMServingSim 2.0 — 논문 정리와 코드 분석</span>
     </h2>
     <p>
-      <span class="en">A unified simulator for heterogeneous + disaggregated LLM serving (KAIST CASYS). Problem definition, methodology in detail (Router + MSG + System Simulator + profile-based HW model), validation numbers, and a code-level walk of the GitHub repo mapping paper ↔ code.</span>
-      <span class="ko">이종 가속기 + 분리형 서빙을 함께 모델링하는 시뮬레이터(KAIST CASYS). 문제 정의, 방법론(Router + MSG + System Simulator + 프로파일 기반 HW 모델), 검증 수치, 그리고 GitHub 코드와 논문을 1:1 매핑한 코드 분석.</span>
+      <span class="en">LLMServingSim 2.0, KAIST's simulator for heterogeneous and disaggregated serving: its method, validation numbers and a code walk mapping paper to repo.</span>
+      <span class="ko">이기종, 분리형 LLM 서빙을 함께 다루는 KAIST 시뮬레이터 LLMServingSim 2.0의 방법과 검증 결과를 정리하고 논문과 코드를 대응시킨다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-10">2026-06-10</time>
@@ -1347,8 +1349,8 @@
     </span>
     <h2>KV cache events — <span class="en">vLLM → Dynamo</span><span class="ko">vLLM → Dynamo</span></h2>
     <p>
-      <span class="en">The messages that make KV-aware routing possible: the BlockStored/Removed/Cleared event model, when &amp; where vLLM fires them (block_pool → scheduler → ZMQ), and how Dynamo subscribes, decodes, and builds the radix tree its router scores against — real source with permalinks.</span>
-      <span class="ko">KV 인지 라우팅을 가능케 하는 메시지: BlockStored/Removed/Cleared 이벤트 모델, vLLM이 언제·어디서 발생시키는지(block_pool → scheduler → ZMQ), 그리고 Dynamo가 구독·디코드해 라우터가 점수 매기는 radix 트리를 만드는 과정 — 실제 소스와 permalink.</span>
+      <span class="en">The KV cache events behind KV-aware routing: when vLLM fires BlockStored/Removed/Cleared and how Dynamo turns them into the radix tree its router scores.</span>
+      <span class="ko">KV 인지 라우팅을 가능하게 하는 KV 캐시 이벤트를 본다. vLLM이 언제 이벤트를 내보내고 Dynamo가 이를 받아 라우터용 radix tree를 어떻게 만드는지 소스로 따라간다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-09">2026-06-09</time>
@@ -1362,8 +1364,8 @@
     </span>
     <h2>NVIDIA Dynamo — <span class="en">overview &amp; code walk</span><span class="ko">개요 &amp; 코드 흐름</span></h2>
     <p>
-      <span class="en">What the ai-dynamo/dynamo repo is and why, running two vLLM workers behind it, the lib/ (Rust) + components/ (Python) layout, the full token-in → token-out path traced through real source (commit bae0051), and pros/cons vs a plain Docker vLLM.</span>
-      <span class="ko">ai-dynamo/dynamo 레포가 무엇이고 왜 쓰는지, vLLM 워커 2대를 띄우는 법, lib/(Rust)+components/(Python) 구조, 실제 소스(커밋 bae0051)로 따라가는 token-in → token-out 전체 경로, 그리고 그냥 Docker vLLM 대비 장단점.</span>
+      <span class="en">What NVIDIA Dynamo is, how to run two vLLM workers behind it, and its token-in to token-out path through the source, compared with plain Docker vLLM.</span>
+      <span class="ko">NVIDIA Dynamo가 무엇인지, vLLM 워커 두 개를 붙여 돌리는 법, 토큰 입력부터 출력까지의 경로를 소스로 따라간다. 순정 vLLM 대비 장단점도 본다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-09">2026-06-09</time>
@@ -1384,8 +1386,8 @@
       <span class="ko">Prefix Cache-aware 라우팅 — 문제와 해결</span>
     </h2>
     <p>
-      <span class="en">Logistic scoring, hardware failure, prefix_map logging pitfall (ledger ① / warehouse ②), KV cache leak (LRU) and the vLLM patch, conc=128 result interpretation — diagrams and code from a customer POC debugging session.</span>
-      <span class="ko">로지스틱 스코어링, 하드웨어 장애, prefix_map 로그 함정(장부①/창고②), KV cache leak(LRU)과 vLLM 패치, conc=128 결과 해석까지 — 그림·코드로 정리한 POC 디버깅 노트.</span>
+      <span class="en">Lessons from debugging prefix cache-aware routing in a customer POC: scoring, a prefix_map logging pitfall, an LRU KV cache leak and its vLLM patch.</span>
+      <span class="ko">고객 POC에서 prefix cache-aware 라우팅을 디버깅하며 얻은 교훈이다. 로깅 함정, LRU KV 캐시 누수와 vLLM 패치를 다룬다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-08">2026-06-08</time>
@@ -1406,8 +1408,8 @@
     </span>
     <h2>Heimdall vs NVIDIA Dynamo</h2>
     <p>
-      <span class="en">End-to-end token-in → token-out flow, mirrored prefill↔decode KV transfer animation, step-by-step walk-through with terminology notes, summary of differences, and inference-side pros/cons + speed comparison.</span>
-      <span class="ko">token-in → token-out 전체 흐름, prefill↔decode KV 전송(거울상) 애니메이션 도식, 단계 상세·용어 풀이, 차이 요약, 추론 관점 장단점·속도 비교.</span>
+      <span class="en">Compares Heimdall and NVIDIA Dynamo end to end, from token-in to token-out and prefill-to-decode KV transfer, with inference-side pros, cons and speed.</span>
+      <span class="ko">Heimdall과 NVIDIA Dynamo를 토큰 입력부터 출력, prefill→decode KV 전송까지 나란히 비교하고 추론 측 장단점과 속도를 본다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-05">2026-06-05</time>
@@ -1424,8 +1426,8 @@
     </span>
     <h2>vLLM v0.22.0 PD Disaggregation (NixlConnector)</h2>
     <p>
-      <span class="en">Code path of vLLM's prefill-decode disaggregated serving — KV transfer flow via NixlConnector.</span>
-      <span class="ko">vLLM의 prefill-decode 분리 서빙 코드 흐름 — NixlConnector 기반 KV 전송 경로 정리.</span>
+      <span class="en">Follows the code path of vLLM v0.22.0 prefill-decode disaggregation and how KV moves through NixlConnector.</span>
+      <span class="ko">vLLM v0.22.0의 prefill-decode 분리 서빙 코드 경로와 NixlConnector로 KV가 옮겨지는 흐름을 따라간다.</span>
     </p>
     <p class="post-meta">
       <time datetime="2026-06-05">2026-06-05</time>
