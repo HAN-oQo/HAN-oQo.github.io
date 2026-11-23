@@ -253,6 +253,8 @@ def check_postmeta(tree, paths):
 
 
 POLISH_TAG = "[polish]"
+# 콘텐츠가 아니라 data/*.json 으로 채워지는 템플릿 페이지 (post-meta 없음)
+TEMPLATE_PAGES = {"curriculum/module.html"}
 
 
 def polish_only(base, head, path):
@@ -291,6 +293,8 @@ def bump_check(base, head, today=None):
             continue  # 신규/삭제/무변경
         if is_staticrypt(h):
             continue
+        if p in TEMPLATE_PAGES:
+            continue  # 데이터(JSON)로 렌더링되는 템플릿 — 자체 날짜 없음
         if polish_only(base, head, p):
             continue  # 윤문 전용 커밋([polish])만 이 파일을 바꿨으면 갱신일 면제
         mh = POSTMETA_BLOCK.search(h)

@@ -87,7 +87,7 @@
   /* ---------- grading prompt (Claude) ---------- */
   function gradePrompt(mod, q, answer) {
     return [
-      "[추론 도장 채점 요청] 모듈 " + mod.id.toUpperCase() + " · " + mod.title,
+      "[Inference Onboarding 채점 요청] 모듈 " + mod.id.toUpperCase() + " · " + mod.title,
       "문항 ID: " + q.id,
       "문항: " + q.prompt.replace(/<[^>]+>/g, ""),
       "채점 기준(rubric):", (q.rubric || []).map(function (r, i) { return "  " + (i + 1) + ". " + r; }).join("\n"),
@@ -228,7 +228,7 @@
   /* ---------- module page ---------- */
   function renderModule(root, mod, index) {
     root.innerHTML = "";
-    var crumbs = el("p", { class: "crumb" }, '<a href="../">Home</a> · <a href="./">Inference Dojo</a> · ' + mod.id.toUpperCase());
+    var crumbs = el("p", { class: "crumb" }, '<a href="../">Home</a> · <a href="./">Inference Onboarding</a> · ' + mod.id.toUpperCase());
     root.appendChild(crumbs);
     root.appendChild(el("h1", null, mod.id.toUpperCase() + ". " + mod.title));
     root.appendChild(el("p", { class: "sub" }, "W" + mod.week + " · 약 " + mod.hours + "시간 · " + (mod.summary || "")));

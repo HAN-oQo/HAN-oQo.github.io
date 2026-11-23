@@ -107,10 +107,12 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 각 섹션은 자체 `index.html`(카드 목록)을 갖고 루트 `index.html` 에서 링크된다.
 새 섹션을 추가하면 `check_theme.py` 의 섹션 튜플 3곳에도 추가한다.
 
-### curriculum/ — 데이터 구동 학습 섹션 (한국어 전용)
+### curriculum/ — Inference Onboarding (Basic·Advanced, 한국어 전용)
+
+- 화면 이름은 "Inference Onboarding". Basic = `study/llm-inference-onboarding.html`(게이트 페이지) 링크, Advanced = 이 섹션의 13주 트랙.
 
 - 페이지 타입 B(한국어 전용) 골격. `assets/i18n.js` 대신 `assets/ask.js` 를 직접 로드한다
-  (i18n 토글 없음, Ask AI 위젯은 유지). 섹션 전용 스타일/로직은 `curriculum/study.css`·`study.js`.
+  (i18n 토글 없음, "Claude에게 질문" 버튼은 유지). 섹션 전용 스타일/로직은 `curriculum/study.css`·`study.js`.
 - 모듈 콘텐츠·퀴즈는 `curriculum/data/*.json` 에 둔다 — 문항 추가는 JSON 만 고치면 되고
   HTML(`module.html?m=…`)은 건드리지 않는다. 스키마와 튜터 진행 규칙은
   `.claude/skills/study-session/SKILL.md`.
