@@ -19,8 +19,7 @@ commit-pinned code links) and to cite them in the answer. No API key, no backend
 it uses the reader's own claude.ai account. Implemented in `assets/ask.js`, loaded
 automatically by `i18n.js` (and injected by CI via `tools/inject_ask_widget.py`).
 
-(The earlier BYO-key multi-provider widget / Claude bot is described in
-`logs/ai-widget-claude-bot-setup.html`; it was replaced on 2026-11-23.)
+(It replaced the earlier BYO-key multi-provider widget / Claude bot on 2026-11-23.)
 
 ## Local preview
 
