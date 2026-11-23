@@ -11,7 +11,7 @@
 (function () {
   "use strict";
   var KEY = "curriculum-state-v1";
-  var EMPTY = function () { return { answers: {}, checks: {}, feedback: {}, notes: {} }; };
+  var EMPTY = function () { return { answers: {}, checks: {}, feedback: {}, notes: {}, predictions: [] }; };
 
   var Store = {
     mode: "local", state: EMPTY(), serverFeedback: {},
@@ -23,7 +23,7 @@
         return r.json();
       }).then(function (j) {
         self.mode = "server";
-        if (j.state && Object.keys(j.state.answers || {}).length + Object.keys(j.state.checks || {}).length > 0) {
+        if (j.state && Object.keys(j.state.answers || {}).length + Object.keys(j.state.checks || {}).length + (j.state.predictions || []).length > 0) {
           self.state = Object.assign(EMPTY(), j.state);
         }
         self.serverFeedback = j.feedback || {};
@@ -302,6 +302,7 @@
         (T.nogpu ? '<div class="call"><b>(b) GPU 없는 판:</b> ' + T.nogpu + "</div>" : "");
       root.appendChild(tb);
       if (T.done) { root.appendChild(el("div", { class: "small" }, "<b>완료 조건</b>")); root.appendChild(checklist(mod.id + ":toy", T.done, paintProg)); }
+      root.appendChild(el("div", { class: "call" }, "측정하기 <b>전에</b> 예측부터 → <a href='predictions.html?ctx=" + mod.id + "'>예측 장부에 기록</a> (변경, 예상 수치, 확신도, 근거)"));
       if (T.hints) {
         root.appendChild(el("div", { class: "small", style: "margin-top:10px" }, "<b>막혔을 때 — 힌트는 순서대로 하나씩 여세요</b>"));
         T.hints.forEach(function (h, i) { root.appendChild(el("details", { class: "hint" }, "<summary>힌트 " + (i + 1) + "</summary>" + h)); });
@@ -402,6 +403,7 @@
 
   /* ---------- boot ---------- */
   window.Curriculum = {
+    Store: Store, el: el, txt: txt, copy: copy,
     bootModule: function () {
       var root = document.getElementById("app");
       var id = qs("m") || "m1";

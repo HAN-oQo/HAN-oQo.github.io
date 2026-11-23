@@ -47,6 +47,17 @@ description: Run a tutoring session for the curriculum/ section — start the lo
 - 웹에서 푼 것과 섞이지 않도록, 채팅으로 푼 결과도 `state.json` 의 `answers` 에 기록할지 물어보지 말고
   기록한다(같은 qid 형식, `ok` 는 정오).
 
+## 4-1. 예측 장부 (state.predictions)
+
+`curriculum/predictions.html` 이 `state.json` 의 `predictions` 배열에 기록한다. 항목:
+`{id, created, ctx, change, metric, unit, baseline, predicted, tol, conf, model, reason, status: open|closed,
+actual, closed, hit, errCat, lesson}`.
+- 세션 시작 시: 열린 예측 수와 오래된(14일+) 열린 예측을 알려준다.
+- 토이·랩을 시작할 때: 측정 전에 예측을 쓰도록 유도하고, 사용자가 채팅으로 말하면 대신 기록해도 된다.
+  근거가 계산이 아니라 감이면 계산식을 요구한다.
+- "분기 리뷰" 요청 시: 닫힌 예측으로 확신도 구간별 적중률·Brier·원인 분포를 계산하고, 가장 자주 틀린
+  모델 유형 → 다음 분기 공부 주제 2개 + 1차 자료를 제시한다. 과신이면 과신이라고 말한다.
+
 ## 5. 출처 규칙 (예외 없음)
 
 - 모든 기술적 주장에 출처: arXiv ID+절, 공식 문서, **커밋 고정 퍼머링크**(파일·라인·심볼).
