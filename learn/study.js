@@ -110,12 +110,30 @@
     var exp = el("div", { class: "exp" }); exp.style.display = "none";
     var prev = Store.state.answers[q.id];
 
+    /* 제출 직후: 정오 판정 + 정답 + 해설을 한 패널에 */
+    function fmtNum(v) { return typeof v === "number" ? v.toLocaleString("ko-KR", { maximumFractionDigits: 4 }) : String(v); }
     function showExplain() {
+      var a = Store.state.answers[q.id];
+      exp.innerHTML = "";
+      if (a) {
+        var verdict = el("div", { class: "call " + (a.ok ? "ok" : "bad") + " verdict" });
+        if (q.type === "mcq") {
+          verdict.innerHTML = a.ok
+            ? "<b>정답입니다.</b> " + q.options[q.answer]
+            : "<b>오답입니다.</b> 정답은 <b>" + q.options[q.answer] + "</b> 입니다.";
+        } else {
+          var unit = q.unit ? " " + q.unit : "";
+          verdict.innerHTML = (a.ok ? "<b>정답입니다.</b> " : "<b>오답입니다.</b> ") +
+            "정답은 <b>" + fmtNum(q.answer) + unit + "</b> 이고, 입력한 값은 " + fmtNum(a.v) + unit + " 입니다.";
+        }
+        exp.appendChild(verdict);
+      }
       var html = "";
-      if (q.explain) html += q.explain;
+      if (q.explain) html += '<div class="exp-h">해설</div><div>' + q.explain + "</div>";
       if (q.pitfall) html += '<div class="call warn"><b>이걸 틀리면 실무에서:</b> ' + q.pitfall + "</div>";
       if (q.refs) html += "<div class=\"small\"><b>다시 볼 자료</b></div>" + resList(q.refs);
-      exp.innerHTML = html; exp.style.display = html ? "block" : "none";
+      exp.insertAdjacentHTML("beforeend", html);
+      exp.style.display = exp.childNodes.length ? "block" : "none";
     }
     function paintStatus() {
       var s = qStatus(q);
@@ -165,7 +183,7 @@
       box.appendChild(ta);
       var save = el("button", { class: "b pri", type: "button" }, "저장");
       var cp = el("button", { class: "b", type: "button" }, "채점 프롬프트 복사");
-      var showModel = el("button", { class: "b", type: "button" }, "답안 뼈대 보기");
+      var showModel = el("button", { class: "b", type: "button" }, "모범 답안·해설 보기");
       box.appendChild(save); box.appendChild(cp); box.appendChild(showModel);
       var fbBox = el("div", { class: "exp" }); fbBox.style.display = "none"; box.appendChild(fbBox);
       var model = el("div", { class: "exp" }); model.style.display = "none"; box.appendChild(model);
@@ -186,17 +204,26 @@
         if (old && old.v !== ta.value) delete Store.state.feedback[q.id];
         Store.state.answers[q.id] = { v: ta.value, ok: null, ts: Date.now() }; Store.save();
         paintStatus(); onChange && onChange();
+        openModel();
         save.textContent = "저장됨 ✓"; setTimeout(function () { save.textContent = "저장"; }, 1400);
       };
       cp.onclick = function () { copy(gradePrompt(mod, q, ta.value || "(미작성)")).then(function () { cp.textContent = "복사됨 ✓"; setTimeout(function () { cp.textContent = "채점 프롬프트 복사"; }, 1400); }); };
-      showModel.onclick = function () {
-        if (model.style.display === "block") { model.style.display = "none"; return; }
-        var h = "";
-        if (q.rubric) h += "<b>채점 기준</b><ul>" + q.rubric.map(function (r) { return "<li>" + r + "</li>"; }).join("") + "</ul>";
-        if (q.model) h += "<b>답안 뼈대</b><div>" + q.model + "</div>";
-        if (q.refs) h += resList(q.refs);
+      /* 서술형은 자동 채점이 없으므로, 저장하면 모범 답안과 해설을 바로 펼쳐 스스로 대조하게 한다 */
+      var openModel = function () {
+        var h = '<div class="call">서술형은 자동 채점되지 않습니다. 아래 모범 답안·채점 기준과 내 답을 대조해 보세요. 정식 채점은 <b>채점 프롬프트 복사</b> 후 Claude에게 맡기면 됩니다.</div>';
+        if (q.model) h += '<div class="exp-h">모범 답안</div><div>' + q.model + "</div>";
+        if (q.rubric) h += '<div class="exp-h">채점 기준 (좋은 답에 들어가야 할 것)</div><ul>' + q.rubric.map(function (r) { return "<li>" + r + "</li>"; }).join("") + "</ul>";
+        if (q.explain) h += '<div class="exp-h">해설</div><div>' + q.explain + "</div>";
+        if (q.pitfall) h += '<div class="call warn"><b>이걸 틀리면 실무에서:</b> ' + q.pitfall + "</div>";
+        if (q.refs) h += '<div class="small"><b>다시 볼 자료</b></div>' + resList(q.refs);
         model.innerHTML = h; model.style.display = "block";
+        showModel.textContent = "모범 답안·해설 접기";
       };
+      showModel.onclick = function () {
+        if (model.style.display === "block") { model.style.display = "none"; showModel.textContent = "모범 답안·해설 보기"; return; }
+        openModel();
+      };
+      if (prev) openModel();
     }
     box.appendChild(exp);
     paintStatus();
