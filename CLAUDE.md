@@ -115,6 +115,10 @@ top-level 콘텐츠 섹션은 글의 **종류**로 나눈다 (2026-11-24 개편)
 옛 섹션(`study/`, `logs/`, `infra/`, `post-training/`, `onboarding/`)의 파일 자리에는
 새 주소로 보내는 리다이렉트 스텁만 남아 있다. **새 글을 옛 폴더에 만들지 않는다.**
 섹션 목록 상단의 주제 칩(KV 캐시·스케줄링·PD·병렬화·커널·음성·에이전트·RL)은 카드 텍스트로 자동 필터링한다.
+목록에서 글을 빼고 싶으면 카드에 `hidden` 속성을 단다(`<a class="card" href="x.html" hidden>`) — 로컬 관리자
+페이지(`python3 tools/admin_server.py` → `/admin/`, 스킬 `site-admin`)로 토글한다. 글 파일·URL은 유지된다.
+회사 잠금 글과 시리즈의 나머지 편은 숨김이 기본이며, 시리즈 대표 카드 아래 `p.series` 줄이 나머지 편으로 연결한다.
+briefings 목록은 최근 30일만 보이고 이전 것은 페이지 JS가 "지난 브리핑"으로 접는다.
 각 섹션은 자체 `index.html`(카드 목록)을 갖고 루트 `index.html` 에서 링크된다.
 새 섹션을 추가하면 `check_theme.py` 의 섹션 튜플(5곳)에도 추가한다.
 

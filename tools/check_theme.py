@@ -198,7 +198,7 @@ def check_index_linkage(tree, paths):
 # ---------------------------------------------------------------- post-meta (created/updated)
 
 POSTMETA_BLOCK = re.compile(r'<p class="post-meta">(.*?)</p>', re.S)
-CARD_RE = re.compile(r'<a class="card" href="([^"]+)">(.*?)</a>', re.S)
+CARD_RE = re.compile(r'<a class="card" href="([^"]+)"[^>]*>(.*?)</a>', re.S)
 
 
 def postmeta_dates(inner):
