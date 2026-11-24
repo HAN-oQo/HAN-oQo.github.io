@@ -257,6 +257,39 @@ POLISH_TAG = "[polish]"
 TEMPLATE_PAGES = {"onboarding/module.html"}
 
 
+# ---------------------------------------------------------------- card blurb length
+
+CARD_KO_MAX, CARD_EN_MAX = 150, 220
+
+
+def _plain(fragment):
+    import html as _h
+    return " ".join(_h.unescape(re.sub(r"<[^>]+>", " ", fragment)).split())
+
+
+def check_card_blurbs(tree):
+    """섹션 index 카드의 요약 <p> 는 한 줄: KO ≤ 150자, EN ≤ 220자(태그 제거 후).
+    목록에서 글을 고르게 하는 미리보기이지 본문 요약이 아니다 (CLAUDE.md 카드 규약)."""
+    for section in ("study", "logs", "infra", "briefings", "post-training", "onboarding"):
+        index = f"{section}/index.html"
+        idx = tree.read(index)
+        if idx is None:
+            continue
+        for href, inner in CARD_RE.findall(idx):
+            m = re.search(r"<p>(.*?)</p>", inner, re.S)
+            if not m:
+                continue
+            body = m.group(1)
+            en = re.search(r'<span class="en">(.*?)</span>\s*<span class="ko">', body, re.S)
+            ko = re.search(r'<span class="ko">(.*)</span>\s*$', body.strip(), re.S)
+            if en and len(_plain(en.group(1))) > CARD_EN_MAX:
+                err(index, "card-blurb", f"카드 [{href}] EN 요약 {len(_plain(en.group(1)))}자 > {CARD_EN_MAX} — 한 줄로 줄이기")
+            if ko and len(_plain(ko.group(1))) > CARD_KO_MAX:
+                err(index, "card-blurb", f"카드 [{href}] KO 요약 {len(_plain(ko.group(1)))}자 > {CARD_KO_MAX} — 한 줄로 줄이기")
+            if not en and not ko and len(_plain(body)) > CARD_EN_MAX:
+                err(index, "card-blurb", f"카드 [{href}] 요약 {len(_plain(body))}자 > {CARD_EN_MAX}")
+
+
 def polish_only(base, head, path):
     """base..head 에서 path 를 바꾼 커밋이 전부 메시지에 [polish] 를 담고 있으면 True.
     윤문(가독성만 개선, 내용 불변) 커밋은 갱신일 bump 를 면제한다 (CLAUDE.md)."""
@@ -362,6 +395,7 @@ def main():
 
     check_index_linkage(tree, paths)
     check_postmeta(tree, paths)
+    check_card_blurbs(tree)
 
     n = len([p for p in paths])
     if errors:
