@@ -1,15 +1,15 @@
 ---
 name: feature-deep-dive
-description: Research an inference-serving feature, system, or codebase (vLLM / llm-d / SGLang / TRT-LLM / a technique / a repo) and write a bilingual study/ HTML deep-dive note with a code-flow + commit-pinned permalinks, diagrams, and cited sources. Use when the user asks to 조사/분석/deep-dive a serving feature or codebase and write a note — NOT an academic paper (use /paper-note for arXiv papers). Code analysis is the core, wrapped with just enough theory / usage / effects / sources to make the note self-contained.
+description: Research an inference-serving feature, system, or codebase (vLLM / llm-d / SGLang / TRT-LLM / a technique / a repo) and write a bilingual engines/ HTML deep-dive note with a code-flow + commit-pinned permalinks, diagrams, and cited sources. Use when the user asks to 조사/분석/deep-dive a serving feature or codebase and write a note — NOT an academic paper (use /paper-note for arXiv papers). Code analysis is the core, wrapped with just enough theory / usage / effects / sources to make the note self-contained.
 ---
 
-# feature-deep-dive — code/system analysis → study/ HTML note
+# feature-deep-dive — code/system analysis → engines/ HTML note
 
 The code/feature/codebase sibling of `/paper-note`. Output: one bilingual (EN/KO)
-**type-A** page under `study/` following this repo's conventions (CLAUDE.md §"테마",
+**type-A** page under `engines/` following this repo's conventions (CLAUDE.md §"테마",
 §"페이지 타입 A", §"카드 태그 버튼 색"). Proven examples to copy from:
-`study/vllm-dual-batch-overlap.html`, `study/vllm-diffusion-llm.html`,
-`study/llm-d-agentic-serving.html` (same style block + section pattern).
+`engines/vllm-dual-batch-overlap.html`, `engines/vllm-diffusion-llm.html`,
+`engines/llm-d-agentic-serving.html` (same style block + section pattern).
 
 Scope = any inference-serving topic, not just vLLM: a vLLM feature (DBO, diffusion
 LLMs), another system (llm-d, SGLang, TRT-LLM), a serving technique, or a codebase walk.
@@ -54,7 +54,7 @@ the terms a reader needs) and a "한 줄 요약" `c-blue` callout near the top.
    - a **theory/docs/sources agent**: official docs, blog, PRs, related papers; the why, the
      expected/ reported effects with cited URLs, honest caveats.
    Independent topics → run their agent sets concurrently. Background agents notify on completion.
-2. **Write** `study/<english-slug>.html` from a proven example's style block:
+2. **Write** `engines/<english-slug>.html` from a proven example's style block:
    hero (title + lede + `.meta` badges: docs link, key PR, `code @ <short-SHA>` tree link, a
    "Deep dive · code-walk" badge) + `post-meta` today → TOC → glossary → "한 줄 요약" → the
    body sections → Sources → footer. All prose in `<span class="en">…</span><span class="ko">…</span>`
@@ -62,7 +62,7 @@ the terms a reader needs) and a "한 줄 요약" `c-blue` callout near the top.
    Tag classes from theme.css only (never inline `.t-*`).
 3. **Diagrams** — inline SVG with `var(--…)` tokens only (mechanism, timeline, comparison),
    each with a `figcap` citing the source. Reuse SVG patterns from the example notes.
-4. **Index card** — add to `study/index.html` (newest first), tag **`t-green` "Deep dive ·
+4. **Index card** — add to `engines/index.html` (newest first), tag **`t-green` "Deep dive ·
    code-walk"** (or "· config-walk"), `post-meta` = today.
 5. **Verify** — `python3 tools/check_theme.py` until pass; sanity-check en/ko span balance,
    permalinks pinned to a real SHA, no stray non-ASCII in Latin words.

@@ -1,0 +1,377 @@
+{
+ "id": "m7",
+ "week": 8,
+ "hours": 14,
+ "weak": true,
+ "title": "커널 — Attention 계보 · Fusion · Triton 작성 · CUDA 리뷰 · Profiler",
+ "summary": "FA1/2/3·PagedAttention·FlashInfer를 메모리 레이아웃으로 이해하고, Triton RMSNorm을 써서 vLLM의 CustomOp로 실제로 갈아끼운다. CUDA는 '에이전트가 쓴 커널을 리뷰'하는 능력.",
+ "maps_to": [
+  "C++/CUDA/Triton",
+  "Profiler로 병목 특정"
+ ],
+ "jp": [
+  "カーネル",
+  "Triton",
+  "プロファイラ",
+  "ボトルネック特定"
+ ],
+ "prereq": [
+  "M1"
+ ],
+ "goals": [
+  "FA 계보 차이를 HBM 트래픽·타일링·하드웨어 기능(TMA, wgmma, FP8)으로 설명한다",
+  "Triton으로 fused add+RMSNorm, fused SwiGLU를 작성하고 정확성·대역폭 효율을 검증한다",
+  "에이전트가 생성한 CUDA 커널의 버그·성능 문제를 체크리스트로 찾아낸다",
+  "Nsight Compute/torch profiler로 병목을 판정한다"
+ ],
+ "diagnostic": [
+  {
+   "id": "m7-d1",
+   "type": "mcq",
+   "topic": "fa",
+   "prompt": "FlashAttention(v1)이 표준 attention보다 빠른 근본 이유는?",
+   "options": [
+    "FLOPs를 크게 줄여서",
+    "N×N 점수 행렬을 HBM에 쓰지 않고 SRAM 타일 안에서 online softmax로 처리해 HBM 읽기/쓰기를 줄여서",
+    "FP8을 써서",
+    "sparse attention이라서"
+   ],
+   "answer": 1,
+   "explain": "IO-aware: FLOPs는 오히려 약간 늘지만(backward 재계산) HBM 트래픽이 줄어 memory-bound 구간이 빨라진다.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "FlashAttention §3 — arXiv 2205.14135",
+     "url": "https://arxiv.org/abs/2205.14135",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m7-d2",
+   "type": "mcq",
+   "topic": "fa",
+   "prompt": "decode(쿼리 1토큰, 긴 KV)에서 FlashAttention-2 스타일 커널이 GPU를 다 못 쓰는 문제를 푸는 대표 기법은?",
+   "options": [
+    "배치 크기 줄이기",
+    "KV 축을 쪼개 여러 블록이 병렬 처리 후 합치기 (split-KV / Flash-Decoding)",
+    "head 수 늘리기",
+    "softmax를 FP64로"
+   ],
+   "answer": 1,
+   "explain": "쿼리가 1개면 (batch × head) 병렬성만으로 SM을 채우기 어렵다 → KV 시퀀스 축 분할 후 log-sum-exp로 결합. vLLM paged_attention v2, FlashInfer decode 커널이 같은 아이디어.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "FlashInfer — arXiv 2501.01005",
+     "url": "https://arxiv.org/abs/2501.01005",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "vLLM csrc/attention/ (paged_attention v1/v2)",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/csrc/attention",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m7-d3",
+   "type": "mcq",
+   "topic": "fusion",
+   "prompt": "residual add + RMSNorm을 하나의 커널로 합치는 것이 이득인 근본 이유는?",
+   "options": [
+    "FLOPs가 줄어서",
+    "둘 다 memory-bound라 중간 텐서의 HBM 왕복(쓰고 다시 읽기)을 없애면 그대로 시간이 준다",
+    "정확도가 올라가서",
+    "Tensor Core를 쓰게 돼서"
+   ],
+   "answer": 1,
+   "explain": "elementwise/reduction 연산은 intensity가 매우 낮다 → 시간 ≈ 바이트/대역폭. 중간 결과를 레지스터에 두면 왕복 하나가 사라진다. vLLM의 fused_add_rms_norm이 residual을 in-place로 갱신하는 이유.",
+   "refs": [
+    {
+     "kind": "code",
+     "label": "vLLM csrc/layernorm_kernels.cu",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/csrc/layernorm_kernels.cu",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM fusions 설계 문서",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/fusions.md",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m7-d4",
+   "type": "text",
+   "topic": "review",
+   "prompt": "아래는 에이전트가 쓴 행 단위 합 커널이다. 정확성 문제 1개와 성능 문제 1개를 찾아라.<pre><code>__global__ void rowsum(const float* x, float* out, int rows, int cols) {\n  __shared__ float buf[256];\n  int r = blockIdx.x, t = threadIdx.x;\n  float s = 0;\n  for (int c = t; c &lt; cols; c += blockDim.x) s += x[c * rows + r];\n  buf[t] = s;\n  for (int k = blockDim.x / 2; k &gt; 0; k &gt;&gt;= 1) {\n    if (t &lt; k) buf[t] += buf[t + k];\n  }\n  if (t == 0) out[r] = buf[0];\n}</code></pre>",
+   "rubric": [
+    "정확성: 리덕션 루프 각 단계 사이(그리고 buf[t]=s 이후)에 __syncthreads() 없음 → 레이스",
+    "성능: x[c*rows + r] — row-major 데이터라면 인접 스레드가 rows 간격으로 접근 → 비병합(uncoalesced). x[r*cols + c]여야 함(레이아웃 가정 확인)",
+    "부가: blockDim.x > 256이면 buf 오버플로; 2의 거듭제곱 가정; warp shuffle 리덕션으로 대체 가능"
+   ],
+   "model": "__syncthreads 누락(레이스) + 인덱싱이 열 우선이라 비병합 접근. 리뷰 체크리스트: 동기화, 병합 접근, 경계·블록 크기 가정, 수치(누산 정밀도).",
+   "refs": [
+    {
+     "kind": "doc",
+     "label": "CUDA C++ Best Practices Guide (coalescing, shared memory)",
+     "url": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "topics": [
+  {
+   "id": "fa",
+   "name": "Attention 커널 계보 — 레이아웃이 성능을 지배한다",
+   "pitfall": "block size·KV 레이아웃 변경의 성능 영향을 잘못 예측한다.",
+   "body": "<p>FA1: 타일링+online softmax. FA2: 시퀀스 축 병렬화·비-matmul FLOPs 감소. FA3: Hopper 비동기(TMA, wgmma), FP8. PagedAttention: KV가 비연속 블록 → block table 간접 참조. FlashInfer: paged/ragged 레이아웃을 일반화한 템플릿 + JIT.</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "FlashAttention §3 — arXiv 2205.14135",
+     "url": "https://arxiv.org/abs/2205.14135",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "FlashAttention-2 §3 — arXiv 2307.08691",
+     "url": "https://arxiv.org/abs/2307.08691",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "FlashAttention-3 §3 — arXiv 2407.08608",
+     "url": "https://arxiv.org/abs/2407.08608",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "vLLM §4.1 — arXiv 2309.06180",
+     "url": "https://arxiv.org/abs/2309.06180",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "FlashInfer — arXiv 2501.01005",
+     "url": "https://arxiv.org/abs/2501.01005",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM attention backends 설계 문서",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/attention_backends.md",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "vLLM FlashInfer backend",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/attention/backends/flashinfer.py",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "fusion",
+   "name": "RMSNorm/SwiGLU — fusion 대상으로서의 구조",
+   "pitfall": "어떤 op 경계가 HBM 왕복을 만드는지 몰라 fusion 우선순위를 틀린다.",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "RMSNorm — arXiv 1910.07467",
+     "url": "https://arxiv.org/abs/1910.07467",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "GLU Variants (SwiGLU) — arXiv 2002.05202",
+     "url": "https://arxiv.org/abs/2002.05202",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "vLLM RMSNorm (CustomOp 'rms_norm')",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/layernorm.py#L38",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "csrc/activation_kernels.cu",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/csrc/activation_kernels.cu",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "vLLM compilation/passes (torch.compile fusion)",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/compilation/passes",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Liger Kernel — 보조 — arXiv 2410.10989",
+     "url": "https://arxiv.org/abs/2410.10989",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "triton",
+   "name": "Triton 작성",
+   "pitfall": "정확성 테스트를 극단값 없이 끝낸다.",
+   "read": [
+    {
+     "kind": "doc",
+     "label": "Triton 공식 튜토리얼 (02 fused softmax, 03 matmul, 05 layer norm)",
+     "url": "https://triton-lang.org/main/getting-started/tutorials/index.html",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "review",
+   "name": "CUDA 리뷰 체크리스트",
+   "pitfall": "에이전트 커널을 벤치 숫자만 보고 머지.",
+   "body": "<ol><li>정확성: 경계(마지막 타일), 동기화, 레이스, 누산 정밀도, NaN/Inf, 정렬 가정</li><li>메모리: 병합 접근, 벡터화 로드, shared bank conflict, 레지스터 스필</li><li>병렬성: occupancy, 블록 크기 가정, tail effect</li><li>검증: reference 대비 atol/rtol + 극단값·비정형 shape, 대역폭/peak %</li></ol>",
+   "read": [
+    {
+     "kind": "doc",
+     "label": "CUDA C++ Best Practices Guide",
+     "url": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "Nsight Compute 문서",
+     "url": "https://docs.nvidia.com/nsight-compute/",
+     "note": null
+    },
+    {
+     "kind": "blog",
+     "label": "TinyServe attention_v1→v7 (개인 프로젝트, 커널 진화 읽기 연습용 — 2차)",
+     "url": "https://github.com/Leo7Deng/TinyServe/tree/b99698ef2ea27960a8998ce9e26faff61f86bc24/src/kernels",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "prof",
+   "name": "Profiler로 병목 특정",
+   "pitfall": "타임라인 없이 커널 단위만 본다.",
+   "read": [
+    {
+     "kind": "code",
+     "label": "vLLM ProfilerConfig (--profiler-config)",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/config/profiler.py#L66",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "torch.profiler 문서",
+     "url": "https://pytorch.org/docs/stable/profiler.html",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "lab": {
+  "title": "Triton RMSNorm을 vLLM에 CustomOp.register_oot로 꽂아 end-to-end 검증",
+  "why": "커널을 '짜서 끝'이 아니라 실제 엔진에 넣고 정확성·성능을 증명하는 전 과정. 가속 엔지니어 일의 축소판.",
+  "steps": [
+   "<code>layernorm.py</code>의 <code>RMSNorm</code>(CustomOp 'rms_norm')과 <code>custom_op.py</code>의 <code>register_oot</code> 사용법 읽기",
+   "Triton fused add+RMSNorm 작성 → <code>@RMSNorm.register_oot</code> 데코레이터로 교체 클래스 등록 (in-tree 클래스 이름이 키) (vLLM 플러그인으로 로드)",
+   "greedy 출력 100개 프롬프트에서 기본 vs 교체 비교 (토큰 일치율, logprob 차이)",
+   "<code>--profiler-config</code>로 torch 트레이스 → RMSNorm 커널 시간 비교, 전체 TPOT 변화 측정",
+   "(선택) <code>VLLM_BATCH_INVARIANT=1</code>과 같이 돌려 배치 불변성 영향 확인"
+  ],
+  "gpu": "소형 모델로 전체 절차.",
+  "nogpu": "<code>TRITON_INTERPRET=1</code>로 Triton 커널 정확성 검증 + CustomOp 등록 코드를 vLLM CPU 백엔드(<code>forward_native</code> 경로)에서 import·등록까지 확인. 성능은 바이트/대역폭 예측.",
+  "read": [
+   {
+    "kind": "code",
+    "label": "CustomOp / register_oot",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/custom_op.py#L102",
+    "note": null
+   },
+   {
+    "kind": "doc",
+    "label": "custom_op 설계 문서",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/custom_op.md",
+    "note": null
+   },
+   {
+    "kind": "doc",
+    "label": "플러그인 시스템",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/plugin_system.md",
+    "note": null
+   }
+  ],
+  "done": [
+   "토큰 일치율·logprob 차이 표",
+   "커널 시간·TPOT 전후 비교"
+  ]
+ },
+ "toy": {
+  "title": "Triton fused 커널 2종 + 버그 심은 CUDA 커널 리뷰",
+  "maps_to": "C++/CUDA/Triton · Profiler",
+  "hours": 7,
+  "spec": [
+   "Triton: fused add+RMSNorm, fused SiLU×mul(SwiGLU)",
+   "정확성: eager/torch.compile 대비 atol/rtol, 극단값·비정형 shape(hidden 5120, 배치 1/7/257)",
+   "성능: achieved bandwidth / peak %, ncu 리포트 해석",
+   "리뷰: 에이전트에게 CUDA 버전 생성시키고 버그 3개(레이스, 경계, 비병합)를 심은 변형을 리뷰 — 근거와 함께"
+  ],
+  "gpu": "전체",
+  "nogpu": "TRITON_INTERPRET=1 정확성 + 바이트 기반 성능 예측 + 리뷰 과제 그대로",
+  "done": [
+   "두 커널 정확성 테스트 통과",
+   "대역폭 효율 표 (목표 peak 70%+ — 출처 미확인, 작성자 추정 목표치)",
+   "버그 3/3 발견 리포트"
+  ],
+  "hints": [
+   "Triton 05-layer-norm 튜토리얼 구조를 그대로 따라가면 forward는 금방 된다.",
+   "bandwidth = (읽은 바이트 + 쓴 바이트) / 시간. residual in-place면 쓰기도 2개.",
+   "ncu에서 'Memory Throughput'과 'DRAM Throughput'을 구분해 읽어라."
+  ]
+ },
+ "check": [],
+ "interview": [
+  {
+   "q": "FlashAttention 1→2→3에서 무엇이 바뀌었나?",
+   "skeleton": [
+    "IO-aware 타일링",
+    "병렬화 축·작업 분할",
+    "Hopper 비동기·FP8",
+    "decode용 split-KV"
+   ]
+  },
+  {
+   "q": "AI 에이전트가 생성한 CUDA 커널을 어떻게 검증·리뷰하나?",
+   "skeleton": [
+    "체크리스트(정확성/메모리/병렬성)",
+    "reference·극단값 테스트",
+    "roofline 대비 효율",
+    "프로덕션 반영 전 e2e 정확성"
+   ]
+  },
+  {
+   "q": "어떤 연산을 fusion할지 어떻게 고르나?",
+   "skeleton": [
+    "memory-bound 체인 찾기",
+    "중간 텐서 바이트",
+    "torch.compile pass로 되는지 먼저",
+    "수작업 커널 유지 비용"
+   ]
+  }
+ ],
+ "done": [
+  "진단·약한 토픽 자료",
+  "실전 랩",
+  "토이 3개 산출물",
+  "확인 퀴즈 75%+",
+  "면접 3문항"
+ ]
+}

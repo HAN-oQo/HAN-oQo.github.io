@@ -1,13 +1,13 @@
 ---
 name: paper-note
-description: Summarize an academic paper (arXiv/ar5iv/PDF/URL) into a bilingual study/ HTML "paper note" for the han-oqo.github.io repo. Use whenever the user supplies a paper link or arXiv id and asks to 정리/summarize/write a note. Reads the paper in full section-by-section, follows the fixed 5-part structure, embeds verbatim source quotes with jump-to anchors, explains the math in plain language, finds and code-walks the official repo with commit-pinned permalinks, draws diagrams, cites every external claim, then adds the study/index card and passes tools/check_theme.py.
+description: Summarize an academic paper (arXiv/ar5iv/PDF/URL) into a bilingual papers/ HTML "paper note" for the han-oqo.github.io repo. Use whenever the user supplies a paper link or arXiv id and asks to 정리/summarize/write a note. Reads the paper in full section-by-section, follows the fixed 5-part structure, embeds verbatim source quotes with jump-to anchors, explains the math in plain language, finds and code-walks the official repo with commit-pinned permalinks, draws diagrams, cites every external claim, then adds the papers/index card and passes tools/check_theme.py.
 ---
 
-# paper-note — turn a paper into a study/ HTML note
+# paper-note — turn a paper into a papers/ HTML note
 
-Produce one bilingual (EN/KO) **type-A** page under `study/` that follows this repo's
+Produce one bilingual (EN/KO) **type-A** page under `papers/` that follows this repo's
 conventions (see CLAUDE.md §"논문 정리 (paper note) 규약" and §"페이지 타입 A").
-Base template to copy: `study/llm-serving-software-aging.html` (hero + TOC + glossary
+Base template to copy: `papers/llm-serving-software-aging.html` (hero + TOC + glossary
 + `blockquote.q` + `svg.fig`/`figcap` + `c-*` callouts + `.num` section chips).
 
 ## Hard requirements (do not drop any)
@@ -56,7 +56,7 @@ Base template to copy: `study/llm-serving-software-aging.html` (hero + TOC + glo
    return: metadata, section-by-section coverage, the 5-part fill, ~8-15 verbatim quotes with
    `#Sx.SSy` anchors, the math list with plain-language explanations, and the repo code-flow with
    pinned-SHA permalinks. Run independent papers' research concurrently (one agent set each).
-2. **Write** `study/<english-slug>.html` from the base template:
+2. **Write** `papers/<english-slug>.html` from the base template:
    - hero: title + lede + `.meta` badges (arXiv abs link, HTML full-text link, subject·date,
      authors) + `post-meta` with today's date.
    - TOC → glossary (`grid3`+`mini`, 4-6 terms a reader needs) → "한 줄 요약" `c-blue` callout
@@ -69,7 +69,7 @@ Base template to copy: `study/llm-serving-software-aging.html` (hero + TOC + glo
      "논문 정리"); the lede and body prose still localize normally. (User preference: a paper's
      proper title is its identity; flipping the EN/KO toggle should leave the title English.)
    - Tag classes come from theme.css only; do not inline `.t-*`.
-3. **Index card.** Add a card to `study/index.html` (newest first) — tag **`t-blue` "Paper note /
+3. **Index card.** Add a card to `papers/index.html` (newest first) — tag **`t-blue` "Paper note /
    논문 정리"**, `post-meta` = today's date (created; add `updated` only when later edited per
    CLAUDE.md §작성일/갱신일).
 4. **Verify.** Run `python3 tools/check_theme.py` until it passes. Sanity-check: en/ko span

@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM MLA × TRT-LLM Ragged Prefill — what it is, how it works, code flow</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:26px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-teal{background:var(--teal-bg);color:var(--teal-ink)} .c-teal .tag{color:var(--teal-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  .flow{list-style:none;padding:0;margin:14px 0;counter-reset:fl}
+  .flow>li{position:relative;padding:10px 0 12px 40px;border-bottom:1px solid var(--line)}
+  .flow>li::before{counter-increment:fl;content:counter(fl);position:absolute;left:0;top:9px;
+    width:26px;height:26px;border-radius:50%;background:var(--blue-ink);color:#fff;font-size:12px;
+    font-weight:700;display:flex;align-items:center;justify-content:center}
+  .flow code{font-size:12px}
+  .flow a.pl{font-size:11.5px;color:var(--muted);border-bottom:1px dotted var(--muted);text-decoration:none}
+  .flow a.pl:hover{color:var(--blue-ink)}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./"><span class="en">Engines</span><span class="ko">엔진·코드</span></a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">vLLM MLA × TRT-LLM Ragged Prefill — what it is, how it works, code flow, status</span>
+    <span class="ko">vLLM MLA × TRT-LLM Ragged Prefill: 무엇인지, 동작 원리, 코드 흐름, 구현 상태</span>
+  </h1>
+  <p class="lede">
+    <span class="en"><code class="inl">TrtllmRaggedPrefillBackend</code> is <b>one of four pluggable MLA-prefill backends</b> in vLLM: it wraps FlashInfer's TRT-LLM-gen kernel <code class="inl">trtllm_ragged_attention_deepseek</code> to run MLA prefill (DeepSeek-V2/V3, GLM) over un-padded ("ragged") batches, on <b>Blackwell (SM100) only</b>. This note reads the vLLM code pinned to commit 4bf699d.</span>
+    <span class="ko"><code class="inl">TrtllmRaggedPrefillBackend</code>는 vLLM의 <b>4개 pluggable MLA-prefill 백엔드 중 하나</b>다. FlashInfer의 TRT-LLM-gen 커널 <code class="inl">trtllm_ragged_attention_deepseek</code>를 감싸 MLA 모델(DeepSeek-V2/V3, GLM)의 prefill을 패딩 없는("ragged") 배치로 돌리며, <b>Blackwell(SM100) 전용</b>이다. 커밋 4bf699d의 vLLM 코드를 기준으로 정리했다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://docs.vllm.ai/en/latest/api/vllm/v1/attention/backends/mla/prefill/trtllm_ragged/">vLLM API doc</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/pull/26397">PR #26397 (kernel)</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/pull/32623">PR #32623 (pluggable)</a></span>
+    <span class="badge"><a href="https://github.com/vllm-project/vllm/tree/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill">code @ 4bf699d</a></span>
+    <span class="badge"><span class="en">Deep dive · code-walk</span><span class="ko">딥다이브 · 코드 분석</span></span>
+  </div>
+  <p class="post-meta"><time datetime="2026-06-17">2026-06-17</time></p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">1. What &amp; why — MLA prefill, and what "ragged" means</span><span class="ko">1. 무엇이고 왜 필요한가: MLA prefill과 "ragged"</span></a></li>
+    <li><a href="#s2"><span class="en">2. How it works — up-project the latent, two ragged passes, one kernel</span><span class="ko">2. 동작 원리: latent up-project, ragged 두 패스, 커널 하나</span></a></li>
+    <li><a href="#s3"><span class="en">3. The four MLA-prefill backends &amp; how this one is chosen</span><span class="ko">3. 4개 MLA-prefill 백엔드와 선택 방식</span></a></li>
+    <li><a href="#s4"><span class="en">4. Effects — theory vs. what's actually been reported</span><span class="ko">4. 효과: 이론과 실제 보고 수치</span></a></li>
+    <li><a href="#s5"><span class="en">5. Using it — config, env, hardware</span><span class="ko">5. 쓰는 법: 설정·env·하드웨어</span></a></li>
+    <li><a href="#s6"><span class="en">6. Code flow (with permalinks)</span><span class="ko">6. 코드 흐름 (permalink)</span></a></li>
+    <li><a href="#s7"><span class="en">7. Implementation status</span><span class="ko">7. 구현 상태</span></a></li>
+    <li><a href="#s8"><span class="en">8. Sources</span><span class="ko">8. 출처</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <ul class="en">
+    <li>MLA's compressed-latent KV gives prefill a special shape: an up-projection plus asymmetric q/k (e.g. 192) vs v (e.g. 128) head dims. vLLM picks the MLA-prefill kernel from a <b>registry of four backends</b>.</li>
+    <li><code class="inl">TRTLLM_RAGGED</code> runs one <b>SM100-only</b> kernel over <b>un-padded ("ragged")</b> batches, for both the non-causal context-chunk pass and the causal new-tokens pass.</li>
+    <li>Auto-selection still ranks FlashAttention first, so this backend is reached only by explicit override or when FA is unavailable.</li>
+    <li>The only public speed number (≈+12.7% qps / −10.2% TTFT) is a contributor self-bench on a small model, one GPU. Irrelevant to non-NVIDIA (e.g. MI250) hardware.</li>
+  </ul>
+  <ul class="ko">
+    <li>MLA의 압축 latent KV 때문에 prefill은 up-projection과 비대칭 head 차원(q/k 예: 192, v 예: 128)을 가진다. vLLM은 이 커널을 <b>4개 백엔드 registry</b>에서 고른다.</li>
+    <li><code class="inl">TRTLLM_RAGGED</code>는 <b>SM100 전용</b> 커널 하나로 <b>패딩 없는("ragged")</b> 배치를 처리한다. 비인과 context-chunk 패스와 인과 new-tokens 패스를 모두 맡는다.</li>
+    <li>auto 선택에서는 FlashAttention이 여전히 1순위다. 이 백엔드는 명시적 override나 FA를 못 쓸 때만 쓰인다.</li>
+    <li>공개된 속도 수치는 작은 모델·단일 GPU 기여자 셀프벤치(≈+12.7% qps / −10.2% TTFT) 하나뿐이다. 비-NVIDIA(예: MI250) 하드웨어와는 무관하다.</li>
+  </ul>
+</div>
+
+<div class="grid3">
+  <div class="mini"><h4>MLA</h4><p><span class="en">Multi-head Latent Attention (DeepSeek-V2): caches one small <b>latent</b> vector per token instead of per-head K and V.</span><span class="ko">Multi-head Latent Attention(DeepSeek-V2). head별 K·V 대신 토큰당 작은 <b>latent</b> 벡터 하나를 캐시한다.</span></p></div>
+  <div class="mini"><h4><span class="en">latent ↑ up-projection</span><span class="ko">latent ↑ up-projection</span></h4><p><span class="en">Prefill expands the latent back into <code>k_nope</code> and <code>v</code> via <code>kv_b_proj</code>.</span><span class="ko">prefill은 latent를 <code>kv_b_proj</code>로 <code>k_nope</code>·<code>v</code>로 다시 펼친다.</span></p></div>
+  <div class="mini"><h4><span class="en">decoupled RoPE</span><span class="ko">decoupled RoPE</span></h4><p><span class="en">Q/K = <code>nope</code> + small <code>rope</code> part (e.g. 64), V = nope only → <b>asymmetric</b> head dims.</span><span class="ko">Q/K는 <code>nope</code>와 작은 <code>rope</code>(예: 64)를 합친 것이고 V는 nope뿐이라 head 차원이 <b>비대칭</b>이다.</span></p></div>
+  <div class="mini"><h4><span class="en">ragged / varlen</span><span class="ko">ragged / varlen</span></h4><p><span class="en">Sequences packed into one flat tensor with <b>no padding</b>, delimited by <code>cu_seqlens</code>.</span><span class="ko">시퀀스를 <b>패딩 없이</b> 한 텐서에 이어 붙이고 <code>cu_seqlens</code>로 경계를 표시한다.</span></p></div>
+  <div class="mini"><h4><span class="en">context (chunked) prefill</span><span class="ko">context(청크) prefill</span></h4><p><span class="en">New queries attend over already-cached <b>context</b> in chunks (non-causal).</span><span class="ko">새 query가 이미 캐시된 <b>context</b>를 청크 단위로 비인과 어텐션한다.</span></p></div>
+  <div class="mini"><h4>trtllm-gen / FlashInfer</h4><p><span class="en"><b>FlashInfer</b>: kernel library exposing NVIDIA's TRT-LLM-generated kernels, incl. <code>trtllm_ragged_attention_deepseek</code>.</span><span class="ko"><b>FlashInfer</b>는 NVIDIA의 TRT-LLM 생성 커널(<code>trtllm_ragged_attention_deepseek</code> 포함)을 제공하는 커널 라이브러리다.</span></p></div>
+</div>
+
+
+<section id="s1">
+<h2><span class="num">1</span><span class="en">What &amp; why — MLA prefill, and what "ragged" means</span><span class="ko">무엇이고 왜 필요한가: MLA prefill과 "ragged"</span></h2>
+
+<h3><span class="en">MLA: the KV cache is a compressed latent</span><span class="ko">MLA: KV 캐시가 압축된 latent</span></h3>
+<p><span class="en">MLA is DeepSeek-V2's way to shrink the KV cache: it stores <b>one small "latent" vector per token</b> and reconstructs per-head keys and values on demand.</span>
+<span class="ko">MLA는 KV 캐시를 줄이려는 DeepSeek-V2의 방법이다. <b>토큰당 작은 "latent" 벡터 하나</b>만 저장하고, head별 key·value는 필요할 때 복원한다.</span></p>
+
+<blockquote class="q">
+  <p>"MLA guarantees efficient inference through significantly compressing the Key-Value (KV) cache into a latent vector."</p>
+  <cite>— DeepSeek-V2 abstract · <a href="https://arxiv.org/abs/2405.04434">arXiv:2405.04434</a></cite>
+</blockquote>
+
+<p><span class="en">This compression makes MLA <i>prefill</i> awkward for a generic attention kernel, for two reasons:</span>
+<span class="ko">이 압축 때문에 MLA <i>prefill</i>은 범용 어텐션 커널로 처리하기 까다롭다. 이유는 두 가지다.</span></p>
+<ul>
+<li><span class="en"><b>An up-projection step.</b> The cached latent must first be expanded into per-head <code class="inl">k_nope</code> and <code class="inl">v</code> through <code class="inl">kv_b_proj</code>. A vanilla kernel just reads K and V.</span>
+<span class="ko"><b>up-projection 단계.</b> 캐시된 latent를 먼저 <code class="inl">kv_b_proj</code>로 head별 <code class="inl">k_nope</code>·<code class="inl">v</code>로 펼쳐야 한다. 일반 커널은 K·V를 읽기만 한다.</span></li>
+<li><span class="en"><b>Asymmetric head dimensions.</b> A query/key head is <code class="inl">qk_nope + qk_rope</code> (e.g. 128+64 = 192) while the value head is <code class="inl">v_head_dim</code> (e.g. 128), breaking the common <code class="inl">head_dim_qk == head_dim_v</code> assumption. The TRT-LLM backend supports two shapes: DeepSeek (qk_nope 128 / rope 64 / v 128) and GLM-style (192 / 64 / 256).</span>
+<span class="ko"><b>비대칭 head 차원.</b> query/key head는 <code class="inl">qk_nope + qk_rope</code>(예: 128+64 = 192)인데 value head는 <code class="inl">v_head_dim</code>(예: 128)이다. 많은 커널이 가정하는 <code class="inl">head_dim_qk == head_dim_v</code>가 깨진다. TRT-LLM 백엔드는 DeepSeek 계열(qk_nope 128 / rope 64 / v 128)과 GLM류(192 / 64 / 256) 두 형태를 지원한다.</span></li>
+</ul>
+
+<h3><span class="en">"Ragged" = un-padded variable-length batching</span><span class="ko">"Ragged" = 무패딩 가변 길이 배칭</span></h3>
+<p><span class="en">Prompts have different lengths. Padding them all to the longest wastes compute. The "ragged" (varlen) layout concatenates sequences into <b>one flat tensor with no padding</b> and finds boundaries with a cumulative-length index array:</span>
+<span class="ko">프롬프트는 길이가 제각각이다. 가장 긴 것에 맞춰 패딩하면 그만큼 연산이 낭비된다. "ragged"(varlen) 레이아웃은 시퀀스를 <b>패딩 없이 한 텐서</b>로 이어 붙이고, 누적 길이 배열로 각 시퀀스의 경계를 찾는다.</span></p>
+
+<blockquote class="q">
+  <p>"<code>indptr[i+1]-indptr[i]</code> is the sequence length of request i" … the <code>indptr</code> array has "num_requests+1 elements, the first element is always zero."</p>
+  <cite>— FlashInfer, KV-Layout tutorial (Ragged Tensor) · <a href="https://docs.flashinfer.ai/tutorials/kv_layout.html">docs.flashinfer.ai/tutorials/kv_layout</a></cite>
+</blockquote>
+
+<p><span class="en">In vLLM this array is <code class="inl">query_start_loc</code>. The kernel takes flat q/k/v plus these lengths and never sees padding. "deepseek" in its name means it also handles MLA's asymmetric qk-vs-v head dims natively, in one call.</span>
+<span class="ko">vLLM에서는 이 배열이 <code class="inl">query_start_loc</code>(요청별 query 토큰 누적 개수)다. 커널은 q/k/v와 이 누적 길이만 받으므로 패딩 토큰을 보지 않는다. 이름의 "deepseek"은 MLA의 비대칭 qk/v head 차원까지 커널 안에서 처리한다는 뜻이다.</span></p>
+
+<svg class="fig" viewBox="0 0 760 230" role="img" aria-label="Padded vs ragged batching">
+  <style>
+    .t{font:600 12.5px -apple-system,sans-serif;fill:var(--ink)}
+    .k{font:11px -apple-system,sans-serif;fill:var(--muted)}
+    .tok{fill:var(--blue-bg);stroke:var(--blue-bd)}
+    .tok2{fill:var(--green-bg);stroke:var(--green-bd)}
+    .tok3{fill:var(--purple-bg);stroke:var(--purple-bd)}
+    .pad{fill:var(--gray-bg);stroke:var(--gray-bd);stroke-dasharray:3 2}
+    .tick{stroke:var(--ink);stroke-width:1}
+  </style>
+  <text x="20" y="20" class="t">Padded — a rectangle; the dashed cells are wasted compute</text>
+  <!-- seq A len 4 -->
+  <g>
+    <rect class="tok"  x="120" y="32" width="26" height="20"/><rect class="tok" x="148" y="32" width="26" height="20"/><rect class="tok" x="176" y="32" width="26" height="20"/><rect class="tok" x="204" y="32" width="26" height="20"/>
+    <rect class="pad" x="232" y="32" width="26" height="20"/><rect class="pad" x="260" y="32" width="26" height="20"/><rect class="pad" x="288" y="32" width="26" height="20"/><rect class="pad" x="316" y="32" width="26" height="20"/>
+    <text x="20" y="47" class="k">seq A (4)</text>
+  </g>
+  <g>
+    <rect class="tok2" x="120" y="56" width="26" height="20"/><rect class="tok2" x="148" y="56" width="26" height="20"/><rect class="tok2" x="176" y="56" width="26" height="20"/>
+    <rect class="pad" x="204" y="56" width="26" height="20"/><rect class="pad" x="232" y="56" width="26" height="20"/><rect class="pad" x="260" y="56" width="26" height="20"/><rect class="pad" x="288" y="56" width="26" height="20"/><rect class="pad" x="316" y="56" width="26" height="20"/>
+    <text x="20" y="71" class="k">seq B (3)</text>
+  </g>
+  <g>
+    <rect class="tok3" x="120" y="80" width="26" height="20"/><rect class="tok3" x="148" y="80" width="26" height="20"/><rect class="tok3" x="176" y="80" width="26" height="20"/><rect class="tok3" x="204" y="80" width="26" height="20"/><rect class="tok3" x="232" y="80" width="26" height="20"/><rect class="tok3" x="260" y="80" width="26" height="20"/><rect class="tok3" x="288" y="80" width="26" height="20"/><rect class="tok3" x="316" y="80" width="26" height="20"/>
+    <text x="20" y="95" class="k">seq C (8)</text>
+  </g>
+  <text x="360" y="71" class="k">⟶ 9 of 24 cells wasted</text>
+
+  <text x="20" y="140" class="t">Ragged — one flat row, no padding; cu_seqlens marks the cuts</text>
+  <rect class="tok"  x="120" y="152" width="26" height="22"/><rect class="tok" x="148" y="152" width="26" height="22"/><rect class="tok" x="176" y="152" width="26" height="22"/><rect class="tok" x="204" y="152" width="26" height="22"/>
+  <rect class="tok2" x="230" y="152" width="26" height="22"/><rect class="tok2" x="258" y="152" width="26" height="22"/><rect class="tok2" x="286" y="152" width="26" height="22"/>
+  <rect class="tok3" x="312" y="152" width="26" height="22"/><rect class="tok3" x="340" y="152" width="26" height="22"/><rect class="tok3" x="368" y="152" width="26" height="22"/><rect class="tok3" x="396" y="152" width="26" height="22"/><rect class="tok3" x="424" y="152" width="26" height="22"/><rect class="tok3" x="452" y="152" width="26" height="22"/><rect class="tok3" x="480" y="152" width="26" height="22"/><rect class="tok3" x="508" y="152" width="26" height="22"/>
+  <!-- ticks -->
+  <line class="tick" x1="120" y1="150" x2="120" y2="184"/><line class="tick" x1="228" y1="150" x2="228" y2="184"/><line class="tick" x1="310" y1="150" x2="310" y2="184"/><line class="tick" x1="536" y1="150" x2="536" y2="184"/>
+  <text x="116" y="198" class="k">0</text><text x="222" y="198" class="k">4</text><text x="304" y="198" class="k">7</text><text x="528" y="198" class="k">15</text>
+  <text x="120" y="216" class="k">cu_seqlens = query_start_loc = [0, 4, 7, 15]</text>
+</svg>
+<p class="figcap"><span class="en">Fig 1 · Padded vs ragged batching (<code>cu_seqlens</code> = <code>query_start_loc</code>). Schematic, per FlashInfer KV-layout docs.</span><span class="ko">그림 1 · 패딩 배칭과 ragged 배칭(<code>cu_seqlens</code> = <code>query_start_loc</code>). 개략도, FlashInfer KV-layout 문서 기준.</span></p>
+</section>
+
+
+<section id="s2">
+<h2><span class="num">2</span><span class="en">How it works — up-project the latent, two ragged passes, one kernel</span><span class="ko">동작 원리: latent up-project, ragged 두 패스, 커널 하나</span></h2>
+
+<p><span class="en">vLLM's MLA prefill runs attention in <b>two passes</b> through the same ragged kernel, differing only in <code class="inl">is_causal</code>:</span>
+<span class="ko">vLLM의 MLA prefill은 같은 ragged 커널을 <b>두 번</b> 호출한다. 차이는 <code class="inl">is_causal</code> 플래그뿐이다.</span></p>
+<ul>
+<li><span class="en"><b>Context-chunk pass (non-causal).</b> When part of the prompt's KV is already cached (chunked prefill / prefix reuse), new queries attend over it. It is all "in the past", so no causal mask. Chunks are merged with <code class="inl">merge_attn_states</code> (log-sum-exp merge), which is why the kernel returns the LSE.</span>
+<span class="ko"><b>Context-chunk 패스(비인과).</b> 프롬프트 KV 일부가 이미 캐시돼 있으면(chunked prefill / prefix 재사용) 새 query가 그 context를 어텐션한다. context는 모두 과거 토큰이라 인과 마스크가 없다. 청크별 결과는 <code class="inl">merge_attn_states</code>(log-sum-exp 병합)로 합치므로 커널이 LSE도 반환한다.</span></li>
+<li><span class="en"><b>New-tokens pass (causal).</b> The new tokens attend to each other with the usual causal mask (<code class="inl">is_causal=True</code>).</span>
+<span class="ko"><b>New-tokens 패스(인과).</b> 새 토큰끼리 일반적인 인과 마스크로 어텐션한다(<code class="inl">is_causal=True</code>).</span></li>
+</ul>
+
+<p><span class="en">Both passes first <b>up-project the latent</b> through <code class="inl">kv_b_proj</code> into <code class="inl">k_nope</code> and <code class="inl">v</code>, and assemble <code class="inl">k = [k_nope | k_pe]</code>. The flat q/k/v + <code class="inl">cu_seqlens</code> then go to <code class="inl">trtllm_ragged_attention_deepseek</code>. The backend transposes the returned LSE from <code class="inl">(q_len, num_heads)</code> to <code class="inl">(num_heads, q_len)</code> for the merge.</span>
+<span class="ko">두 패스 모두 먼저 <code class="inl">kv_b_proj</code>로 <b>latent를 up-project</b> 해 <code class="inl">k_nope</code>·<code class="inl">v</code>를 만들고, key를 <code class="inl">k = [k_nope | k_pe]</code>(내용 + 공유 RoPE)로 조립한다. 이어서 q/k/v와 <code class="inl">cu_seqlens</code>를 <code class="inl">trtllm_ragged_attention_deepseek</code>에 넘긴다. 커널이 돌려준 LSE는 <code class="inl">(q_len, num_heads)</code> 형태라, 병합을 위해 백엔드가 <code class="inl">(num_heads, q_len)</code>로 전치한다.</span></p>
+
+<div class="callout c-teal">
+  <span class="tag"><span class="en">why prefill gets its own kernel: un-absorbed MLA</span><span class="ko">prefill에 전용 커널이 있는 이유: 비흡수 MLA</span></span>
+  <span class="en"><b>Decode</b> is memory-bound, so it "absorbs" the up-projection into the weights and runs MQA over the latent. <b>Prefill</b> is compute-bound, so it "un-absorbs": expand to full per-head K/V and run ordinary MHA. <code class="inl">trtllm_ragged</code> is that un-absorbed prefill path (the up-projection in Fig 2). The vLLM forum calls prefill "compute-friendly" and decode "data-movement-friendly" <a class="src" href="https://discuss.vllm.ai/t/why-does-prefill-use-normal-attention-while-decode-uses-weight-absorption-in-mla/1289">[vLLM forum]</a>.</span>
+  <span class="ko"><b>Decode</b>는 메모리 바운드라 up-projection을 가중치에 "흡수"하고 압축 latent 위에서 바로 MQA를 돈다. <b>Prefill</b>은 query가 많아 연산 바운드이므로 반대로 "비흡수"한다. latent를 head별 K/V로 펼친 뒤 일반 MHA를 돈다. <code class="inl">trtllm_ragged</code>가 이 비흡수 prefill 경로이고, 그림 2의 up-projection이 그 단계다. vLLM 포럼은 prefill을 "compute-friendly", decode를 "data-movement-friendly"라고 표현한다 <a class="src" href="https://discuss.vllm.ai/t/why-does-prefill-use-normal-attention-while-decode-uses-weight-absorption-in-mla/1289">[vLLM forum]</a>.</span>
+</div>
+
+<svg class="fig" viewBox="0 0 760 300" role="img" aria-label="MLA prefill two-pass mechanism">
+  <style>
+    .t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+    .k{font:11px -apple-system,sans-serif;fill:var(--muted)}
+    .bk{font:600 11px -apple-system,sans-serif;fill:#fff}
+    .box{fill:var(--card);stroke:var(--line);stroke-width:1.4}
+    .lat{fill:var(--purple-bg);stroke:var(--purple-bd)}
+    .up{fill:var(--amber-bg);stroke:var(--amber-bd)}
+    .ker{fill:var(--blue-ink)}
+    .ar{stroke:var(--muted);stroke-width:1.4;fill:none;marker-end:url(#mh)}
+  </style>
+  <defs><marker id="mh" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+
+  <!-- latent cache -->
+  <rect class="lat" x="20" y="60" width="120" height="56" rx="9"/>
+  <text x="80" y="84" class="k" text-anchor="middle" fill="var(--purple-ink)">cached latent KV</text>
+  <text x="80" y="100" class="k" text-anchor="middle" fill="var(--purple-ink)">(compressed)</text>
+
+  <!-- up-proj -->
+  <rect class="up" x="190" y="52" width="130" height="72" rx="9"/>
+  <text x="255" y="76" class="k" text-anchor="middle" fill="var(--amber-ink)">kv_b_proj ↑</text>
+  <text x="255" y="92" class="k" text-anchor="middle" fill="var(--amber-ink)">→ k_nope, v</text>
+  <text x="255" y="108" class="k" text-anchor="middle" fill="var(--amber-ink)">k = [k_nope | k_pe]</text>
+  <path class="ar" d="M140,88 L188,88"/>
+
+  <!-- q -->
+  <rect class="box" x="190" y="158" width="130" height="40" rx="9"/>
+  <text x="255" y="182" class="k" text-anchor="middle">q = [q_nope | q_pe]</text>
+
+  <!-- kernel -->
+  <rect class="ker" x="380" y="86" width="180" height="120" rx="11"/>
+  <text x="470" y="116" class="bk" text-anchor="middle">trtllm_ragged_</text>
+  <text x="470" y="132" class="bk" text-anchor="middle">attention_deepseek</text>
+  <text x="470" y="156" class="k" text-anchor="middle" fill="#cdddff">flat q/k/v + cu_seqlens</text>
+  <text x="470" y="172" class="k" text-anchor="middle" fill="#cdddff">asymmetric qk≠v dims</text>
+  <text x="470" y="188" class="k" text-anchor="middle" fill="#cdddff">bmm1_scale = scale</text>
+  <path class="ar" d="M320,96 C 350,100 355,120 378,124"/>
+  <path class="ar" d="M320,178 C 350,170 355,156 378,150"/>
+
+  <!-- two outputs -->
+  <rect class="box" x="600" y="74" width="140" height="52" rx="9"/>
+  <text x="670" y="96" class="k" text-anchor="middle" fill="var(--ink)">context chunk</text>
+  <text x="670" y="112" class="k" text-anchor="middle">is_causal = False</text>
+  <rect class="box" x="600" y="166" width="140" height="52" rx="9"/>
+  <text x="670" y="188" class="k" text-anchor="middle" fill="var(--ink)">new tokens</text>
+  <text x="670" y="204" class="k" text-anchor="middle">is_causal = True</text>
+  <path class="ar" d="M560,124 C 580,116 585,104 598,100"/>
+  <path class="ar" d="M560,168 C 580,178 585,188 598,192"/>
+
+  <text x="600" y="246" class="k">context chunks → merge_attn_states (LSE)</text>
+  <text x="600" y="262" class="k">→ combined with new-tokens output</text>
+  <text x="20" y="246" class="t">Same kernel, two flags</text>
+  <text x="20" y="264" class="k">non-causal over cached context + causal over new tokens</text>
+</svg>
+<p class="figcap"><span class="en">Fig 2 · MLA prefill: up-project (<code>kv_b_proj</code>), reassemble <code>[k_nope|k_pe]</code>, one kernel called twice. Source: vLLM mla_attention.py &amp; trtllm_ragged.py @ 4bf699d.</span><span class="ko">그림 2 · MLA prefill: up-project(<code>kv_b_proj</code>), <code>[k_nope|k_pe]</code> 조립, 커널 하나를 두 번 호출. 출처: vLLM mla_attention.py·trtllm_ragged.py @ 4bf699d.</span></p>
+
+<p class="muted"><span class="en">The kernel call as the backend makes it (from <code class="inl">trtllm_ragged.py</code> @ 4bf699d):</span>
+<span class="ko">백엔드의 실제 커널 호출(<code class="inl">trtllm_ragged.py</code> @ 4bf699d에서 옮김):</span></p>
+<pre><code>trtllm_ragged_attention_deepseek(
+    query, key, value, workspace_buffer,
+    seq_lens, max_q_len, max_kv_len,
+    bmm1_scale=self.scale, bmm2_scale=1.0, o_sf_scale=1.0,
+    batch_size,
+    window_left=-1,
+    cum_seq_lens_q,            # = query_start_loc
+    cum_seq_lens_kv,           # new-tokens: query_start_loc;  context: chunk's cu_seq_lens
+    enable_pdl=False,
+    is_causal=...,             # True for new tokens, False for context chunk
+    return_lse=...,            # context chunk returns LSE for merge_attn_states
+    out=...,
+)</code></pre>
+</section>
+
+
+<section id="s3">
+<h2><span class="num">3</span><span class="en">The four MLA-prefill backends &amp; how this one is chosen</span><span class="ko">4개 MLA-prefill 백엔드와 선택 방식</span></h2>
+
+<p><span class="en">At this commit MLA prefill is a <b>pluggable registry</b>: each layer picks one backend at construction. There are four (cuDNN was removed):</span>
+<span class="ko">이 커밋에서 MLA prefill은 <b>pluggable registry</b> 구조다. 레이어가 생성될 때 백엔드 하나를 고른다. 백엔드는 네 개이고 cuDNN은 빠졌다.</span></p>
+
+<table>
+<tr><th><span class="en">Backend (<code>get_name()</code>)</span><span class="ko">백엔드 (<code>get_name()</code>)</span></th><th><span class="en">What</span><span class="ko">내용</span></th><th><span class="en">Hardware</span><span class="ko">하드웨어</span></th></tr>
+<tr><td><code class="inl">FLASH_ATTN</code></td><td><span class="en">The default FlashAttention MLA prefill. Broadest support, ranked first everywhere.</span><span class="ko">기본 FlashAttention MLA prefill. 지원 범위가 가장 넓고 어디서나 1순위.</span></td><td><span class="en">Hopper &amp; up (and the only option on pre-Blackwell)</span><span class="ko">Hopper 이상(Blackwell 이전엔 유일 선택지)</span></td></tr>
+<tr><td><code class="inl">TRTLLM_RAGGED</code></td><td><span class="en"><b>This note.</b> FlashInfer <code>trtllm_ragged_attention_deepseek</code> kernel.</span><span class="ko"><b>이 노트.</b> FlashInfer <code>trtllm_ragged_attention_deepseek</code> 커널.</span></td><td><span class="en">Blackwell SM100 only (<code>major == 10</code>)</span><span class="ko">Blackwell SM100 전용(<code>major == 10</code>)</span></td></tr>
+<tr><td><code class="inl">FLASHINFER</code></td><td><span class="en">FlashInfer's other MLA prefill path.</span><span class="ko">FlashInfer의 다른 MLA prefill 경로.</span></td><td><span class="en">Blackwell (ranked below TRTLLM_RAGGED)</span><span class="ko">Blackwell(TRTLLM_RAGGED 아래 순위)</span></td></tr>
+<tr><td><code class="inl">TOKENSPEED_MLA</code></td><td><span class="en">A further specialized MLA prefill backend.</span><span class="ko">추가로 특화된 MLA prefill 백엔드.</span></td><td><span class="en">Blackwell (lowest priority)</span><span class="ko">Blackwell(최하위 순위)</span></td></tr>
+</table>
+
+<p><span class="en">Selection happens in <code class="inl">get_mla_prefill_backend()</code>, two ways:</span>
+<span class="ko">선택은 <code class="inl">get_mla_prefill_backend()</code>에서 두 가지 방식으로 이뤄진다.</span></p>
+<ol>
+<li><span class="en"><b>Explicit override:</b> set <code class="inl">mla_prefill_backend=TRTLLM_RAGGED</code>; the branch validates hardware and <code class="inl">is_available()</code>, then uses it.</span>
+<span class="ko"><b>명시적 override:</b> 설정에 <code class="inl">mla_prefill_backend=TRTLLM_RAGGED</code>를 주면 하드웨어와 <code class="inl">is_available()</code>를 검증한 뒤 쓴다.</span></li>
+<li><span class="en"><b>Auto:</b> walk a per-hardware priority list and take the first valid, available backend.</span>
+<span class="ko"><b>Auto:</b> 하드웨어별 우선순위 목록에서 사용 가능하고 유효한 첫 백엔드를 고른다.</span></li>
+</ol>
+
+<div class="callout c-amber">
+  <span class="tag"><span class="en">the surprising part: auto-selection does NOT pick it</span><span class="ko">의외의 지점: auto 선택은 이 백엔드를 고르지 않는다</span></span>
+  <span class="en">On Blackwell the order is <b>FLASH_ATTN → TRTLLM_RAGGED → FLASHINFER → TOKENSPEED_MLA</b> (<code class="inl">selector.py</code> L59-69 @ 4bf699d); on Hopper/older it is <b>FLASH_ATTN only</b>. FA is first and broadly valid, so <code class="inl">TRTLLM_RAGGED</code> is reached only by <b>explicit</b> selection or a config FA can't serve. <i>(Some vLLM docs and secondary write-ups call it the auto-selected Blackwell backend. The selector source disagrees, so treat that as docs lagging the code.)</i></span>
+  <span class="ko">Blackwell의 우선순위는 <b>FLASH_ATTN → TRTLLM_RAGGED → FLASHINFER → TOKENSPEED_MLA</b>이고(<code class="inl">selector.py</code> L59-69 @ 4bf699d), Hopper 이하는 <b>FLASH_ATTN만</b> 있다. FA가 1순위이면서 대부분의 설정에서 유효하므로, <code class="inl">TRTLLM_RAGGED</code>는 <b>명시적으로</b> 고르거나 FA가 못 다루는 설정일 때만 쓰인다. 기본값으로는 쓰이지 않는다. <i>(일부 vLLM 문서와 2차 글은 이 백엔드를 Blackwell의 auto 선택값으로 설명한다. selector 소스와 맞지 않으므로 문서가 코드를 못 따라간 것으로 본다.)</i></span>
+</div>
+
+<svg class="fig" viewBox="0 0 760 200" role="img" aria-label="Backend selection priority by hardware">
+  <style>
+    .t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+    .k{font:11px -apple-system,sans-serif;fill:var(--muted)}
+    .pill{rx:8}
+    .fa{fill:var(--green-bg);stroke:var(--green-bd)}
+    .tr{fill:var(--blue-bg);stroke:var(--blue-bd);stroke-width:2}
+    .ot{fill:var(--gray-bg);stroke:var(--gray-bd)}
+    .ar{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#mh2)}
+  </style>
+  <defs><marker id="mh2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/></marker></defs>
+  <text x="20" y="22" class="t">Blackwell (capability.major == 10) — auto priority, left = picked first</text>
+  <rect class="fa pill" x="20"  y="36" width="130" height="34" rx="8"/><text x="85"  y="58" class="k" text-anchor="middle" fill="var(--green-ink)">FLASH_ATTN ✓</text>
+  <rect class="tr pill" x="178" y="36" width="150" height="34" rx="8"/><text x="253" y="58" class="k" text-anchor="middle" fill="var(--blue-ink)">TRTLLM_RAGGED</text>
+  <rect class="ot pill" x="356" y="36" width="120" height="34" rx="8"/><text x="416" y="58" class="k" text-anchor="middle">FLASHINFER</text>
+  <rect class="ot pill" x="504" y="36" width="150" height="34" rx="8"/><text x="579" y="58" class="k" text-anchor="middle">TOKENSPEED_MLA</text>
+  <path class="ar" d="M150,53 L176,53"/><path class="ar" d="M328,53 L354,53"/><path class="ar" d="M476,53 L502,53"/>
+  <text x="20" y="92" class="k">FA usually wins → TRTLLM_RAGGED reached only by explicit override or when FA is invalid</text>
+
+  <line x1="20" y1="110" x2="740" y2="110" stroke="var(--line)"/>
+  <text x="20" y="138" class="t">Hopper / older / non-NVIDIA (e.g. MI250) — list is FLASH_ATTN only</text>
+  <rect class="fa pill" x="20" y="152" width="130" height="34" rx="8"/><text x="85" y="174" class="k" text-anchor="middle" fill="var(--green-ink)">FLASH_ATTN ✓</text>
+  <text x="178" y="174" class="k">TRTLLM_RAGGED not in the list — never selected off Blackwell</text>
+</svg>
+<p class="figcap"><span class="en">Fig 3 · MLA-prefill backend priority by hardware. Source: <code>prefill/selector.py</code> @ 4bf699d.</span><span class="ko">그림 3 · 하드웨어별 MLA-prefill 백엔드 우선순위. 출처: <code>prefill/selector.py</code> @ 4bf699d.</span></p>
+</section>
+
+
+<section id="s4">
+<h2><span class="num">4</span><span class="en">Effects — theory vs. what's actually been reported</span><span class="ko">효과: 이론과 실제 보고 수치</span></h2>
+
+<h3><span class="en">Theory: why a dedicated Blackwell kernel could help</span><span class="ko">이론: 전용 Blackwell 커널이 도움이 되는 이유</span></h3>
+<table>
+<tr><th><span class="en">Lever</span><span class="ko">지렛대</span></th><th><span class="en">Mechanism</span><span class="ko">메커니즘</span></th></tr>
+<tr><td><span class="en">No padding</span><span class="ko">무패딩</span></td><td><span class="en">Zero FLOPs on pad tokens when lengths vary.</span><span class="ko">길이가 제각각이어도 pad 토큰에 쓰는 FLOPs가 0이다.</span></td></tr>
+<tr><td><span class="en">Native asymmetric dims</span><span class="ko">네이티브 비대칭 차원</span></td><td><span class="en">qk≠v head dims in one kernel, no padding/zeroing tricks.</span><span class="ko">qk≠v head 차원을 커널 하나에서 처리해 패딩/제로화 트릭이 필요 없다.</span></td></tr>
+<tr><td><span class="en">Blackwell-tuned</span><span class="ko">Blackwell 튜닝</span></td><td><span class="en">trtllm-gen kernels are tuned for SM100, to use features FA's generic path may not.</span><span class="ko">trtllm-gen 커널은 SM100에 맞춰 생성되어 FA 범용 경로가 못 쓰는 기능을 활용한다.</span></td></tr>
+</table>
+
+<h3><span class="en">Reported numbers: read carefully</span><span class="ko">보고된 수치: 주의해서 읽기</span></h3>
+<p><span class="en"><b>There is no isolated kernel microbenchmark</b> (the author deferred it), so "how much faster than FA" is <b>unquantified in public sources</b>. What exists:</span>
+<span class="ko">이 백엔드만 떼어 잰 <b>커널 마이크로벤치는 없다</b>(저자가 미뤘다). 그래서 "FA보다 얼마나 빠른가"는 <b>공개 자료로는 알 수 없다</b>. 나와 있는 수치는 다음과 같다.</span></p>
+<table>
+<tr><th><span class="en">Source</span><span class="ko">출처</span></th><th><span class="en">Number</span><span class="ko">수치</span></th><th><span class="en">What it actually means</span><span class="ko">실제 의미</span></th></tr>
+<tr><td><span class="en">vLLM PR #26397 (contributor self-bench)</span><span class="ko">vLLM PR #26397 (기여자 셀프벤치)</span></td><td>≈ +12.7% qps, −10.2% TTFT</td><td><span class="en">DeepSeek-V2-Lite (a <i>small</i> MLA model), single GPU, end-to-end serving. <b>Not</b> an isolated kernel bench, not vs FA3/FA4 at scale. Directional only.</span><span class="ko">DeepSeek-V2-Lite(<i>작은</i> MLA 모델), 단일 GPU, end-to-end 서빙. 커널 단독 벤치가 <b>아니고</b> 대규모 FA3/FA4 비교도 아니다. 방향성 참고용.</span></td></tr>
+<tr><td><span class="en">Vendor blog (GB200 deployment)</span><span class="ko">벤더 블로그 (GB200 배포)</span></td><td>~26.2K / 10.1K tok/s, "3–5× over H200"</td><td><span class="en"><b>Whole-deployment</b> figures (GB200 vs H200, full stack). <b>Not</b> attributable to trtllm_ragged.</span><span class="ko"><b>전체 배포</b> 수치(GB200 vs H200, 풀스택). trtllm_ragged의 효과로 볼 수 <b>없다</b>.</span></td></tr>
+<tr><td><span class="en">"3.36× FLOPs" (absorbed vs unabsorbed)</span><span class="ko">"3.36× FLOPs" (흡수 vs 비흡수)</span></td><td><span class="en">unconfirmed</span><span class="ko">미확인</span></td><td><span class="en">Only in a search summary, no primary source. Omitted.</span><span class="ko">검색 요약에만 나오고 1차 출처가 없어 생략한다.</span></td></tr>
+</table>
+
+<div class="callout c-purple">
+  <span class="tag"><span class="en">editor's note: our angle (not a vLLM claim)</span><span class="ko">편집자 주: 우리 관점 (vLLM 주장 아님)</span></span>
+  <ol class="en">
+    <li><b>Non-event on MI250.</b> CDNA2 has <code class="inl">capability.major != 10</code>, so the ROCm list is FlashAttention only. Forcing TRTLLM_RAGGED fails <code class="inl">is_available()</code> (no flashinfer kernel) and <code class="inl">supports_compute_capability()</code>.</li>
+    <li><b>Useful signal.</b> MLA prefill is now a <b>pluggable backend registry</b> (like the attention-backend and KV-connector registries), so the kernel for DeepSeek/GLM is a per-hardware policy, not a hardcode.</li>
+    <li><b>Benchmarking.</b> A DeepSeek-family model on MI250 runs the FA MLA-prefill path. A fair comparison with a Blackwell box must account for the prefill backend, which may be a different kernel.</li>
+  </ol>
+  <ol class="ko">
+    <li><b>MI250에서는 무관하다.</b> CDNA2는 <code class="inl">capability.major != 10</code>이라 ROCm의 목록은 FlashAttention 하나다. TRTLLM_RAGGED를 강제해도 <code class="inl">is_available()</code>(flashinfer 커널 없음)와 <code class="inl">supports_compute_capability()</code>에서 막힌다.</li>
+    <li><b>남겨 둘 신호.</b> MLA prefill이 <b>pluggable 백엔드 registry</b>로 바뀌었다(attention-backend·KV-connector registry와 같은 형태). DeepSeek/GLM을 어떤 커널로 돌릴지가 하드코드가 아니라 하드웨어별 정책이 됐다.</li>
+    <li><b>벤치 비교.</b> MI250에서 DeepSeek 계열을 돌리면 FA MLA-prefill 경로를 탄다. Blackwell 장비와 비교할 때는 prefill 백엔드가 다른 커널일 수 있다는 점을 감안해야 한다.</li>
+  </ol>
+</div>
+</section>
+
+
+<section id="s5">
+<h2><span class="num">5</span><span class="en">Using it — config, env, hardware</span><span class="ko">쓰는 법: 설정·env·하드웨어</span></h2>
+
+<p><span class="en">Use the config field; the old environment-variable path is deprecated.</span>
+<span class="ko">지금은 설정 필드로 켠다. 예전 환경변수 방식은 deprecated다.</span></p>
+<pre><code># Current — pluggable selector (since the prefill/ subpackage refactor)
+--attention-config.mla_prefill_backend=TRTLLM_RAGGED
+
+# Deprecated — the original env-gated path (PR #26397)
+VLLM_USE_TRTLLM_RAGGED_DEEPSEEK_PREFILL=1
+VLLM_ATTENTION_BACKEND=FLASHINFER_MLA</code></pre>
+
+<table>
+<tr><th><span class="en">Requirement</span><span class="ko">요구사항</span></th><th><span class="en">Value</span><span class="ko">값</span></th></tr>
+<tr><td><span class="en">GPU</span><span class="ko">GPU</span></td><td><span class="en"><b>Datacenter Blackwell, SM100</b> (e.g. B200 / GB200). Check: <code class="inl">device_capability.major == 10</code>. SM120 (e.g. consumer Blackwell) reportedly fails (SGLang #24633).</span><span class="ko"><b>데이터센터 Blackwell, SM100</b>(예: B200 / GB200). 검사 조건은 <code class="inl">device_capability.major == 10</code>이다. SM120(예: 컨슈머 Blackwell)은 실패한다는 보고가 있다(SGLang #24633).</span></td></tr>
+<tr><td><span class="en">Model</span><span class="ko">모델</span></td><td><span class="en">MLA model with supported dims: <code class="inl">128/64/128</code> (DeepSeek-V2/V3) or <code class="inl">192/64/256</code> (GLM-style).</span><span class="ko">지원 차원의 MLA 모델: <code class="inl">128/64/128</code>(DeepSeek-V2/V3) 또는 <code class="inl">192/64/256</code>(GLM류).</span></td></tr>
+<tr><td><span class="en">Library</span><span class="ko">라이브러리</span></td><td><span class="en"><code class="inl">flashinfer</code> with <code class="inl">trtllm_ragged_attention_deepseek</code> (no documented minimum version).</span><span class="ko"><code class="inl">trtllm_ragged_attention_deepseek</code>가 있는 <code class="inl">flashinfer</code>(문서화된 최소 버전 없음).</span></td></tr>
+<tr><td><span class="en">Dtype</span><span class="ko">dtype</span></td><td><span class="en">fp16 / bf16; fp8 query-quantization supported via the prefill-quant path.</span><span class="ko">fp16 / bf16. fp8 query 양자화는 prefill-quant 경로로 지원.</span></td></tr>
+<tr><td><code class="inl">VLLM_FLASHINFER_WORKSPACE_BUFFER_SIZE</code></td><td><span class="en">workspace scratch for the kernel; default <b>394 MB</b> (<code class="inl">394*1024*1024</code>).</span><span class="ko">커널용 workspace. 기본 <b>394 MB</b>(<code class="inl">394*1024*1024</code>).</span></td></tr>
+</table>
+</section>
+
+
+<section id="s6">
+<h2><span class="num">6</span><span class="en">Code flow (with permalinks)</span><span class="ko">코드 흐름 (permalink)</span></h2>
+<p class="muted"><span class="en">End-to-end MLA prefill with <code class="inl">TRTLLM_RAGGED</code> chosen; permalinks pinned to <code class="inl">4bf699d</code>. At this SHA the shared prefill orchestration lives in <code class="inl">model_executor/layers/attention/mla_attention.py</code> (there is no <code class="inl">mla/common.py</code>); the backend is the <code class="inl">v1/attention/backends/mla/prefill/</code> subpackage.</span>
+<span class="ko"><code class="inl">TRTLLM_RAGGED</code>가 선택됐을 때의 흐름이다(permalink은 <code class="inl">4bf699d</code> 기준). 이 SHA에서 공통 prefill 오케스트레이션은 <code class="inl">model_executor/layers/attention/mla_attention.py</code>에 있고(<code class="inl">mla/common.py</code>는 없다), 백엔드는 <code class="inl">v1/attention/backends/mla/prefill/</code> 서브패키지에 있다.</span></p>
+
+<ol class="flow">
+<li><span class="en"><b>Config.</b> <code class="inl">mla_prefill_backend</code> field parsed into the attention config; a validator maps the string to the enum.</span><span class="ko"><b>설정.</b> <code class="inl">mla_prefill_backend</code> 필드를 attention 설정으로 파싱하고, validator가 문자열을 enum으로 바꾼다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/config/attention.py#L45-L47">config/attention.py#L45-L47</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/config/attention.py#L111-L117">validator #L111-L117</a></li>
+
+<li><span class="en"><b>Backend registry.</b> <code class="inl">MLAPrefillBackendEnum</code> lists the four backends; the <code class="inl">TRTLLM_RAGGED</code> entry points at the backend class.</span><span class="ko"><b>백엔드 registry.</b> <code class="inl">MLAPrefillBackendEnum</code>에 4개 백엔드가 있고, <code class="inl">TRTLLM_RAGGED</code> 항목이 백엔드 클래스를 가리킨다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/registry.py#L34-L53">prefill/registry.py#L34-L53</a></li>
+
+<li><span class="en"><b>Selection.</b> <code class="inl">get_mla_prefill_backend()</code>: explicit-override branch, else <code class="inl">_auto_select_mla_prefill_backend()</code> over the hardware priorities (Blackwell list = FA, TRTLLM_RAGGED, FLASHINFER, TOKENSPEED).</span><span class="ko"><b>선택.</b> <code class="inl">get_mla_prefill_backend()</code>가 명시적 override를 먼저 보고, 없으면 하드웨어 우선순위로 <code class="inl">_auto_select_mla_prefill_backend()</code>를 돈다(Blackwell 목록 = FA, TRTLLM_RAGGED, FLASHINFER, TOKENSPEED).</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/selector.py#L72-L135">selector.py#L72-L135</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/selector.py#L48-L69">priorities #L48-L69</a></li>
+
+<li><span class="en"><b>Gating.</b> <code class="inl">supports_compute_capability()</code> returns <code class="inl">major == 10</code>; <code class="inl">is_available()</code> tries to import <code class="inl">trtllm_ragged_attention_deepseek</code> from <code class="inl">flashinfer.prefill</code>; the base class validates dtype (fp16/bf16) and config.</span><span class="ko"><b>게이팅.</b> <code class="inl">supports_compute_capability()</code>는 <code class="inl">major == 10</code>을 확인하고, <code class="inl">is_available()</code>는 <code class="inl">flashinfer.prefill</code>에서 <code class="inl">trtllm_ragged_attention_deepseek</code> import를 시도한다. dtype(fp16/bf16)과 설정은 베이스 클래스가 검증한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/trtllm_ragged.py#L44-L57">trtllm_ragged.py#L44-L57</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/base.py#L37-L99">base.py#L37-L99</a></li>
+
+<li><span class="en"><b>Bind at layer init.</b> <code class="inl">MLAAttention.__init__</code> resolves and stores the chosen prefill backend.</span><span class="ko"><b>레이어 init에서 바인드.</b> <code class="inl">MLAAttention.__init__</code>가 선택된 prefill 백엔드를 정해 저장한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/model_executor/layers/attention/mla_attention.py#L472-L481">mla_attention.py#L472-L481</a></li>
+
+<li><span class="en"><b>Construct &amp; workspace.</b> <code class="inl">TrtllmRaggedPrefillBackend.__init__</code> reserves the FlashInfer workspace buffer (sized by the env var, <code class="inl">torch.uint8</code>); <code class="inl">supported_mla_dimensions</code> declares the 128/64/128 and 192/64/256 shapes.</span><span class="ko"><b>생성 &amp; workspace.</b> <code class="inl">TrtllmRaggedPrefillBackend.__init__</code>가 workspace 버퍼(<code class="inl">torch.uint8</code>, 크기는 env 변수)를 잡고, <code class="inl">supported_mla_dimensions</code>에 128/64/128·192/64/256을 선언한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/trtllm_ragged.py#L24-L83">trtllm_ragged.py#L24-L83</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/envs.py#L1549-L1550">envs.py#L1549-L1550</a></li>
+
+<li><span class="en"><b>Metadata.</b> The MLA builder fills prefill metadata and calls <code class="inl">prepare_metadata()</code>, which computes <code class="inl">_query_seq_lens</code> from consecutive <code class="inl">query_start_loc</code> diffs (the ragged cu_seqlens).</span><span class="ko"><b>메타데이터.</b> MLA 빌더가 prefill 메타데이터를 채우고 <code class="inl">prepare_metadata()</code>를 부른다. 여기서 <code class="inl">query_start_loc</code>의 인접 차분으로 <code class="inl">_query_seq_lens</code>를 구한다(ragged cu_seqlens).</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/model_executor/layers/attention/mla_attention.py#L1817-L1825">mla_attention.py#L1817-L1825</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/trtllm_ragged.py#L85-L92">prepare_metadata #L85-L92</a></li>
+
+<li><span class="en"><b>Context-chunk pass.</b> <code class="inl">_compute_prefill_context()</code> gathers paged latent KV, up-projects via <code class="inl">kv_b_proj</code>, concatenates <code class="inl">k = [k_nope | k_pe]</code>, then calls <code class="inl">run_prefill_context_chunk()</code> with <code class="inl">is_causal=False, return_lse=True</code>; chunks merge with <code class="inl">merge_attn_states</code>.</span><span class="ko"><b>Context-chunk 패스.</b> <code class="inl">_compute_prefill_context()</code>가 페이지드 latent KV를 모아 <code class="inl">kv_b_proj</code>로 up-project 하고 <code class="inl">k = [k_nope | k_pe]</code>를 만든 뒤, <code class="inl">run_prefill_context_chunk()</code>를 <code class="inl">is_causal=False, return_lse=True</code>로 호출한다. 청크 결과는 <code class="inl">merge_attn_states</code>로 합친다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/model_executor/layers/attention/mla_attention.py#L2052-L2137">mla_attention.py#L2052-L2137</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/trtllm_ragged.py#L139-L185">run_prefill_context_chunk #L139-L185</a></li>
+
+<li><span class="en"><b>New-tokens pass.</b> The forward calls <code class="inl">run_prefill_new_tokens()</code> with <code class="inl">is_causal=True</code>; the kernel call (lines 113-132) passes <code class="inl">bmm1_scale=self.scale</code> and <code class="inl">query_start_loc</code> as both q and kv cu_seqlens; LSE is transposed <code class="inl">(q_len,H)→(H,q_len)</code>.</span><span class="ko"><b>New-tokens 패스.</b> forward가 <code class="inl">run_prefill_new_tokens()</code>를 <code class="inl">is_causal=True</code>로 호출한다. 커널 호출(113-132줄)은 <code class="inl">bmm1_scale=self.scale</code>를 넘기고 <code class="inl">query_start_loc</code>를 q·kv cu_seqlens 양쪽에 쓴다. LSE는 <code class="inl">(q_len,H)→(H,q_len)</code>로 전치한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/model_executor/layers/attention/mla_attention.py#L2294-L2315">mla_attention.py#L2294-L2315</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill/trtllm_ragged.py#L94-L137">run_prefill_new_tokens #L94-L137</a></li>
+
+<li><span class="en"><b>fp8 query-quant (optional).</b> A capability gate decides whether the prefill query is quantized to fp8 before the kernel.</span><span class="ko"><b>fp8 query-양자화(선택).</b> 커널 호출 전에 capability 게이트가 prefill query의 fp8 양자화 여부를 정한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/model_executor/layers/attention/mla_attention.py#L1350-L1376">mla_attention.py#L1350-L1376</a></li>
+</ol>
+
+<div class="grid2">
+  <div class="mini"><h4><span class="en">Key files</span><span class="ko">핵심 파일</span></h4><p>
+  <code>…/mla/prefill/trtllm_ragged.py</code> — <span class="en">the backend (lines 24-185)</span><span class="ko">백엔드(24-185줄)</span><br>
+  <code>…/mla/prefill/selector.py</code> — <span class="en">choice + priorities</span><span class="ko">선택 + 우선순위</span><br>
+  <code>…/mla/prefill/base.py</code> · <code>registry.py</code> — <span class="en">ABC + enum of 4</span><span class="ko">ABC + 4개 enum</span><br>
+  <code>…/attention/mla_attention.py</code> — <span class="en">up-project, two passes, merge</span><span class="ko">up-project, 두 패스, 병합</span><br>
+  <code>config/attention.py</code> — <span class="en">the selectable field</span><span class="ko">선택 가능 필드</span></p></div>
+  <div class="mini"><h4><span class="en">Mechanism, precisely</span><span class="ko">메커니즘 정확히</span></h4><p><span class="en">One kernel (<code>trtllm_ragged_attention_deepseek</code>) serves both passes, flipped by <code class="inl">is_causal</code>. The backend is thin: declare dims, gate on SM100 + flashinfer, reserve a workspace, build cu_seqlens, call the kernel, transpose the LSE. MLA-specific work (up-projection, k assembly, chunk merge) lives in <code>mla_attention.py</code>, shared by all four backends.</span><span class="ko">커널 하나(<code>trtllm_ragged_attention_deepseek</code>)가 <code class="inl">is_causal</code>만 바꿔 두 패스를 처리한다. 백엔드는 얇다. 차원 선언, SM100·flashinfer 게이트, workspace 예약, cu_seqlens 구성, 커널 호출, LSE 전치가 전부다. MLA 고유 작업(up-projection, k 조립, 청크 병합)은 4개 백엔드가 공유하는 <code>mla_attention.py</code>에 있다.</span></p></div>
+</div>
+</section>
+
+
+<section id="s7">
+<h2><span class="num">7</span><span class="en">Implementation status</span><span class="ko">구현 상태</span></h2>
+<p><span class="en"><b>Merged, not experimental-gated</b>, but narrow (Blackwell SM100 only, two MLA dim sets, flashinfer required) and <b>not the auto-default</b> (FA outranks it).</span>
+<span class="ko"><b>머지됐고 experimental 게이트도 없다.</b> 다만 적용 범위가 좁고(Blackwell SM100 전용, MLA 차원 2종, flashinfer 필요) FA보다 순위가 낮아 <b>auto 기본값이 아니다</b>.</span></p>
+
+<table>
+<tr><th>PR</th><th><span class="en">What</span><span class="ko">내용</span></th></tr>
+<tr><td><a class="src" href="https://github.com/vllm-project/vllm/pull/26397">#26397</a></td><td><span class="en">Introduced the TRT-LLM ragged DeepSeek prefill kernel integration (env-gated path), merged 2025-10-24 (minosfuture). Source of the +12.7% qps / −10.2% TTFT self-bench.</span><span class="ko">TRT-LLM ragged DeepSeek prefill 커널 통합(env 게이트 경로). 2025-10-24 머지(minosfuture). +12.7% qps / −10.2% TTFT 셀프벤치의 출처.</span></td></tr>
+<tr><td><a class="src" href="https://github.com/vllm-project/vllm/pull/32623">#32623</a></td><td><span class="en">Refactored MLA prefill into the pluggable <code class="inl">prefill/</code> subpackage + the <code class="inl">mla_prefill_backend</code> selector (created the registry; ~2026-05-01).</span><span class="ko">MLA prefill을 pluggable <code class="inl">prefill/</code> 서브패키지와 <code class="inl">mla_prefill_backend</code> selector로 리팩터(registry 생성, ~2026-05-01).</span></td></tr>
+<tr><td><span class="en">follow-ups</span><span class="ko">후속</span></td><td><span class="en">#41744, #42112, #43050 (refinements); #43525 added the 192/64/256 (GLM-5) dims. Latest touch 2026-06-16.</span><span class="ko">#41744, #42112, #43050(개선). #43525가 192/64/256(GLM-5) 차원 추가. 최신 변경 2026-06-16.</span></td></tr>
+</table>
+
+<h4><span class="en">Constraints &amp; gaps</span><span class="ko">제약 &amp; 빈자리</span></h4>
+<ul>
+<li><span class="en"><b>Blackwell SM100 only.</b> Hard <code class="inl">major == 10</code> gate; SM120 (consumer Blackwell) reportedly broken (<a class="src" href="https://github.com/sgl-project/sglang/issues/24633">SGLang #24633</a>, cross-project signal).</span><span class="ko"><b>Blackwell SM100 전용.</b> <code class="inl">major == 10</code> 고정 게이트. SM120(컨슈머 Blackwell)은 실패 보고가 있다(<a class="src" href="https://github.com/sgl-project/sglang/issues/24633">SGLang #24633</a>, 다른 프로젝트 사례).</span></li>
+<li><span class="en"><b>No isolated kernel benchmark.</b> No published "trtllm_ragged vs FA MLA-prefill" number (§4).</span><span class="ko"><b>커널 단독 벤치 없음.</b> "trtllm_ragged vs FA MLA-prefill" 수치는 미공개다(4장).</span></li>
+<li><span class="en"><b>No documented minimum flashinfer version.</b> It just has to export the kernel symbol.</span><span class="ko"><b>문서화된 최소 flashinfer 버전 없음.</b> 커널 심벌만 export하면 된다.</span></li>
+<li><span class="en"><b>Not auto-selected.</b> Needs explicit <code class="inl">mla_prefill_backend=TRTLLM_RAGGED</code> (§3).</span><span class="ko"><b>auto 선택 안 됨.</b> <code class="inl">mla_prefill_backend=TRTLLM_RAGGED</code> 명시가 필요하다(3장).</span></li>
+</ul>
+</section>
+
+
+<section id="s8">
+<h2><span class="num">8</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+<h4><span class="en">vLLM (docs / PRs / code)</span><span class="ko">vLLM (문서 / PR / 코드)</span></h4>
+<ul class="srcs">
+<li>vLLM API doc — TrtllmRaggedPrefillBackend — <a href="https://docs.vllm.ai/en/latest/api/vllm/v1/attention/backends/mla/prefill/trtllm_ragged/">docs.vllm.ai/…/mla/prefill/trtllm_ragged</a></li>
+<li>PR #26397 — TRT-LLM ragged DeepSeek prefill kernel (env-gated), +12.7% qps / −10.2% TTFT self-bench — <a href="https://github.com/vllm-project/vllm/pull/26397">github.com/vllm-project/vllm/pull/26397</a></li>
+<li>PR #32623 — pluggable <code>prefill/</code> subpackage + <code>mla_prefill_backend</code> selector — <a href="https://github.com/vllm-project/vllm/pull/32623">…/pull/32623</a> · follow-ups #41744 / #42112 / #43050 / #43525 (GLM-5 dims)</li>
+<li>Code @ <code>4bf699d</code> — <a href="https://github.com/vllm-project/vllm/tree/4bf699d310300edf1df2df2713e3d6516438a798/vllm/v1/attention/backends/mla/prefill">v1/attention/backends/mla/prefill</a> (trtllm_ragged.py, selector.py, base.py, registry.py) + <a href="https://github.com/vllm-project/vllm/blob/4bf699d310300edf1df2df2713e3d6516438a798/vllm/model_executor/layers/attention/mla_attention.py">mla_attention.py</a></li>
+</ul>
+<h4><span class="en">MLA &amp; ragged concept</span><span class="ko">MLA &amp; ragged 개념</span></h4>
+<ul class="srcs">
+<li>DeepSeek-V2 (MLA, "compressing the KV cache into a latent vector") — <a href="https://arxiv.org/abs/2405.04434">arXiv:2405.04434</a></li>
+<li>DeepSeek-V3 (the V3-scale MLA model) — <a href="https://arxiv.org/abs/2412.19437">arXiv:2412.19437</a></li>
+<li>FlashInfer KV-Layout (Ragged Tensor definition, <code>indptr</code>/<code>qo_indptr</code>; "MLA unifies key cache and value cache into a single tensor") — <a href="https://docs.flashinfer.ai/tutorials/kv_layout.html">docs.flashinfer.ai/tutorials/kv_layout</a></li>
+<li>FlashInfer kernel — <code>trtllm_ragged_attention_deepseek</code> (args, <code>bmm1_scale</code>, <code>backend='trtllm-gen'</code>) — <a href="https://docs.flashinfer.ai/generated/flashinfer.prefill.trtllm_ragged_attention_deepseek.html">docs.flashinfer.ai/…/trtllm_ragged_attention_deepseek</a></li>
+<li>vLLM forum — why MLA prefill uses normal (un-absorbed) attention while decode uses weight absorption — <a href="https://discuss.vllm.ai/t/why-does-prefill-use-normal-attention-while-decode-uses-weight-absorption-in-mla/1289">discuss.vllm.ai/t/…/1289</a></li>
+</ul>
+<h4><span class="en">Cross-project / vendor (use with attribution)</span><span class="ko">프로젝트 교차 / 벤더 (출처 표기해 인용)</span></h4>
+<ul class="srcs">
+<li>SGLang #24633 — TRT-LLM ragged DeepSeek prefill fails on SM120 (consumer Blackwell) — <a href="https://github.com/sgl-project/sglang/issues/24633">github.com/sgl-project/sglang/issues/24633</a></li>
+</ul>
+<p class="muted"><span class="en">Caveats: +12.7% qps / −10.2% TTFT is a single-GPU DeepSeek-V2-Lite self-bench, directional only. GB200 "3–5× over H200" / ~26K tok/s are whole-deployment vendor numbers, not attributable to this kernel. "3.36× FLOPs" is unconfirmed and omitted. Line numbers are valid at commit 4bf699d.</span>
+<span class="ko">주의: +12.7% qps / −10.2% TTFT는 단일 GPU·DeepSeek-V2-Lite 셀프벤치라 방향성 참고용이다. GB200 "H200 대비 3–5×" / ~26K tok/s는 전체 배포 벤더 수치라 이 커널의 효과로 볼 수 없다. "3.36× FLOPs"는 미확인이라 생략했다. 줄 번호는 커밋 4bf699d 기준이다.</span></p>
+</section>
+
+<footer>
+  <span class="en">Inference study note · 2026-06-17 · TrtllmRaggedPrefillBackend &amp; code @ vllm-project/vllm 4bf699d · see the <a class="src" href="https://docs.vllm.ai/en/latest/api/vllm/v1/attention/backends/mla/prefill/trtllm_ragged/">API doc</a>. Code line numbers are commit-pinned; everything else is cited inline.</span>
+  <span class="ko">추론 스터디 노트 · 2026-06-17 · TrtllmRaggedPrefillBackend &amp; 코드 @ vllm-project/vllm 4bf699d · <a class="src" href="https://docs.vllm.ai/en/latest/api/vllm/v1/attention/backends/mla/prefill/trtllm_ragged/">API 문서</a>. 코드 줄 번호는 커밋 기준이고 나머지는 본문에 출처를 달았다.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>

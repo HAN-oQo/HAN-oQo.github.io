@@ -1,110 +1,17 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Field guide — 가속화 엔지니어의 실제 작업 방식 · Dynamic Bucketing</title>
+<meta http-equiv="refresh" content="0; url=../learn/practice.html">
+<link rel="canonical" href="../learn/practice.html">
+<title>Moved</title>
 <link rel="stylesheet" href="../assets/theme.css">
-<link rel="stylesheet" href="study.css">
 </head>
 <body>
-<div class="wrap">
-  <p class="crumb"><a href="../">Home</a> · <a href="./">Inference Onboarding</a> · Field guide</p>
-  <h1>가속화 엔지니어는 실제로 어떻게 일하나</h1>
-  <p class="sub">워크플로 · 엔진에서 실제로 손대는 지점 · 노브 · 흔한 병목 패턴 · Dynamic Bucketing</p>
-  <p class="post-meta"><time datetime="2026-11-23">2026-11-23</time></p>
-
-  <div class="call warn">기준 버전: vLLM <code>v0.34.0</code> (<a href="https://github.com/vllm-project/vllm/tree/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca">62d4bc3</a>), SGLang main (<a href="https://github.com/sgl-project/sglang/tree/2544c9ac34be4447bdffa612c37015a3f8da9e84">2544c9a</a>). 이 페이지의 "루프"와 "패턴 표"는 공식 문서가 아니라 <b>현업 관행을 정리한 작성자 추정</b>입니다. 코드 경로·플래그는 위 커밋에서 존재를 확인했습니다.</div>
-
-  <h2>1. 작업 루프: 한 번의 최적화는 이렇게 돈다</h2>
-  <table>
-    <tr><th>단계</th><th>하는 일</th><th>도구 / 근거</th><th>여기서 흔히 틀리는 것</th></tr>
-    <tr><td><b>0. 워크로드 고정</b></td><td>입력/출력 길이 분포, 동시성·도착률, SLO(TTFT/TPOT p99)를 YAML로 고정. "빨라졌다"의 정의부터 합의.</td><td><code>vllm bench serve</code> (<a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/entrypoints/cli/benchmark/serve.py">cli/benchmark/serve.py</a>), <code>vllm bench sweep</code></td><td>평균 처리량만 보고 p99 TTFT 회귀를 놓침</td></tr>
-    <tr><td><b>1. 분해</b></td><td>step 시간을 스케줄러(CPU) / 입력 준비 / forward / 샘플링·디토크나이즈로 쪼갬. GPU가 놀고 있는 구간(CPU 바운드)부터 찾는다.</td><td><code>--profiler-config</code> (torch profiler, <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/config/profiler.py#L66">ProfilerConfig</a>), Nsight Systems, py-spy</td><td>커널만 보고 CPU 갭(launch, Python 스케줄러)을 놓침</td></tr>
-    <tr><td><b>2. 가설</b></td><td>roofline 상 위치(M1)로 "이 커널은 대역폭 몇 %여야 정상"을 먼저 계산 → 실측과의 차이가 가설</td><td>Nsight Compute, M1의 계산기</td><td>계산 없이 "느려 보이는" 커널부터 고침</td></tr>
-    <tr><td><b>3. 마이크로벤치</b></td><td>문제 연산만 떼어 shape sweep. MoE면 tuning config 생성</td><td><a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/benchmarks/kernels/benchmark_moe.py#L1211"><code>benchmarks/kernels/benchmark_moe.py --tune</code></a></td><td>실제 배치 분포와 다른 shape로 튜닝</td></tr>
-    <tr><td><b>4. 패치</b></td><td>fork 대신 확장 지점(§2)으로: 커스텀 스케줄러, CustomOp, KV connector, 플러그인</td><td>§2 표</td><td>코어를 직접 고쳐 rebase 지옥</td></tr>
-    <tr><td><b>5. 정확성</b></td><td>greedy 출력·logprob diff, 소규모 eval(GSM8K 등), 배치 크기 바뀌어도 같은 결과인지</td><td><a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/features/batch_invariance.md">batch invariance 문서</a>, <code>VLLM_BATCH_INVARIANT</code></td><td>빨라졌는데 수치가 미세하게 바뀐 걸 "노이즈"로 넘김</td></tr>
-    <tr><td><b>6. A/B</b></td><td>같은 노드·같은 시드에서 반복 측정, 분산 포함 보고</td><td>bench sweep</td><td>1회 측정, 워밍업 미포함</td></tr>
-    <tr><td><b>7. 반영</b></td><td>업스트림 PR(벤치 표 + 정확성 증빙) 또는 내부 플러그인 유지</td><td>vLLM 저장소 PR 템플릿</td><td>내부 fork에 쌓아두다 버전업 때 전부 깨짐</td></tr>
-  </table>
-
-  <h2>2. 엔진에서 실제로 손대는 5개 지점 (vLLM ↔ SGLang)</h2>
-  <p class="small">엔진 전체를 읽지 말고 이 다섯 곳을 깊게. M4~M10의 실전 랩이 전부 여기에 걸려 있다.</p>
-  <table>
-    <tr><th>지점</th><th>vLLM v0.34.0</th><th>SGLang 2544c9a</th><th>확장 방법</th></tr>
-    <tr><td>① 스케줄러</td>
-      <td><a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/sched/scheduler.py#L716"><code>Scheduler.schedule()</code></a>, <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/sched/request_queue.py#L131"><code>PriorityRequestQueue</code></a></td>
-      <td><a href="https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/scheduler.py#L4386"><code>get_next_batch_to_run</code></a>, <a href="https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/schedule_policy.py#L188"><code>CacheAwarePolicy (lpm/dfs-weight)</code></a></td>
-      <td>vLLM: <code>--scheduler-cls</code> (<a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/config/scheduler.py#L189">SchedulerConfig.scheduler_cls</a>), <code>--scheduling-policy priority</code></td></tr>
-    <tr><td>② KV·prefix cache</td>
-      <td><a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/kv_cache_manager.py#L131"><code>KVCacheManager</code></a>, <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/block_pool.py#L107"><code>BlockPool</code></a>, <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/kv_cache_utils.py#L703"><code>hash_block_tokens</code></a></td>
-      <td><a href="https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/mem_cache/radix_cache.py#L282"><code>RadixCache</code></a></td>
-      <td>vLLM: <code>--enable-prefix-caching</code>, <code>--block-size</code>, <code>--kv-cache-dtype</code></td></tr>
-    <tr><td>③ 실행·CUDA graph</td>
-      <td><a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/worker/gpu/model_runner.py#L1826"><code>execute_model</code></a>, <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/worker/gpu/cudagraph_utils.py#L558"><code>CudaGraphManager.dispatch</code></a></td>
-      <td><a href="https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/scheduler.py#L2266"><code>event_loop_overlap</code></a>, <a href="https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/model_executor/runner/base_cuda_graph_runner.py#L201">cuda graph bucket (bisect)</a></td>
-      <td><code>--cudagraph-capture-sizes</code>, <code>--enforce-eager</code>, <code>--async-scheduling</code></td></tr>
-    <tr><td>④ 커널·fusion</td>
-      <td><a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/custom_op.py#L102"><code>CustomOp</code></a> (<code>forward_cuda</code>/<code>forward_native</code>/<code>register_oot</code>), <a href="https://github.com/vllm-project/vllm/tree/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/compilation/passes">compilation/passes</a></td>
-      <td><a href="https://github.com/sgl-project/sglang/tree/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/layers">srt/layers</a> + sgl-kernel</td>
-      <td>vLLM: <code>@RMSNorm.register_oot</code> 처럼 in-tree 클래스에 OOT 구현을 등록해 교체 (<a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/custom_op.md">custom_op.md</a>)</td></tr>
-    <tr><td>⑤ KV 전송·모델 등록</td>
-      <td><a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L182"><code>KVConnectorBase_V1</code></a>, <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/plugin_system.md"><code>ModelRegistry.register_model</code></a></td>
-      <td><a href="https://github.com/sgl-project/sglang/tree/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/disaggregation">srt/disaggregation</a></td>
-      <td><code>--kv-transfer-config</code>, 플러그인 entry point <code>vllm.general_plugins</code></td></tr>
-  </table>
-
-  <h2>3. 흔한 병목 패턴: 증상에서 코드까지</h2>
-  <table>
-    <tr><th>증상</th><th>흔한 원인</th><th>먼저 볼 곳</th></tr>
-    <tr><td>decode 배치가 작은데 GPU util이 낮고 step이 들쭉날쭉</td><td>CPU 오버헤드(스케줄링·입력 준비·디토크나이즈)가 GPU를 굶김</td><td>timeline의 커널 사이 갭 → <code>--async-scheduling</code>, CUDA graph 적용 여부</td></tr>
-    <tr><td>배치 33에서만 이상하게 느림</td><td>CUDA graph 버킷 경계: 33 → 다음 캡처 크기로 패딩(§5)</td><td><code>CudaGraphManager.dispatch</code>, <code>--cudagraph-capture-sizes</code></td></tr>
-    <tr><td>긴 프롬프트 유입 시 진행 중 요청들의 TPOT 스파이크</td><td>prefill이 decode step을 점유</td><td>chunked prefill 토큰 예산 <code>--max-num-batched-tokens</code>, <code>--long-prefill-token-threshold</code></td></tr>
-    <tr><td>고부하에서 TTFT p99 폭증 + 로그에 preemption</td><td>KV 부족 → recompute preemption 폭주</td><td><code>schedule()</code>의 preemption 분기, 로그의 <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/kv_cache_utils.py#L1170">"Maximum concurrency"</a> 줄로 예산 확인</td></tr>
-    <tr><td>새 GPU에서 MoE 모델만 기대보다 느림</td><td>해당 GPU용 fused_moe 튜닝 config 없음</td><td>로그 <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/fused_moe/fused_moe.py#L1254">"Using default MoE config"</a> → <code>benchmark_moe.py --tune</code></td></tr>
-    <tr><td>prefix hit rate가 예상보다 낮음</td><td>block 경계 미정렬, 시스템 프롬프트 템플릿 차이, eviction 정책</td><td><code>hash_block_tokens</code>, <code>--block-size</code></td></tr>
-  </table>
-
-  <h2>4. Dynamic Bucketing: 세 가지 의미</h2>
-  <div class="call">"버킷팅"은 문맥마다 다른 것을 가리킨다. 공통점은 하나: <b>가변 크기 입력을 미리 정한 몇 개의 크기로 맞춰서(패딩) 정적 shape의 이점을 얻고, 그 대가로 패딩 낭비를 낸다.</b> "dynamic"은 버킷 경계나 배치 크기를 런타임 분포·예산에 맞춰 정한다는 뜻.</div>
-
-  <h3>4-1. 정적 shape 실행을 위한 버킷: CUDA graph, XLA/TPU, Gaudi</h3>
-  <p>CUDA graph는 캡처한 shape로만 replay할 수 있다. 그래서 vLLM은 몇 개의 배치/토큰 크기로 graph를 캡처해 두고, 실제 배치를 <b>그걸 담을 수 있는 가장 작은 graph</b>로 패딩해 실행한다. <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/worker/gpu/cudagraph_utils.py#L558"><code>dispatch()</code></a>의 docstring이 그대로 이 동작을 설명한다:</p>
-  <blockquote class="small" style="border-left:3px solid var(--line);margin:8px 0;padding:4px 12px;color:var(--muted)">"A uniform decode batch takes the smallest decode graph of its query length that covers `num_tokens`, which may be padded…"<br>— vllm/v1/worker/gpu/cudagraph_utils.py L569–571</blockquote>
-  <p>SGLang도 같은 일을 <a href="https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/model_executor/runner/base_cuda_graph_runner.py#L201"><code>bisect.bisect_left(buckets, raw_size)</code></a>로 한다. XLA/TPU나 Gaudi처럼 컴파일이 shape에 묶인 하드웨어에서는 prefill 길이까지 버킷으로 나눠 미리 컴파일한다 (vLLM의 TPU·Gaudi 백엔드 문서 참고. 세부 env 이름은 백엔드 버전마다 달라 <b>재확인 필요</b>).</p>
-  <p><b>설계 판단:</b> 버킷을 촘촘히 → 패딩 낭비↓, 캡처 메모리·시간↑. 듬성듬성 → 반대. 실제 배치 크기 분포(히스토그램)에 버킷을 맞추는 것이 실무 튜닝.</p>
-
-  <h3>4-2. 요청 큐잉 측 dynamic batching: 언제 배치를 닫을 것인가</h3>
-  <p>NVIDIA Triton Inference Server의 dynamic batcher는 <code>preferred_batch_size</code>와 <code>max_queue_delay_microseconds</code>로 "더 모을지 vs 지금 보낼지"를 정한다 (<a href="https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html">Triton 공식 문서: Batchers</a>). LLM 엔진의 continuous batching은 이 질문을 step마다 다시 묻는 것이라 대기 타이머가 거의 필요 없지만, <b>encoder형 음성 모델(ASR encoder, 코덱, FM TTS 한 step)</b>은 요청 단위 실행이라 이 트레이드오프가 그대로 남는다. 실시간 음성에선 max-wait가 곧 지연 예산이다.</p>
-
-  <h3>4-3. 가변장 음성의 길이 버킷: 패딩 낭비를 줄이는 묶기</h3>
-  <p>길이가 제각각인 오디오를 한 배치에 넣으면 가장 긴 것에 맞춰 패딩한다. 비슷한 길이끼리 묶으면(버킷) 낭비가 준다. 학습 쪽 표준 구현이 lhotse의 <code>DynamicBucketingSampler</code>(총 duration 예산으로 배치 크기를 정하고, 데이터 분포로 버킷 경계 추정)이며, 2차적으로 참고했다 (<a href="https://lhotse.readthedocs.io/en/latest/datasets.html">lhotse 문서</a>). 추론 서버에서는 여기에 4-2의 max-wait가 붙는다: 같은 버킷의 짝을 기다리는 시간 vs 패딩 낭비.</p>
-  <div class="box">
-    <b>패딩 낭비 공식</b>: 배치 길이 <code>l₁…l_B</code>, 패딩 후 길이 <code>L = max lᵢ</code>:
-    <pre><code>waste = 1 − Σ lᵢ / (B · L)</code></pre>
-    예: 2s, 3s, 4s, 15s 를 한 배치 → 1 − 24/60 = <b>60%</b> 낭비. [2,3,4] / [15] 두 버킷으로 나누면 1 − 9/12 = 25%, 0% → 전체 계산량 12+15 = 27 vs 60.
-    <details class="hint"><summary>왜 LLM 엔진은 버킷 대신 packing을 쓰나</summary>LLM prefill은 varlen attention(FlashAttention의 cu_seqlens, FlashInfer ragged)으로 여러 시퀀스를 패딩 없이 한 줄로 이어붙여(packing) 처리한다. 이 경우 버킷이 필요 없다. 반면 conv/정적 shape 커널을 쓰는 음성 encoder·코덱·CUDA graph 경로는 아직 패딩이 필요해서 버킷이 의미를 갖는다. Whisper는 입력을 30초 고정 윈도로 패딩하므로(<a href="https://arxiv.org/abs/2212.04356">2212.04356 §2</a>) 길이 버킷이 무의미하고, 대신 VAD로 잘라 30초 창을 채우는 쪽으로 최적화한다.</details>
-  </div>
-  <p class="small">Advanced 트랙 위치: 4-1은 M4 실전 랩(CUDA graph 버킷 히스토그램), 4-2·4-3은 M8 토이 프로젝트(가변장 동적 배처 + max-wait)에서 직접 구현.</p>
-
-  <h2>5. 노브 치트시트 (vLLM v0.34.0, arg_utils.py에서 존재 확인)</h2>
-  <table>
-    <tr><th>플래그</th><th>무엇을 바꾸나</th><th>연결 모듈</th></tr>
-    <tr><td><code>--max-num-batched-tokens</code></td><td>step당 토큰 예산 (chunked prefill 크기)</td><td>M4, M5</td></tr>
-    <tr><td><code>--max-num-seqs</code></td><td>동시 실행 시퀀스 상한</td><td>M1, M4</td></tr>
-    <tr><td><code>--gpu-memory-utilization</code></td><td>KV 풀 크기 → 최대 동시성</td><td>M1</td></tr>
-    <tr><td><code>--kv-cache-dtype</code>, <code>--block-size</code></td><td>KV 바이트/토큰, 페이지 크기</td><td>M1, M2, M4</td></tr>
-    <tr><td><code>--enable-prefix-caching</code></td><td>block hash 기반 prefix 재사용</td><td>M4</td></tr>
-    <tr><td><code>--scheduling-policy</code>, <code>--scheduler-cls</code></td><td>fcfs/priority, 커스텀 스케줄러 주입</td><td>M5</td></tr>
-    <tr><td><code>--cudagraph-capture-sizes</code>, <code>--enforce-eager</code></td><td>CUDA graph 버킷</td><td>M4, M7</td></tr>
-    <tr><td><code>--async-scheduling</code></td><td>스케줄링과 실행 겹치기</td><td>M4, M10</td></tr>
-    <tr><td><code>--speculative-config</code></td><td>spec decode</td><td>M2</td></tr>
-    <tr><td><code>--profiler-config</code></td><td>torch profiler 트레이스</td><td>전 모듈</td></tr>
-  </table>
-
-  <footer>Field guide · 2026-11-23 · <a href="./">← Inference Onboarding</a></footer>
+<div class="wrap" style="max-width:780px;margin:0 auto;padding:48px 22px">
+<p>This page moved to <a href="../learn/practice.html">../learn/practice.html</a>.</p>
 </div>
-<script src="../assets/ask.js" defer></script>
+<script>location.replace("../learn/practice.html" + location.hash);</script>
 </body>
 </html>

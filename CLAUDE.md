@@ -62,7 +62,7 @@ truth** 다. 크림/웜 톤 라이트 테마이며 다크 테마는 쓰지 않�
 
 ## 페이지 타입 — 새 페이지는 반드시 이 중 하나
 
-### A. 표준 페이지 (study/, infra/ — EN/KO 이중언어)
+### A. 표준 페이지 (learn/, papers/, models/, engines/, lab/ — EN/KO 이중언어)
 
 ```html
 <!DOCTYPE html>
@@ -93,34 +93,45 @@ truth** 다. 크림/웜 톤 라이트 테마이며 다크 테마는 쓰지 않�
   쌍으로 작성한다. 언어 토글 버튼은 `i18n.js` 가 자동으로 붙인다.
 - `assets/…` 상대경로는 디렉터리 깊이에 맞춘다 (루트: `assets/`, 1단계: `../assets/`).
 
-### B. 한국어 전용 작업 로그 (logs/)
+### B. 한국어 전용 페이지 (lab/ 일부, learn/ 의 Advanced 트랙)
 
 A 와 같되 `<html lang="ko">`, i18n 링크/스크립트와 en/ko span 없이 한국어로만 작성.
 `theme.css` 링크는 동일하게 필수. 코드 블록은 `--code-bg/--code-ink` 또는
-기존 logs 페이지의 pre 스타일을 따른다.
+기존 lab/ 페이지의 pre 스타일을 따른다.
 
 ### 섹션 구조
 
-top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리포트), `post-training/`
-(포스트트레이닝 방법론·프레임워크 조사 + 공부 계획), `infra/`(인프라), `logs/`(작업 로그),
-`briefings/`(매일의 AI 모닝 브리핑 — 타입 C 자체완결, EN/KO).
+top-level 콘텐츠 섹션은 글의 **종류**로 나눈다 (2026-11-24 개편):
+
+| 섹션 | 들어갈 글 | 카드 태그 |
+|---|---|---|
+| `learn/` | Inference Onboarding(Basic 문제지 + Advanced 13주 트랙), 개념 설명, 공부 계획 | t-amber 등 |
+| `papers/` | 논문 정리, 서베이, 레퍼런스·번역 | t-blue |
+| `models/` | 모델 리포트 | t-coral |
+| `engines/` | 서빙 엔진·코드 분석(vLLM, SGLang, Dynamo, Mooncake …), 지식 그래프 | t-green |
+| `lab/` | 실험·벤치마크·런북·인프라 운영 | t-amber / t-purple |
+| `briefings/` | 매일의 AI 모닝 브리핑 (타입 C 자체완결, EN/KO) | t-gray |
+
+옛 섹션(`study/`, `logs/`, `infra/`, `post-training/`, `onboarding/`)의 파일 자리에는
+새 주소로 보내는 리다이렉트 스텁만 남아 있다. **새 글을 옛 폴더에 만들지 않는다.**
+섹션 목록 상단의 주제 칩(KV 캐시·스케줄링·PD·병렬화·커널·음성·에이전트·RL)은 카드 텍스트로 자동 필터링한다.
 각 섹션은 자체 `index.html`(카드 목록)을 갖고 루트 `index.html` 에서 링크된다.
-새 섹션을 추가하면 `check_theme.py` 의 섹션 튜플 3곳에도 추가한다.
+새 섹션을 추가하면 `check_theme.py` 의 섹션 튜플(5곳)에도 추가한다.
 
-### onboarding/ — Inference Onboarding (Basic·Advanced, 한국어 전용)
+### learn/ — Inference Onboarding (Basic·Advanced)
 
-- 화면 이름은 "Inference Onboarding". Basic = `study/llm-inference-onboarding.html`(게이트 페이지) 링크, Advanced = 이 섹션의 13주 트랙.
+- `learn/index.html` 상단이 Inference Onboarding 허브다. Basic = `learn/llm-inference-onboarding.html`(35문항 문제지), Advanced = 13주 트랙(`module.html`·`practice.html`·`predictions.html`). 아래쪽은 개념 설명 글 카드 목록.
 
-- 페이지 타입 B(한국어 전용) 골격. `assets/i18n.js` 대신 `assets/ask.js` 를 직접 로드한다
-  (i18n 토글 없음, "Claude에게 질문" 버튼은 유지). 섹션 전용 스타일/로직은 `onboarding/study.css`·`study.js`.
-- 모듈 콘텐츠·퀴즈는 `onboarding/data/*.json` 에 둔다 — 문항 추가는 JSON 만 고치면 되고
+- Advanced 트랙 페이지는 타입 B(한국어 전용) 골격이고 `assets/i18n.js` 대신 `assets/ask.js` 를 직접 로드한다.
+  `learn/index.html` 은 개념 글 카드(EN/KO) 때문에 i18n.js 를 로드한다. 섹션 전용 스타일/로직은 `learn/study.css`·`study.js`.
+- 모듈 콘텐츠·퀴즈는 `learn/data/*.json` 에 둔다 — 문항 추가는 JSON 만 고치면 되고
   HTML(`module.html?m=…`)은 건드리지 않는다. 스키마와 튜터 진행 규칙은
   `.claude/skills/study-session/SKILL.md`.
-- 진행 상태·답안·채점은 `onboarding/progress/` (gitignore) — **커밋 금지**. 로컬 서버:
-  `python3 tools/study_server.py` → `http://localhost:8000/onboarding/`.
+- 진행 상태·답안·채점은 `learn/progress/` (gitignore) — **커밋 금지**. 로컬 서버:
+  `python3 tools/study_server.py` → `http://localhost:8000/learn/`.
 - 공개 페이지이므로 개인 이직 계획·지원 회사 등은 쓰지 않는다.
 
-### C. 자체 내장 페이지 (study/ai-briefing-*.html 류)
+### C. 자체 내장 페이지 (briefings/ai-briefing-*.html 류)
 
 외부 asset 링크 없이 단일 파일로 완결되어야 할 때만 사용. 조건:
 - theme.css 의 정본 팔레트를 `:root{…}` 에 **정확히 같은 값으로** 인라인
@@ -148,7 +159,7 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 ## 논문 정리 (paper note) 규약
 
 사용자가 논문 링크(arXiv 등)를 주고 정리를 요청하면 **반드시 이 규약대로** 만든다.
-기준 예시: `study/llm-serving-software-aging.html` (이 파일을 복사해서 시작할 것).
+기준 예시: `papers/llm-serving-software-aging.html` (이 파일을 복사해서 시작할 것).
 
 ### 준비 — 전문을 끝까지 읽는다
 
@@ -159,7 +170,7 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 
 ### 파일과 구조
 
-- 파일: `study/<영문-슬러그>.html`, 페이지 타입 A (EN/KO 이중언어).
+- 파일: `papers/<영문-슬러그>.html`, 페이지 타입 A (EN/KO 이중언어).
 - 구성: hero(제목 + lede + badge: arXiv abs 링크·HTML 전문 링크·분야와 게재일·저자)
   → TOC → "한 줄 요약" callout → 본문 4개 섹션 → footer(논문 링크 + 작성일).
 - 본문은 **고정 4단 구조** (h2 + 번호 칩, 이 순서 그대로):
@@ -201,7 +212,7 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 
 ### 마무리
 
-- `study/index.html` 에 카드 추가 — tag 는 `t-blue` "Paper note / 논문 정리",
+- `papers/index.html` 에 카드 추가 — tag 는 `t-blue` "Paper note / 논문 정리",
   `post-meta` 에 작성일.
 - `python3 tools/check_theme.py` 통과 확인 후 커밋.
 
@@ -237,7 +248,7 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 - **카드 요약은 한 줄**: KO 1~2문장(≤150자), EN 1문장(≤220자). 무엇을 알게 되는지만 쓰고 형식 설명("원문 인용과 함께" 등)은 빼기. 검사기 `card-blurb` 가 강제.
 - **본문은 반복을 덜어 낸다**: 서론 1~2문장(목차를 다시 풀어 쓰지 않기), 요약 callout ≤ 4 bullet, 용어집 카드 1줄, 그림 캡션 한 줄(제목 + 출처). 긴 나열 문단은 목록·표로.
 - **KO 문체**: 평서체 "~다"의 완결된 문장. 엠대시(—)·세미콜론·명사 종결 메모체·번역투("~에 대해/~를 통해/~에 있어") 쓰지 않기. 논문·모델 이름은 영어 그대로.
-- 기준 예시: `study/vllm-kv-cache-block-management.html`.
+- 기준 예시: `engines/vllm-kv-cache-block-management.html`.
 - 모닝 브리핑은 레포 스킬 `morning-briefing`(아침) → `hf-daily-papers`(2c 추가)로 쓴다.
 
 ## 새 페이지 체크리스트
@@ -253,7 +264,7 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 
 ## 긴 페이지는 청크로 작성 (수백 줄 HTML 생성 시 필수)
 
-study/ 딥다이브·paper note·briefing 처럼 **대략 300줄 이상짜리 HTML** 을 만들 때는 한 번의
+engines/ 딥다이브·paper note·briefing 처럼 **대략 300줄 이상짜리 HTML** 을 만들 때는 한 번의
 Write 로 파일 전체를 뱉지 말고 **여러 조각으로 나눠 쓴다.** 큰 단일 출력은 API 응답이 중간에
 끊기는 `Response stalled mid-stream` 오류를 유발하고, 끊기면 진행분이 통째로 날아간다. 나눠 쓰면
 매 단계 파일이 유효하고, 한 조각이 실패해도 앞의 진행분은 남는다.
@@ -280,7 +291,7 @@ Write 로 파일 전체를 뱉지 말고 **여러 조각으로 나눠 쓴다.** 
 | i18n-dead-toggle | (비-staticrypt) `assets/i18n.js` 를 로드하면 en/ko span 이 있어야 함 — 토글만 뜨고 콘텐츠가 한국어 전용인 '죽은 토글' 금지 |
 | font | body font-family 는 `-apple-system` 시작 스택만 |
 | lockscreen | StatiCrypt 잠금 화면은 `#faf9f5`/`#1f1e1b` 템플릿 색 |
-| index-link | study/logs/infra/briefings 콘텐츠 페이지는 섹션 index 에 링크 필수 |
+| index-link | learn/papers/models/engines/lab/briefings 콘텐츠 페이지는 섹션 index 에 링크 필수 |
 | post-meta | 카드에 created `<time>` 필수, created ≤ updated, **페이지 hero 날짜 = 카드 날짜** |
 | post-meta-bump | (pre-push) 원격에 있던 콘텐츠 페이지를 고쳤으면 `.post-meta`(갱신일)도 바뀌어야 함 — 단 `[polish]` 커밋만 건드린 파일은 면제 |
 | card-blurb | 섹션 index 카드의 요약 `<p>` 는 한 줄 — KO ≤ 150자, EN ≤ 220자(태그 제거 후) |

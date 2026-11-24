@@ -1,28 +1,28 @@
 ---
 name: study-session
-description: Run a tutoring session for the onboarding/ section (Inference Onboarding) — start the local study server, show progress, grade saved written answers, generate the next check quiz from diagnostic results, and quiz one question at a time. Use when the user says 공부 띄워줘 / 공부 시작 / study session / 채점해줘 / M3 확인 퀴즈 만들어줘 / 다음 모듈, or asks to continue Inference Onboarding.
+description: Run a tutoring session for Inference Onboarding (learn/) — start the local study server, show progress, grade saved written answers, generate the next check quiz from diagnostic results, and quiz one question at a time. Use when the user says 공부 띄워줘 / 공부 시작 / study session / 채점해줘 / M3 확인 퀴즈 만들어줘 / 다음 모듈, or asks to continue Inference Onboarding.
 ---
 
 # study-session — Inference Onboarding 튜터 세션
 
-`onboarding/`은 Inference Onboarding의 Advanced 트랙(M1~M10 + 버퍼)이다. 콘텐츠는
-`onboarding/data/*.json`, 학습 엔진은 `onboarding/study.js`, 진행 상태는
-`onboarding/progress/`(**gitignore — 절대 커밋하지 않는다**).
+`learn/`은 Inference Onboarding의 Advanced 트랙(M1~M10 + 버퍼)이다. 콘텐츠는
+`learn/data/*.json`, 학습 엔진은 `learn/study.js`, 진행 상태는
+`learn/progress/`(**gitignore — 절대 커밋하지 않는다**).
 
 ## 1. 띄우기
 
 1. `python3 tools/study_server.py --port 8000` 을 **백그라운드**로 실행 (포트 사용 중이면 8001…).
-2. 사용자에게 `http://localhost:8000/onboarding/` 을 알려준다 (macOS면 `open` 으로 열어도 됨).
-3. `onboarding/progress/state.json` 을 읽어 요약: 모듈별 진행, 오답 문항, 채점 대기 서술형 수,
+2. 사용자에게 `http://localhost:8000/learn/` 을 알려준다 (macOS면 `open` 으로 열어도 됨).
+3. `learn/progress/state.json` 을 읽어 요약: 모듈별 진행, 오답 문항, 채점 대기 서술형 수,
    "다음 할 일"(진행도 100% 미만인 첫 모듈). 길게 쓰지 말 것 — 표 하나.
 
 ## 2. 서술형 채점 (state.json → feedback.json)
 
 - `state.answers[qid].v` 가 있고 `feedback.json` 에 qid 가 없거나 답이 바뀐 서술형(type `text`)을 채점한다.
-- 문항·rubric·model·refs 는 `onboarding/data/<모듈>.json` 에서 찾는다.
+- 문항·rubric·model·refs 는 `learn/data/<모듈>.json` 에서 찾는다.
 - 채점: 0(오답)/1(부분)/2(정답). **맞은 부분은 인정하고 빠진 부분만 보완**, 오해의 출처를 짚고,
   다시 읽을 자료(arXiv 절 또는 커밋 고정 코드 경로)를 지목. 맞장구·칭찬 금지.
-- 결과를 `onboarding/progress/feedback.json` 에 병합 기록:
+- 결과를 `learn/progress/feedback.json` 에 병합 기록:
   `{"<qid>": {"score": 2, "verdict": "한 줄", "comment": "보완 설명", "ts": "YYYY-MM-DD"}}`
   → 페이지 새로고침 시 반영된다.
 - 대화에도 문항별로 짧게 보고한다.
@@ -49,7 +49,7 @@ description: Run a tutoring session for the onboarding/ section (Inference Onboa
 
 ## 4-1. 예측 장부 (state.predictions)
 
-`onboarding/predictions.html` 이 `state.json` 의 `predictions` 배열에 기록한다. 항목:
+`learn/predictions.html` 이 `state.json` 의 `predictions` 배열에 기록한다. 항목:
 `{id, created, ctx, change, metric, unit, baseline, predicted, tol, conf, model, reason, status: open|closed,
 actual, closed, hit, errCat, lesson}`.
 - 세션 시작 시: 열린 예측 수와 오래된(14일+) 열린 예측을 알려준다.
@@ -61,7 +61,7 @@ actual, closed, hit, errCat, lesson}`.
 ## 5. 출처 규칙 (예외 없음)
 
 - 모든 기술적 주장에 출처: arXiv ID+절, 공식 문서, **커밋 고정 퍼머링크**(파일·라인·심볼).
-- 기준 핀: `onboarding/data/modules.json` 의 `pins` (vLLM v0.34.0 @62d4bc3, SGLang @2544c9a,
+- 기준 핀: `learn/data/modules.json` 의 `pins` (vLLM v0.34.0 @62d4bc3, SGLang @2544c9a,
   TokenSpeed @96dfdee). 새 경로를 인용하려면 `/tmp` 에 shallow clone 해서 **존재와 라인을 확인**한다.
   핀을 올릴 때는 modules.json 의 pins 와 data 파일의 URL SHA 를 함께 바꾼다.
 - 못 찾은 내용은 "출처 미확인 — 추정"이라고 쓴다. 블로그·벤더 글은 `kind:"blog"`(2차)로 표시.
@@ -69,7 +69,7 @@ actual, closed, hit, errCat, lesson}`.
 ## 6. 공개 레포 주의
 
 이 레포는 GitHub Pages 로 **공개**된다. data/*.json 과 페이지에 사용자의 이직 계획·지원 회사·
-개인 진행 상황·답안을 쓰지 않는다. 진행/답안/피드백은 오직 `onboarding/progress/` 에만.
+개인 진행 상황·답안을 쓰지 않는다. 진행/답안/피드백은 오직 `learn/progress/` 에만.
 커밋 전 `python3 tools/check_theme.py` 통과 확인. 커밋은 사용자가 요청할 때만.
 
 ## 7. 진행 규칙

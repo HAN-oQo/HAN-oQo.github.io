@@ -1,0 +1,451 @@
+{
+ "id": "m10",
+ "week": 12,
+ "hours": 14,
+ "title": "엔진 구현 비교 분석 — vLLM · SGLang · TokenSpeed (+ 미니 엔진)",
+ "summary": "세 엔진의 '주요 부분'(요청 수명·스케줄러, KV/prefix cache, 실행·CUDA graph·overlap, 커널 계층, 엔트리포인트/IPC)을 같은 축으로 읽고, 한 엔진의 기능을 다른 엔진으로 이식한다.",
+ "maps_to": [
+  "vLLM/SGLang 활용",
+  "재사용 아키텍처",
+  "사내 추론 라이브러리",
+  "스케줄링 설계"
+ ],
+ "jp": [
+  "推論エンジン",
+  "実装比較",
+  "制御プレーン/実行プレーン"
+ ],
+ "prereq": [
+  "M4",
+  "M5",
+  "M7",
+  "M9"
+ ],
+ "goals": [
+  "같은 요청 하나가 세 엔진에서 HTTP → 스케줄러 → 실행 → 샘플링 → 응답까지 지나는 경로를 그린다",
+  "5개 축으로 설계 선택과 그 이유(트레이드오프)를 비교표로 만든다",
+  "한 엔진의 정책을 다른 엔진에 이식한다 (SGLang LPM → vLLM --scheduler-cls)"
+ ],
+ "intro": "<div class='call'><b>읽는 순서:</b> ① 미니 엔진으로 뼈대를 먼저 잡고(nano-vllm ≈1.4k LOC, mini-sglang ≈8.4k LOC — 2026-11-23 집계) ② vLLM·SGLang은 '주요 부분'만 ③ TokenSpeed는 설계 문서 → C++ 스케줄러 순. 엔진 전체를 읽지 않는다.</div><div class='call warn'><b>TinyServe에 대해:</b> 같은 이름이 둘이다. (a) arXiv 2509.12211 'TinyServe: Query-Aware Cache Selection' — 소형 모델 기반 연구용 서빙 시스템, 공개 코드 저장소는 <b>확인하지 못함</b>. (b) GitHub Leo7Deng/TinyServe — 개인 프로젝트, Python 제어 평면 + CUDA paged attention 커널 v1→v7. 실무 엔진 비교 대상이라기보다 (a)는 쿼리 인지 KV 선택 아이디어(KV 압축 연구와 연결), (b)는 CUDA 커널 진화를 읽는 교재로 쓴다.</div>",
+ "diagnostic": [
+  {
+   "id": "m10-d1",
+   "type": "mcq",
+   "topic": "ts",
+   "prompt": "TokenSpeed의 README가 내세우는 아키텍처상 차별점은?",
+   "options": [
+    "모든 것을 Rust로 재작성",
+    "C++ 제어 평면(요청 수명·KV 소유를 유한상태기계로, 타입 시스템으로 안전성 강제) + Python 실행 평면 분리",
+    "Python 단일 프로세스",
+    "TensorRT 엔진 빌드 방식"
+   ],
+   "answer": 1,
+   "explain": "README: scheduler는 C++ control plane + Python execution plane, 요청 수명·KV 소유·overlap 타이밍을 FSM으로 인코딩. 엔트리포인트는 Rust(SMG/Dynamo)에서 msgpack으로 엔진을 구동. 단, '최초'·'가장 빠름' 같은 주장은 프로젝트 자체 주장(성능 수치는 벤더/블로그 — 2차).",
+   "refs": [
+    {
+     "kind": "code",
+     "label": "TokenSpeed README",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/README.md",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed scheduler 설계 문서",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/docs/design/scheduler.md",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "tokenspeed-scheduler/csrc/",
+     "url": "https://github.com/lightseekorg/tokenspeed/tree/96dfdee340a6dc588a893f1a156e67ea40b64c13/tokenspeed-scheduler/csrc",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m10-d2",
+   "type": "mcq",
+   "topic": "sg",
+   "prompt": "SGLang <code>event_loop_overlap</code>의 핵심 아이디어는?",
+   "options": [
+    "GPU 두 개를 번갈아 쓰기",
+    "현재 배치의 GPU 실행 중에 다음 배치의 CPU 스케줄링·입력 준비를 겹쳐 CPU 오버헤드를 숨김",
+    "prefill과 decode를 다른 프로세스로",
+    "KV를 CPU로 오프로딩"
+   ],
+   "answer": 1,
+   "explain": "작은 배치 decode에서 CPU 스케줄링이 GPU를 굶기는 문제(Field guide §3 첫 행)에 대한 해법. vLLM은 <code>--async-scheduling</code>으로 같은 문제를 다룬다.",
+   "refs": [
+    {
+     "kind": "code",
+     "label": "SGLang event_loop_overlap",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/scheduler.py#L2266",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "event_loop_normal (비교용)",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/scheduler.py#L2231",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m10-d3",
+   "type": "text",
+   "topic": "cmp",
+   "prompt": "vLLM, SGLang, TokenSpeed 중 '스케줄러 정책 하나를 바꾸고 싶다'면 각각 어디를 고치거나 확장하는가? 지금 알고 있는 만큼 써라 (모르면 모른다고 — 이 모듈 끝에 다시 채점).",
+   "rubric": [
+    "vLLM: Scheduler 상속 + --scheduler-cls, 또는 policy/RequestQueue",
+    "SGLang: schedule_policy.py의 정책(CacheAwarePolicy/CacheAgnosticPolicy), get_next_batch_to_run",
+    "TokenSpeed: C++ tokenspeed-scheduler (capacity_model, operations) — Python 실행 평면이 아니라 제어 평면을 수정"
+   ],
+   "refs": [
+    {
+     "kind": "code",
+     "label": "scheduler_cls",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/config/scheduler.py#L189",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang schedule_policy",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/schedule_policy.py#L188",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed scheduler.cpp",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/tokenspeed-scheduler/csrc/scheduler/scheduler.cpp",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "topics": [
+  {
+   "id": "mini",
+   "name": "뼈대: 미니 엔진 먼저",
+   "pitfall": "대형 엔진의 부가 기능에 묻혀 핵심 루프를 놓친다.",
+   "read": [
+    {
+     "kind": "doc",
+     "label": "nano-vllm engine/ (scheduler, block_manager, model_runner)",
+     "url": "https://github.com/GeeeekExplorer/nano-vllm/tree/bb823b3e06983d71485a8e1f23715ebd87d98ef8/nanovllm/engine",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "mini-sglang scheduler/ (prefill, decode, cache)",
+     "url": "https://github.com/sgl-project/mini-sglang/tree/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "Leo7Deng/TinyServe (개인 프로젝트 — 2차)",
+     "url": "https://github.com/Leo7Deng/TinyServe/tree/b99698ef2ea27960a8998ce9e26faff61f86bc24",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "TinyServe: Query-Aware Cache Selection (연구 시스템, 코드 미확인) — arXiv 2509.12211",
+     "url": "https://arxiv.org/abs/2509.12211",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "sched",
+   "name": "축 1 — 요청 수명과 스케줄러",
+   "pitfall": "스케줄러가 어느 프로세스/언어에 있는지에 따라 확장 방법이 완전히 다르다는 걸 놓친다.",
+   "read": [
+    {
+     "kind": "code",
+     "label": "vLLM Scheduler.schedule",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/sched/scheduler.py#L716",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang get_next_batch_to_run",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/scheduler.py#L4386",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang get_new_batch_prefill",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/scheduler.py#L4553",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed scheduler.cpp",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/tokenspeed-scheduler/csrc/scheduler/scheduler.cpp",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed fsm/",
+     "url": "https://github.com/lightseekorg/tokenspeed/tree/96dfdee340a6dc588a893f1a156e67ea40b64c13/tokenspeed-scheduler/csrc/fsm",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed scheduler.md (admission·retraction·restore)",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/docs/design/scheduler.md",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "cache",
+   "name": "축 2 — KV/prefix cache",
+   "pitfall": "블록 해시 vs radix vs 계층형 캐시 조정자의 차이를 '같은 prefix cache'로 뭉뚱그린다.",
+   "read": [
+    {
+     "kind": "code",
+     "label": "vLLM KVCacheManager",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/kv_cache_manager.py#L131",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "hash_block_tokens",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/kv_cache_utils.py#L703",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang RadixCache",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/mem_cache/radix_cache.py#L282",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed csrc/cache/ (coordinator, prefix, tier)",
+     "url": "https://github.com/lightseekorg/tokenspeed/tree/96dfdee340a6dc588a893f1a156e67ea40b64c13/tokenspeed-scheduler/csrc/cache",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed cache-concepts.md",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/docs/design/cache-concepts.md",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "exec",
+   "name": "축 3 — 실행 평면 · CUDA graph · overlap",
+   "pitfall": "CPU 오버헤드 숨기기 방식(async scheduling vs overlap loop vs 분리된 제어 평면)을 비교 못 한다.",
+   "read": [
+    {
+     "kind": "code",
+     "label": "vLLM execute_model",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/worker/gpu/model_runner.py#L1826",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "vLLM CudaGraphManager.dispatch",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/worker/gpu/cudagraph_utils.py#L558",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang event_loop_overlap",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/scheduler.py#L2266",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang model_runner.py",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/model_executor/model_runner.py",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed runtime/execution/",
+     "url": "https://github.com/lightseekorg/tokenspeed/tree/96dfdee340a6dc588a893f1a156e67ea40b64c13/python/tokenspeed/runtime/execution",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed event-loop.md (원칙 1: 루프는 GPU 작업을 하지 않는다)",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/docs/design/event-loop.md",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "kernel",
+   "name": "축 4 — 커널 계층",
+   "pitfall": "커널 선택 로직(registry·backend selector)이 성능 회귀의 진원지라는 걸 놓친다.",
+   "read": [
+    {
+     "kind": "code",
+     "label": "vLLM CustomOp",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/custom_op.py#L102",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM attention backends",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/attention_backends.md",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang FlashInferAttnBackend",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/layers/attention/flashinfer_backend.py#L356",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed kernel registry.py",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/tokenspeed-kernel/python/tokenspeed_kernel/registry.py",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed kernel selection.py",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/tokenspeed-kernel/python/tokenspeed_kernel/selection.py",
+     "note": null
+    },
+    {
+     "kind": "blog",
+     "label": "PyTorch 블로그: TokenSpeed-Kernel 설계 (프로젝트 측 글 — 2차)",
+     "url": "https://pytorch.org/blog/lightseek-tokenspeed-kernel/",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "entry",
+   "name": "축 5 — 엔트리포인트 · 프로세스 · IPC",
+   "pitfall": "토크나이즈·디토크나이즈·HTTP가 같은 프로세스에서 GPU 루프를 막는 구조를 못 알아챈다.",
+   "read": [
+    {
+     "kind": "code",
+     "label": "vLLM EngineCore",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/engine/core.py#L129",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM multiprocessing 설계 문서",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/multiprocessing.md",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang entrypoints/engine.py",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/entrypoints/engine.py",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed zmq_wire.py",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/python/tokenspeed/runtime/engine/zmq_wire.py",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed RFC 0002 Rust control plane",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/docs/rfcs/0002-rust-control-plane.md",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "lab": {
+  "title": "SGLang의 LPM(longest prefix match) 정책을 vLLM --scheduler-cls 플러그인으로 이식",
+  "why": "엔진 간 이식은 두 엔진의 같은 축을 정확히 이해해야만 가능 — 비교 분석을 '실행 가능한 결과'로 만드는 과제.",
+  "steps": [
+   "SGLang <code>schedule_policy.py</code>의 LPM: waiting 요청을 radix tree 매칭 길이로 정렬하는 로직과 BOUNDED_LPM_WINDOW_SIZE의 의도 정리",
+   "vLLM에서 waiting 요청의 prefix hit 길이를 얻는 방법 찾기 (KVCacheManager의 cached block 조회 경로)",
+   "M4 랩의 MyScheduler에 'waiting 앞쪽 W개 중 hit 길이 최대 우선' 구현",
+   "멀티턴 트레이스(LMSYS-Chat-1M 샘플)로 FCFS vs LPM의 hit rate·TTFT p99·공정성(최대 대기) 비교"
+  ],
+  "gpu": "소형 모델로 전체.",
+  "nogpu": "M4 랩처럼 CPU 스케줄러 단위테스트로 검증 + M5 시뮬레이터에 정책 추가.",
+  "read": [
+   {
+    "kind": "code",
+    "label": "SGLang CacheAwarePolicy",
+    "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/managers/schedule_policy.py#L188",
+    "note": null
+   },
+   {
+    "kind": "code",
+    "label": "vLLM KVCacheManager",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/kv_cache_manager.py#L131",
+    "note": null
+   }
+  ],
+  "done": [
+   "LPM 이식 코드 + 테스트",
+   "FCFS vs LPM 비교표 (hit rate, TTFT p99, 최대 대기)"
+  ]
+ },
+ "toy": {
+  "title": "3-엔진 비교 노트 (이 사이트의 study/ 딥다이브로 발행 가능)",
+  "maps_to": "재사용 아키텍처 · 사내 추론 라이브러리 · vLLM/SGLang 활용",
+  "hours": 8,
+  "spec": [
+   "같은 채팅 요청 하나의 경로를 세 엔진에서 함수 단위로 추적 — 커밋 고정 퍼머링크",
+   "5개 축 비교표: 설계 선택 / 이유 / 비용 / 확장 방법",
+   "미니 엔진(nano-vllm, mini-sglang)에서 '빠진 것' 목록 = 프로덕션 엔진이 복잡해지는 이유",
+   "결론: M9 ADR에 반영할 결정 3개"
+  ],
+  "gpu": "가능하면 vLLM·SGLang를 같은 소형 모델·워크로드로 측정해 표에 1행 추가 (TokenSpeed는 대형 GPU 지향이라 소비자 GPU 실행은 <b>미확인</b> — 코드 독해 중심)",
+  "nogpu": "코드 독해만으로 완결 (이 모듈의 본 과제)",
+  "done": [
+   "요청 경로 다이어그램 3장",
+   "5축 비교표",
+   "M9 ADR 갱신"
+  ],
+  "hints": [
+   "각 엔진에서 'schedule' 한 번이 호출되는 루프를 먼저 찾고, 거기서 위(입력)·아래(실행)로 넓혀라.",
+   "TokenSpeed는 docs/design/*.md가 코드보다 친절하다 — event-loop.md → scheduler.md → cache-concepts.md 순.",
+   "비교표의 '이유' 칸은 커밋 메시지·RFC·설계 문서에서 찾고, 못 찾으면 '출처 미확인 — 추정'으로."
+  ]
+ },
+ "check": [],
+ "interview": [
+  {
+   "q": "vLLM과 SGLang의 스케줄러·캐시 설계 차이를 설명하라.",
+   "skeleton": [
+    "블록 해시 vs radix tree",
+    "정책(FCFS/priority vs LPM/DFS-weight)",
+    "CPU 오버헤드 대응(async scheduling vs overlap loop)",
+    "어느 워크로드에 유리한가"
+   ]
+  },
+  {
+   "q": "제어 평면을 C++로 분리하는 설계(TokenSpeed)의 장단점은?",
+   "skeleton": [
+    "장점: 정합성(FSM·타입), Python GIL/오버헤드 회피",
+    "단점: 확장·디버깅 비용, 기여 장벽",
+    "Python 실행 평면과의 경계·직렬화 비용",
+    "우리 사내 엔진이라면?"
+   ]
+  },
+  {
+   "q": "새 추론 엔진이 나왔을 때 어떻게 평가하나?",
+   "skeleton": [
+    "5축 구조 리뷰",
+    "우리 워크로드·SLO로 goodput 측정",
+    "확장 지점·업스트림 활동",
+    "운영 성숙도(메트릭·장애 대응)"
+   ]
+  }
+ ],
+ "done": [
+  "진단·약한 토픽 자료",
+  "LPM 이식 랩",
+  "3-엔진 비교 노트",
+  "확인 퀴즈 75%+",
+  "면접 3문항"
+ ]
+}

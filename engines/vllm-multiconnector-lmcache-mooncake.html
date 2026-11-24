@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vLLM MultiConnector — NIXL PD + LMCache MP → Mooncake offload</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:27px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber-ink)} .c-amber .tag{color:var(--amber-ink)}
+  .c-green{background:var(--green-bg);color:var(--green-ink)} .c-green .tag{color:var(--green-ink)}
+  .c-purple{background:var(--purple-bg);color:var(--purple-ink)} .c-purple .tag{color:var(--purple-ink)}
+  .c-red{background:var(--red-bg);color:var(--red-ink)} .c-red .tag{color:var(--red-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--bg)}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  .flow{list-style:none;padding:0;margin:14px 0;counter-reset:fl}
+  .flow>li{position:relative;padding:10px 0 12px 40px;border-bottom:1px solid var(--line)}
+  .flow>li::before{counter-increment:fl;content:counter(fl);position:absolute;left:0;top:9px;
+    width:26px;height:26px;border-radius:50%;background:var(--blue-ink);color:#fff;font-size:12px;
+    font-weight:700;display:flex;align-items:center;justify-content:center}
+  .flow code{font-size:12px}
+  .flow a.pl{font-size:11.5px;color:var(--muted);border-bottom:1px dotted var(--muted);text-decoration:none}
+  .flow a.pl:hover{color:var(--blue-ink)}
+  ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
+  ul.srcs li{margin:5px 0}
+  ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  .lbl{font:600 12px -apple-system,sans-serif;fill:var(--ink)}
+  .sm{font:11px -apple-system,sans-serif;fill:var(--muted)}
+  .xs{font:9.5px -apple-system,sans-serif;fill:var(--faint)}
+  .bx{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+  .callout ol{margin:6px 0 0;padding-left:20px} .callout ol li{margin:4px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../">Home</a> · <a href="./"><span class="en">Engines</span><span class="ko">엔진·코드</span></a> · <span class="en">MultiConnector: NIXL PD + LMCache/Mooncake offload</span><span class="ko">MultiConnector: NIXL PD + LMCache/Mooncake 오프로드</span></p>
+
+  <header class="hero">
+    <h1><span class="en">Running PD and KV offload at once: MultiConnector with NIXL and LMCache&nbsp;→&nbsp;Mooncake</span><span class="ko">PD 와 KV 오프로드를 동시에: MultiConnector + NIXL + LMCache&nbsp;→&nbsp;Mooncake</span></h1>
+    <p class="lede"><span class="en">vLLM's <code class="inl">MultiConnector</code> stacks two KV connectors in one engine. This code walk follows what happens on the wire and in the call stack when <code class="inl">NixlConnector</code> (prefill&rarr;decode) is composed with <code class="inl">LMCacheMPConnector</code> backed by a MooncakeStore L2 tier, across three repos.</span><span class="ko">vLLM <code class="inl">MultiConnector</code> 는 한 엔진에 KV 커넥터 두 개를 쌓는다. 이 노트는 <code class="inl">NixlConnector</code>(prefill&rarr;decode)와 MooncakeStore L2 를 쓰는 <code class="inl">LMCacheMPConnector</code> 를 합성했을 때 네트워크와 콜스택에서 일어나는 일을 레포 3개의 코드로 따라간다.</span></p>
+    <div class="meta">
+      <span class="badge">Deep dive · code-walk</span>
+      <span class="badge">vLLM <a class="src" href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c">code @ a0f1b9ad</a></span>
+      <span class="badge">LMCache <a class="src" href="https://github.com/LMCache/LMCache/tree/f9addd2e4e074f21f26cbda84c3abd932d32ef33">code @ f9addd2e</a></span>
+      <span class="badge">Mooncake <a class="src" href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280">code @ f8c9667a</a></span>
+      <span class="badge"><a class="src" href="https://docs.vllm.ai/en/latest/features/disagg_prefill.html">vLLM disagg docs</a></span>
+      <span class="badge"><a class="src" href="https://docs.lmcache.ai/">LMCache docs</a></span>
+    </div>
+    <p class="post-meta"><time datetime="2026-08-25">2026-08-25</time></p>
+  </header>
+
+  <nav class="toc">
+    <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+    <ol>
+      <li><a href="#s1"><span class="en">What we are building, and what changed since June</span><span class="ko">무엇을 만드는가, 그리고 6월 이후 달라진 것</span></a></li>
+      <li><a href="#s2"><span class="en">Architecture: three repos, two processes, four transports</span><span class="ko">아키텍처: 레포 3개, 프로세스 2개, 전송 4개</span></a></li>
+      <li><a href="#s3"><span class="en">MultiConnector: first hit loads, everyone saves</span><span class="ko">MultiConnector: 첫 히트가 읽고, 전부가 쓴다</span></a></li>
+      <li><a href="#s4"><span class="en">Wire flow A: NIXL prefill&rarr;decode</span><span class="ko">통신 흐름 A: NIXL prefill&rarr;decode</span></a></li>
+      <li><a href="#s5"><span class="en">Wire flow B: LMCache MP &rarr; MooncakeStore</span><span class="ko">통신 흐름 B: LMCache MP &rarr; MooncakeStore</span></a></li>
+      <li><a href="#s6"><span class="en">Code flow: one request, end to end</span><span class="ko">코드 흐름: 요청 하나를 끝까지</span></a></li>
+      <li><a href="#s7"><span class="en">Configuration, and five traps</span><span class="ko">설정, 그리고 함정 5개</span></a></li>
+      <li><a href="#s8"><span class="en">Design alternatives</span><span class="ko">설계 대안</span></a></li>
+      <li><a href="#s9"><span class="en">Sources</span><span class="ko">출처</span></a></li>
+    </ol>
+  </nav>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">One-line summary</span><span class="ko">한 줄 요약</span></span>
+    <span class="en"><code class="inl">MultiConnector</code> loads KV from the <b>first</b> child (in config order) that reports a hit and saves to <b>all</b> of them. So <code class="inl">[NixlConnector, LMCacheMPConnector]</code> gives RDMA prefill&rarr;decode transfer on the fast path and a Mooncake-backed shared cache on the miss path. The cost is one extra scheduler step whenever LMCache's async lookup has not resolved yet.</span><span class="ko"><code class="inl">MultiConnector</code> 는 설정 순서상 <b>가장 먼저</b> 히트를 보고한 자식에서 KV 를 읽고 <b>전부</b>에 저장한다. 그래서 <code class="inl">[NixlConnector, LMCacheMPConnector]</code> 는 빠른 경로에 RDMA prefill&rarr;decode 전송을, 미스 경로에 Mooncake 공유 캐시를 준다. 대가는 LMCache 비동기 lookup 이 덜 끝났을 때마다 스케줄러 스텝이 하나 더 든다는 것이다.</span>
+  </div>
+
+  <h3><span class="en">Glossary</span><span class="ko">용어 정리</span></h3>
+  <div class="grid3">
+    <div class="mini">
+      <h4>PD / disaggregation</h4>
+      <p><span class="en">Prefill and decode on separate engines, so the prompt's KV must be shipped from prefiller to decoder.</span><span class="ko">prefill 과 decode 를 별도 엔진에서 돌리는 구성. 프롬프트 KV 를 prefiller 에서 decoder 로 옮겨야 한다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>KV connector</h4>
+      <p><span class="en">vLLM's plug-in for moving KV in or out of an engine: a scheduler half that plans, a worker half that moves bytes.</span><span class="ko">KV 를 엔진에 넣고 빼는 vLLM 플러그인. 계획하는 scheduler 쪽과 바이트를 옮기는 worker 쪽으로 나뉜다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>NIXL</h4>
+      <p><span class="en">NVIDIA's transfer layer over UCX/RDMA: register memory, exchange agent metadata, then one-sided READ/WRITE.</span><span class="ko">UCX/RDMA 위의 NVIDIA 전송 계층. 메모리 등록, agent 메타데이터 교환 후 단방향 READ/WRITE 를 한다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>L1 / L2 (LMCache)</h4>
+      <p><span class="en">L1: LMCache's CPU staging tier in POSIX shared memory. L2: a remote store behind an adapter (MooncakeStore, NIXL, S3, filesystem).</span><span class="ko">L1 은 POSIX 공유 메모리의 CPU 스테이징 계층, L2 는 어댑터 뒤의 원격 스토어(MooncakeStore, NIXL, S3, 파일시스템)다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>MP mode</h4>
+      <p><span class="en">LMCache as a standalone <code class="inl">lmcache server</code> process owning the KV store, with vLLM engines attached over ZMQ. The alternative is in-process mode.</span><span class="ko">KV 저장소를 가진 독립 <code class="inl">lmcache server</code> 프로세스에 vLLM 엔진들이 ZMQ 로 붙는 구성. 반대는 in-process 모드다.</span></p>
+    </div>
+    <div class="mini">
+      <h4>HMA</h4>
+      <p><span class="en">Hybrid memory allocator for models mixing attention types (full + sliding-window + Mamba). Connectors opt in via <code class="inl">SupportsHMA</code>.</span><span class="ko">attention 종류가 섞인 모델(full + sliding-window + Mamba)용 vLLM KV 관리자. 커넥터는 <code class="inl">SupportsHMA</code> 로 참여한다.</span></p>
+    </div>
+  </div>
+
+  <section id="s1">
+    <h2><span class="num">1</span><span class="en">What we are building, and what changed since June</span><span class="ko">무엇을 만드는가, 그리고 6월 이후 달라진 것</span></h2>
+
+    <p><span class="en">The goal is one vLLM engine doing two jobs usually discussed separately: <b>disaggregated prefill/decode</b>, where the KV prefilled on one instance is shipped to another for decoding, and <b>KV offload</b>, where finished KV goes into a shared tiered cache so a later request with the same prefix can skip prefill, even on a <i>different</i> engine. vLLM models both through the KV connector interface, and <code class="inl">MultiConnector</code> lets you have both at once.</span><span class="ko">목표는 보통 따로 다루는 두 일을 한 vLLM 엔진이 함께 하는 것이다. <b>disaggregated prefill/decode</b> 는 한 인스턴스에서 prefill 한 KV 를 다른 인스턴스로 보내 decode 한다. <b>KV 오프로드</b>는 끝난 KV 를 공유 계층형 캐시에 넣어, 같은 prefix 의 나중 요청이 <i>다른</i> 엔진에서도 prefill 을 건너뛰게 한다. vLLM 은 둘 다 KV 커넥터 인터페이스로 다루고, <code class="inl">MultiConnector</code> 가 둘을 동시에 쓰게 해 준다.</span></p>
+
+
+
+    <div class="callout c-amber">
+      <span class="tag"><span class="en">Read these first</span><span class="ko">먼저 읽을 것</span></span>
+      <span class="en">This note skips what the site already covers. For the <b>taxonomy</b> of connectors by transfer direction, see <a class="src" href="vllm-kv-connectors.html">vLLM KV-cache connectors &mdash; transfer-direction map</a>. For a <b>line-by-line NixlConnector PD walk</b> (proxy &rarr; prefill &rarr; <code class="inl">request_finished</code> &rarr; decode), see <a class="src" href="vllm_pd_disagg_flow.html">vLLM v0.22.0 PD Disaggregation (NixlConnector) &mdash; code walk</a>. Here: composition and the offload leg only.</span><span class="ko">사이트에 이미 있는 내용은 다시 다루지 않는다. 커넥터 <b>분류</b>(전송 방향별)는 <a class="src" href="vllm-kv-connectors.html">vLLM KV-cache connectors &mdash; transfer-direction map</a>, <b>NixlConnector PD 코드 워크</b>(proxy &rarr; prefill &rarr; <code class="inl">request_finished</code> &rarr; decode)는 <a class="src" href="vllm_pd_disagg_flow.html">vLLM v0.22.0 PD Disaggregation (NixlConnector) &mdash; code walk</a> 를 보라. 여기서는 합성과 오프로드 쪽만 다룬다.</span>
+    </div>
+
+    <h3><span class="en">What changed since those notes</span><span class="ko">그 노트들 이후 달라진 것</span></h3>
+    <p><span class="en">Both notes date from June 2026, and the connector registry has moved since. Three deltas matter today:</span><span class="ko">두 노트는 2026년 6월 것이고, 그 뒤 커넥터 레지스트리가 바뀌었다. 지금은 세 가지가 중요하다.</span></p>
+    <table>
+      <thead><tr>
+        <th><span class="en">Change</span><span class="ko">변경</span></th>
+        <th><span class="en">Then (June 2026)</span><span class="ko">그때 (2026-06)</span></th>
+        <th><span class="en">Now (@ a0f1b9ad)</span><span class="ko">지금 (@ a0f1b9ad)</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><code class="inl">P2pNcclConnector</code></td>
+          <td><span class="en">A registered connector; the NCCL-based P2P option.</span><span class="ko">등록된 커넥터. NCCL 기반 P2P 옵션.</span></td>
+          <td><span class="en"><b>Gone.</b> No <code class="inl">P2pNccl</code> symbol anywhere under <code class="inl">vllm/</code>. A "p2p then nixl" plan has no p2p half upstream anymore.</span><span class="ko"><b>삭제됨.</b> <code class="inl">vllm/</code> 아래에 <code class="inl">P2pNccl</code> 심볼이 없다. "p2p 다음 nixl" 계획이라면 p2p 쪽은 업스트림에 더는 없다.</span></td>
+        </tr>
+        <tr>
+          <td><span class="en">NIXL direction</span><span class="ko">NIXL 방향</span></td>
+          <td><span class="en">One <code class="inl">NixlConnector</code>.</span><span class="ko"><code class="inl">NixlConnector</code> 하나.</span></td>
+          <td><span class="en">Split into <code class="inl">NixlPullConnector</code> (READ) and <code class="inl">NixlPushConnector</code> (WRITE). <code class="inl">NixlConnector</code> is now an alias for pull.</span><span class="ko"><code class="inl">NixlPullConnector</code>(READ)와 <code class="inl">NixlPushConnector</code>(WRITE)로 분리. <code class="inl">NixlConnector</code> 는 이제 pull 의 별칭이다.</span></td>
+        </tr>
+        <tr>
+          <td><code class="inl">LMCacheMPConnector</code></td>
+          <td><span class="en">A footnote.</span><span class="ko">각주 수준.</span></td>
+          <td><span class="en">A registered first-class connector with its own vLLM shortcut flags; the recommended way to run LMCache.</span><span class="ko">전용 vLLM 단축 플래그가 있는 정식 커넥터. LMCache 권장 실행 방식이다.</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><span class="en">The alias decides what a config string means:</span><span class="ko">별칭이 설정 문자열의 의미를 정한다.</span></p>
+    <pre># vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py:399
+# Backward compatibility: NixlConnector is the pull-based connector.
+NixlConnector = NixlPullConnector</pre>
+    <p class="muted"><span class="en">So <code class="inl">"kv_connector": "NixlConnector"</code> means pull/READ: the decoder reads from the prefiller. To push, name <code class="inl">NixlPushConnector</code> explicitly.</span><span class="ko"><code class="inl">"kv_connector": "NixlConnector"</code> 는 pull/READ 다. decoder 가 prefiller 에서 읽는다. push 를 쓰려면 <code class="inl">NixlPushConnector</code> 를 직접 지정한다.</span></p>
+  </section>
+
+  <section id="s2">
+    <h2><span class="num">2</span><span class="en">Architecture: three repos, two processes, four transports</span><span class="ko">아키텍처: 레포 3개, 프로세스 2개, 전송 4개</span></h2>
+
+    <p><span class="en">The key idea: the <b>control plane and data plane do not travel together</b>. Each hop carries either small metadata or KV bytes, almost never both. Mixing them up is the usual source of "why is my ZMQ socket slow".</span><span class="ko">이 스택에서는 <b>컨트롤 플레인과 데이터 플레인이 따로 움직인다</b>. 각 홉은 작은 메타데이터나 KV 바이트 중 하나만 나른다. 둘을 혼동하면 "ZMQ 소켓이 왜 느리지" 같은 오해가 생긴다.</span></p>
+
+    <svg class="fig" viewBox="0 0 880 470" role="img" aria-label="Architecture: vLLM engine, LMCache MP server, Mooncake store, with control and data planes separated">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/>
+        </marker>
+        <marker id="ard" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--green-ink)"/>
+        </marker>
+        <marker id="arn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--purple-ink)"/>
+        </marker>
+      </defs>
+
+      <!-- legend -->
+      <line x1="560" y1="20" x2="596" y2="20" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+      <text x="602" y="24" class="xs">control (metadata)</text>
+      <line x1="560" y1="38" x2="596" y2="38" stroke="var(--green-ink)" stroke-width="2.4" marker-end="url(#ard)"/>
+      <text x="602" y="42" class="xs">data (KV bytes)</text>
+      <line x1="560" y1="56" x2="596" y2="56" stroke="var(--purple-ink)" stroke-width="2.4" marker-end="url(#arn)"/>
+      <text x="602" y="60" class="xs">RDMA (zero-copy)</text>
+
+      <!-- prefiller engine -->
+      <rect x="20" y="86" width="200" height="128" rx="10" class="bx"/>
+      <text x="34" y="106" class="lbl">vLLM engine A (prefill)</text>
+      <rect x="34" y="118" width="172" height="30" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="42" y="137" class="sm">Scheduler · connector hooks</text>
+      <rect x="34" y="154" width="172" height="46" rx="6" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="42" y="171" class="sm">GPU worker</text>
+      <text x="42" y="189" class="xs">paged KV cache (HBM)</text>
+
+      <!-- decoder engine -->
+      <rect x="20" y="252" width="200" height="128" rx="10" class="bx"/>
+      <text x="34" y="272" class="lbl">vLLM engine B (decode)</text>
+      <rect x="34" y="284" width="172" height="30" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="42" y="303" class="sm">Scheduler · connector hooks</text>
+      <rect x="34" y="320" width="172" height="46" rx="6" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="42" y="337" class="sm">GPU worker</text>
+      <text x="42" y="355" class="xs">paged KV cache (HBM)</text>
+
+      <!-- NIXL between the two engines -->
+      <path d="M120 214 L120 252" stroke="var(--purple-ink)" stroke-width="2.4" marker-end="url(#arn)"/>
+      <text x="128" y="238" class="xs">NIXL RDMA (READ)</text>
+      <path d="M196 214 C 250 226, 250 240, 196 252" stroke="var(--muted)" stroke-width="1.6" fill="none" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+      <text x="256" y="236" class="xs">ZMQ REQ/REP</text>
+      <text x="256" y="248" class="xs">agent metadata</text>
+
+      <!-- LMCache MP server -->
+      <rect x="392" y="120" width="216" height="196" rx="10" class="bx"/>
+      <text x="406" y="140" class="lbl">lmcache server (separate proc)</text>
+      <rect x="406" y="152" width="188" height="34" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="414" y="167" class="sm">MP engine · mq.py DEALER</text>
+      <text x="414" y="180" class="xs">msgspec requests + futures</text>
+      <rect x="406" y="194" width="188" height="46" rx="6" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+      <text x="414" y="211" class="sm">L1 — CPU staging</text>
+      <text x="414" y="228" class="xs">POSIX shm, RDMA-preregistered</text>
+      <rect x="406" y="248" width="188" height="52" rx="6" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="414" y="265" class="sm">L2 adapter (mooncake_store)</text>
+      <text x="414" y="281" class="xs">NativeConnectorL2Adapter</text>
+      <text x="414" y="294" class="xs">→ LMCacheMooncakeClient (C++)</text>
+
+      <!-- engine A -> lmcache -->
+      <path d="M220 132 L392 158" stroke="var(--muted)" stroke-width="1.6" fill="none" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+      <text x="242" y="128" class="xs">ZMQ DEALER · lookup / store / retrieve</text>
+      <path d="M220 178 L392 210" stroke="var(--green-ink)" stroke-width="2.4" fill="none" marker-end="url(#ard)"/>
+      <text x="242" y="196" class="xs">CUDA IPC handles → server gathers KV itself</text>
+
+      <!-- engine B -> lmcache -->
+      <path d="M220 300 L392 286" stroke="var(--muted)" stroke-width="1.6" fill="none" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+      <text x="242" y="318" class="xs">same socket, second engine</text>
+
+      <!-- Mooncake -->
+      <rect x="668" y="120" width="192" height="196" rx="10" class="bx"/>
+      <text x="682" y="140" class="lbl">Mooncake cluster</text>
+      <rect x="682" y="152" width="164" height="42" rx="6" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="690" y="169" class="sm">MasterService</text>
+      <text x="690" y="185" class="xs">placement · eviction · replicas</text>
+      <rect x="682" y="202" width="164" height="42" rx="6" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+      <text x="690" y="219" class="sm">Transfer Engine</text>
+      <text x="690" y="235" class="xs">RDMA / TCP / NVLink</text>
+      <rect x="682" y="252" width="164" height="48" rx="6" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="690" y="269" class="sm">mounted segments</text>
+      <text x="690" y="286" class="xs">the actual KV pool</text>
+
+      <path d="M608 172 L668 172" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+      <text x="612" y="164" class="xs">MasterClient RPC</text>
+      <path d="M608 268 L668 268" stroke="var(--purple-ink)" stroke-width="2.4" marker-end="url(#arn)"/>
+      <text x="612" y="290" class="xs">RDMA from L1</text>
+
+      <!-- footnote band -->
+      <text x="20" y="412" class="sm">Control plane: ZMQ REQ/REP (NIXL handshake) · ZMQ DEALER (LMCache RPC) · MasterClient RPC (Mooncake metadata)</text>
+      <text x="20" y="432" class="sm">Data plane: NIXL/UCX RDMA (engine↔engine) · CUDA IPC (engine→lmcache server) · Mooncake RDMA (L1→segments)</text>
+      <text x="20" y="452" class="xs">KV bytes never travel over any ZMQ socket in this design.</text>
+    </svg>
+    <p class="figcap"><span class="en">Fig 1 · Processes and tiers; dashed = control, solid = data. Drawn from vLLM <code class="inl">a0f1b9ad</code>, LMCache <code class="inl">f9addd2e</code>, Mooncake <code class="inl">f8c9667a</code>.</span><span class="ko">그림 1 · 프로세스와 계층. 점선은 컨트롤, 실선은 데이터. vLLM <code class="inl">a0f1b9ad</code>, LMCache <code class="inl">f9addd2e</code>, Mooncake <code class="inl">f8c9667a</code> 기준 직접 그림.</span></p>
+
+    <h3><span class="en">The two roles every connector has</span><span class="ko">모든 커넥터가 갖는 두 역할</span></h3>
+    <p><span class="en">A connector class is instantiated once per role, and the two halves live in different processes. That is why methods in the same file never call each other.</span><span class="ko">커넥터 클래스는 역할마다 한 번씩 생성되고 두 인스턴스는 다른 프로세스에 산다. 그래서 같은 파일의 메서드끼리 서로 호출하지 않는다.</span></p>
+    <table>
+      <thead><tr>
+        <th><code class="inl">KVConnectorRole</code></th>
+        <th><span class="en">Runs in</span><span class="ko">실행 위치</span></th>
+        <th><span class="en">Hooks it must implement</span><span class="ko">구현해야 하는 훅</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><code class="inl">SCHEDULER</code></td>
+          <td><span class="en">engine core / scheduler process</span><span class="ko">엔진 코어 / 스케줄러 프로세스</span></td>
+          <td><code class="inl">get_num_new_matched_tokens</code>, <code class="inl">update_state_after_alloc</code>, <code class="inl">build_connector_meta</code>, <code class="inl">request_finished</code></td>
+        </tr>
+        <tr>
+          <td><code class="inl">WORKER</code></td>
+          <td><span class="en">each GPU worker process</span><span class="ko">각 GPU 워커 프로세스</span></td>
+          <td><code class="inl">register_kv_caches</code>, <code class="inl">start_load_kv</code>, <code class="inl">wait_for_layer_load</code>, <code class="inl">save_kv_layer</code>, <code class="inl">wait_for_save</code>, <code class="inl">get_finished</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted"><span class="en">Defined at <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L124-L171"><code class="inl">base.py#L124-L171</code></a>; the scheduler half spans <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L450-L563">L450-L563</a> and the worker half <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L264-L371">L264-L371</a>.</span><span class="ko">정의는 <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L124-L171"><code class="inl">base.py#L124-L171</code></a>, scheduler 쪽은 <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L450-L563">L450-L563</a>, worker 쪽은 <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L264-L371">L264-L371</a>.</span></p>
+
+    <div class="callout c-green">
+      <span class="tag"><span class="en">Why the registry looks empty</span><span class="ko">레지스트리가 비어 보이는 이유</span></span>
+      <span class="en">The factory registers connectors as <b>strings</b> (<code class="inl">register_connector(name, module_path, class_name)</code>), not imports, so only the selected connector's module is imported. Grepping for users of <code class="inl">NixlConnector</code> finds nothing; the link exists only at runtime. <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/factory.py#L152-L240">factory.py#L152-L240</a></span><span class="ko">팩토리는 커넥터를 import 가 아니라 <b>문자열</b>로 등록한다(<code class="inl">register_connector(name, module_path, class_name)</code>). 그래서 선택한 커넥터의 모듈만 import 되고, <code class="inl">NixlConnector</code> 사용처를 grep 해도 나오지 않는다. 연결은 런타임에만 생긴다. <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/factory.py#L152-L240">factory.py#L152-L240</a></span>
+    </div>
+  </section>
+
+  <section id="s3">
+    <h2><span class="num">3</span><span class="en">MultiConnector: first hit loads, everyone saves</span><span class="ko">MultiConnector: 첫 히트가 읽고, 전부가 쓴다</span></h2>
+
+    <p><span class="en">The whole composition policy is in the class docstring:</span><span class="ko">합성 정책은 클래스 docstring 에 다 적혀 있다.</span></p>
+
+    <blockquote class="q">
+      <p>"A wrapper for using multiple KVConnectors at the same time. The current logic is: Load KV from the first connector that advertises available tokens from get_num_new_matched_tokens(), based on the order in the config. Save to all connectors."</p>
+      <cite>— <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py#L128-L136">multi_connector.py#L128-L136</a></cite>
+    </blockquote>
+
+    <p><span class="en">So ordering is policy. With <code class="inl">[NixlConnector, LMCacheMPConnector]</code>, a decode instance that can pull from its prefiller does so, and the Mooncake-backed cache is consulted only when NIXL reports nothing. Reversing the order prefers the shared cache over the peer, which is usually wrong: the peer transfer is one RDMA hop, the cache at least two.</span><span class="ko">그래서 순서가 곧 정책이다. <code class="inl">[NixlConnector, LMCacheMPConnector]</code> 이면 prefiller 에서 바로 당겨올 수 있는 decode 인스턴스는 NIXL 을 쓰고, NIXL 이 아무것도 보고하지 않을 때만 Mooncake 캐시를 본다. 순서를 뒤집으면 peer 보다 공유 캐시를 먼저 보는데, peer 전송은 RDMA 한 홉이고 캐시는 최소 두 홉이라 보통 손해다.</span></p>
+
+    <h3><span class="en">The selection loop, and the trap in it</span><span class="ko">선택 루프, 그리고 그 안의 함정</span></h3>
+    <pre># multi_connector.py:387-406
+def get_num_new_matched_tokens(self, request, num_computed_tokens):
+    to_return = (0, False)
+    for i, c in enumerate(self._connectors):
+        toks, load_async = c.get_num_new_matched_tokens(request, num_computed_tokens)
+        # If there is a connector still looking up the matches,
+        # we return None to indicate that we are not done yet.
+        if toks is None:
+            return (None, False)          # &lt;-- abandons to_return
+        if to_return[0] == 0 and toks &gt; 0:
+            self._requests_to_connector[request.request_id] = i
+            to_return = (toks, load_async)
+    return to_return</pre>
+
+    <p><span class="en">Two things. First, the loop calls <b>every</b> child even after one has won; the winner is just the first with <code class="inl">toks &gt; 0</code>. Second, any child returning <code class="inl">None</code> aborts the scan and discards what was already found.</span><span class="ko">볼 점이 두 가지다. 첫째, 승자가 정해진 뒤에도 루프는 <b>모든</b> 자식을 호출한다. 승자는 <code class="inl">toks &gt; 0</code> 인 첫 자식일 뿐이다. 둘째, 자식 하나라도 <code class="inl">None</code> 을 반환하면 스캔이 중단되고 이미 찾은 결과도 버려진다.</span></p>
+
+    <p><span class="en"><code class="inl">LMCacheMPConnector</code> returns exactly that while its lookup RPC is in flight: it fires the lookup, polls once, and gives up for this step.</span><span class="ko"><code class="inl">LMCacheMPConnector</code> 는 lookup RPC 가 진행 중이면 바로 이 값을 반환한다. lookup 을 보내고 한 번 폴링한 뒤 이번 스텝은 포기한다.</span></p>
+    <pre># vllm/.../v1/lmcache_mp_connector.py:770-777
+self.scheduler_adapter.maybe_submit_lookup_request(
+    request.request_id, token_ids=list(request.all_token_ids),
+    cache_salt=tracker.cache_salt,
+)
+ret = self.scheduler_adapter.check_lookup_result(request.request_id)
+if ret is None:
+    return None, True</pre>
+
+    <div class="callout c-red">
+      <span class="tag"><span class="en">Latency tax on the fast path</span><span class="ko">빠른 경로에 붙는 지연 세금</span></span>
+      <span class="en"><b>A pending LMCache lookup throws away an already-found NIXL hit for that step.</b> NIXL reports tokens and <code class="inl">to_return</code> is set, then LMCache returns <code class="inl">None</code> and the function bails with <code class="inl">(None, False)</code>; the scheduler re-queries next step. So every request whose lookup does not resolve immediately pays at least one extra step <i>even when the prefiller already had the blocks ready</i>. Connector order does not help, because the loop calls every child.</span><span class="ko"><b>진행 중인 LMCache lookup 이 이미 찾은 NIXL 히트를 그 스텝에서 버린다.</b> NIXL 이 토큰을 보고해 <code class="inl">to_return</code> 이 채워져도 LMCache 가 <code class="inl">None</code> 을 내면 함수는 <code class="inl">(None, False)</code> 로 빠져나가고, 스케줄러는 다음 스텝에 다시 묻는다. 그래서 lookup 이 즉시 안 끝나는 요청은 <i>prefiller 가 블록을 준비해 뒀어도</i> 스텝을 최소 하나 더 쓴다. 루프가 모든 자식을 호출하므로 커넥터 순서로도 피할 수 없다.</span>
+    </div>
+
+    <p><span class="en">The cost is bounded: a scheduler step, not a storage round trip. Whether it matters depends on your TTFT budget and how often lookups miss the fast return. It is the first thing I would instrument.</span><span class="ko">다만 비용은 스토리지 왕복이 아니라 스케줄러 스텝 하나다. 문제가 되는지는 TTFT 예산과 lookup 이 빠른 반환을 놓치는 빈도에 달렸다. 가장 먼저 계측할 지점이다.</span></p>
+
+    <h3><span class="en">Allocation: the winner gets tokens, the rest get zero</span><span class="ko">할당: 승자는 토큰을, 나머지는 0 을</span></h3>
+    <p><span class="en">After allocation every child gets the block list, but only the chosen one is told there is external KV to load. The others need the blocks to plan their saves.</span><span class="ko">블록 할당 후 모든 자식이 블록 목록을 받지만, 로드할 외부 KV 개수는 선택된 자식만 받는다. 나머지는 저장 계획에 블록 목록이 필요하다.</span></p>
+    <pre># multi_connector.py:408-418
+chosen_connector = self._requests_to_connector.get(request.request_id, -1)
+for i, c in enumerate(self._connectors):
+    if i == chosen_connector:
+        c.update_state_after_alloc(request, blocks, num_external_tokens)
+    else:
+        # Other connectors still receive the request's real blocks
+        c.update_state_after_alloc(request, blocks, 0)</pre>
+
+    <h3><span class="en">Finishing: counting async saves, and a clash guard</span><span class="ko">종료: 비동기 저장 카운트, 그리고 충돌 가드</span></h3>
+    <p><span class="en">Saves fan out to all children, so a request can have several async saves outstanding. <code class="inl">MultiConnector</code> counts them and passes the surplus to the worker so blocks are not freed early:</span><span class="ko">저장은 모든 자식으로 퍼지므로 한 요청에 비동기 저장이 여러 개 남을 수 있다. <code class="inl">MultiConnector</code> 는 그 수를 세어 초과분을 워커에 넘기고, 블록이 일찍 해제되지 않게 한다.</span></p>
+    <pre># multi_connector.py:485-509 (excerpt)
+if async_saves &gt; 1:
+    self._extra_async_saves[request.request_id] = async_saves - 1
+...
+if txfer_params is not None:
+    if kv_txfer_params is not None:
+        clashes = set(kv_txfer_params) &amp; set(txfer_params)
+        if clashes:
+            raise RuntimeError(
+                "Key clash in kv_transfer_params from multiple "
+                f"connectors: {clashes}")</pre>
+    <p><span class="en">If two children return <code class="inl">kv_transfer_params</code> with overlapping keys, the engine raises instead of silently letting one win. NIXL and LMCacheMP do not collide today, but a custom connector easily could.</span><span class="ko">두 자식이 겹치는 키로 <code class="inl">kv_transfer_params</code> 를 돌려주면 엔진은 한쪽을 조용히 택하지 않고 예외를 던진다. NIXL 과 LMCacheMP 는 지금 충돌하지 않지만 커스텀 커넥터는 쉽게 부딪힌다.</span></p>
+
+    <h3><span class="en">HMA: the constraint that is not what the docs say</span><span class="ko">HMA: 문서와 다른 제약</span></h3>
+    <p><span class="en">Composition has one gate: <code class="inl">MultiConnector.__init__</code> asserts that the hybrid KV cache manager is off or every child supports it.</span><span class="ko">합성에는 게이트가 하나 있다. <code class="inl">MultiConnector.__init__</code> 은 hybrid KV cache manager 가 꺼져 있거나 모든 자식이 이를 지원해야 통과시킨다.</span></p>
+    <pre># multi_connector.py:188-195
+self._all_support_hma = MultiConnector.all_children_support_hma(
+    vllm_config.kv_transfer_config)
+assert (
+    vllm_config.scheduler_config.disable_hybrid_kv_cache_manager
+    or self._all_support_hma
+), "HMA should not be enabled unless all sub-connectors support it"</pre>
+    <p><span class="en">Checking your pair takes one more step, because <code class="inl">LMCacheMPConnector</code> is not a class but a name bound at import time:</span><span class="ko">이 조합이 통과하는지는 한 단계 더 봐야 안다. <code class="inl">LMCacheMPConnector</code> 는 클래스가 아니라 import 시점에 정해지는 이름이다.</span></p>
+    <pre># vllm/.../v1/lmcache_mp_connector.py:1200-1226 (condensed)
+def _resolve_lmcache_mp_connector() -&gt; type[KVConnectorBase_V1]:
+    try:
+        from lmcache.integration.vllm.lmcache_mp_connector import (
+            LMCacheMPConnector as _ExternalLMCacheMPConnector)
+        return _ExternalLMCacheMPConnector      # &lt;-- this one, in practice
+    except ImportError:
+        return LMCacheMPConnectorUpstream       # vLLM's builtin fallback
+
+LMCacheMPConnector = _resolve_lmcache_mp_connector()</pre>
+    <p><span class="en">The connector cannot work without LMCache installed, so you get the external class, and it <b>does</b> declare HMA support:</span><span class="ko">LMCache 없이는 이 커넥터가 동작하지 않으므로 실제로는 external 클래스가 쓰이고, 이 클래스는 HMA 지원을 <b>선언한다</b>.</span></p>
+    <pre># LMCache f9addd2e · lmcache/integration/vllm/lmcache_mp_connector.py:230
+class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):</pre>
+    <p><span class="en"><code class="inl">SupportsHMA</code> is imported from vLLM under a <code class="inl">try/except</code> (<a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/lmcache_mp_connector.py#L17-L25">L17-L25</a>), which succeeds against current vLLM. So <code class="inl">supports_hma()</code>, a plain <code class="inl">issubclass</code> check (<a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L117-L121">base.py#L117-L121</a>), returns <code class="inl">True</code>.</span><span class="ko"><code class="inl">SupportsHMA</code> 는 vLLM 에서 <code class="inl">try/except</code> 로 import 되는데(<a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/lmcache_mp_connector.py#L17-L25">L17-L25</a>) 현재 vLLM 에서는 성공한다. 그래서 단순 <code class="inl">issubclass</code> 검사인 <code class="inl">supports_hma()</code>(<a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L117-L121">base.py#L117-L121</a>)는 <code class="inl">True</code> 를 돌려준다.</span></p>
+
+    <div class="callout c-amber">
+      <span class="tag"><span class="en">Verify this one yourself</span><span class="ko">이건 직접 확인할 것</span></span>
+      <span class="en">By that reading, <code class="inl">MultiConnector[NixlConnector, LMCacheMPConnector]</code> does <b>not</b> need <code class="inl">--disable-hybrid-kv-cache-manager</code>. Yet vLLM's MP example still passes that flag, commenting that "the MP connector currently requires the non-hybrid KV cache manager" (<a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/examples/disaggregated/lmcache/cpu_offload_lmcache_mp.sh#L30-L38">cpu_offload_lmcache_mp.sh#L30-L38</a>). The comment is either stale relative to LMCache <code class="inl">f9addd2e</code> or describes the builtin-fallback path. Smoke-test your exact versions; the failure is a loud assert at construction, not silent corruption.</span><span class="ko">이대로라면 <code class="inl">MultiConnector[NixlConnector, LMCacheMPConnector]</code> 에 <code class="inl">--disable-hybrid-kv-cache-manager</code> 는 <b>필요 없다</b>. 그런데 vLLM MP 예제는 아직 이 플래그를 넘기며 "MP 커넥터는 현재 non-hybrid KV cache manager 를 요구한다"는 주석을 달아 두었다(<a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/examples/disaggregated/lmcache/cpu_offload_lmcache_mp.sh#L30-L38">cpu_offload_lmcache_mp.sh#L30-L38</a>). 주석이 LMCache <code class="inl">f9addd2e</code> 기준으로 낡았거나 builtin fallback 경로 얘기일 것이다. 쓰는 버전으로 스모크 테스트하면 된다. 실패하면 조용한 손상이 아니라 생성 시점의 assert 로 바로 드러난다.</span>
+    </div>
+
+    <p class="muted"><span class="en">For reference, who declares <code class="inl">SupportsHMA</code> in vLLM at this SHA: <code class="inl">NixlBaseConnector</code> (so all three NIXL variants), <code class="inl">MooncakeConnector</code>, <code class="inl">MooncakeStoreConnector</code>, <code class="inl">OffloadingConnector</code>, <code class="inl">SimpleCPUOffloadConnector</code>, <code class="inl">DecodeBenchConnector</code>, and <code class="inl">MultiConnector</code> itself. vLLM's builtin <code class="inl">LMCacheMPConnectorUpstream</code> does <b>not</b>.</span><span class="ko">참고로 이 SHA 에서 <code class="inl">SupportsHMA</code> 를 선언한 vLLM 커넥터는 <code class="inl">NixlBaseConnector</code>(따라서 NIXL 3종 전부), <code class="inl">MooncakeConnector</code>, <code class="inl">MooncakeStoreConnector</code>, <code class="inl">OffloadingConnector</code>, <code class="inl">SimpleCPUOffloadConnector</code>, <code class="inl">DecodeBenchConnector</code>, <code class="inl">MultiConnector</code> 자신이다. vLLM 내장 <code class="inl">LMCacheMPConnectorUpstream</code> 은 <b>선언하지 않는다</b>.</span></p>
+  </section>
+
+  <section id="s4">
+    <h2><span class="num">4</span><span class="en">Wire flow A: NIXL prefill&rarr;decode</span><span class="ko">통신 흐름 A: NIXL prefill&rarr;decode</span></h2>
+
+    <p><span class="en">Before any byte moves, NIXL needs two things: both sides <b>register</b> their KV memory with the local NIXL agent, and the reader gets the writer's <b>agent metadata</b> plus buffer base addresses. Registration is local; for the metadata exchange vLLM uses a plain ZMQ REQ/REP socket.</span><span class="ko">NIXL 은 바이트를 옮기기 전에 두 가지가 필요하다. 양쪽이 로컬 NIXL agent 에 KV 메모리를 <b>등록</b>하고, 읽는 쪽이 쓰는 쪽의 <b>agent 메타데이터</b>와 버퍼 기준 주소를 받아야 한다. 등록은 로컬 작업이고, 메타데이터 교환에는 vLLM 이 평범한 ZMQ REQ/REP 소켓을 쓴다.</span></p>
+
+    <svg class="fig" viewBox="0 0 860 320" role="img" aria-label="NIXL handshake and transfer sequence between prefiller and decoder">
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/>
+        </marker>
+        <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--purple-ink)"/>
+        </marker>
+      </defs>
+      <rect x="60" y="20" width="180" height="34" rx="8" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="86" y="42" class="lbl">Prefiller worker</text>
+      <rect x="620" y="20" width="180" height="34" rx="8" fill="var(--blue-bg)" stroke="var(--blue-bd)"/>
+      <text x="654" y="42" class="lbl">Decoder worker</text>
+      <line x1="150" y1="54" x2="150" y2="300" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="3 4"/>
+      <line x1="710" y1="54" x2="710" y2="300" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="3 4"/>
+
+      <text x="20" y="82" class="xs">t0</text>
+      <rect x="66" y="68" width="168" height="26" rx="5" fill="var(--card)" stroke="var(--line)"/>
+      <text x="74" y="85" class="sm">register_kv_caches()</text>
+      <rect x="626" y="68" width="168" height="26" rx="5" fill="var(--card)" stroke="var(--line)"/>
+      <text x="634" y="85" class="sm">register_kv_caches()</text>
+      <text x="250" y="86" class="xs">get_reg_descs → register_memory (local, both sides)</text>
+
+      <text x="20" y="130" class="xs">t1</text>
+      <path d="M710 122 L150 122" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#a2)"/>
+      <text x="300" y="116" class="xs">ZMQ REQ — _nixl_handshake(host, port), RCVTIMEO 5000ms</text>
+      <path d="M150 148 L710 148" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#a2)"/>
+      <text x="250" y="142" class="xs">REP — NixlAgentMetadata: agent bytes, kv_caches_base_addr, block_lens/strides, layout</text>
+
+      <text x="20" y="186" class="xs">t2</text>
+      <rect x="626" y="172" width="168" height="26" rx="5" fill="var(--card)" stroke="var(--line)"/>
+      <text x="634" y="189" class="sm">add_remote_agent()</text>
+      <text x="380" y="190" class="xs">build local↔remote descriptor lists (TP/PP/DCP aware)</text>
+
+      <text x="20" y="234" class="xs">t3</text>
+      <path d="M710 226 L150 226" stroke="var(--purple-ink)" stroke-width="2.6" marker-end="url(#a3)"/>
+      <text x="300" y="220" class="xs">NIXL one-sided READ — KV blocks over UCX/RDMA</text>
+      <text x="300" y="246" class="xs">(NixlPushConnector inverts this: prefiller WRITEs, on a background nixl-push-writer thread)</text>
+
+      <text x="20" y="286" class="xs">t4</text>
+      <rect x="626" y="272" width="168" height="26" rx="5" fill="var(--card)" stroke="var(--line)"/>
+      <text x="634" y="289" class="sm">get_finished()</text>
+      <text x="380" y="290" class="xs">_pop_done_transfers + _get_new_notifs → req ids done</text>
+    </svg>
+    <p class="figcap"><span class="en">Fig 2 · NIXL handshake and transfer. Reconstructed from <code class="inl">nixl/base_worker.py</code> and <code class="inl">nixl/connector.py</code> @ <code class="inl">a0f1b9ad</code> (own drawing).</span><span class="ko">그림 2 · NIXL 핸드셰이크와 전송 순서. <code class="inl">nixl/base_worker.py</code>, <code class="inl">nixl/connector.py</code> @ <code class="inl">a0f1b9ad</code> 에서 재구성(직접 그림).</span></p>
+
+    <p><span class="en">The handshake is simple: a synchronous request/reply with a five-second timeout, run in a background thread so it does not stall the engine.</span><span class="ko">핸드셰이크는 단순하다. 5초 타임아웃의 동기 요청/응답이고, 엔진을 막지 않게 백그라운드 스레드에서 돈다.</span></p>
+    <pre># nixl/base_worker.py:648-671 (excerpt)
+path = make_zmq_path("tcp", host, port)
+...
+with zmq_ctx(zmq.REQ, path) as sock:
+    ...
+    sock.setsockopt(zmq.RCVTIMEO, 5000)  # milliseconds</pre>
+
+    <table>
+      <thead><tr>
+        <th><span class="en">Step</span><span class="ko">단계</span></th>
+        <th><span class="en">Code</span><span class="ko">코드</span></th>
+        <th><span class="en">What crosses the network</span><span class="ko">네트워크를 건너는 것</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="en">Register</span><span class="ko">등록</span></td>
+          <td><a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py#L1200-L1202">base_worker.py#L1200-L1202</a></td>
+          <td><span class="en">nothing; local <code class="inl">get_reg_descs</code> + <code class="inl">register_memory</code></span><span class="ko">없음. 로컬 <code class="inl">get_reg_descs</code> + <code class="inl">register_memory</code></span></td>
+        </tr>
+        <tr>
+          <td><span class="en">Handshake</span><span class="ko">핸드셰이크</span></td>
+          <td><a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py#L617-L671">base_worker.py#L617-L671</a></td>
+          <td><span class="en">one ZMQ REQ/REP: <code class="inl">NixlAgentMetadata</code> (agent bytes + base addrs + block geometry + layout)</span><span class="ko">ZMQ REQ/REP 한 번: <code class="inl">NixlAgentMetadata</code>(agent 바이트 + 기준 주소 + 블록 기하 + 레이아웃)</span></td>
+        </tr>
+        <tr>
+          <td><span class="en">Map</span><span class="ko">매핑</span></td>
+          <td><a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py#L1467">base_worker.py#L1467</a></td>
+          <td><span class="en">nothing; local descriptor construction</span><span class="ko">없음. 로컬 디스크립터 구성</span></td>
+        </tr>
+        <tr>
+          <td><span class="en">Transfer</span><span class="ko">전송</span></td>
+          <td><a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py#L334-L397">connector.py#L334-L397</a></td>
+          <td><span class="en"><b>the KV bytes</b>, one-sided RDMA</span><span class="ko"><b>KV 바이트</b>, 단방향 RDMA</span></td>
+        </tr>
+        <tr>
+          <td><span class="en">Completion</span><span class="ko">완료</span></td>
+          <td><a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py#L2164-L2230">base_worker.py#L2164-L2230</a></td>
+          <td><span class="en">NIXL notifications + heartbeats</span><span class="ko">NIXL 알림 + 하트비트</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><span class="en">Pull and push differ not only in direction but in which thread pays. Pull drives the worker inline from <code class="inl">start_load_kv</code>; push hands work to a background writer and returns.</span><span class="ko">pull 과 push 는 방향뿐 아니라 비용을 내는 스레드도 다르다. pull 은 <code class="inl">start_load_kv</code> 에서 워커가 직접 처리하고, push 는 백그라운드 라이터에 일을 넘기고 바로 반환한다.</span></p>
+    <blockquote class="q">
+      <p>"The worker enqueues registrations / finished blocks for the background <code>nixl-push-writer</code> thread; the writer issues the WRITE transfers and polls NIXL notifs without further engine-thread involvement."</p>
+      <cite>— <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py#L385-L392">nixl/connector.py#L385-L392</a></cite>
+    </blockquote>
+    <p><span class="en">If the prefiller is your throughput bottleneck, measure <code class="inl">NixlPushConnector</code> against the default pull.</span><span class="ko">prefiller 가 처리량 병목이면 기본 pull 과 <code class="inl">NixlPushConnector</code> 를 비교 측정해 볼 만하다.</span></p>
+  </section>
+
+  <section id="s5">
+    <h2><span class="num">5</span><span class="en">Wire flow B: LMCache MP &rarr; MooncakeStore</span><span class="ko">통신 흐름 B: LMCache MP &rarr; MooncakeStore</span></h2>
+
+    <p><span class="en">The offload leg has more hops, but the KV bytes skip most of them. vLLM never serialises KV over a socket; it gives the LMCache server <i>access</i> to its GPU memory and lets the server gather.</span><span class="ko">오프로드 쪽은 홉이 더 많지만 KV 바이트는 대부분을 건너뛴다. vLLM 프로세스는 KV 를 소켓으로 직렬화하지 않고, LMCache 서버에 GPU 메모리 <i>접근권</i>을 넘겨 서버가 직접 모으게 한다.</span></p>
+
+    <svg class="fig" viewBox="0 0 860 380" role="img" aria-label="Tiered path from vLLM GPU KV through LMCache L1 to Mooncake segments">
+      <defs>
+        <marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--green-ink)"/>
+        </marker>
+        <marker id="b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--purple-ink)"/>
+        </marker>
+      </defs>
+
+      <rect x="30" y="24" width="230" height="70" rx="10" fill="var(--green-bg)" stroke="var(--green-bd)"/>
+      <text x="46" y="46" class="lbl">vLLM GPU paged KV (HBM)</text>
+      <text x="46" y="64" class="sm">tier 0 · owned by vLLM worker</text>
+      <text x="46" y="82" class="xs">exposed to the server via CUDA IPC handles</text>
+
+      <rect x="30" y="140" width="230" height="70" rx="10" fill="var(--amber-bg)" stroke="var(--amber-bd)"/>
+      <text x="46" y="162" class="lbl">LMCache L1 — CPU staging</text>
+      <text x="46" y="180" class="sm">POSIX shm (mmap), L1Manager</text>
+      <text x="46" y="198" class="xs">pre-registered with Mooncake when protocol=rdma</text>
+
+      <rect x="30" y="256" width="230" height="70" rx="10" fill="var(--purple-bg)" stroke="var(--purple-bd)"/>
+      <text x="46" y="278" class="lbl">Mooncake mounted segments</text>
+      <text x="46" y="296" class="sm">tier 2 · cluster KV pool</text>
+      <text x="46" y="314" class="xs">placement + eviction by MasterService</text>
+
+      <path d="M145 94 L145 140" stroke="var(--green-ink)" stroke-width="2.6" marker-end="url(#b1)"/>
+      <path d="M145 210 L145 256" stroke="var(--purple-ink)" stroke-width="2.6" marker-end="url(#b2)"/>
+
+      <!-- right column: who does what -->
+      <rect x="330" y="24" width="500" height="70" rx="10" class="bx"/>
+      <text x="346" y="44" class="lbl">gather / scatter — who copies?</text>
+      <text x="346" y="62" class="sm">create_transfer_context(mode) → AUTO on CUDA picks LMCACHE_DRIVEN</text>
+      <text x="346" y="80" class="xs">LMCACHE_DRIVEN = server pulls via IPC (zero-copy) · ENGINE_DRIVEN = vLLM worker copies</text>
+
+      <rect x="330" y="140" width="500" height="70" rx="10" class="bx"/>
+      <text x="346" y="160" class="lbl">L1Manager write protocol</text>
+      <text x="346" y="178" class="sm">reserve_write → [fill] → finish_write / finish_write_and_reserve_read</text>
+      <text x="346" y="196" class="xs">get_l1_memory_desc() yields {ptr, size} — this is what Mooncake pre-registers</text>
+
+      <rect x="330" y="256" width="500" height="70" rx="10" class="bx"/>
+      <text x="346" y="276" class="lbl">L2 adapter → native C++ → Mooncake</text>
+      <text x="346" y="294" class="sm">submit_store_task → eventfd → NativeConnectorL2Adapter</text>
+      <text x="346" y="312" class="xs">MooncakeConnector::do_batch_set → mooncake::RealClient → Transfer Engine</text>
+
+      <text x="30" y="358" class="xs">Control for all three hops rides the ZMQ DEALER socket in mq.py; none of it carries KV bytes.</text>
+    </svg>
+    <p class="figcap"><span class="en">Fig 3 · Tiers and ownership. Own drawing from LMCache <code class="inl">f9addd2e</code> and Mooncake <code class="inl">f8c9667a</code>.</span><span class="ko">그림 3 · 계층과 소유권. LMCache <code class="inl">f9addd2e</code>, Mooncake <code class="inl">f8c9667a</code> 기준 직접 그림.</span></p>
+
+    <h3><span class="en">The control socket</span><span class="ko">컨트롤 소켓</span></h3>
+    <p><span class="en">One ZMQ <code class="inl">DEALER</code> socket per client, msgspec-encoded requests, futures for replies, and one shared polling loop instead of a thread per client:</span><span class="ko">클라이언트마다 ZMQ <code class="inl">DEALER</code> 소켓 하나를 두고, 요청은 msgspec 으로 인코딩하며 응답은 future 로 받는다. 클라이언트별 스레드 대신 공유 폴링 루프 하나가 모든 소켓을 돈다.</span></p>
+    <blockquote class="q">
+      <p>"Instead of each client running its own daemon thread and zmq.Poller, a single loop polls all clients' DEALER sockets and dispatches"</p>
+      <cite>— <a href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/v1/multiprocess/mq.py#L127-L133">mq.py#L127-L133</a> (<code>ClientPollingLoop</code>)</cite>
+    </blockquote>
+
+    <h3><span class="en">The tunable that decides who copies</span><span class="ko">누가 복사하는지 결정하는 튜너블</span></h3>
+    <p><span class="en">The most performance-relevant knob on the offload leg, easy to miss because it defaults to <code class="inl">auto</code>:</span><span class="ko">오프로드 쪽에서 성능에 가장 직결되는 노브다. 기본값이 <code class="inl">auto</code> 라 놓치기 쉽다.</span></p>
+    <table>
+      <thead><tr>
+        <th><code class="inl">lmcache.mp.mp_transfer_mode</code></th>
+        <th><span class="en">Mechanism</span><span class="ko">메커니즘</span></th>
+        <th><span class="en">Who pays the copy</span><span class="ko">복사 비용 부담</span></th>
+      </tr></thead>
+      <tbody>
+        <tr><td><code class="inl">lmcache_driven</code></td><td><span class="en">CUDA IPC / SHM, zero-copy</span><span class="ko">CUDA IPC / SHM, 무복사</span></td><td><span class="en">the LMCache server, off vLLM's forward path</span><span class="ko">LMCache 서버 (vLLM forward 경로 밖)</span></td></tr>
+        <tr><td><code class="inl">engine_driven</code></td><td><span class="en">worker-side gather/scatter</span><span class="ko">워커 측 gather/scatter</span></td><td><span class="en">the vLLM GPU worker</span><span class="ko">vLLM GPU 워커</span></td></tr>
+        <tr><td><code class="inl">auto</code> <span class="muted">(default)</span></td><td><span class="en">CUDA &rarr; <code class="inl">lmcache_driven</code>; anything else &rarr; <code class="inl">engine_driven</code></span><span class="ko">CUDA &rarr; <code class="inl">lmcache_driven</code>, 그 외 &rarr; <code class="inl">engine_driven</code></span></td><td>&mdash;</td></tr>
+      </tbody>
+    </table>
+    <p class="muted"><span class="en">Routing lives in <a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/v1/multiprocess/transfer_context/worker_transfer.py#L844-L892"><code class="inl">worker_transfer.py#L844-L892</code></a>; the option is documented at <a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/lmcache_mp_connector_0201.py#L450-L457">lmcache_mp_connector_0201.py#L450-L457</a>. On GPU the default is already zero-copy; the knob mainly lets you force <code class="inl">engine_driven</code> when CUDA IPC is unavailable in your container.</span><span class="ko">라우팅은 <a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/v1/multiprocess/transfer_context/worker_transfer.py#L844-L892"><code class="inl">worker_transfer.py#L844-L892</code></a>, 옵션 설명은 <a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/lmcache_mp_connector_0201.py#L450-L457">lmcache_mp_connector_0201.py#L450-L457</a> 에 있다. GPU 에서는 기본값이 이미 무복사 경로다. 컨테이너에서 CUDA IPC 를 못 쓸 때 <code class="inl">engine_driven</code> 으로 강제할 수 있다는 정도만 알아 두면 된다.</span></p>
+
+    <h3><span class="en">The Mooncake hop is C++, not Python</span><span class="ko">Mooncake 홉은 파이썬이 아니라 C++</span></h3>
+    <p><span class="en">Looking for I/O in the adapter file is surprising: <code class="inl">mooncake_store_l2_adapter.py</code> is <b>config and factory only</b>, 215 lines with no data path. It builds a native client and wraps it:</span><span class="ko">어댑터 파일에서 I/O 를 찾으면 놀란다. <code class="inl">mooncake_store_l2_adapter.py</code> 는 215줄짜리 <b>설정·팩토리 코드</b>이고 데이터 경로가 없다. 네이티브 클라이언트를 만들어 감쌀 뿐이다.</span></p>
+    <pre># LMCache f9addd2e · l2_adapters/mooncake_store_l2_adapter.py:179-210 (condensed)
+l1_registration = L1RegistrationConfig()
+if config.setup_config.get("protocol") == "rdma":
+    ...
+    l1_registration.enabled = True
+    l1_registration.base = l1_memory_desc.ptr
+    l1_registration.size = l1_memory_desc.size
+
+native_client = LMCacheMooncakeClient(
+    config=config.setup_config, num_workers=config.num_workers,
+    l1_registration=l1_registration, per_op_workers=config.per_op_workers)
+return NativeConnectorL2Adapter(native_client)</pre>
+
+    <p><span class="en">The store I/O is in LMCache's own C++ extension, which holds a shared <code class="inl">mooncake::RealClient</code> and a worker pool:</span><span class="ko">실제 스토어 I/O 는 LMCache 자체 C++ 확장에 있다. 이 확장이 공유 <code class="inl">mooncake::RealClient</code> 와 워커 풀을 쥔다.</span></p>
+    <pre>// LMCache f9addd2e · csrc/storage_backends/mooncake/connector.h:42-83 (excerpt)
+class MooncakeConnector : public ConnectorBase&lt;WorkerMooncakeConn&gt; {
+  void do_batch_get(WorkerMooncakeConn&amp; conn, const Request&amp; req) override;
+  void do_batch_set(WorkerMooncakeConn&amp; conn, const Request&amp; req) override;
+ private:
+  void preregister_l1_memory(std::uintptr_t base, size_t size);
+  std::shared_ptr&lt;mooncake::RealClient&gt; client_;
+};</pre>
+
+    <div class="callout c-green">
+      <span class="tag"><span class="en">The zero-copy trick</span><span class="ko">무복사 트릭</span></span>
+      <span class="en"><code class="inl">preregister_l1_memory(base, size)</code> registers LMCache's <b>entire L1 region</b> with Mooncake once, at adapter construction. From then on every store and load RDMAs straight out of / into L1, with no bounce buffer. Without <code class="inl">protocol: "rdma"</code>, <code class="inl">ensure_registered()</code> registers buffers lazily per operation: correct, but not free.</span><span class="ko"><code class="inl">preregister_l1_memory(base, size)</code> 는 어댑터 생성 시 LMCache <b>L1 영역 전체</b>를 Mooncake 에 한 번 등록한다. 이후 모든 store/load 는 L1 에서 바로 RDMA 로 오가고 바운스 버퍼가 없다. <code class="inl">protocol: "rdma"</code> 가 없으면 <code class="inl">ensure_registered()</code> 가 연산마다 버퍼를 늦게 등록한다. 동작은 맞지만 비용이 든다.</span>
+    </div>
+
+    <p><span class="en">Past that boundary it is Mooncake's own design: <code class="inl">RealClient</code> talks to <code class="inl">MasterService</code> over <code class="inl">MasterClient</code> RPC for placement, replica lifecycle and eviction; <code class="inl">TransferSubmitter</code> picks the transport per transfer (memcpy, SPDK-NoF, file read, or the Transfer Engine); <code class="inl">ClientBufferAllocator</code> slices registered buffers into transfer slices.</span><span class="ko">그 너머는 Mooncake 자체 구조다. <code class="inl">RealClient</code> 는 <code class="inl">MasterClient</code> RPC 로 <code class="inl">MasterService</code> 와 배치·복제본 수명·축출을 정한다. <code class="inl">TransferSubmitter</code> 는 전송마다 방식(memcpy, SPDK-NoF, 파일 읽기, Transfer Engine)을 고르고, <code class="inl">ClientBufferAllocator</code> 는 등록된 버퍼를 전송 슬라이스로 나눈다.</span></p>
+    <p class="muted"><span class="en">See <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-store/include/real_client.h#L73">real_client.h#L73</a>, <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-store/include/master_service.h#L88">master_service.h#L88</a>, <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-store/include/transfer_task.h#L529">transfer_task.h#L529</a>.</span><span class="ko"><a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-store/include/real_client.h#L73">real_client.h#L73</a>, <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-store/include/master_service.h#L88">master_service.h#L88</a>, <a class="src" href="https://github.com/kvcache-ai/Mooncake/blob/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-store/include/transfer_task.h#L529">transfer_task.h#L529</a> 참고.</span></p>
+  </section>
+
+  <section id="s6">
+    <h2><span class="num">6</span><span class="en">Code flow: one request, end to end</span><span class="ko">코드 흐름: 요청 하나를 끝까지</span></h2>
+
+    <p><span class="en">One decode-side request through both connectors, every hop pinned. Steps 1&ndash;5 run in the scheduler process, 6&ndash;11 in each GPU worker, and 12&ndash;13 back in the scheduler.</span><span class="ko">decode 쪽 요청 하나를 두 커넥터에 걸쳐 따라간다. 1&ndash;5 는 스케줄러 프로세스, 6&ndash;11 은 각 GPU 워커에서 돌고, 12&ndash;13 은 스케줄러에서 마무리한다.</span></p>
+
+    <ol class="flow">
+      <li>
+        <b><span class="en">Engine start: build the connector tree.</span><span class="ko">엔진 시작: 커넥터 트리 구성.</span></b>
+        <span class="en">The scheduler creates one connector from <code class="inl">KVTransferConfig</code>. Seeing <code class="inl">MultiConnector</code>, it constructs each child from <code class="inl">kv_connector_extra_config["connectors"]</code> through the factory, in order.</span><span class="ko">스케줄러가 <code class="inl">KVTransferConfig</code> 로 커넥터 하나를 만든다. <code class="inl">MultiConnector</code> 를 보면 <code class="inl">kv_connector_extra_config["connectors"]</code> 의 각 자식을 팩토리로 순서대로 생성한다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/v1/core/sched/scheduler.py#L144-L167">scheduler.py#L144-L167</a> ·
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py#L169-L196">multi_connector.py#L169-L196</a>
+      </li>
+      <li>
+        <b><span class="en">HMA gate.</span><span class="ko">HMA 게이트.</span></b>
+        <span class="en">Still in <code class="inl">__init__</code>: assert the hybrid KV manager is disabled or every child declares <code class="inl">SupportsHMA</code>. A bad pairing fails loudly here.</span><span class="ko">아직 <code class="inl">__init__</code> 안이다. hybrid KV manager 가 꺼져 있거나 모든 자식이 <code class="inl">SupportsHMA</code> 를 선언했는지 검사한다. 잘못된 조합은 여기서 바로 실패한다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py#L188-L195">multi_connector.py#L188-L195</a>
+      </li>
+      <li>
+        <b><span class="en">Lookup: how many tokens can we skip?</span><span class="ko">Lookup: 몇 토큰을 건너뛸 수 있나?</span></b>
+        <span class="en">After local prefix-cache matching, the scheduler asks the connector. <code class="inl">MultiConnector</code> polls children in order; NIXL answers from its request metadata, LMCacheMP fires a ZMQ lookup to the MP server and may answer <code class="inl">None</code> (see &sect;3).</span><span class="ko">로컬 prefix 캐시 매칭 후 스케줄러가 커넥터에 묻는다. <code class="inl">MultiConnector</code> 는 자식을 순서대로 폴링하고, NIXL 은 자기 요청 메타데이터로 답하며, LMCacheMP 는 MP 서버로 ZMQ lookup 을 발행하고 <code class="inl">None</code> 을 답할 수 있다(&sect;3 참고).</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/v1/core/sched/scheduler.py#L844-L901">scheduler.py#L844-L901</a> ·
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py#L387-L406">multi_connector.py#L387-L406</a> ·
+        <a class="pl" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/vllm_multi_process_adapter.py#L674-L749">adapter.py#L674-L749</a>
+      </li>
+      <li>
+        <b><span class="en">Allocate, then tell everyone.</span><span class="ko">할당 후 전원 통보.</span></b>
+        <span class="en">Blocks are allocated for the external tokens; the winner is told the real count, the others get zero.</span><span class="ko">외부 토큰을 위한 블록이 할당되고, 승자에게는 실제 개수가, 나머지에게는 0 이 전달된다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/v1/core/sched/scheduler.py#L1083-L1089">scheduler.py#L1083-L1089</a> ·
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py#L408-L418">multi_connector.py#L408-L418</a>
+      </li>
+      <li>
+        <b><span class="en">Pack the per-step instructions.</span><span class="ko">스텝별 지시 사항 패킹.</span></b>
+        <span class="en"><code class="inl">build_connector_meta</code> produces a <code class="inl">MultiKVConnectorMetadata</code> holding one child metadata per connector, plus any <code class="inl">extra_async_saves</code>. It rides on <code class="inl">SchedulerOutput</code> to the workers.</span><span class="ko"><code class="inl">build_connector_meta</code> 가 커넥터별 자식 메타데이터와 <code class="inl">extra_async_saves</code> 를 담은 <code class="inl">MultiKVConnectorMetadata</code> 를 만든다. 이것이 <code class="inl">SchedulerOutput</code> 에 실려 워커로 간다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py#L424-L437">multi_connector.py#L424-L437</a> ·
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/v1/core/sched/scheduler.py#L1322-L1326">scheduler.py#L1322-L1326</a>
+      </li>
+      <li>
+        <b><span class="en">Worker: bind the metadata.</span><span class="ko">워커: 메타데이터 바인딩.</span></b>
+        <span class="en">The model-runner mixin binds it onto the connector for this forward pass. Steps 6 to 11 are one ~35-line block, worth reading in full.</span><span class="ko">model-runner mixin 이 이번 forward pass 동안 커넥터에 바인딩한다. 6번부터 11번까지는 35줄 정도의 코드 한 덩어리라 통째로 읽을 만하다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/v1/worker/kv_connector_model_runner_mixin.py#L69-L103">kv_connector_model_runner_mixin.py#L69-L103</a>
+      </li>
+      <li>
+        <b><span class="en">Start the loads.</span><span class="ko">로드 시작.</span></b>
+        <span class="en"><code class="inl">start_load_kv()</code> fans out. NIXL issues the RDMA READ (or hands off to the push writer); LMCacheMP submits retrieve requests over ZMQ, and the MP server gathers into the vLLM blocks via IPC.</span><span class="ko"><code class="inl">start_load_kv()</code> 가 팬아웃한다. NIXL 은 RDMA READ 를 발행하거나 push writer 에 넘기고, LMCacheMP 는 ZMQ 로 retrieve 요청을 제출하며, MP 서버가 IPC 로 vLLM 블록에 수집해 넣는다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py#L355-L360">nixl/connector.py#L355-L360</a> ·
+        <a class="pl" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/vllm_multi_process_adapter.py#L1450-L1504">adapter.py#L1450-L1504</a>
+      </li>
+      <li>
+        <b><span class="en">L2 &rarr; L1 &rarr; GPU, if the hit came from Mooncake.</span><span class="ko">Mooncake 히트였다면 L2 &rarr; L1 &rarr; GPU.</span></b>
+        <span class="en">The MP server submits a load task to the L2 adapter, polls its eventfd, and the native Mooncake client RDMAs blocks into L1; then the GPU-connector layer scatters L1 into the paged KV cache.</span><span class="ko">MP 서버가 L2 어댑터에 load 태스크를 제출하고 eventfd 를 폴링하면, 네이티브 Mooncake 클라이언트가 블록을 L1 로 RDMA 한다. 그 다음 GPU-connector 계층이 L1 을 paged KV 캐시로 흩뿌린다.</span><br>
+        <a class="pl" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/v1/distributed/l2_adapters/base.py#L310-L357">l2_adapters/base.py#L310-L357</a> ·
+        <a class="pl" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/v1/distributed/l1_manager.py#L248-L343">l1_manager.py#L248-L343</a>
+      </li>
+      <li>
+        <b><span class="en">Forward pass, with per-layer waits.</span><span class="ko">레이어별 대기가 걸린 forward pass.</span></b>
+        <span class="en">Attention for layer <i>i</i> calls <code class="inl">wait_for_layer_load(i)</code> before reading its KV, so loading overlaps compute instead of blocking the whole step.</span><span class="ko">레이어 <i>i</i> 의 attention 이 KV 를 읽기 전에 <code class="inl">wait_for_layer_load(i)</code> 를 호출한다. 덕분에 로딩이 스텝 전체를 막지 않고 연산과 겹친다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L307-L319">base.py#L307-L319</a>
+      </li>
+      <li>
+        <b><span class="en">Save, to every child.</span><span class="ko">저장: 모든 자식에.</span></b>
+        <span class="en"><code class="inl">save_kv_layer</code> per layer, then <code class="inl">wait_for_save()</code>. LMCacheMP stages into L1 and the L2 adapter pushes to Mooncake; a PD producer also readies blocks for its peer.</span><span class="ko">레이어마다 <code class="inl">save_kv_layer</code>, 그 뒤 <code class="inl">wait_for_save()</code>. LMCacheMP 는 L1 에 스테이징하고 L2 어댑터가 Mooncake 로 밀어 넣는다. PD producer 라면 peer 를 위한 블록도 준비한다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/v1/worker/kv_connector_model_runner_mixin.py#L88-L92">mixin.py#L88-L92</a> ·
+        <a class="pl" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/vllm_multi_process_adapter.py#L1399-L1449">adapter.py#L1399-L1449</a> ·
+        <a class="pl" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/v1/distributed/l2_adapters/base.py#L206-L242">l2_adapters/base.py#L206-L242</a>
+      </li>
+      <li>
+        <b><span class="en">Collect completions, unbind.</span><span class="ko">완료 수집, 언바인딩.</span></b>
+        <span class="en"><code class="inl">get_finished()</code> returns the finished sends and receives, then <code class="inl">clear_connector_metadata()</code>. NIXL derives this from transfer handles and notifications, LMCacheMP from store-request accounting.</span><span class="ko"><code class="inl">get_finished()</code> 가 완료된 송신·수신 집합을 반환하고 이어서 <code class="inl">clear_connector_metadata()</code> 를 부른다. NIXL 은 전송 핸들과 알림에서, LMCacheMP 는 store 요청 집계에서 완료를 판단한다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py#L2026-L2147">nixl/base_worker.py#L2026-L2147</a> ·
+        <a class="pl" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/vllm_multi_process_adapter.py#L1576-L1708">adapter.py#L1576-L1708</a>
+      </li>
+      <li>
+        <b><span class="en">Scheduler: fan the worker output back in.</span><span class="ko">스케줄러: 워커 출력 역팬인.</span></b>
+        <span class="en"><code class="inl">update_connector_output</code> slices the aggregated <code class="inl">MultiKVConnectorWorkerMetadata</code>, gives each child only its own slice, then restores the wrapper in a <code class="inl">finally</code>.</span><span class="ko"><code class="inl">update_connector_output</code> 이 집계된 <code class="inl">MultiKVConnectorWorkerMetadata</code> 를 잘라 각 자식에게 자기 몫만 준 뒤, <code class="inl">finally</code> 에서 래퍼를 복원한다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py#L439-L466">multi_connector.py#L439-L466</a>
+      </li>
+      <li>
+        <b><span class="en">Request finished: count the stragglers.</span><span class="ko">요청 종료: 남은 것 세기.</span></b>
+        <span class="en"><code class="inl">request_finished</code> aggregates across children, records <code class="inl">async_saves - 1</code> as surplus so blocks survive until every save lands, merges <code class="inl">kv_transfer_params</code> (raising on key clashes), and drops the request&rarr;connector mapping.</span><span class="ko"><code class="inl">request_finished</code> 가 자식 결과를 모은다. <code class="inl">async_saves - 1</code> 을 초과분으로 기록해 모든 저장이 끝날 때까지 블록을 유지하고, <code class="inl">kv_transfer_params</code> 를 병합하며(키 충돌 시 예외), 요청&rarr;커넥터 매핑을 지운다.</span><br>
+        <a class="pl" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py#L485-L520">multi_connector.py#L485-L520</a>
+      </li>
+    </ol>
+
+    <div class="callout c-blue">
+      <span class="tag"><span class="en">The shape to remember</span><span class="ko">기억할 형태</span></span>
+      <span class="en">The scheduler decides <i>whether and how much</i>; the worker moves bytes. Every connector, however exotic its transport, plugs into the same six-call worker loop: <code class="inl">bind_connector_metadata</code> &rarr; <code class="inl">start_load_kv</code> &rarr; <code class="inl">wait_for_layer_load</code>&times;N &rarr; <code class="inl">wait_for_save</code> &rarr; <code class="inl">get_finished</code> &rarr; <code class="inl">clear_connector_metadata</code>. If you remember one thing from this note, make it that loop.</span><span class="ko">스케줄러는 <i>할지, 얼마나 할지</i>를 정하고 워커는 바이트를 옮긴다. 전송 방식이 무엇이든 모든 커넥터는 같은 6단계 워커 루프에 붙는다: <code class="inl">bind_connector_metadata</code> &rarr; <code class="inl">start_load_kv</code> &rarr; <code class="inl">wait_for_layer_load</code>&times;N &rarr; <code class="inl">wait_for_save</code> &rarr; <code class="inl">get_finished</code> &rarr; <code class="inl">clear_connector_metadata</code>. 이 노트에서 하나만 기억한다면 이 루프다.</span>
+    </div>
+  </section>
+
+  <section id="s7">
+    <h2><span class="num">7</span><span class="en">Configuration, and five traps</span><span class="ko">설정, 그리고 함정 5개</span></h2>
+
+    <h3><span class="en">The engine side</span><span class="ko">엔진 쪽</span></h3>
+    <pre># 1. Mooncake cluster: metadata server + master service must already be up.
+# 2. LMCache MP server, with a Mooncake L2 tier:
+lmcache server --host localhost --port 5555 --l1-size-gb 32 \
+  --no-l1-use-lazy \
+  --l2-adapter '{
+    "type": "mooncake_store",
+    "num_workers": 4,
+    "local_hostname": "node01",
+    "metadata_server": "http://localhost:8080/metadata",
+    "master_server_addr": "localhost:50051",
+    "protocol": "rdma",
+    "global_segment_size": "3221225472"
+  }'
+
+# 3. vLLM, composing NIXL under LMCacheMP:
+vllm serve "$MODEL" --port 8100 \
+  --kv-transfer-config '{
+    "kv_connector": "MultiConnector",
+    "kv_role": "kv_both",
+    "kv_connector_extra_config": {
+      "connectors": [
+        {"kv_connector": "NixlConnector", "kv_role": "kv_both"},
+        {"kv_connector": "LMCacheMPConnector", "kv_role": "kv_both",
+         "kv_connector_extra_config": {
+           "lmcache.mp.host": "tcp://localhost",
+           "lmcache.mp.port": 5555
+         }}
+      ]
+    }
+  }'</pre>
+    <p class="muted"><span class="en">Adapter fields follow <a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/docs/source/mp/l2_storage/mooncake_store.rst">LMCache's <code class="inl">mooncake_store.rst</code></a>; everything except <code class="inl">type</code>, <code class="inl">num_workers</code>, <code class="inl">per_op_workers</code> and <code class="inl">eviction</code> is forwarded as-is to Mooncake's <code class="inl">setup_internal(ConfigDict)</code>. The vLLM connector keys come from the class docstring at <a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/lmcache_mp_connector_0201.py#L443-L457">lmcache_mp_connector_0201.py#L443-L457</a>.</span><span class="ko">어댑터 필드는 <a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/docs/source/mp/l2_storage/mooncake_store.rst">LMCache 의 <code class="inl">mooncake_store.rst</code></a> 를 따른다. <code class="inl">type</code>, <code class="inl">num_workers</code>, <code class="inl">per_op_workers</code>, <code class="inl">eviction</code> 을 뺀 나머지는 Mooncake 의 <code class="inl">setup_internal(ConfigDict)</code> 로 그대로 전달된다. vLLM 커넥터 키는 <a class="src" href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/integration/vllm/lmcache_mp_connector_0201.py#L443-L457">lmcache_mp_connector_0201.py#L443-L457</a> 의 클래스 docstring 에서 왔다.</span></p>
+
+    <h3><span class="en">Five traps, in the order you will hit them</span><span class="ko">부딪히게 되는 순서대로, 함정 5개</span></h3>
+
+    <div class="callout c-red">
+      <span class="tag">1 · <span class="en">The Mooncake extension is not built by default</span><span class="ko">Mooncake 확장은 기본 빌드가 아니다</span></span>
+      <span class="en">A plain <code class="inl">pip install lmcache</code> has no Mooncake support, and the failure shows up late, as a <code class="inl">RuntimeError</code> at adapter construction telling you to rebuild. Opt in with <code class="inl">BUILD_MOONCAKE=1 pip install -e . --verbose</code>, plus <code class="inl">MOONCAKE_INCLUDE_DIR</code> / <code class="inl">MOONCAKE_LIB_DIR</code> if the headers are not on the system include path. <code class="inl">BUILD_MOONCAKE=0</code> takes top priority and overrides <code class="inl">MOONCAKE_INCLUDE_DIR</code>.</span><span class="ko"><code class="inl">pip install lmcache</code> 만으로는 Mooncake 지원이 없고, 실패는 늦게 드러난다. 어댑터 생성 시점에 다시 빌드하라는 <code class="inl">RuntimeError</code> 가 난다. <code class="inl">BUILD_MOONCAKE=1 pip install -e . --verbose</code> 로 직접 켜고, 헤더가 시스템 include 경로에 없으면 <code class="inl">MOONCAKE_INCLUDE_DIR</code> / <code class="inl">MOONCAKE_LIB_DIR</code> 도 지정한다. <code class="inl">BUILD_MOONCAKE=0</code> 이 최우선이라 <code class="inl">MOONCAKE_INCLUDE_DIR</code> 을 덮어쓴다.</span>
+    </div>
+
+    <div class="callout c-red">
+      <span class="tag">2 · <span class="en">The offloading shortcut flags silently replace MultiConnector</span><span class="ko">오프로딩 단축 플래그가 MultiConnector 를 조용히 대체한다</span></span>
+      <span class="en">vLLM's convenience flags <code class="inl">--kv-offloading-size N --kv-offloading-backend lmcache</code> work by <b>overwriting</b> <code class="inl">kv_transfer_config.kv_connector</code>:</span><span class="ko">vLLM 편의 플래그 <code class="inl">--kv-offloading-size N --kv-offloading-backend lmcache</code> 는 <code class="inl">kv_transfer_config.kv_connector</code> 를 <b>덮어쓴다</b>.</span>
+      <pre># vllm/config/vllm.py:1032-1038
+elif kv_offloading_backend == "lmcache":
+    self.kv_transfer_config.kv_connector = "LMCacheMPConnector"</pre>
+      <span class="en">Pass them alongside your <code class="inl">MultiConnector</code> JSON and NIXL disappears with no warning. Use only the explicit <code class="inl">--kv-transfer-config</code> form. <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L1013-L1042">vllm.py#L1013-L1042</a></span><span class="ko">이 플래그를 <code class="inl">MultiConnector</code> JSON 과 함께 넘기면 경고 없이 NIXL 이 사라진다. 명시적 <code class="inl">--kv-transfer-config</code> 만 쓴다. <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L1013-L1042">vllm.py#L1013-L1042</a></span>
+    </div>
+
+    <div class="callout c-amber">
+      <span class="tag">3 · <span class="en">RDMA wants L1 fully allocated up front</span><span class="ko">RDMA 는 L1 이 미리 다 할당돼 있길 원한다</span></span>
+      <span class="en">With <code class="inl">protocol: "rdma"</code>, LMCache's docs recommend <code class="inl">--no-l1-use-lazy</code> so L1 exists in full before Mooncake registers it. A missing descriptor or a zero pointer/size makes adapter creation raise <code class="inl">ValueError</code> instead of silently falling back to non-RDMA. Right behaviour, but a lazy-allocated L1 fails at startup.</span><span class="ko"><code class="inl">protocol: "rdma"</code> 이면 LMCache 문서는 Mooncake 등록 전에 L1 버퍼가 다 잡혀 있도록 <code class="inl">--no-l1-use-lazy</code> 를 권한다. 디스크립터가 없거나 포인터/크기가 0 이면 어댑터 생성은 비-RDMA 경로로 조용히 내려가지 않고 <code class="inl">ValueError</code> 를 던진다. 옳은 동작이지만 lazy 할당 L1 은 시작 시점에 실패한다.</span>
+    </div>
+
+    <div class="callout c-amber">
+      <span class="tag">4 · <span class="en">Two NIXL agents if you are not careful</span><span class="ko">조심하지 않으면 NIXL agent 가 둘</span></span>
+      <span class="en">LMCache has its own NIXL transport (<code class="inl">enable_nixl</code>, <code class="inl">nixl_role: sender|receiver</code>, <code class="inl">nixl_buffer_size</code>), and vLLM's shipped PD example uses <i>that</i> with <code class="inl">LMCacheConnectorV1</code>, not <code class="inl">NixlConnector</code> (<a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/examples/disaggregated/lmcache/disagg_prefill_lmcache_v1/configs/lmcache-prefiller-config.yaml">prefiller config</a>). These are two independent routes to NIXL PD; enabling both puts two NIXL agents on the same NICs. Pick one for the PD leg: vLLM-native <code class="inl">NixlConnector</code> (this note's assumption) or LMCache-internal NIXL.</span><span class="ko">LMCache 에는 자체 NIXL 전송(<code class="inl">enable_nixl</code>, <code class="inl">nixl_role: sender|receiver</code>, <code class="inl">nixl_buffer_size</code>)이 있고, vLLM 의 PD 예제는 <code class="inl">NixlConnector</code> 대신 <code class="inl">LMCacheConnectorV1</code> 과 <i>이것</i>을 쓴다(<a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/examples/disaggregated/lmcache/disagg_prefill_lmcache_v1/configs/lmcache-prefiller-config.yaml">prefiller config</a>). NIXL PD 를 얻는 서로 다른 두 방법이라, 둘 다 켜면 NIXL agent 두 개가 같은 NIC 을 두고 다툰다. PD 쪽은 vLLM 네이티브 <code class="inl">NixlConnector</code>(이 노트의 가정)와 LMCache 내부 NIXL 중 하나만 고른다.</span>
+    </div>
+
+    <div class="callout c-amber">
+      <span class="tag">5 · <span class="en">Hash-seed alignment across instances</span><span class="ko">인스턴스 간 해시 시드 정렬</span></span>
+      <span class="en">LMCache derives chunk keys from a hash, so prefiller and decoder must agree or the decoder never finds what was stored. vLLM's example pins <code class="inl">PYTHONHASHSEED</code> and also warns that a fixed seed is a DoS vector: in production use a secret random value, not the demo's <code class="inl">123</code>. <code class="inl">UCX_TLS</code>, set to <code class="inl">cuda_ipc,cuda_copy,tcp</code> in the example, is the same kind of concern.</span><span class="ko">LMCache 는 청크 키를 해시로 만들므로 prefiller 와 decoder 의 해시가 같아야 decoder 가 저장된 KV 를 찾는다. vLLM 예제는 <code class="inl">PYTHONHASHSEED</code> 를 고정하면서, 고정 시드가 DoS 벡터라고도 경고한다. 프로덕션에서는 데모 값 <code class="inl">123</code> 대신 비밀 난수를 쓴다. 예제가 <code class="inl">cuda_ipc,cuda_copy,tcp</code> 로 설정하는 <code class="inl">UCX_TLS</code> 도 같은 종류의 주의사항이다.</span>
+    </div>
+  </section>
+
+  <section id="s8">
+    <h2><span class="num">8</span><span class="en">Design alternatives</span><span class="ko">설계 대안</span></h2>
+
+    <p><span class="en">Three ways to put Mooncake behind a vLLM engine, differing in how many moving parts you accept:</span><span class="ko">vLLM 엔진 뒤에 Mooncake 를 두는 방법은 셋이고, 움직이는 부품 수가 다르다.</span></p>
+    <table>
+      <thead><tr>
+        <th><span class="en">Route</span><span class="ko">경로</span></th>
+        <th><span class="en">Extra process</span><span class="ko">추가 프로세스</span></th>
+        <th><span class="en">You gain</span><span class="ko">얻는 것</span></th>
+        <th><span class="en">You give up</span><span class="ko">포기하는 것</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><code class="inl">LMCacheMPConnector</code> + <code class="inl">mooncake_store</code> L2</td>
+          <td><span class="en">yes (<code class="inl">lmcache server</code>)</span><span class="ko">있음 (<code class="inl">lmcache server</code>)</span></td>
+          <td><span class="en">L1 CPU tier, chunk-level reuse, eviction policies, cache shared across engines, one place to grow more L2 backends</span><span class="ko">L1 CPU 계층, 청크 단위 재사용, 축출 정책, 엔진 간 캐시 공유, L2 백엔드를 늘릴 단일 지점</span></td>
+          <td><span class="en">a process to operate and monitor; the async-lookup step (&sect;3); a native build step</span><span class="ko">운영·모니터링할 프로세스, 비동기 lookup 스텝(&sect;3), 네이티브 빌드 단계</span></td>
+        </tr>
+        <tr>
+          <td><code class="inl">MooncakeStoreConnector</code> <span class="muted">(vLLM-native)</span></td>
+          <td><span class="en">no</span><span class="ko">없음</span></td>
+          <td><span class="en">one fewer hop and process; declares <code class="inl">SupportsHMA</code> in vLLM itself</span><span class="ko">홉과 프로세스가 하나씩 적음. vLLM 자체에서 <code class="inl">SupportsHMA</code> 명시</span></td>
+          <td><span class="en">LMCache's L1 staging tier and its cache-management layer entirely</span><span class="ko">LMCache 의 L1 스테이징 계층과 캐시 관리 계층 전체</span></td>
+        </tr>
+        <tr>
+          <td><code class="inl">OffloadingConnector</code> <span class="muted">(<code class="inl">--kv-offloading-backend native</code>)</span></td>
+          <td><span class="en">no</span><span class="ko">없음</span></td>
+          <td><span class="en">simplest possible offload; in-tree</span><span class="ko">가능한 가장 단순한 오프로드, 인트리</span></td>
+          <td><span class="en"><b>cannot reach Mooncake at all</b>: it is CPU-only (<code class="inl">cpu_bytes_to_use</code>)</span><span class="ko"><b>Mooncake 에 아예 닿지 못한다</b>. CPU 전용(<code class="inl">cpu_bytes_to_use</code>)</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted"><span class="en"><code class="inl">KVOffloadingBackend = Literal["native", "lmcache"]</code> at <a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/cache.py#L72">cache.py#L72</a>, so the shortcut flag cannot express the <code class="inl">MooncakeStoreConnector</code> route either; it needs explicit <code class="inl">--kv-transfer-config</code>.</span><span class="ko"><a class="src" href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/cache.py#L72">cache.py#L72</a> 에서 <code class="inl">KVOffloadingBackend = Literal["native", "lmcache"]</code> 이므로 단축 플래그로는 <code class="inl">MooncakeStoreConnector</code> 경로를 쓸 수 없다. 이 경로도 명시적 <code class="inl">--kv-transfer-config</code> 가 필요하다.</span></p>
+
+    <div class="callout c-purple">
+      <span class="tag"><span class="en">Editor's note: not a claim by vLLM, LMCache or Mooncake</span><span class="ko">편집자 주: vLLM · LMCache · Mooncake 의 주장 아님</span></span>
+      <ol class="en">
+        <li>If the goal is just "PD plus a shared KV pool", benchmark <code class="inl">MultiConnector[NixlConnector, MooncakeStoreConnector]</code> <i>first</i>: two vLLM-native connectors that both declare HMA in-tree, no extra process, no native build, one fewer tier to debug.</li>
+        <li>The LMCache route earns its complexity when you want what it adds: an L1 CPU tier absorbing writes off the critical path, chunk-level reuse below full-prefix granularity, tunable eviction, and a cache truly shared across many engines. That is features, not overhead; just buy it on purpose.</li>
+        <li>Nothing here is measured. This is a code read, and on our MI250 boxes NIXL/UCX and RDMA availability would decide it in practice.</li>
+      </ol>
+      <ol class="ko">
+        <li>목표가 "PD + 공유 KV 풀"뿐이라면 <i>먼저</i> 벤치마크할 구성은 <code class="inl">MultiConnector[NixlConnector, MooncakeStoreConnector]</code> 다. vLLM 네이티브 커넥터 둘이 모두 인트리에서 HMA 를 선언하고, 추가 프로세스와 네이티브 빌드가 없으며, 지연을 따질 계층이 하나 적다.</li>
+        <li>LMCache 경로는 그 기능이 실제로 필요할 때 복잡도 값을 한다. 크리티컬 패스 밖에서 쓰기를 받는 L1 CPU 계층, 전체 prefix 보다 잘게 나눈 청크 재사용, 튜닝 가능한 축출 정책, 여러 엔진이 함께 쓰는 캐시가 그것이다. 오버헤드가 아니라 기능이니 알고 고르면 된다.</li>
+        <li>측정치는 없다. 이 노트는 코드 읽기이고, 우리 MI250 장비에서는 NIXL/UCX 와 RDMA 가용성이 실제 선택을 좌우할 것이다.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="s9">
+    <h2><span class="num">9</span><span class="en">Sources</span><span class="ko">출처</span></h2>
+    <p class="muted"><span class="en">All line numbers are pinned to the SHAs in the header badges and will drift on <code class="inl">main</code>. Everything was read from those three trees; no performance numbers appear because none were measured.</span><span class="ko">모든 줄 번호는 헤더 배지의 SHA 기준이라 <code class="inl">main</code> 에서는 어긋난다. 내용은 전부 그 세 트리에서 읽었고, 측정하지 않았으므로 성능 수치는 없다.</span></p>
+    <h4><span class="en">Repositories (code read)</span><span class="ko">레포지터리 (코드 원문)</span></h4>
+    <ul class="srcs">
+      <li>vLLM @ <code class="inl">a0f1b9ad</code> — <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c">github.com/vllm-project/vllm</a> · <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/distributed/kv_transfer">vllm/distributed/kv_transfer/</a></li>
+      <li>LMCache @ <code class="inl">f9addd2e</code> — <a href="https://github.com/LMCache/LMCache/tree/f9addd2e4e074f21f26cbda84c3abd932d32ef33">github.com/LMCache/LMCache</a> · <a href="https://github.com/LMCache/LMCache/tree/f9addd2e4e074f21f26cbda84c3abd932d32ef33/lmcache/v1/multiprocess">lmcache/v1/multiprocess/</a></li>
+      <li>Mooncake @ <code class="inl">f8c9667a</code> — <a href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280">github.com/kvcache-ai/Mooncake</a> · <a href="https://github.com/kvcache-ai/Mooncake/tree/f8c9667a35e64eee5426aad8edf27bafdefe0280/mooncake-store">mooncake-store/</a></li>
+      <li>NIXL — <a href="https://github.com/ai-dynamo/nixl">github.com/ai-dynamo/nixl</a></li>
+    </ul>
+    <h4><span class="en">In-repo docs and runnable examples</span><span class="ko">레포 내 문서와 실행 가능한 예제</span></h4>
+    <ul class="srcs">
+      <li><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/docs/features/disagg_prefill.md">vLLM · docs/features/disagg_prefill.md</a></li>
+      <li><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/docs/features/kv_offloading_usage.md">vLLM · docs/features/kv_offloading_usage.md</a></li>
+      <li><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/docs/design/nixl_kv_push_connector.md">vLLM · docs/design/nixl_kv_push_connector.md</a> · <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/docs/design/nixl_kv_cache_lease.md">nixl_kv_cache_lease.md</a></li>
+      <li><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/examples/disaggregated/lmcache/cpu_offload_lmcache_mp.sh">vLLM · examples/disaggregated/lmcache/cpu_offload_lmcache_mp.sh</a> (the MP shortcut + the HMA comment)</li>
+      <li><a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/examples/disaggregated/lmcache/disagg_prefill_lmcache_v1">vLLM · examples/disaggregated/lmcache/disagg_prefill_lmcache_v1/</a> (LMCache-internal NIXL PD)</li>
+      <li><a href="https://github.com/LMCache/LMCache/blob/f9addd2e4e074f21f26cbda84c3abd932d32ef33/docs/source/mp/l2_storage/mooncake_store.rst">LMCache · docs/source/mp/l2_storage/mooncake_store.rst</a> (build flags, config keys, RDMA notes)</li>
+      <li><a href="https://github.com/LMCache/LMCache/tree/f9addd2e4e074f21f26cbda84c3abd932d32ef33/examples/kv_cache_reuse/remote_backends/mooncakestore">LMCache · examples/.../mooncakestore/</a></li>
+    </ul>
+    <h4><span class="en">Project documentation sites</span><span class="ko">프로젝트 문서 사이트</span></h4>
+    <ul class="srcs">
+      <li><a href="https://docs.vllm.ai/en/latest/features/disagg_prefill.html">docs.vllm.ai — disaggregated prefilling</a></li>
+      <li><a href="https://docs.lmcache.ai/">docs.lmcache.ai</a></li>
+    </ul>
+    <h4><span class="en">Related notes on this site</span><span class="ko">이 사이트의 관련 노트</span></h4>
+    <ul class="srcs">
+      <li><a href="vllm-kv-connectors.html">vLLM KV-cache connectors — transfer-direction map</a> <span class="muted">(taxonomy; predates the Pull/Push split)</span></li>
+      <li><a href="vllm_pd_disagg_flow.html">vLLM v0.22.0 PD Disaggregation (NixlConnector) — code walk</a> <span class="muted">(line-by-line NIXL PD, pinned to v0.22.0)</span></li>
+      <li><a href="vllm-kv-cache-block-management.html">vLLM KV cache block management</a></li>
+    </ul>
+  </section>
+
+  <footer>
+    <p><span class="en">Code read at vLLM <code class="inl">a0f1b9ad</code>, LMCache <code class="inl">f9addd2e</code>, Mooncake <code class="inl">f8c9667a</code>. Written 2026-08-25.</span><span class="ko">vLLM <code class="inl">a0f1b9ad</code>, LMCache <code class="inl">f9addd2e</code>, Mooncake <code class="inl">f8c9667a</code> 기준으로 코드 확인. 작성 2026-08-25.</span></p>
+  </footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>

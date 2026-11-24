@@ -1,0 +1,450 @@
+{
+ "id": "m3",
+ "week": 3,
+ "hours": 13,
+ "title": "토대 III — 음성 모델 구조 (스트리밍·지연 관점)",
+ "summary": "코덱 frame·lookahead가 지연 하한을 고정한다. AR/NAR TTS, FM step 수, ASR 구조, 음성 LLM의 토큰률, 8kHz 전화 음성의 제약을 '첫 오디오까지 ms'로 환산.",
+ "maps_to": [
+  "음성 추론 파이프라인",
+  "스트리밍 TTS",
+  "8kHz/콘택트센터"
+ ],
+ "jp": [
+  "音声コーデック",
+  "ストリーミングTTS",
+  "フローマッチング",
+  "電話音声(8kHz)"
+ ],
+ "prereq": [
+  "M1"
+ ],
+ "goals": [
+  "첫 오디오까지 지연 = 알고리즘 지연(frame/lookahead/chunk) + 연산 지연으로 분해한다",
+  "코덱 토큰률을 LLM decode 부하와 KV 증가 속도로 환산한다",
+  "FM/Diffusion step 수와 distillation이 RTF에 주는 효과를 계산한다",
+  "Whisper/CTC/RNN-T의 스트리밍 제약, 8kHz 입력의 제약을 설명한다"
+ ],
+ "intro": "<div class='call'>TTS·가창변환 학습 경험이 있으므로 AR vs NAR 기본은 진단으로 건너뛰고, <b>코덱의 스트리밍 제약 · ASR 스트리밍 · 8kHz</b>에 시간을 쓰세요.</div>",
+ "diagnostic": [
+  {
+   "id": "m3-d1",
+   "type": "mcq",
+   "topic": "codec",
+   "prompt": "Moshi는 Mimi 코덱(12.5 Hz frame, 8 codebook 사용)과 RQ-Transformer를 쓴다. 대화가 1초 진행될 때 <b>메인(temporal) Transformer의 컨텍스트(KV) 위치</b>는 오디오 스트림당 몇 개 늘어나나?",
+   "options": [
+    "12.5",
+    "100 (12.5 × 8)",
+    "24,000",
+    "75"
+   ],
+   "answer": 0,
+   "explain": "RQ-Transformer는 frame마다 temporal Transformer 1 step, codebook 축은 작은 depth Transformer가 처리 → temporal KV는 12.5 위치/초. codebook을 평탄화해 한 시퀀스에 넣는 설계라면 100 위치/초 — 이 차이가 음성 LLM의 KV 예산을 8배 바꾼다.",
+   "pitfall": "음성 토큰 설계(평탄화 vs 계층형)를 모르고 KV 예산·동시 통화 수를 계산하면 수 배 틀린다.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "Moshi (Mimi, RQ-Transformer) — arXiv 2410.00037",
+     "url": "https://arxiv.org/abs/2410.00037",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m3-d2",
+   "type": "num",
+   "topic": "codec",
+   "unit": "codebooks",
+   "tol": 0.01,
+   "prompt": "EnCodec 24 kHz 모델은 75 frame/s, codebook당 1024 엔트리(10 bit). <b>6 kbps</b> 대역폭에 필요한 RVQ codebook 수는?",
+   "answer": 8,
+   "explain": "75 × 10 bit = 750 bps/codebook → 6000/750 = <b>8</b>. RVQ는 codebook을 앞에서부터 잘라 비트레이트를 고른다 — 상위 레벨만으로도 대략적 복원이 되는 계층 구조라, 스트리밍에서 '앞 레벨 먼저 생성' 같은 설계가 가능하다.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "EnCodec — arXiv 2210.13438",
+     "url": "https://arxiv.org/abs/2210.13438",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "SoundStream §3 (RVQ) — arXiv 2107.03312",
+     "url": "https://arxiv.org/abs/2107.03312",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m3-d3",
+   "type": "mcq",
+   "topic": "asr",
+   "prompt": "다음 중 <b>낮은 지연의 스트리밍 ASR</b>에 구조적으로 가장 자연스러운 것은?",
+   "options": [
+    "Whisper (encoder-decoder, 30초 고정 입력 창)",
+    "RNN-T (프레임 단위 정렬, 출력 즉시 방출)",
+    "Non-causal CTC (전체 발화 attention)",
+    "Seq2seq + beam search (발화 종료 후 디코딩)"
+   ],
+   "answer": 1,
+   "explain": "RNN-T는 입력 프레임에 맞춰 토큰을 즉시 낼 수 있게 설계됐다 (encoder를 causal/chunked로 만들면 스트리밍). Whisper는 30초 창으로 학습돼 스트리밍엔 LocalAgreement 같은 재디코딩 기법이 필요하고 재계산 비용이 든다.",
+   "pitfall": "Whisper를 그대로 실시간 콜센터에 넣고 지연·재계산 비용을 과소평가.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "RNN-T (Graves) — arXiv 1211.3711",
+     "url": "https://arxiv.org/abs/1211.3711",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Whisper §2 — arXiv 2212.04356",
+     "url": "https://arxiv.org/abs/2212.04356",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Whisper-Streaming — arXiv 2307.14743",
+     "url": "https://arxiv.org/abs/2307.14743",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m3-d4",
+   "type": "mcq",
+   "topic": "tel8k",
+   "prompt": "G.711 전화 음성(8 kHz 샘플링)을 16 kHz로 업샘플해 16 kHz 학습 ASR에 넣었다. 맞는 설명은?",
+   "options": [
+    "업샘플하면 4–8 kHz 대역이 복원된다",
+    "4 kHz 이상 대역은 원래 없다 — 업샘플은 형식만 맞출 뿐, 학습 분포와의 대역 불일치는 남는다",
+    "8 kHz는 16 kHz보다 SNR이 항상 높다",
+    "μ-law는 무손실이라 영향 없다"
+   ],
+   "answer": 1,
+   "explain": "나이퀴스트에 의해 8 kHz 샘플링은 4 kHz까지만 담는다(전화 채널은 실질 ~300–3400 Hz). 업샘플은 정보를 만들지 않는다. 그래서 8 kHz 데이터로 미세조정/증강하거나 8 kHz 전용 모델을 쓴다. μ-law는 8bit 비선형 양자화로 손실이 있다.",
+   "refs": [
+    {
+     "kind": "doc",
+     "label": "ITU-T G.711",
+     "url": "https://www.itu.int/rec/T-REC-G.711",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m3-d5",
+   "type": "text",
+   "topic": "fm",
+   "prompt": "F5-TTS 같은 NAR Flow Matching TTS를 그대로 스트리밍하기 어려운 이유와, CosyVoice 2가 이를 어떻게 풀었는지 설명하라.",
+   "rubric": [
+    "NAR FM은 발화 전체(또는 큰 구간) 멜을 N step ODE로 한꺼번에 생성 → 첫 오디오가 전체 생성 후에야 나옴",
+    "CosyVoice 2: 텍스트→음성 토큰은 AR LM이 스트리밍 생성, 토큰→멜은 chunk-aware causal flow matching으로 청크 단위 생성",
+    "트레이드오프: chunk 크기 = 지연 vs 품질(경계), FM step 수 × chunk 수 = 연산"
+   ],
+   "model": "NAR는 '전체를 동시에' 정제하므로 시간축 인과성이 없다. CosyVoice 2는 AR 토큰 스트림 + 인과적 청크 FM으로 쪼개 스트리밍을 얻음.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "F5-TTS — arXiv 2410.06885",
+     "url": "https://arxiv.org/abs/2410.06885",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "CosyVoice 2 — arXiv 2412.10117",
+     "url": "https://arxiv.org/abs/2412.10117",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "topics": [
+  {
+   "id": "codec",
+   "name": "Audio codec(RVQ) — frame·lookahead·비트레이트",
+   "pitfall": "코덱 frame/lookahead가 지연 하한을 고정한다는 걸 모르고 모델 연산만 줄인다.",
+   "body": "<p>지연 하한 ≥ frame 길이(예: Mimi 80 ms) + 인코더/디코더 lookahead. causal conv 여부가 스트리밍 가능성을 결정. 토큰률 = frame rate × (평탄화 시) codebook 수.</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "SoundStream §3 — arXiv 2107.03312",
+     "url": "https://arxiv.org/abs/2107.03312",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "EnCodec (streaming 모드) — arXiv 2210.13438",
+     "url": "https://arxiv.org/abs/2210.13438",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "DAC — arXiv 2306.06546",
+     "url": "https://arxiv.org/abs/2306.06546",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Moshi/Mimi §3 — arXiv 2410.00037",
+     "url": "https://arxiv.org/abs/2410.00037",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "tts",
+   "name": "AR vs NAR TTS의 추론 비용 프로파일",
+   "pitfall": "NAR(FM) TTS를 그대로 스트리밍할 수 있다고 가정한다.",
+   "body": "<p>AR 코덱 LM(VALL-E 계열): decode 루프 = LLM과 같은 서빙 문제(continuous batching 적용 가능). NAR FM/Diffusion: 고정 길이 N step × 전체 길이 — 배칭은 쉽지만 첫 오디오가 늦다. 하이브리드(AR 토큰 + FM 렌더러)가 현재 주류.</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "VALL-E — arXiv 2301.02111",
+     "url": "https://arxiv.org/abs/2301.02111",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Voicebox — arXiv 2306.15687",
+     "url": "https://arxiv.org/abs/2306.15687",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Matcha-TTS — arXiv 2309.03199",
+     "url": "https://arxiv.org/abs/2309.03199",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "F5-TTS — arXiv 2410.06885",
+     "url": "https://arxiv.org/abs/2410.06885",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "CosyVoice 2 — arXiv 2412.10117",
+     "url": "https://arxiv.org/abs/2412.10117",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "fm",
+   "name": "Flow Matching / Diffusion step ↔ 품질, distillation",
+   "pitfall": "RTF를 맞출 때 step 감축과 배칭 중 무엇이 싼지 계산 없이 고른다.",
+   "body": "<p>RTF ∝ step 수 × (step당 연산/오디오 초). step distillation(consistency, progressive)은 step을 1~4로 줄이는 대신 학습 비용·품질 리스크. 서빙 측 대안: 세션 간 같은 step끼리 묶는 step-level batching (M8).</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "Flow Matching — arXiv 2210.02747",
+     "url": "https://arxiv.org/abs/2210.02747",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Rectified Flow — arXiv 2209.03003",
+     "url": "https://arxiv.org/abs/2209.03003",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Consistency Models — arXiv 2303.01469",
+     "url": "https://arxiv.org/abs/2303.01469",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Progressive Distillation — arXiv 2202.00512",
+     "url": "https://arxiv.org/abs/2202.00512",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "asr",
+   "name": "ASR 구조와 스트리밍 제약",
+   "pitfall": "Whisper 30초 창을 스트리밍에 쓰면서 재계산 비용을 과소평가.",
+   "body": "<p>CTC: 조건부 독립, 빠름, causal encoder면 스트리밍. RNN-T: 스트리밍 표준. Whisper: 고정 창 → LocalAgreement로 확정 토큰만 방출. U2: 하나의 모델로 스트리밍/비스트리밍(동적 chunk).</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "Whisper §2 — arXiv 2212.04356",
+     "url": "https://arxiv.org/abs/2212.04356",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "RNN-T — arXiv 1211.3711",
+     "url": "https://arxiv.org/abs/1211.3711",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "U2 (WeNet) — arXiv 2012.05481",
+     "url": "https://arxiv.org/abs/2012.05481",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Whisper-Streaming — arXiv 2307.14743",
+     "url": "https://arxiv.org/abs/2307.14743",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Conformer — arXiv 2005.08100",
+     "url": "https://arxiv.org/abs/2005.08100",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "s2s",
+   "name": "Speech-to-Speech / 음성 LLM과 KV",
+   "pitfall": "오디오 토큰률 때문에 KV가 텍스트보다 얼마나 빨리 차는지 과소평가.",
+   "body": "<p>오디오를 LLM 컨텍스트에 넣는 방식: (a) 연속 임베딩(encoder 출력) (b) 이산 코덱 토큰. Thinker-Talker(Qwen2.5-Omni)는 텍스트 생성과 음성 토큰 생성을 분리. 10분 통화 = 오디오 토큰 수 × 레이어 KV → M1 계산기로 환산.</p>",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "AudioLM — arXiv 2209.03143",
+     "url": "https://arxiv.org/abs/2209.03143",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Mini-Omni — arXiv 2408.16725",
+     "url": "https://arxiv.org/abs/2408.16725",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "LLaMA-Omni — arXiv 2409.06666",
+     "url": "https://arxiv.org/abs/2409.06666",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "GLM-4-Voice — arXiv 2412.02612",
+     "url": "https://arxiv.org/abs/2412.02612",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "Qwen2.5-Omni — arXiv 2503.20215",
+     "url": "https://arxiv.org/abs/2503.20215",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "tel8k",
+   "name": "8 kHz 전화 음성과 콘택트센터 제약",
+   "pitfall": "16 kHz 모델에 단순 업샘플 입력을 넣고 품질 저하 원인을 놓친다.",
+   "body": "<p>G.711 μ-law/A-law, 8 kHz, 8 bit → 64 kbps. 대역 ~300–3400 Hz. 코덱 입출력 샘플레이트 변환, 에코·잡음, 양방향(full-duplex) 및 barge-in이 서빙 설계에 들어온다.</p>",
+   "read": [
+    {
+     "kind": "doc",
+     "label": "ITU-T G.711",
+     "url": "https://www.itu.int/rec/T-REC-G.711",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "lab": {
+  "title": "vLLM의 speech-to-text(Whisper)와 realtime 예제로 지연 측정",
+  "why": "음성 쪽도 vLLM이 어디까지 지원하는지 손으로 확인 — 엔진 안(ASR) vs 엔진 밖(코덱·TTS) 경계를 정하는 근거.",
+  "steps": [
+   "<code>vllm serve openai/whisper-small</code> 기동 → <code>examples/speech_to_text/openai/openai_transcription_client.py</code>로 전사",
+   "<code>examples/speech_to_text/realtime/</code> 클라이언트로 realtime 경로 실행, 청크 크기별 첫 결과 지연 기록",
+   "8 kHz μ-law 샘플을 16 kHz로 변환해 같은 측정 → WER/지연 비교",
+   "<code>vllm/model_executor/models/whisper.py</code>에서 encoder 입력 길이(30초 고정 패딩) 처리 위치 찾기"
+  ],
+  "gpu": "위 절차 (whisper-small/medium).",
+  "nogpu": "vLLM CPU 백엔드로 whisper-tiny, 또는 faster-whisper(int8 CPU)로 같은 지연 측정 + whisper.py 코드 독해.",
+  "read": [
+   {
+    "kind": "code",
+    "label": "vLLM whisper.py",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/models/whisper.py",
+    "note": null
+   },
+   {
+    "kind": "code",
+    "label": "examples/speech_to_text/realtime/",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/examples/speech_to_text/realtime",
+    "note": null
+   },
+   {
+    "kind": "code",
+    "label": "examples/speech_to_text/openai/",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/examples/speech_to_text/openai",
+    "note": null
+   }
+  ],
+  "done": [
+   "청크 크기별 지연 표",
+   "whisper.py의 30초 패딩 지점 코드 링크와 설명"
+  ]
+ },
+ "toy": {
+  "title": "지연 예산 시트 + 코덱 프로브",
+  "maps_to": "음성 추론 파이프라인 · 스트리밍 TTS · 8kHz",
+  "hours": 6,
+  "spec": [
+   "Mimi / EnCodec / DAC 각각: frame 길이, lookahead, causal 여부, 토큰/초 측정 (인코드→디코드 왕복, chunk 크기 sweep)",
+   "8 kHz 입력을 업샘플해 각 코덱 통과 → 지연·품질(PESQ 등 가용 지표) 비교",
+   "S2S(Mimi 기반) 첫 오디오까지 지연 하한을 구성요소별 ms 표로 — 모든 수치에 출처(논문 절 또는 내 측정)"
+  ],
+  "gpu": "chunk 크기 sweep을 GPU에서 측정",
+  "nogpu": "코덱은 CPU로도 충분히 돈다 — 동일 측정",
+  "done": [
+   "코덱 3종 비교표",
+   "S2S 지연 waterfall 표 (출처 열 포함)"
+  ],
+  "hints": [
+   "알고리즘 지연(frame+lookahead)은 하드웨어와 무관 — 먼저 이론값을 표에 넣고 연산 지연을 측정으로 채워라.",
+   "Moshi 논문의 지연 수치를 기준점으로 삼되, 논문 조건(하드웨어)을 같이 적어라.",
+   "8 kHz는 코덱 학습 샘플레이트와 다를 수 있다 — 리샘플 단계를 지연 표에 별도 행으로."
+  ]
+ },
+ "check": [],
+ "interview": [
+  {
+   "q": "실시간 음성 에이전트의 첫 응답 지연을 구성요소별로 분해해 보라.",
+   "skeleton": [
+    "VAD/턴 종료 판정",
+    "ASR 확정",
+    "LLM TTFT",
+    "TTS 첫 청크(코덱 frame·FM step)",
+    "네트워크·버퍼",
+    "각 항목의 하한 vs 최적화 수단"
+   ]
+  },
+  {
+   "q": "Flow Matching TTS를 실시간에 넣으려면?",
+   "skeleton": [
+    "step distillation",
+    "chunk-aware causal FM",
+    "세션 간 step 배칭",
+    "RTF 계산식 제시"
+   ]
+  },
+  {
+   "q": "콜센터(8 kHz)용 ASR을 고를 때 무엇을 보나?",
+   "skeleton": [
+    "대역/학습 분포",
+    "스트리밍 구조(RNN-T/CTC)",
+    "지연·재계산",
+    "도메인 어휘·화자 분리"
+   ]
+  }
+ ],
+ "done": [
+  "진단·약한 토픽 자료",
+  "실전 랩 지연 표",
+  "토이 산출물 2개",
+  "확인 퀴즈 75%+",
+  "면접 3문항"
+ ]
+}

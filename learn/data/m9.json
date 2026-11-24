@@ -1,0 +1,267 @@
+{
+ "id": "m9",
+ "week": 11,
+ "hours": 13,
+ "title": "RL Rollout 추론 + 사내 추론 라이브러리/SDK 설계",
+ "summary": "rollout 워크로드의 특성(롱테일·n-sample·weight sync)을 vLLM RL 예제로 체험하고, mini-infer/voice-infer를 하나의 코어로 리팩터링하는 ADR을 쓴다.",
+ "maps_to": [
+  "RL Rollout",
+  "사내 Framework/추론 라이브러리/SDK",
+  "재사용 아키텍처"
+ ],
+ "jp": [
+  "強化学習ロールアウト",
+  "推論ライブラリ",
+  "モデルSDK",
+  "推論基盤"
+ ],
+ "prereq": [
+  "M4",
+  "M6",
+  "M8"
+ ],
+ "goals": [
+  "rollout 워크로드가 서빙과 다른 점(롱테일, n-sample prefix 공유, weight sync, staleness)을 설명한다",
+  "colocated(1 GPU) weight sync 경로를 실제로 돌려본다",
+  "실행·배칭·데이터·스케줄링을 분리한 추론 코어 인터페이스를 설계한다"
+ ],
+ "diagnostic": [
+  {
+   "id": "m9-d1",
+   "type": "mcq",
+   "topic": "rollout",
+   "prompt": "GRPO 계열 RL에서 프롬프트당 n개 응답을 샘플링할 때 추론 엔진 쪽에서 가장 직접적인 절감 수단은?",
+   "options": [
+    "모델 양자화",
+    "같은 프롬프트의 prefill KV를 n개 샘플이 공유 (prefix cache / fork)",
+    "TP 확대",
+    "spec decode 끄기"
+   ],
+   "answer": 1,
+   "explain": "프롬프트 prefill은 한 번, decode만 n갈래. vLLM의 n 파라미터·prefix cache, SGLang radix tree가 이걸 자동으로 처리.",
+   "refs": [
+    {
+     "kind": "paper",
+     "label": "DeepSeekMath (GRPO) — arXiv 2402.03300",
+     "url": "https://arxiv.org/abs/2402.03300",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "HybridFlow / veRL — arXiv 2409.19256",
+     "url": "https://arxiv.org/abs/2409.19256",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "m9-d2",
+   "type": "mcq",
+   "topic": "rollout",
+   "prompt": "동기식 rollout에서 GPU 유휴의 주원인은?",
+   "options": [
+    "토크나이저 속도",
+    "응답 길이의 롱테일 — 배치의 마지막 긴 응답이 끝날 때까지 다른 슬롯이 놀고 학습 단계가 대기",
+    "KV 캐시 부족",
+    "NCCL 초기화"
+   ],
+   "answer": 1,
+   "explain": "그래서 partial rollout(긴 응답을 끊어 다음 iteration으로 이월), 비동기 RL(off-policy staleness 허용) 같은 설계가 나온다."
+  },
+  {
+   "id": "m9-d3",
+   "type": "text",
+   "topic": "wsync",
+   "prompt": "학습기와 추론 엔진 사이 weight 동기화의 두 경로(같은 GPU의 CUDA IPC vs 다른 GPU의 NCCL broadcast)를 비교하라. 각각 vLLM 예제 파일을 근거로.",
+   "rubric": [
+    "IPC: 같은 GPU/노드에서 메모리 핸들 공유 — 복사 최소, 메모리 공존 필요(rlhf_http_ipc.py는 1-GPU 레이아웃, --gpu-memory-utilization 0.5)",
+    "NCCL: 별도 GPU의 학습기에서 broadcast — 대역폭·그룹 구성 필요(rlhf_http_nccl.py)",
+    "공통: 생성 일시정지 → 동기화 → 재개, KV/prefix cache 무효화"
+   ],
+   "refs": [
+    {
+     "kind": "code",
+     "label": "examples/rl/rlhf_http_ipc.py",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/examples/rl/rlhf_http_ipc.py",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "examples/rl/rlhf_http_nccl.py",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/examples/rl/rlhf_http_nccl.py",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang update_weights_from_distributed",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/entrypoints/engine.py#L1724",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "topics": [
+  {
+   "id": "rollout",
+   "name": "Rollout 워크로드 특성",
+   "pitfall": "서빙용 SLO 설정을 rollout에 그대로 써 처리량을 잃는다.",
+   "read": [
+    {
+     "kind": "paper",
+     "label": "HybridFlow / veRL — arXiv 2409.19256",
+     "url": "https://arxiv.org/abs/2409.19256",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "OpenRLHF — arXiv 2405.11143",
+     "url": "https://arxiv.org/abs/2405.11143",
+     "note": null
+    },
+    {
+     "kind": "paper",
+     "label": "DeepSeekMath (GRPO) — arXiv 2402.03300",
+     "url": "https://arxiv.org/abs/2402.03300",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "vLLM examples/rl/",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/examples/rl",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "wsync",
+   "name": "Weight 동기화",
+   "pitfall": "동기화 후 prefix cache 무효화를 잊음.",
+   "read": [
+    {
+     "kind": "code",
+     "label": "rlhf_http_ipc.py (1-GPU)",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/examples/rl/rlhf_http_ipc.py",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "SGLang update_weights_from_tensor",
+     "url": "https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/entrypoints/engine.py#L1747",
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "arch",
+   "name": "추론 코어 아키텍처 — 분리와 통합",
+   "pitfall": "모델 실행과 스케줄링을 한 클래스에 섞어 음성·RL 재사용이 불가능해짐.",
+   "body": "<p>참고 구조: vLLM V1은 프론트엔드(입출력 처리)와 EngineCore(스케줄러+executor)를 프로세스로 분리. TokenSpeed는 C++ 제어 평면(FSM)과 Python 실행 평면을 분리(M10에서 비교).</p>",
+   "read": [
+    {
+     "kind": "code",
+     "label": "vLLM EngineCore",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/engine/core.py#L129",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM 아키텍처 개요",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/arch_overview.md",
+     "note": null
+    },
+    {
+     "kind": "doc",
+     "label": "vLLM model runner v2 설계 문서",
+     "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/docs/design/model_runner_v2.md",
+     "note": null
+    },
+    {
+     "kind": "code",
+     "label": "TokenSpeed event-loop 설계 문서",
+     "url": "https://github.com/lightseekorg/tokenspeed/blob/96dfdee340a6dc588a893f1a156e67ea40b64c13/docs/design/event-loop.md",
+     "note": null
+    }
+   ]
+  }
+ ],
+ "lab": {
+  "title": "vLLM RL 예제를 1 GPU에서: 더미 가중치 → IPC 동기화 → 생성 품질 회복",
+  "why": "rollout 엔진의 핵심 동작(일시정지·가중치 교체·재개)을 직접 관찰.",
+  "steps": [
+   "<code>examples/rl/rlhf_http_ipc.py</code> 실행 (1-GPU 레이아웃, 서버 --gpu-memory-utilization 0.5)",
+   "동기화 구간의 시간·메모리 측정, prefix cache가 비워지는지 확인",
+   "n=8 샘플링으로 prefill 공유 효과를 처리량으로 측정"
+  ],
+  "gpu": "소형 모델로 전체.",
+  "nogpu": "예제 코드를 읽고 제어/데이터 평면 시퀀스 다이어그램 작성 + 롤아웃 시뮬레이터(토이)로 대체.",
+  "read": [
+   {
+    "kind": "code",
+    "label": "rlhf_http_ipc.py",
+    "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/examples/rl/rlhf_http_ipc.py",
+    "note": null
+   }
+  ],
+  "done": [
+   "동기화 시간·메모리 측정(또는 시퀀스 다이어그램)",
+   "n-sample prefill 공유 효과 수치"
+  ]
+ },
+ "toy": {
+  "title": "Rollout 시뮬레이터 + 추론 코어 ADR",
+  "maps_to": "RL Rollout · 사내 추론 라이브러리/SDK",
+  "hours": 7,
+  "spec": [
+   "롱테일 길이 분포에서 sync / partial / async rollout의 GPU 유휴율 시뮬레이션",
+   "mini-infer에 n-sample prefix 공유 + weight hot-swap API",
+   "ADR(4p 이내): LLM·음성·RL 3개 워크로드를 같은 코어로 — 인터페이스(Scheduler, BlockManager, Executor, Batcher, IO), 확장 지점, 무엇을 의도적으로 안 하는지"
+  ],
+  "gpu": "hot-swap API 실측",
+  "nogpu": "시뮬레이터 + ADR로 완결",
+  "done": [
+   "정책별 유휴율 그래프",
+   "ADR 문서"
+  ],
+  "hints": [
+   "ADR은 '결정 / 대안 / 근거 / 결과' 4칸으로.",
+   "인터페이스 설계 전 M10의 세 엔진 구조를 먼저 훑으면 경계 잡기가 쉽다 (M10과 병행 가능)."
+  ]
+ },
+ "check": [],
+ "interview": [
+  {
+   "q": "RL rollout용 추론 엔진은 서빙 엔진과 무엇이 다른가?",
+   "skeleton": [
+    "목표: 처리량·on-policy성 vs 지연 SLO",
+    "롱테일·n-sample",
+    "weight sync·캐시 무효화",
+    "배치 구성"
+   ]
+  },
+  {
+   "q": "사내 추론 라이브러리를 설계한다면 어떤 경계로 나누겠나?",
+   "skeleton": [
+    "제어 평면 vs 실행 평면",
+    "스케줄러/메모리/실행기/IO",
+    "확장 지점(플러그인)",
+    "엔진 업스트림 추종 전략"
+   ]
+  },
+  {
+   "q": "vLLM을 fork할지 플러그인으로 확장할지 어떻게 정하나?",
+   "skeleton": [
+    "확장 지점으로 되는가",
+    "rebase 비용",
+    "업스트림 기여 가능성",
+    "성능 임계 경로 여부"
+   ]
+  }
+ ],
+ "done": [
+  "진단·약한 토픽 자료",
+  "실전 랩",
+  "시뮬레이터·ADR",
+  "확인 퀴즈 75%+",
+  "면접 3문항"
+ ]
+}

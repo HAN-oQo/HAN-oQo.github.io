@@ -1,0 +1,1989 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoPE from scratch — rotary position embedding, derived</title>
+<link rel="stylesheet" href="../assets/theme.css">
+<link rel="stylesheet" href="../assets/i18n.css">
+<style>
+  body{line-height:1.7; font-size:16px}
+  .wrap{max-width:880px;margin:0 auto;padding:48px 24px 96px}
+  .crumb{font-size:12.5px;color:var(--muted);margin:0 0 16px}
+  .crumb a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+  .crumb a:hover{color:var(--ink)}
+  header.hero{border:1px solid var(--line);border-radius:16px;padding:32px 32px 28px;
+    background:linear-gradient(160deg,#ffffff,#f3f1ea);margin-bottom:32px}
+  .hero h1{margin:0 0 8px;font-size:28px;letter-spacing:-0.01em;line-height:1.3}
+  .hero .lede{font-size:15.5px;color:var(--muted);margin:6px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .badge{font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--gray-bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge a{color:var(--blue-ink);text-decoration:none;font-weight:600}
+  nav.toc{border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:18px 22px;margin-bottom:36px}
+  nav.toc h4{margin:0 0 10px;font-size:13px;color:var(--faint);letter-spacing:0.04em;text-transform:uppercase}
+  nav.toc ol{margin:0;padding-left:22px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+  nav.toc a:hover{color:var(--blue-ink)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 30px;margin:20px 0}
+  h2{font-size:21px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:10px}
+  h2 .num{font-size:13px;color:#fff;background:var(--blue-ink);border-radius:8px;padding:2px 10px;font-weight:700;flex:none}
+  h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
+  h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
+  p{margin:10px 0}
+  .muted{color:var(--muted)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px;line-height:1.55;margin:12px 0}
+  .eq{background:var(--gray-bg);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:14px 0;
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:14px;color:var(--ink);overflow-x:auto;text-align:center;line-height:1.9}
+  .eq .hl{background:var(--amber-bg);padding:1px 5px;border-radius:4px;font-weight:700}
+  .eq .mat{display:inline-block;text-align:left;white-space:pre;line-height:1.5}
+  .eq .lbl{color:var(--faint);font-size:12px}
+  .step{border-left:3px solid var(--blue-bd);padding:2px 0 2px 16px;margin:16px 0}
+  .step .n{display:inline-block;font-size:11.5px;font-weight:700;color:var(--blue-ink);
+    background:var(--blue-bg);border-radius:6px;padding:1px 8px;margin-bottom:4px}
+  .callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:15px}
+  .callout .tag{font-weight:700;font-size:12px;letter-spacing:0.04em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue-ink)} .c-blue .tag{color:var(--blue-ink)}
+  .c-amber{background:var(--amber-bg);color:var(--amber)} .c-amber .tag{color:var(--amber)}
+  .c-teal{background:var(--teal-bg);color:var(--teal)} .c-teal .tag{color:var(--teal)}
+  .c-purple{background:var(--purple-bg);color:var(--purple)} .c-purple .tag{color:var(--purple)}
+  .c-coral{background:var(--coral-bg);color:var(--coral-ink)} .c-coral .tag{color:var(--coral-ink)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;background:#fafbfd}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  code.inl{background:var(--blue-bg);color:var(--blue-ink);padding:1px 6px;border-radius:5px;font-size:13.5px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  .post-meta{font-size:12px;color:var(--faint);margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
+  .mini h4{margin:0 0 6px;font-size:13.5px}
+  .mini p{margin:0;font-size:13.5px;color:var(--muted)}
+  blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
+    padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
+  blockquote.q p{margin:0;font-style:italic}
+  blockquote.q cite{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--muted)}
+  blockquote.q cite a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  svg.fig{margin:16px 0 4px;display:block;max-width:100%;height:auto}
+  .figcap{font-size:12.5px;color:var(--faint);margin:0 0 14px;text-align:center}
+  a.src{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd)}
+  footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="crumb"><a href="../">←
+  <span class="en">Home</span><span class="ko">홈</span>
+</a> · <a href="./"><span class="en">Learn</span><span class="ko">기초·학습</span></a></p>
+
+<header class="hero">
+  <h1>
+    <span class="en">RoPE from scratch — rotary position embedding, derived</span>
+    <span class="ko">RoPE 처음부터: 회전으로 위치를 심는 법</span>
+  </h1>
+  <p class="lede">
+    <span class="en">RoPE gives attention word order by <b>rotating</b> each query and key by an angle proportional to its position, instead of <i>adding</i> a position vector. This note derives it from the design goal (RoFormer), follows it into vLLM's kernels, and ends with why it matters for KV-cache reuse.</span>
+    <span class="ko">RoPE는 위치 벡터를 <i>더하는</i> 대신 query와 key를 <b>위치에 비례한 각도만큼 회전</b>시켜 어텐션에 어순을 알려 준다. 설계 목표에서 출발해 유도하고(RoFormer), vLLM 커널까지 따라간 뒤, KV 캐시 재사용에서 이것이 왜 중요한지로 끝맺는다.</span>
+  </p>
+  <div class="meta">
+    <span class="badge"><a href="https://arxiv.org/abs/2104.09864">RoFormer · arXiv:2104.09864</a></span>
+    <span class="badge"><span class="en">concept explainer</span><span class="ko">개념 정리</span></span>
+    <span class="badge"><a href="../papers/cross-model-kv-cache-transfer.html"><span class="en">companion to the KV-transfer note</span><span class="ko">KV 전이 노트의 부록</span></a></span>
+  </div>
+  <p class="post-meta">
+    <time datetime="2026-08-24">2026-08-24</time>
+    <span class="sep">·</span>
+    <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
+    <time datetime="2026-10-30">2026-10-30</time>
+  </p>
+</header>
+
+<nav class="toc">
+  <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
+  <ol>
+    <li><a href="#s1"><span class="en">Attention cannot see word order</span><span class="ko">어텐션은 어순을 볼 수 없다</span></a></li>
+    <li><a href="#s2"><span class="en">The design goal, in one equation</span><span class="ko">설계 목표를 수식 한 줄로</span></a></li>
+    <li><a href="#s3"><span class="en">Solving it in 2D — multiply, don't add</span><span class="ko">2차원에서 풀기: 더하지 말고 곱한다</span></a></li>
+    <li><a href="#s4"><span class="en">Rotation matrices and the one identity that matters</span><span class="ko">회전행렬, 그리고 전부를 떠받치는 항등식 하나</span></a></li>
+    <li><a href="#s5"><span class="en">Scaling to 128 dimensions — a bank of clocks</span><span class="ko">128차원으로: 시계 64개</span></a></li>
+    <li><a href="#s6"><span class="en">What the kernels actually compute</span><span class="ko">커널이 실제로 계산하는 것</span></a></li>
+    <li><a href="#s7"><span class="en">Why this matters for KV-cache reuse</span><span class="ko">KV 캐시 재사용에서 왜 중요한가</span></a></li>
+  </ol>
+</nav>
+
+<div class="callout c-blue">
+  <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
+  <ul class="en">
+    <li>Multiply each query and key by <code class="inl">e^(i·position·θ)</code>, i.e. rotate it by an angle proportional to its position.</li>
+    <li>In the inner product the absolute positions <b>cancel and leave only their difference</b>, because <code class="inl">R(a)ᵀR(b) = R(b−a)</code>.</li>
+    <li>The 128-dim head is split into 64 pairs with different speeds: fast pairs resolve neighbouring tokens, slow pairs carry document-scale position.</li>
+    <li>Rotations are orthogonal, so stripping RoPE off a cached key is exact and free.</li>
+  </ul>
+  <ul class="ko">
+    <li>query와 key에 <code class="inl">e^(i·위치·θ)</code>를 곱한다. 위치에 비례한 각도만큼 회전시키는 것이다.</li>
+    <li>내적에서 두 절대 위치가 <b>상쇄되고 차이만 남는다.</b> <code class="inl">R(a)ᵀR(b) = R(b−a)</code>이기 때문이다.</li>
+    <li>128차원 head를 속도가 다른 2차원 쌍 64개로 나눈다. 빠른 쌍은 옆 토큰 순서를, 느린 쌍은 문서 규모의 위치를 담는다.</li>
+    <li>회전은 직교 변환이라 캐시된 key에서 RoPE를 벗겨내는 일이 정확하고 비용도 거의 없다.</li>
+  </ul>
+</div>
+
+<div class="grid3">
+  <div class="mini">
+    <h4><span class="en">📖 Query · Key · Value</span><span class="ko">📖 Query · Key · Value</span></h4>
+    <p><span class="en">Each token makes a <b>query</b> (what it looks for), <b>key</b> (what it offers) and <b>value</b> (what it hands over). Query·key inner products weight the values.</span><span class="ko">토큰마다 <b>query</b>(찾는 것), <b>key</b>(내놓는 것), <b>value</b>(넘겨줄 것)를 만든다. query·key 내적이 value의 가중치가 된다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 Absolute vs relative position</span><span class="ko">📖 절대 위치 vs 상대 위치</span></h4>
+    <p><span class="en"><b>Absolute</b>: "token #7". <b>Relative</b>: "4 places before that one". Attention mostly wants the second.</span><span class="ko"><b>절대</b>는 "7번째 토큰", <b>상대</b>는 "저 토큰보다 4칸 앞"이다. 어텐션이 주로 원하는 건 후자다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 Orthogonal matrix</span><span class="ko">📖 직교행렬</span></h4>
+    <p><span class="en">Transpose = inverse (<code class="inl">RᵀR = I</code>). It rotates or reflects but never stretches, so undoing it is free.</span><span class="ko">전치가 곧 역행렬인 행렬이다(<code class="inl">RᵀR = I</code>). 돌리거나 뒤집을 뿐 늘이지 않으니 되돌리기도 공짜다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 Wavelength</span><span class="ko">📖 파장</span></h4>
+    <p><span class="en">A pair turning θ per token repeats every <code class="inl">2π/θ</code> tokens: the distance scale it can resolve.</span><span class="ko">토큰당 θ씩 도는 쌍은 <code class="inl">2π/θ</code> 토큰마다 한 바퀴를 돈다. 그 쌍이 구별할 수 있는 거리 단위다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 KV cache</span><span class="ko">📖 KV 캐시</span></h4>
+    <p><span class="en">Stored keys and values of the prompt. <b>Keys are stored already rotated</b>; queries are rotated fresh each decode step.</span><span class="ko">프롬프트의 key와 value를 저장해 둔 것이다. <b>key는 회전된 채로 저장</b>되고, query는 디코드 스텝마다 새로 회전된다.</span></p>
+  </div>
+  <div class="mini">
+    <h4><span class="en">📖 Why you'd want to strip it</span><span class="ko">📖 왜 벗겨내고 싶은가</span></h4>
+    <p><span class="en">A stored key mixes <i>meaning</i> with <i>position</i>. Cross-model mapping or re-indexing must separate them first (§7).</span><span class="ko">저장된 key에는 <i>의미</i>와 <i>자리</i>가 섞여 있다. 모델 간 매핑이나 재색인은 둘을 먼저 떼어내야 한다(§7).</span></p>
+  </div>
+</div>
+
+<!-- ============ 1. THE PROBLEM ============ -->
+<section id="s1">
+  <h2><span class="num">1</span>
+    <span class="en">Attention cannot see word order</span>
+    <span class="ko">어텐션은 어순을 볼 수 없다</span>
+  </h2>
+
+  <p class="en">Strip attention down to its scoring step and this is all there is:</p>
+  <p class="ko">어텐션의 채점 단계만 남기면 이게 전부다.</p>
+  <div class="eq">score(m, n) = q<sub>m</sub> · k<sub>n</sub></div>
+  <p class="en">There is no <code class="inl">m</code> or <code class="inl">n</code> on the right. The score depends only on the two vectors' <i>contents</i>, so shuffling the tokens just relabels the same scores. Attention is <b>permutation-equivariant</b>: it has no idea which word came first.</p>
+  <p class="ko">우변에 <code class="inl">m</code>도 <code class="inl">n</code>도 없다. 점수는 두 벡터의 <i>내용</i>에만 달려 있어서, 토큰 순서를 섞어도 같은 점수가 이름표만 바뀌어 나온다. 어텐션은 <b>순열 등변(permutation-equivariant)</b>이다. 어느 단어가 먼저 왔는지 모른다는 뜻이다.</p>
+  <div class="callout c-coral">
+    <span class="tag"><span class="en">the concrete failure</span><span class="ko">구체적인 실패</span></span>
+    <span class="en">"The cat chased the mouse" and "The mouse chased the cat" have the same tokens, so bare attention scores them identically. Every transformer needs <i>some</i> way to inject position.</span>
+    <span class="ko">"고양이가 쥐를 쫓았다"와 "쥐가 고양이를 쫓았다"는 토큰이 같아서, 위치 정보 없는 어텐션은 둘을 똑같이 채점한다. 그래서 모든 트랜스포머는 위치를 넣는 장치가 <i>따로</i> 필요하다.</span>
+  </div>
+
+
+  <svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Two sentences with the same words in different orders. The attention score between cat and mouse is 0.73 in both, because the dot product of a query and a key contains no position information.">
+    <defs>
+      <marker id="s1a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6f2a12"/></marker>
+    </defs>
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Same words, opposite meanings — and attention scores them identically</text>
+
+    <!-- sentence A -->
+    <text x="40" y="58" font-size="10.5" fill="#8a8f98">sentence A</text>
+    <path d="M132,74 Q226,34 321,74" fill="none" stroke="#6f2a12" stroke-width="1.8" marker-end="url(#s1a)"/>
+    <text x="226" y="30" text-anchor="middle" font-size="10.5" font-weight="700" fill="#6f2a12">q(cat) · k(mouse)</text>
+    <g>
+      <rect x="40" y="78" width="42" height="27" rx="6" fill="#f1efe8" stroke="#c2c0b6"/><text x="61" y="96" text-anchor="middle" font-size="11" fill="#3a3934">The</text>
+      <rect x="88" y="78" width="46" height="27" rx="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.6"/><text x="111" y="96" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">cat</text>
+      <rect x="140" y="78" width="66" height="27" rx="6" fill="#f1efe8" stroke="#c2c0b6"/><text x="173" y="96" text-anchor="middle" font-size="11" fill="#3a3934">chased</text>
+      <rect x="212" y="78" width="42" height="27" rx="6" fill="#f1efe8" stroke="#c2c0b6"/><text x="233" y="96" text-anchor="middle" font-size="11" fill="#3a3934">the</text>
+      <rect x="260" y="78" width="62" height="27" rx="6" fill="#eaf3de" stroke="#97c459" stroke-width="1.6"/><text x="291" y="96" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">mouse</text>
+    </g>
+    <text x="40" y="126" font-size="10.5" fill="#6b6a63">the cat is the one doing the chasing</text>
+
+    <!-- sentence B -->
+    <text x="40" y="176" font-size="10.5" fill="#8a8f98">sentence B</text>
+    <path d="M330,192 Q236,152 142,192" fill="none" stroke="#6f2a12" stroke-width="1.8" marker-end="url(#s1a)"/>
+    <text x="236" y="148" text-anchor="middle" font-size="10.5" font-weight="700" fill="#6f2a12">q(cat) · k(mouse)</text>
+    <g>
+      <rect x="40" y="196" width="42" height="27" rx="6" fill="#f1efe8" stroke="#c2c0b6"/><text x="61" y="214" text-anchor="middle" font-size="11" fill="#3a3934">The</text>
+      <rect x="88" y="196" width="62" height="27" rx="6" fill="#eaf3de" stroke="#97c459" stroke-width="1.6"/><text x="119" y="214" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">mouse</text>
+      <rect x="156" y="196" width="66" height="27" rx="6" fill="#f1efe8" stroke="#c2c0b6"/><text x="189" y="214" text-anchor="middle" font-size="11" fill="#3a3934">chased</text>
+      <rect x="228" y="196" width="42" height="27" rx="6" fill="#f1efe8" stroke="#c2c0b6"/><text x="249" y="214" text-anchor="middle" font-size="11" fill="#3a3934">the</text>
+      <rect x="276" y="196" width="46" height="27" rx="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.6"/><text x="299" y="214" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">cat</text>
+    </g>
+    <text x="40" y="244" font-size="10.5" fill="#6b6a63">now the mouse is</text>
+
+    <!-- scores -->
+    <text x="396" y="96" font-size="17" font-weight="700" fill="#3a3934">= 0.73</text>
+    <text x="396" y="214" font-size="17" font-weight="700" fill="#3a3934">= 0.73</text>
+
+    <!-- verdict -->
+    <rect x="516" y="52" width="348" height="196" rx="11" fill="#fce6dd" stroke="#ef9f86" stroke-width="1.6"/>
+    <text x="536" y="78" font-size="12" font-weight="700" fill="#6f2a12">Why they must be equal</text>
+    <text x="536" y="102" font-size="11.5" font-family="'SF Mono',Menlo,monospace" fill="#6f2a12">score(m, n) = q · k</text>
+    <text x="536" y="128" font-size="10.5" fill="#6f2a12">The vector q(cat) is the same vector in both</text>
+    <text x="536" y="144" font-size="10.5" fill="#6f2a12">sentences. So is k(mouse). The dot product</text>
+    <text x="536" y="160" font-size="10.5" fill="#6f2a12">of two fixed vectors is one fixed number —</text>
+    <text x="536" y="176" font-size="10.5" fill="#6f2a12">there is no slot in it for "which came first".</text>
+    <text x="536" y="204" font-size="11" font-weight="700" fill="#6f2a12">Shuffle the tokens and the whole score</text>
+    <text x="536" y="220" font-size="11" font-weight="700" fill="#6f2a12">matrix is just relabelled, never changed.</text>
+    <text x="536" y="238" font-size="10" fill="#8a8f98">= permutation equivariance</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 1 · Attention's blind spot to word order. Drawn by the author.</span><span class="ko">그림 1 · 어순을 못 보는 어텐션. 직접 그림.</span></p>
+
+  <h3><span class="en">1.1 — Why the obvious fix isn't the one that stuck</span>
+      <span class="ko">1.1 왜 가장 뻔한 해법이 살아남지 못했나</span></h3>
+  <p class="en">The original transformer's answer was <b>absolute</b>: build a vector <code class="inl">p_m</code> that encodes "position m" and add it to the token embedding before the projections.</p>
+  <p class="ko">원래 트랜스포머는 <b>절대 위치</b>를 썼다. "위치 m"을 나타내는 벡터 <code class="inl">p_m</code>을 projection 전에 토큰 임베딩에 더한다.</p>
+  <div class="eq">q<sub>m</sub> = W<sub>q</sub>(x<sub>m</sub> + p<sub>m</sub>),   k<sub>n</sub> = W<sub>k</sub>(x<sub>n</sub> + p<sub>n</sub>)</div>
+  <p class="en">This works, but when a head decides how much token 7 attends to token 3, it usually wants <b>"how far apart are they"</b>, not "one is the 7th". Absolute tags force the model to infer distance, and say nothing about positions longer than training.</p>
+  <p class="ko">작동은 한다. 하지만 7번 토큰이 3번 토큰을 얼마나 볼지 정할 때 head가 알고 싶은 건 보통 <b>"둘이 얼마나 떨어져 있나"</b>다. 절대 태그로는 모델이 거리를 거꾸로 추론해야 하고, 학습 때보다 긴 위치에서는 어떻게 동작할지 보장이 없다.</p>
+  <p class="en">RoPE asks a sharper question: <b>can we inject absolute position into each vector separately so that only the relative position survives the inner product?</b></p>
+  <p class="ko">그래서 RoPE는 이렇게 묻는다. <b>벡터마다 절대 위치를 따로 심되, 내적을 거치면 상대 위치만 남게 할 수 있을까?</b></p>
+</section>
+
+<!-- ============ 2. THE DESIGN GOAL ============ -->
+<section id="s2">
+  <h2><span class="num">2</span>
+    <span class="en">The design goal, in one equation</span>
+    <span class="ko">설계 목표를 수식 한 줄로</span>
+  </h2>
+
+  <p class="en">We want one function that injects position into a query and one for a key, whose inner product keeps only the gap:</p>
+  <p class="ko">query에 위치를 심는 함수와 key에 위치를 심는 함수가 필요하다. 조건은 둘의 내적에 간격만 남는 것이다.</p>
+
+  <div class="eq">
+    ⟨ f<sub>q</sub>(x, <span class="hl">m</span>) , f<sub>k</sub>(y, <span class="hl">n</span>) ⟩  =  g( x, y, <span class="hl">m − n</span> )<br>
+    <span class="lbl">absolute position goes in on the left · only the difference comes out on the right</span>
+  </div>
+
+  <p class="en">On the left, <code class="inl">m</code> and <code class="inl">n</code> enter <i>separately</i>: a key is computed and cached without knowing which query will read it. On the right they may appear only as <code class="inl">m − n</code>. The absolute information must <b>cancel inside the inner product</b>.</p>
+  <p class="ko">왼쪽에서 <code class="inl">m</code>과 <code class="inl">n</code>은 <i>따로</i> 들어간다. key는 나중에 어느 query가 읽을지 모른 채 계산돼 캐시에 들어가기 때문이다. 오른쪽에는 <code class="inl">m − n</code> 꼴로만 나와야 한다. 절대 위치가 <b>내적 안에서 지워져야</b> 한다.</p>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">why addition cannot do this</span><span class="ko">덧셈으로는 안 되는 이유</span></span>
+    <span class="en">Expand the inner product for <code class="inl">f(x, m) = q + p_m</code>:<br>
+    <code class="inl">⟨q + p_m, k + p_n⟩ = q·k + q·p_n + p_m·k + p_m·p_n</code><br>
+    The middle terms depend on <code class="inl">n</code> alone and <code class="inl">m</code> alone, so nothing collapses into <code class="inl">m − n</code>. We need an operation where the position factors <b>meet</b>.</span>
+    <span class="ko"><code class="inl">f(x, m) = q + p_m</code>로 내적을 전개하면 이렇다.<br>
+    <code class="inl">⟨q + p_m, k + p_n⟩ = q·k + q·p_n + p_m·k + p_m·p_n</code><br>
+    가운데 두 항은 <code class="inl">n</code>만, <code class="inl">m</code>만 담고 있어서 <code class="inl">m − n</code>으로 합쳐질 수 없다. 두 위치 인자가 <b>만나는</b> 연산이 필요하다.</span>
+  </div>
+
+  <svg class="fig" viewBox="0 0 880 340" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Left panel expands the additive inner product into four terms, two of which depend on m alone and n alone, so the absolute positions cannot collapse. Right panel shows the multiplicative version producing a single term in which the positions meet and become m minus n.">
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Adding position vs. multiplying position — what survives the inner product</text>
+
+    <!-- LEFT: addition -->
+    <rect x="14" y="34" width="414" height="292" rx="12" fill="#fce6dd" stroke="#ef9f86" stroke-width="1.6"/>
+    <text x="34" y="58" font-size="12" font-weight="700" fill="#6f2a12">✗  ADD it:  f(x, m) = q + p</text>
+    <text x="196" y="58" font-size="9" font-weight="700" fill="#6f2a12">m</text>
+    <text x="34" y="82" font-size="11" font-family="'SF Mono',Menlo,monospace" fill="#6f2a12">⟨ q + p_m ,  k + p_n ⟩  expands to 4 terms:</text>
+
+    <rect x="34" y="96" width="374" height="34" rx="7" fill="#ffffff" stroke="#ef9f86"/>
+    <text x="48" y="118" font-size="12" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">q · k</text>
+    <text x="200" y="112" font-size="10" fill="#6b6a63">pure content</text>
+    <text x="200" y="125" font-size="9.5" fill="#8a8f98">fine — no position at all</text>
+
+    <rect x="34" y="136" width="374" height="34" rx="7" fill="#ffffff" stroke="#ef9f86"/>
+    <text x="48" y="158" font-size="12" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">q · p_n</text>
+    <text x="200" y="152" font-size="10" font-weight="700" fill="#6f2a12">depends on n ALONE</text>
+    <text x="200" y="165" font-size="9.5" fill="#8a8f98">nothing to pair it with</text>
+
+    <rect x="34" y="176" width="374" height="34" rx="7" fill="#ffffff" stroke="#ef9f86"/>
+    <text x="48" y="198" font-size="12" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">p_m · k</text>
+    <text x="200" y="192" font-size="10" font-weight="700" fill="#6f2a12">depends on m ALONE</text>
+    <text x="200" y="205" font-size="9.5" fill="#8a8f98">nothing to pair it with</text>
+
+    <rect x="34" y="216" width="374" height="34" rx="7" fill="#ffffff" stroke="#ef9f86"/>
+    <text x="48" y="238" font-size="12" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">p_m · p_n</text>
+    <text x="200" y="232" font-size="10" fill="#6b6a63">both — but as a dot product,</text>
+    <text x="200" y="245" font-size="9.5" fill="#8a8f98">not as a difference</text>
+
+    <text x="34" y="276" font-size="11" font-weight="700" fill="#6f2a12">Two terms leak absolute position straight</text>
+    <text x="34" y="292" font-size="11" font-weight="700" fill="#6f2a12">into the score. Nothing can become m−n.</text>
+    <text x="34" y="313" font-size="10" fill="#8a8f98">The score can tell you "this is token 7", which is</text>
+    <text x="34" y="326" font-size="10" fill="#8a8f98">not the question attention was asking.</text>
+
+    <!-- RIGHT: multiplication -->
+    <rect x="452" y="34" width="414" height="292" rx="12" fill="#eaf3de" stroke="#97c459" stroke-width="1.6"/>
+    <text x="472" y="58" font-size="12" font-weight="700" fill="#27500a">✓  MULTIPLY it:  f(x, m) = q · e</text>
+    <text x="700" y="52" font-size="9" font-weight="700" fill="#27500a">imθ</text>
+    <text x="472" y="82" font-size="11" font-family="'SF Mono',Menlo,monospace" fill="#27500a">⟨ q·e^imθ ,  k·e^inθ ⟩  is ONE term:</text>
+
+    <rect x="472" y="106" width="374" height="86" rx="7" fill="#ffffff" stroke="#97c459"/>
+    <text x="659" y="136" text-anchor="middle" font-size="13" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">Re[ q · conj(k) · e^imθ · e^−inθ ]</text>
+    <text x="659" y="158" text-anchor="middle" font-size="10" fill="#6b6a63">the two position factors sit side by side —</text>
+    <text x="659" y="172" text-anchor="middle" font-size="10" fill="#6b6a63">and exponents of a product add</text>
+    <text x="659" y="186" text-anchor="middle" font-size="9.5" fill="#8a8f98">(conj already flipped the sign of nθ)</text>
+
+    <text x="659" y="216" text-anchor="middle" font-size="20" fill="#27500a">↓</text>
+
+    <rect x="472" y="228" width="374" height="46" rx="7" fill="#ffffff" stroke="#97c459" stroke-width="2"/>
+    <text x="659" y="258" text-anchor="middle" font-size="14" font-family="'SF Mono',Menlo,monospace" font-weight="700" fill="#27500a">Re[ q · conj(k) · e^i(m−n)θ ]</text>
+
+    <text x="472" y="296" font-size="11" font-weight="700" fill="#27500a">Absolute positions annihilated each other.</text>
+    <text x="472" y="312" font-size="11" font-weight="700" fill="#27500a">Only the gap m−n is left.</text>
+    <text x="472" y="328" font-size="10" fill="#8a8f98">Nothing was engineered to make this happen.</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 2 · Adding vs multiplying position. Drawn by the author.</span><span class="ko">그림 2 · 위치를 더할 때와 곱할 때. 직접 그림.</span></p>
+
+  <p class="en">An inner product multiplies its arguments, so if position enters <b>multiplicatively</b>, <code class="inl">e^(im·) × e^(−in·)</code> collapses to <code class="inl">e^(i(m−n)·)</code> for free.</p>
+  <p class="ko">내적은 두 인자를 곱한다. 그러니 위치를 <b>곱셈으로</b> 넣으면 <code class="inl">e^(im·) × e^(−in·)</code>가 저절로 <code class="inl">e^(i(m−n)·)</code>로 합쳐진다.</p>
+</section>
+
+<!-- ============ 3. SOLVING IN 2D ============ -->
+<section id="s3">
+  <h2><span class="num">3</span>
+    <span class="en">Solving it in 2D — multiply, don't add</span>
+    <span class="ko">2차원에서 풀기: 더하지 말고 곱한다</span>
+  </h2>
+
+  <p class="en">Start with <b>d = 2</b> and treat a 2-vector as a <b>single complex number</b>, <code class="inl">(a, b) ↔ a + bi</code>. Complex multiplication is then rotation.</p>
+  <p class="ko"><b>d = 2</b>에서 시작한다. 2차원 벡터를 <code class="inl">(a, b) ↔ a + bi</code>처럼 <b>복소수 하나</b>로 보면, 복소수 곱셈이 곧 회전이 된다.</p>
+
+  <div class="step">
+    <span class="n"><span class="en">step 1 · the guess</span><span class="ko">1단계 · 시도</span></span>
+    <p class="en">Let <code class="inl">q = W_q x</code> and <code class="inl">k = W_k y</code> be complex. Multiply by a unit-modulus number whose angle is proportional to position:</p>
+    <p class="ko"><code class="inl">q = W_q x</code>, <code class="inl">k = W_k y</code>를 복소수로 두고, 위치에 비례한 각도를 가진 크기 1짜리 복소수를 곱한다.</p>
+    <div class="eq">f<sub>q</sub>(x, m) = q · e<sup>imθ</sup>     f<sub>k</sub>(y, n) = k · e<sup>inθ</sup></div>
+    <p class="en">The factor has modulus 1, so length is unchanged: position is encoded purely as <b>direction</b>.</p>
+    <p class="ko">곱하는 수의 크기가 1이라 길이는 그대로다. 위치는 오직 <b>방향</b>으로만 담긴다.</p>
+  </div>
+
+  <div class="step">
+    <span class="n"><span class="en">step 2 · what "inner product" means for complex numbers</span><span class="ko">2단계 · 복소수에서 "내적"이란</span></span>
+    <p class="en">The real 2-D dot product in complex form is:</p>
+    <p class="ko">2차원 실수 내적을 복소수로 쓰면 이렇다.</p>
+    <div class="eq">u · v  =  Re[ u · conj(v) ]</div>
+    <p class="en">Check with <code class="inl">u = a + bi</code>, <code class="inl">v = c + di</code>:</p>
+    <p class="ko"><code class="inl">u = a + bi</code>, <code class="inl">v = c + di</code>로 확인해 보자.</p>
+    <div class="eq">u · conj(v) = (a + bi)(c − di) = <span class="hl">(ac + bd)</span> + i(bc − ad)</div>
+    <p class="en">The real part <code class="inl">ac + bd</code> is the dot product of <code class="inl">(a,b)</code> and <code class="inl">(c,d)</code>. ✓ The conjugate <b>flips the sign of the second vector's angle</b>, which is the subtraction we want.</p>
+    <p class="ko">실수부 <code class="inl">ac + bd</code>가 <code class="inl">(a,b)</code>와 <code class="inl">(c,d)</code>의 내적이다. ✓ 켤레(conjugate)는 <b>두 번째 벡터의 각도 부호를 뒤집는다.</b> 바라던 뺄셈이 여기서 나온다.</p>
+  </div>
+
+
+  <svg class="fig" viewBox="0 0 880 344" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Three panels. First, two vectors u and v with a 45 degree angle between them. Second, the conjugate of v is v mirrored below the horizontal axis, so its angle becomes negative. Third, the product of u and the conjugate of v is a vector at 45 degrees whose horizontal shadow equals the dot product.">
+    <defs>
+      <marker id="c3u" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0c447c"/></marker>
+      <marker id="c3v" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#27500a"/></marker>
+      <marker id="c3p" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3f1f72"/></marker>
+    </defs>
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Why Re[ u · conj(v) ] is exactly the dot product — the conjugate is a mirror, and multiplying subtracts angles</text>
+
+    <!-- panel 1 -->
+    <text x="150" y="46" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">① what we want</text>
+    <circle cx="150" cy="170" r="95" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.3"/>
+    <line x1="55" y1="170" x2="252" y2="170" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="4 3"/>
+    <path d="M192.3,154.6 A45,45 0 0,0 169.0,129.2" fill="none" stroke="#6b4a06" stroke-width="2.2"/>
+    <text x="205" y="128" font-size="11" font-weight="700" fill="#6b4a06">φ = 45°</text>
+    <line x1="150" y1="170" x2="190.2" y2="83.9" stroke="#0c447c" stroke-width="3.2" marker-end="url(#c3u)"/>
+    <line x1="150" y1="170" x2="239.3" y2="137.5" stroke="#27500a" stroke-width="3.2" marker-end="url(#c3v)"/>
+    <circle cx="150" cy="170" r="3.6" fill="#3a3934"/>
+    <text x="176" y="76" font-size="11.5" font-weight="700" fill="#0c447c">u</text>
+    <text x="248" y="132" font-size="11.5" font-weight="700" fill="#27500a">v</text>
+    <text x="150" y="292" text-anchor="middle" font-size="11" fill="#6b6a63">u · v = |u||v| cos φ</text>
+    <text x="150" y="310" text-anchor="middle" font-size="9.5" fill="#8a8f98">the ordinary dot product</text>
+
+    <!-- arrow -->
+    <text x="296" y="176" font-size="19" fill="#8a8f98">→</text>
+
+    <!-- panel 2 -->
+    <text x="440" y="46" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">② conj(v) mirrors v</text>
+    <circle cx="440" cy="170" r="95" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.3"/>
+    <line x1="345" y1="170" x2="542" y2="170" stroke="#c2c0b6" stroke-width="1.4" stroke-dasharray="4 3"/>
+    <text x="548" y="174" font-size="9" fill="#8a8f98">mirror</text>
+    <line x1="440" y1="170" x2="529.3" y2="137.5" stroke="#27500a" stroke-width="3.2" marker-end="url(#c3v)" opacity="0.35"/>
+    <line x1="440" y1="170" x2="529.3" y2="202.5" stroke="#27500a" stroke-width="3.2" marker-end="url(#c3v)"/>
+    <circle cx="440" cy="170" r="3.6" fill="#3a3934"/>
+    <text x="536" y="134" font-size="10.5" fill="#8a8f98">v  (+20°)</text>
+    <text x="536" y="208" font-size="11.5" font-weight="700" fill="#27500a">conj(v)  (−20°)</text>
+    <text x="440" y="292" text-anchor="middle" font-size="11" fill="#6b6a63">same length, angle negated</text>
+    <text x="440" y="310" text-anchor="middle" font-size="9.5" fill="#8a8f98">this is where the minus sign comes from</text>
+
+    <!-- arrow -->
+    <text x="586" y="176" font-size="19" fill="#8a8f98">→</text>
+
+    <!-- panel 3 -->
+    <text x="730" y="46" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">③ multiply: angles add</text>
+    <circle cx="730" cy="170" r="95" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.3"/>
+    <line x1="635" y1="170" x2="832" y2="170" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="4 3"/>
+    <line x1="730" y1="170" x2="797.2" y2="102.8" stroke="#3f1f72" stroke-width="3.2" marker-end="url(#c3p)"/>
+    <line x1="797.2" y1="102.8" x2="797.2" y2="170" stroke="#3f1f72" stroke-width="1.2" stroke-dasharray="3 3"/>
+    <line x1="730" y1="178" x2="797.2" y2="178" stroke="#6b4a06" stroke-width="3.4"/>
+    <circle cx="730" cy="170" r="3.6" fill="#3a3934"/>
+    <text x="790" y="94" font-size="10.5" font-weight="700" fill="#3f1f72">u · conj(v)</text>
+    <text x="806" y="140" font-size="9.5" fill="#8a8f98">65° + (−20°)</text>
+    <text x="806" y="152" font-size="9.5" fill="#8a8f98">= 45° = φ</text>
+    <text x="764" y="196" text-anchor="middle" font-size="10" font-weight="700" fill="#6b4a06">Re part</text>
+    <text x="730" y="292" text-anchor="middle" font-size="11" font-weight="700" fill="#6b4a06">Re = |u||v| cos 45° = u · v ✓</text>
+    <text x="730" y="310" text-anchor="middle" font-size="9.5" fill="#8a8f98">the shadow on the horizontal axis</text>
+
+    <line x1="14" y1="324" x2="866" y2="324" stroke="#e3e1d8"/>
+    <text x="440" y="340" text-anchor="middle" font-size="10.5" fill="#6b6a63">The conjugate turns "add the angles" into "<tspan font-weight="700">subtract</tspan> the angles" — which is the entire mechanism behind RoPE.</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 3 · Step 2's identity: the conjugate rotates backwards. Drawn by the author.</span><span class="ko">그림 3 · 2단계 항등식. 켤레는 반대로 돌린다. 직접 그림.</span></p>
+
+  <div class="step">
+    <span class="n"><span class="en">step 3 · the cancellation</span><span class="ko">3단계 · 상쇄</span></span>
+    <p class="en">Now substitute step 1 into step 2 and turn the crank:</p>
+    <p class="ko">1단계를 2단계에 대입한다.</p>
+    <div class="eq">
+      ⟨f<sub>q</sub>, f<sub>k</sub>⟩ = Re[ (q e<sup>imθ</sup>) · conj(k e<sup>inθ</sup>) ]<br>
+      = Re[ q · conj(k) · e<sup>imθ</sup> · e<sup>−inθ</sup> ]<span class="lbl">   ← conj flipped the sign of nθ</span><br>
+      = Re[ q · conj(k) · e<sup>i<span class="hl">(m−n)</span>θ</sup> ]<span class="lbl">   ← exponents add</span>
+    </div>
+    <p class="en">Two absolute positions went in; only their difference came out. §2 is satisfied with <code class="inl">g(x, y, m−n) = Re[q·conj(k)·e^(i(m−n)θ)]</code>.</p>
+    <p class="ko">절대 위치 둘이 들어가서 차이만 나왔다. §2의 조건이 <code class="inl">g(x, y, m−n) = Re[q·conj(k)·e^(i(m−n)θ)]</code>로 충족된다.</p>
+  </div>
+
+
+  <svg class="fig" viewBox="0 0 880 244" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="A bar chart of angles. The query contributes plus five theta, the key plus three theta, the conjugate flips the key to minus three theta, and the sum is two theta, which is the gap between the two positions.">
+    <defs>
+      <marker id="d3r" markerWidth="8" markerHeight="8" refX="6" refY="2.8" orient="auto"><path d="M0,0 L6,2.8 L0,5.6 Z" fill="#0c447c"/></marker>
+      <marker id="d3l" markerWidth="8" markerHeight="8" refX="6" refY="2.8" orient="auto"><path d="M6,0 L0,2.8 L6,5.6 Z" fill="#27500a"/></marker>
+    </defs>
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">The same thing as bookkeeping on angles — query at position 5, key at position 3</text>
+
+    <!-- zero axis -->
+    <line x1="380" y1="36" x2="380" y2="206" stroke="#c2c0b6" stroke-width="1.4" stroke-dasharray="4 3"/>
+    <text x="380" y="224" text-anchor="middle" font-size="10" fill="#8a8f98">0</text>
+
+    <!-- row 1 -->
+    <text x="360" y="62" text-anchor="end" font-size="11" fill="#3a3934">q turned by</text>
+    <line x1="380" y1="57" x2="655" y2="57" stroke="#0c447c" stroke-width="9" marker-end="url(#d3r)"/>
+    <text x="672" y="62" font-size="12" font-weight="700" fill="#0c447c">+5θ</text>
+    <text x="712" y="62" font-size="10" fill="#8a8f98">its own absolute position</text>
+
+    <!-- row 2 -->
+    <text x="360" y="102" text-anchor="end" font-size="11" fill="#3a3934">k turned by</text>
+    <line x1="380" y1="97" x2="545" y2="97" stroke="#27500a" stroke-width="9" marker-end="url(#d3r)" opacity="0.35"/>
+    <text x="562" y="102" font-size="12" font-weight="700" fill="#27500a" opacity="0.55">+3θ</text>
+    <text x="712" y="102" font-size="10" fill="#8a8f98">its own absolute position</text>
+
+    <!-- row 3 -->
+    <text x="360" y="142" text-anchor="end" font-size="11" fill="#3a3934">conj(k) flips it to</text>
+    <line x1="380" y1="137" x2="215" y2="137" stroke="#27500a" stroke-width="9" marker-end="url(#d3l)"/>
+    <text x="176" y="142" text-anchor="end" font-size="12" font-weight="700" fill="#27500a">−3θ</text>
+    <text x="712" y="142" font-size="10" fill="#8a8f98">the mirror from panel ②</text>
+
+    <!-- sum -->
+    <line x1="60" y1="162" x2="820" y2="162" stroke="#e3e1d8"/>
+    <text x="360" y="188" text-anchor="end" font-size="11" font-weight="700" fill="#3a3934">product angle</text>
+    <rect x="380" y="174" width="110" height="18" rx="4" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.6"/>
+    <text x="507" y="188" font-size="13" font-weight="700" fill="#6b4a06">+2θ</text>
+    <text x="552" y="188" font-size="11" font-weight="700" fill="#6b4a06">= (5 − 3)θ  — the gap, nothing else</text>
+
+    <text x="440" y="238" text-anchor="middle" font-size="10.5" fill="#6b6a63">Move both tokens 100 places down the sequence and the top two bars both grow by 100θ — the bottom bar does not move.</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 4 · Step 3 as arithmetic on angles. Drawn by the author.</span><span class="ko">그림 4 · 각도 덧셈으로 본 3단계. 직접 그림.</span></p>
+
+  <p class="en">This is no coincidence: position enters as an <b>angle</b>, angles <b>add</b> under multiplication, and the conjugate <b>negates one</b>. Relative position is what the mechanism does, not something bolted on.</p>
+  <p class="ko">우연이 아니다. 위치가 <b>각도</b>로 들어가고, 곱셈에서 각도는 <b>더해지며</b>, 켤레가 <b>하나의 부호를 뒤집는다.</b> 상대 위치는 덧붙인 설계가 아니라 이 연산 자체의 성질이다.</p>
+
+  <svg class="fig" viewBox="0 0 880 380" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Two circles. In the left one a query at position m and a key at position n are drawn as arrows separated by a 60 degree gap. In the right one both positions are shifted by the same amount, the arrows point elsewhere, but the gap between them is still 60 degrees, so the attention score is unchanged.">
+    <defs>
+      <marker id="rq" markerWidth="10" markerHeight="10" refX="8" refY="3.4" orient="auto"><path d="M0,0 L8,3.4 L0,6.8 Z" fill="#0c447c"/></marker>
+      <marker id="rk" markerWidth="10" markerHeight="10" refX="8" refY="3.4" orient="auto"><path d="M0,0 L8,3.4 L0,6.8 Z" fill="#27500a"/></marker>
+      <marker id="rg" markerWidth="8" markerHeight="8" refX="6" refY="2.8" orient="auto"><path d="M0,0 L6,2.8 L0,5.6 Z" fill="#8a8f98"/></marker>
+    </defs>
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Slide both tokens down the sequence. The gap — and therefore the score — does not move.</text>
+
+    <!-- PANEL A -->
+    <text x="210" y="44" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">q at position m,  k at position n</text>
+    <circle cx="210" cy="175" r="110" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.4"/>
+    <line x1="210" y1="175" x2="330" y2="175" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="336" y="179" font-size="9" fill="#8a8f98">content</text>
+    <text x="336" y="190" font-size="9" fill="#8a8f98">direction</text>
+    <!-- gap arc -->
+    <path d="M256.0,136.4 A60,60 0 0,0 199.6,115.9" fill="none" stroke="#6b4a06" stroke-width="2.4"/>
+    <text x="206" y="103" text-anchor="middle" font-size="11" font-weight="700" fill="#6b4a06">(m−n)θ</text>
+    <!-- vectors -->
+    <line x1="210" y1="175" x2="190.9" y2="66.7" stroke="#0c447c" stroke-width="3.4" marker-end="url(#rq)"/>
+    <line x1="210" y1="175" x2="294.3" y2="104.3" stroke="#27500a" stroke-width="3.4" marker-end="url(#rk)"/>
+    <circle cx="210" cy="175" r="4" fill="#3a3934"/>
+    <text x="168" y="58" font-size="11" font-weight="700" fill="#0c447c">q · e^imθ</text>
+    <text x="300" y="98" font-size="11" font-weight="700" fill="#27500a">k · e^inθ</text>
+    <text x="210" y="316" text-anchor="middle" font-size="10.5" fill="#6b6a63">m = 5,  n = 3</text>
+    <text x="210" y="333" text-anchor="middle" font-size="10.5" fill="#6b6a63">each turned by its own absolute position</text>
+
+    <!-- middle -->
+    <line x1="415" y1="90" x2="415" y2="300" stroke="#e3e1d8" stroke-dasharray="5 4"/>
+    <text x="440" y="168" font-size="13" font-weight="700" fill="#8a8f98">slide</text>
+    <text x="440" y="184" font-size="13" font-weight="700" fill="#8a8f98">+7</text>
+    <line x1="425" y1="200" x2="470" y2="200" stroke="#8a8f98" stroke-width="1.6" marker-end="url(#rg)"/>
+
+    <!-- PANEL B -->
+    <text x="640" y="44" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">q at position m+7,  k at position n+7</text>
+    <circle cx="640" cy="175" r="110" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.4"/>
+    <line x1="640" y1="175" x2="760" y2="175" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="4 3"/>
+    <path d="M629.6,115.9 A60,60 0 0,0 583.6,154.5" fill="none" stroke="#6b4a06" stroke-width="2.4"/>
+    <text x="576" y="108" text-anchor="middle" font-size="11" font-weight="700" fill="#6b4a06">(m−n)θ</text>
+    <line x1="640" y1="175" x2="536.6" y2="137.4" stroke="#0c447c" stroke-width="3.4" marker-end="url(#rq)"/>
+    <line x1="640" y1="175" x2="620.9" y2="66.7" stroke="#27500a" stroke-width="3.4" marker-end="url(#rk)"/>
+    <circle cx="640" cy="175" r="4" fill="#3a3934"/>
+    <text x="512" y="130" font-size="11" font-weight="700" fill="#0c447c">q · e^i(m+7)θ</text>
+    <text x="628" y="58" font-size="11" font-weight="700" fill="#27500a">k · e^i(n+7)θ</text>
+    <text x="640" y="316" text-anchor="middle" font-size="10.5" fill="#6b6a63">m = 12,  n = 10</text>
+    <text x="640" y="333" text-anchor="middle" font-size="10.5" fill="#6b6a63">both arrows moved — the angle between them did not</text>
+
+    <line x1="14" y1="352" x2="866" y2="352" stroke="#e3e1d8"/>
+    <text x="440" y="372" text-anchor="middle" font-size="11" fill="#6b6a63">The inner product reads the <tspan font-weight="700">cosine of the angle between</tspan> the two arrows. Rotate both by the same amount and it is untouched.</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 5 · The cancellation, geometrically. Drawn by the author.</span><span class="ko">그림 5 · 기하로 본 상쇄. 직접 그림.</span></p>
+</section>
+
+<!-- ============ 4. ROTATION MATRICES ============ -->
+<section id="s4">
+  <h2><span class="num">4</span>
+    <span class="en">Rotation matrices and the one identity that matters</span>
+    <span class="ko">회전행렬, 그리고 전부를 떠받치는 항등식 하나</span>
+  </h2>
+
+  <p class="en">A GPU wants real arithmetic. In real coordinates, multiplying by <code class="inl">e^(imθ)</code> is a <b>rotation by mθ</b>:</p>
+  <p class="ko">GPU는 실수 연산을 쓴다. 실수 좌표에서 <code class="inl">e^(imθ)</code>를 곱하는 것은 <b>mθ만큼의 회전</b>이다.</p>
+
+  <div class="eq"><span class="mat">        ⎡ cos mθ   −sin mθ ⎤
+R(mθ) = ⎢                  ⎥
+        ⎣ sin mθ    cos mθ ⎦</span></div>
+  <p class="en">Check the equivalence by expanding both sides on <code class="inl">(a, b) ↔ a + bi</code>:</p>
+  <p class="ko"><code class="inl">(a, b) ↔ a + bi</code>로 양변을 전개해 확인한다.</p>
+  <div class="eq">
+    R(mθ)·[a; b] = [ a cos mθ − b sin mθ ;  a sin mθ + b cos mθ ]<br>
+    (a + bi)(cos mθ + i sin mθ) = (a cos mθ − b sin mθ) + i(a sin mθ + b cos mθ)
+  </div>
+  <p class="en">Same two numbers. ✓ "Inject position" means "<b>turn the vector by an angle proportional to where it sits</b>".</p>
+  <p class="ko">두 수가 같다. ✓ "위치를 심는다"는 곧 "<b>벡터를 자리에 비례한 각도만큼 돌린다</b>"는 뜻이다.</p>
+
+
+  <svg class="fig" viewBox="0 0 880 320" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Left, the two unit basis vectors are rotated by forty degrees. Right, the same two rotated vectors appear as the first and second columns of the rotation matrix, which is why the matrix has that particular shape.">
+    <defs>
+      <marker id="e4a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0c447c"/></marker>
+      <marker id="e4b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#27500a"/></marker>
+      <marker id="e4g" markerWidth="8" markerHeight="8" refX="6" refY="2.8" orient="auto"><path d="M0,0 L6,2.8 L0,5.6 Z" fill="#c2c0b6"/></marker>
+    </defs>
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Where does that matrix come from? Its columns are simply where the two axes land.</text>
+
+    <!-- left: the picture -->
+    <circle cx="230" cy="172" r="100" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.3"/>
+    <line x1="130" y1="172" x2="330" y2="172" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="230" y1="72" x2="230" y2="272" stroke="#e3e1d8" stroke-width="1"/>
+    <!-- originals -->
+    <line x1="230" y1="172" x2="330" y2="172" stroke="#c2c0b6" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#e4g)"/>
+    <line x1="230" y1="172" x2="230" y2="72" stroke="#c2c0b6" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#e4g)"/>
+    <text x="336" y="176" font-size="10.5" fill="#8a8f98">ê₁ = (1, 0)</text>
+    <text x="236" y="66" font-size="10.5" fill="#8a8f98">ê₂ = (0, 1)</text>
+    <!-- rotated -->
+    <line x1="230" y1="172" x2="306.6" y2="107.7" stroke="#0c447c" stroke-width="3.4" marker-end="url(#e4a)"/>
+    <line x1="230" y1="172" x2="165.7" y2="95.4" stroke="#27500a" stroke-width="3.4" marker-end="url(#e4b)"/>
+    <circle cx="230" cy="172" r="3.6" fill="#3a3934"/>
+    <path d="M270,172 A40,40 0 0,0 260.6,146.3" fill="none" stroke="#6b4a06" stroke-width="2"/>
+    <text x="282" y="146" font-size="10.5" font-weight="700" fill="#6b4a06">α = 40°</text>
+    <text x="312" y="100" font-size="10.5" font-weight="700" fill="#0c447c">(cos α, sin α)</text>
+    <text x="96" y="88" font-size="10.5" font-weight="700" fill="#27500a">(−sin α, cos α)</text>
+    <text x="230" y="300" text-anchor="middle" font-size="10.5" fill="#6b6a63">both still unit length, still perpendicular</text>
+
+    <!-- right: the matrix -->
+    <text x="470" y="66" font-size="11.5" font-weight="700" fill="#3a3934">stack them side by side as columns:</text>
+    <rect x="596" y="86" width="86" height="92" rx="5" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.6"/>
+    <rect x="686" y="86" width="98" height="92" rx="5" fill="#eaf3de" stroke="#97c459" stroke-width="1.6"/>
+    <text x="470" y="120" font-size="15" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">R(α) =</text>
+    <text x="576" y="104" font-size="19" fill="#3a3934">⎡</text>
+    <text x="576" y="146" font-size="19" fill="#3a3934">⎣</text>
+    <text x="639" y="120" text-anchor="middle" font-size="14" font-family="'SF Mono',Menlo,monospace" fill="#0c447c">cos α</text>
+    <text x="639" y="156" text-anchor="middle" font-size="14" font-family="'SF Mono',Menlo,monospace" fill="#0c447c">sin α</text>
+    <text x="735" y="120" text-anchor="middle" font-size="14" font-family="'SF Mono',Menlo,monospace" fill="#27500a">−sin α</text>
+    <text x="735" y="156" text-anchor="middle" font-size="14" font-family="'SF Mono',Menlo,monospace" fill="#27500a">cos α</text>
+    <text x="796" y="104" font-size="19" fill="#3a3934">⎤</text>
+    <text x="796" y="146" font-size="19" fill="#3a3934">⎦</text>
+    <text x="639" y="198" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">↑ where ê₁ went</text>
+    <text x="735" y="216" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">↑ where ê₂ went</text>
+
+    <rect x="452" y="238" width="404" height="62" rx="9" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.3"/>
+    <text x="470" y="260" font-size="10.5" font-weight="700" fill="#6b4a06">This is true of every matrix, not just rotations:</text>
+    <text x="470" y="277" font-size="10.5" fill="#6b4a06">column j of M is always M·êⱼ. Reading a matrix as</text>
+    <text x="470" y="292" font-size="10.5" fill="#6b4a06">"where the axes land" makes its shape stop being arbitrary.</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 6 · The rotation matrix's columns are the rotated axes. Drawn by the author.</span><span class="ko">그림 6 · 회전행렬의 열은 회전된 축이다. 직접 그림.</span></p>
+
+  <svg class="fig" viewBox="0 0 880 268" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Four circles showing the same key content vector at positions 0, 1, 2 and 3, rotated progressively by zero, one, two and three times theta, so the arrow points in a different direction at each position while keeping the same length.">
+    <defs>
+      <marker id="p4" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0c447c"/></marker>
+    </defs>
+    <text x="14" y="18" font-size="12" font-weight="700" fill="#3a3934">One and the same key content, cached at four different positions (θ = 1 rad ≈ 57°)</text>
+
+    <!-- m=0 -->
+    <circle cx="120" cy="150" r="62" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.3"/>
+    <line x1="120" y1="150" x2="182" y2="150" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="3 3"/>
+    <line x1="120" y1="150" x2="182" y2="150" stroke="#0c447c" stroke-width="3" marker-end="url(#p4)"/>
+    <circle cx="120" cy="150" r="3.4" fill="#3a3934"/>
+    <text x="120" y="52" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">position 0</text>
+    <text x="120" y="68" text-anchor="middle" font-size="10.5" fill="#6b4a06">angle 0</text>
+    <text x="120" y="232" text-anchor="middle" font-size="10" fill="#6b6a63">( 1.000,  0.000 )</text>
+
+    <!-- m=1 -->
+    <circle cx="320" cy="150" r="62" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.3"/>
+    <line x1="320" y1="150" x2="382" y2="150" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="3 3"/>
+    <path d="M348,150 A28,28 0 0,0 335.1,126.4" fill="none" stroke="#6b4a06" stroke-width="2"/>
+    <line x1="320" y1="150" x2="353.5" y2="97.8" stroke="#0c447c" stroke-width="3" marker-end="url(#p4)"/>
+    <circle cx="320" cy="150" r="3.4" fill="#3a3934"/>
+    <text x="320" y="52" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">position 1</text>
+    <text x="320" y="68" text-anchor="middle" font-size="10.5" fill="#6b4a06">angle θ</text>
+    <text x="320" y="232" text-anchor="middle" font-size="10" fill="#6b6a63">( 0.540,  0.841 )</text>
+
+    <!-- m=2 -->
+    <circle cx="520" cy="150" r="62" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.3"/>
+    <line x1="520" y1="150" x2="582" y2="150" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="3 3"/>
+    <path d="M548,150 A28,28 0 0,0 508.3,124.5" fill="none" stroke="#6b4a06" stroke-width="2"/>
+    <line x1="520" y1="150" x2="494.2" y2="93.6" stroke="#0c447c" stroke-width="3" marker-end="url(#p4)"/>
+    <circle cx="520" cy="150" r="3.4" fill="#3a3934"/>
+    <text x="520" y="52" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">position 2</text>
+    <text x="520" y="68" text-anchor="middle" font-size="10.5" fill="#6b4a06">angle 2θ</text>
+    <text x="520" y="232" text-anchor="middle" font-size="10" fill="#6b6a63">( −0.416,  0.909 )</text>
+
+    <!-- m=3 -->
+    <circle cx="720" cy="150" r="62" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.3"/>
+    <line x1="720" y1="150" x2="782" y2="150" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="3 3"/>
+    <path d="M748,150 A28,28 0 0,0 692.3,146.0" fill="none" stroke="#6b4a06" stroke-width="2"/>
+    <line x1="720" y1="150" x2="658.6" y2="141.3" stroke="#0c447c" stroke-width="3" marker-end="url(#p4)"/>
+    <circle cx="720" cy="150" r="3.4" fill="#3a3934"/>
+    <text x="720" y="52" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">position 3</text>
+    <text x="720" y="68" text-anchor="middle" font-size="10.5" fill="#6b4a06">angle 3θ</text>
+    <text x="720" y="232" text-anchor="middle" font-size="10" fill="#6b6a63">( −0.990,  0.141 )</text>
+
+    <text x="440" y="256" text-anchor="middle" font-size="10.5" fill="#8a8f98">Length never changes — only direction. Position costs the vector no magnitude at all.</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 7 · Position as direction: content vector (1, 0) at four positions. Drawn by the author.</span><span class="ko">그림 7 · 방향이 된 위치. 내용 벡터 (1, 0)을 네 위치에 둔 모습. 직접 그림.</span></p>
+
+  <h3><span class="en">4.1 — Two facts about rotations, and then we're done</span>
+      <span class="ko">4.1 회전에 관한 사실 두 개, 그러면 끝</span></h3>
+
+  <div class="step">
+    <span class="n"><span class="en">fact 1 · rotations compose by adding angles</span><span class="ko">사실 1 · 회전은 각도를 더해서 합성된다</span></span>
+    <p class="en">Multiply two rotation matrices out and use the angle-addition formulas:</p>
+    <p class="ko">회전행렬 둘을 곱하고 덧셈 정리를 쓴다.</p>
+    <div class="eq"><span class="mat">           ⎡ cosα cosβ − sinα sinβ    −cosα sinβ − sinα cosβ ⎤
+R(α)R(β) = ⎢                                                 ⎥
+           ⎣ sinα cosβ + cosα sinβ    −sinα sinβ + cosα cosβ ⎦
+
+           ⎡ cos(α+β)   −sin(α+β) ⎤
+         = ⎢                      ⎥ = R(α + β)
+           ⎣ sin(α+β)    cos(α+β) ⎦</span></div>
+  </div>
+
+  <div class="step">
+    <span class="n"><span class="en">fact 2 · rotations are orthogonal</span><span class="ko">사실 2 · 회전행렬은 직교행렬이다</span></span>
+    <p class="en">The columns of <code class="inl">R(α)</code> are orthogonal unit vectors, so <code class="inl">R(α)ᵀR(α) = I</code>: the transpose is the inverse, and by fact 1 it is the backwards rotation:</p>
+    <p class="ko"><code class="inl">R(α)</code>의 두 열은 서로 직각인 단위벡터라서 <code class="inl">R(α)ᵀR(α) = I</code>다. 전치가 곧 역행렬이고, 사실 1에 따라 반대 방향 회전이다.</p>
+    <div class="eq">R(α)<sup>ᵀ</sup> = R(α)<sup>−1</sup> = R(−α)</div>
+
+    <svg class="fig" viewBox="0 0 880 216" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="A content vector is rotated by alpha to become the cached key, then multiplied by the transpose which rotates it back by minus alpha, returning exactly the original content vector with no loss.">
+      <defs>
+        <marker id="f4a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0c447c"/></marker>
+        <marker id="f4b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#27500a"/></marker>
+        <marker id="f4g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b6a63"/></marker>
+      </defs>
+      <text x="14" y="18" font-size="11.5" font-weight="700" fill="#3a3934">Because Rᵀ = R⁻¹, the round trip is exact — this is what §7 will lean on</text>
+
+      <circle cx="140" cy="112" r="58" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.2"/>
+      <line x1="140" y1="112" x2="198" y2="112" stroke="#0c447c" stroke-width="3.2" marker-end="url(#f4a)"/>
+      <circle cx="140" cy="112" r="3" fill="#3a3934"/>
+      <text x="140" y="192" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">k_content</text>
+      <text x="140" y="206" text-anchor="middle" font-size="9.5" fill="#8a8f98">pure meaning</text>
+
+      <line x1="214" y1="112" x2="270" y2="112" stroke="#6b6a63" stroke-width="1.8" marker-end="url(#f4g)"/>
+      <text x="242" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#3a3934">R(α)</text>
+      <text x="242" y="130" text-anchor="middle" font-size="9" fill="#8a8f98">apply</text>
+
+      <circle cx="344" cy="112" r="58" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.2"/>
+      <line x1="344" y1="112" x2="402" y2="112" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="3 2"/>
+      <line x1="344" y1="112" x2="388.4" y2="74.7" stroke="#27500a" stroke-width="3.2" marker-end="url(#f4b)"/>
+      <circle cx="344" cy="112" r="3" fill="#3a3934"/>
+      <text x="344" y="192" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">k_cached</text>
+      <text x="344" y="206" text-anchor="middle" font-size="9.5" fill="#8a8f98">meaning ⊗ position</text>
+
+      <line x1="418" y1="112" x2="474" y2="112" stroke="#6b6a63" stroke-width="1.8" marker-end="url(#f4g)"/>
+      <text x="446" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#3a3934">R(α)ᵀ</text>
+      <text x="446" y="130" text-anchor="middle" font-size="9" fill="#8a8f98">= R(−α)</text>
+
+      <circle cx="548" cy="112" r="58" fill="#faf9f5" stroke="#e3e1d8" stroke-width="1.2"/>
+      <line x1="548" y1="112" x2="606" y2="112" stroke="#0c447c" stroke-width="3.2" marker-end="url(#f4a)"/>
+      <circle cx="548" cy="112" r="3" fill="#3a3934"/>
+      <text x="548" y="192" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">k_content</text>
+      <text x="548" y="206" text-anchor="middle" font-size="9.5" fill="#8a8f98">bit-for-bit the same</text>
+
+      <rect x="636" y="52" width="230" height="120" rx="10" fill="#eaf3de" stroke="#97c459" stroke-width="1.4"/>
+      <text x="654" y="76" font-size="11" font-weight="700" fill="#27500a">Why it is exact</text>
+      <text x="654" y="98" font-size="10" fill="#27500a">Rotations neither stretch nor squash,</text>
+      <text x="654" y="112" font-size="10" fill="#27500a">so no direction is ever collapsed.</text>
+      <text x="654" y="132" font-size="10" fill="#27500a">Nothing is lost, so nothing has to be</text>
+      <text x="654" y="146" font-size="10" fill="#27500a">estimated back — no pseudo-inverse,</text>
+      <text x="654" y="160" font-size="10" fill="#27500a">no least squares, no conditioning.</text>
+    </svg>
+    <p class="figcap"><span class="en">Fig 8 · Orthogonality makes RoPE reversible by a transpose, not a fit. Drawn by the author.</span><span class="ko">그림 8 · 직교성 덕분에 RoPE는 피팅이 아니라 전치로 되돌린다. 직접 그림.</span></p>
+
+    <p class="en">This makes stripping position off in §7 exact and essentially free.</p>
+    <p class="ko">§7에서 위치를 벗겨내는 일이 정확하고 거의 공짜인 이유가 이것이다.</p>
+  </div>
+
+  <p class="en">Together they give the identity RoPE rests on:</p>
+  <p class="ko">둘을 합치면 RoPE를 떠받치는 항등식이 나온다.</p>
+  <div class="eq">R(α)<sup>ᵀ</sup> R(β) = R(−α) R(β) = <span class="hl">R(β − α)</span></div>
+
+  <h3><span class="en">4.2 — Applying it to the attention score</span>
+      <span class="ko">4.2 어텐션 점수에 적용하기</span></h3>
+  <p class="en">Rotate the query by its position, rotate the key by its position, take the inner product:</p>
+  <p class="ko">query와 key를 각자 위치만큼 돌린 뒤 내적한다.</p>
+  <div class="eq">
+    ( R(mθ) q )<sup>ᵀ</sup> ( R(nθ) k ) = q<sup>ᵀ</sup> R(mθ)<sup>ᵀ</sup> R(nθ) k = q<sup>ᵀ</sup> R( <span class="hl">(n − m)</span> θ ) k
+  </div>
+  <p class="en">The score depends on <code class="inl">n − m</code> alone. Same result as §3, in a form a kernel can execute.</p>
+  <p class="ko">점수는 <code class="inl">n − m</code>에만 달려 있다. §3과 같은 결과를 커널이 실행할 수 있는 꼴로 쓴 것이다.</p>
+
+  <h4><span class="en">Verifying it with actual numbers</span><span class="ko">실제 숫자로 확인</span></h4>
+  <p class="en">With <code class="inl">θ = 1</code> and both content vectors <code class="inl">(1, 0)</code>, <code class="inl">R(m)q = (cos m, sin m)</code>. Pairs with the same gap of 2:</p>
+  <p class="ko"><code class="inl">θ = 1</code>, 두 내용 벡터를 <code class="inl">(1, 0)</code>으로 두면 <code class="inl">R(m)q = (cos m, sin m)</code>이다. 간격이 모두 2인 쌍들을 비교한다.</p>
+  <table>
+    <thead><tr>
+      <th><span class="en">positions</span><span class="ko">위치</span></th>
+      <th class="num">R(m)q</th><th class="num">R(n)k</th>
+      <th class="num"><span class="en">dot product</span><span class="ko">내적</span></th>
+      <th class="num">cos((m−n)θ)</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>m=5, n=3</td><td class="num">(0.284, −0.959)</td><td class="num">(−0.990, 0.141)</td><td class="num"><b>−0.4161</b></td><td class="num">cos 2 = −0.4161</td></tr>
+      <tr><td>m=12, n=10</td><td class="num">(0.844, −0.537)</td><td class="num">(−0.839, −0.544)</td><td class="num"><b>−0.4162</b></td><td class="num">cos 2 = −0.4161</td></tr>
+      <tr><td>m=101, n=99</td><td class="num">(0.799, 0.602)</td><td class="num">(0.032, 0.999)</td><td class="num"><b>−0.4161</b></td><td class="num">cos 2 = −0.4161</td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Same gap, same score to four decimals (residual differences are rounding). Computed by the author.</span><span class="ko">간격이 같으면 점수가 소수 넷째 자리까지 같다(남는 차이는 반올림). 직접 계산.</span></p>
+
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">side effect worth naming</span><span class="ko">짚어둘 부수 효과</span></span>
+    <span class="en"><code class="inl">qᵀR((n−m)θ)k</code> is cosine-weighted, so for fixed content the score <b>oscillates</b> with the gap instead of decaying. RoPE gives relative-position <i>awareness</i>, not a "nearby is better" prior; any distance preference is learned into <code class="inl">W_q</code> and <code class="inl">W_k</code>. ALiBi, by contrast, adds an explicit distance penalty.</span>
+    <span class="ko"><code class="inl">qᵀR((n−m)θ)k</code>는 코사인이 섞인 값이라, 내용을 고정하면 간격이 커질 때 점수가 줄지 않고 <b>진동</b>한다. RoPE는 상대 위치를 <i>알게</i> 할 뿐 "가까울수록 좋다"는 가정은 없다. 거리 선호는 <code class="inl">W_q</code>, <code class="inl">W_k</code>가 학습한다. 거리 페널티를 직접 더하는 ALiBi와 다른 점이다.</span>
+  </div>
+</section>
+
+<!-- ============ 5. SCALING TO 128 DIMS ============ -->
+<section id="s5">
+  <h2><span class="num">5</span>
+    <span class="en">Scaling to 128 dimensions — a bank of clocks</span>
+    <span class="ko">128차원으로: 시계 64개</span>
+  </h2>
+
+  <p class="en">A head is 128-dimensional, so <b>chop it into 64 independent 2-D pairs and give each pair its own rotation speed.</b></p>
+  <p class="ko">head는 128차원이다. 그래서 <b>독립된 2차원 쌍 64개로 나누고 쌍마다 회전 속도를 따로 준다.</b></p>
+
+  <div class="eq">
+    R<sub>Θ</sub>(m) = blockdiag( R(mθ<sub>0</sub>), R(mθ<sub>1</sub>), …, R(mθ<sub>63</sub>) )<br>
+    <span class="lbl">a 128×128 matrix that is zero everywhere except 64 little 2×2 rotation blocks down the diagonal</span>
+  </div>
+
+  <p class="en">Every block is a rotation, so the properties from §4 carry over:</p>
+  <p class="ko">블록마다 회전이므로 §4의 성질이 그대로 유지된다.</p>
+  <div class="grid3">
+    <div class="mini"><h4><span class="en">Orthogonal</span><span class="ko">직교</span></h4><p><code class="inl">R_Θ(m)ᵀ R_Θ(m) = I</code><br><span class="en">so the transpose undoes it, exactly.</span><span class="ko">전치가 정확히 되돌린다.</span></p></div>
+    <div class="mini"><h4><span class="en">Relative</span><span class="ko">상대적</span></h4><p><code class="inl">R_Θ(m)ᵀ R_Θ(n) = R_Θ(n−m)</code><br><span class="en">each block does its own subtraction.</span><span class="ko">각 블록이 자기 뺄셈을 수행한다.</span></p></div>
+    <div class="mini"><h4><span class="en">Norm-preserving</span><span class="ko">노름 보존</span></h4><p><code class="inl">‖R_Θ(m) q‖ = ‖q‖</code><br><span class="en">position never rescales anything.</span><span class="ko">위치가 크기를 건드리지 않는다.</span></p></div>
+  </div>
+
+  <h3><span class="en">5.1 — Choosing the 64 speeds</span>
+      <span class="ko">5.1 64개의 속도 정하기</span></h3>
+  <p class="en">The frequencies are a geometric sequence:</p>
+  <p class="ko">주파수는 등비수열이다.</p>
+  <div class="eq">θ<sub>j</sub> = base<sup>−2j/d</sup>,   j = 0, 1, …, 63,   base = 10,000 <span class="lbl">(the usual default)</span></div>
+  <p class="en">With <code class="inl">base = 10⁴</code> and <code class="inl">d = 128</code>, <code class="inl">θ_j = 10^(−j/16)</code>. The <b>wavelength</b> (tokens per full turn) is <code class="inl">λ_j = 2π/θ_j</code>:</p>
+  <p class="ko"><code class="inl">base = 10⁴</code>, <code class="inl">d = 128</code>이면 <code class="inl">θ_j = 10^(−j/16)</code>이다. 한 바퀴에 걸리는 토큰 수인 <b>파장</b>은 <code class="inl">λ_j = 2π/θ_j</code>다.</p>
+
+  <table>
+    <thead><tr>
+      <th class="num"><span class="en">pair j</span><span class="ko">쌍 j</span></th>
+      <th class="num">θ<sub>j</sub></th>
+      <th class="num"><span class="en">wavelength λ</span><span class="ko">파장 λ</span></th>
+      <th><span class="en">what it can resolve</span><span class="ko">구별할 수 있는 것</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td class="num">0</td><td class="num">1.0</td><td class="num">6.3</td><td><span class="en">is this token immediately before that one</span><span class="ko">이 토큰이 저 토큰 바로 앞인가</span></td></tr>
+      <tr><td class="num">16</td><td class="num">0.1</td><td class="num">63</td><td><span class="en">same clause / same sentence</span><span class="ko">같은 절 / 같은 문장인가</span></td></tr>
+      <tr><td class="num">32</td><td class="num">0.01</td><td class="num">628</td><td><span class="en">same paragraph</span><span class="ko">같은 단락인가</span></td></tr>
+      <tr><td class="num">48</td><td class="num">0.001</td><td class="num">6,283</td><td><span class="en">same section of a long document</span><span class="ko">긴 문서의 같은 절인가</span></td></tr>
+      <tr><td class="num">63</td><td class="num">1.15e-4</td><td class="num">54,410</td><td><span class="en">front half or back half of the whole context</span><span class="ko">전체 컨텍스트의 앞쪽인가 뒤쪽인가</span></td></tr>
+    </tbody>
+  </table>
+
+  <svg class="fig" viewBox="0 0 880 240" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="A logarithmic axis of token distance from 1 to 100000. Sixty-four evenly spaced tick marks show the wavelengths of the 64 rotation pairs, tiling the whole range from about 6 tokens up to about 54000 tokens.">
+    <text x="14" y="18" font-size="12" font-weight="700" fill="#3a3934">The 64 pairs tile distance scales evenly — geometric frequencies become uniform spacing on a log axis</text>
+
+    <!-- 64 ticks -->
+    <g stroke="#85b7eb" stroke-width="2.2">
+      <line x1="211.7" y1="60" x2="211.7" y2="86"/><line x1="220.5" y1="60" x2="220.5" y2="86"/>
+      <line x1="229.2" y1="60" x2="229.2" y2="86"/><line x1="238.0" y1="60" x2="238.0" y2="86"/>
+      <line x1="246.7" y1="60" x2="246.7" y2="86"/><line x1="255.5" y1="60" x2="255.5" y2="86"/>
+      <line x1="264.2" y1="60" x2="264.2" y2="86"/><line x1="273.0" y1="60" x2="273.0" y2="86"/>
+      <line x1="281.7" y1="60" x2="281.7" y2="86"/><line x1="290.5" y1="60" x2="290.5" y2="86"/>
+      <line x1="299.2" y1="60" x2="299.2" y2="86"/><line x1="308.0" y1="60" x2="308.0" y2="86"/>
+      <line x1="316.7" y1="60" x2="316.7" y2="86"/><line x1="325.5" y1="60" x2="325.5" y2="86"/>
+      <line x1="334.2" y1="60" x2="334.2" y2="86"/><line x1="343.0" y1="60" x2="343.0" y2="86"/>
+      <line x1="351.7" y1="60" x2="351.7" y2="86"/><line x1="360.5" y1="60" x2="360.5" y2="86"/>
+      <line x1="369.2" y1="60" x2="369.2" y2="86"/><line x1="378.0" y1="60" x2="378.0" y2="86"/>
+      <line x1="386.7" y1="60" x2="386.7" y2="86"/><line x1="395.5" y1="60" x2="395.5" y2="86"/>
+      <line x1="404.2" y1="60" x2="404.2" y2="86"/><line x1="413.0" y1="60" x2="413.0" y2="86"/>
+      <line x1="421.7" y1="60" x2="421.7" y2="86"/><line x1="430.5" y1="60" x2="430.5" y2="86"/>
+      <line x1="439.2" y1="60" x2="439.2" y2="86"/><line x1="448.0" y1="60" x2="448.0" y2="86"/>
+      <line x1="456.7" y1="60" x2="456.7" y2="86"/><line x1="465.5" y1="60" x2="465.5" y2="86"/>
+      <line x1="474.2" y1="60" x2="474.2" y2="86"/><line x1="483.0" y1="60" x2="483.0" y2="86"/>
+      <line x1="491.7" y1="60" x2="491.7" y2="86"/><line x1="500.5" y1="60" x2="500.5" y2="86"/>
+      <line x1="509.2" y1="60" x2="509.2" y2="86"/><line x1="518.0" y1="60" x2="518.0" y2="86"/>
+    </g>
+    <g stroke="#bfa0eb" stroke-width="2.2">
+      <line x1="526.7" y1="60" x2="526.7" y2="86"/><line x1="535.5" y1="60" x2="535.5" y2="86"/>
+      <line x1="544.2" y1="60" x2="544.2" y2="86"/><line x1="553.0" y1="60" x2="553.0" y2="86"/>
+      <line x1="561.7" y1="60" x2="561.7" y2="86"/><line x1="570.5" y1="60" x2="570.5" y2="86"/>
+      <line x1="579.2" y1="60" x2="579.2" y2="86"/><line x1="588.0" y1="60" x2="588.0" y2="86"/>
+      <line x1="596.7" y1="60" x2="596.7" y2="86"/><line x1="605.5" y1="60" x2="605.5" y2="86"/>
+      <line x1="614.2" y1="60" x2="614.2" y2="86"/><line x1="623.0" y1="60" x2="623.0" y2="86"/>
+      <line x1="631.7" y1="60" x2="631.7" y2="86"/><line x1="640.5" y1="60" x2="640.5" y2="86"/>
+      <line x1="649.2" y1="60" x2="649.2" y2="86"/><line x1="658.0" y1="60" x2="658.0" y2="86"/>
+      <line x1="666.7" y1="60" x2="666.7" y2="86"/><line x1="675.5" y1="60" x2="675.5" y2="86"/>
+      <line x1="684.2" y1="60" x2="684.2" y2="86"/><line x1="693.0" y1="60" x2="693.0" y2="86"/>
+      <line x1="701.7" y1="60" x2="701.7" y2="86"/><line x1="710.5" y1="60" x2="710.5" y2="86"/>
+      <line x1="719.2" y1="60" x2="719.2" y2="86"/><line x1="728.0" y1="60" x2="728.0" y2="86"/>
+      <line x1="736.7" y1="60" x2="736.7" y2="86"/><line x1="745.5" y1="60" x2="745.5" y2="86"/>
+      <line x1="754.2" y1="60" x2="754.2" y2="86"/><line x1="763.0" y1="60" x2="763.0" y2="86"/>
+    </g>
+
+    <!-- axis -->
+    <line x1="100" y1="100" x2="800" y2="100" stroke="#3a3934" stroke-width="1.6"/>
+    <g stroke="#3a3934" stroke-width="1.2">
+      <line x1="100" y1="100" x2="100" y2="107"/><line x1="240" y1="100" x2="240" y2="107"/>
+      <line x1="380" y1="100" x2="380" y2="107"/><line x1="520" y1="100" x2="520" y2="107"/>
+      <line x1="660" y1="100" x2="660" y2="107"/><line x1="800" y1="100" x2="800" y2="107"/>
+    </g>
+    <g font-size="10" fill="#6b6a63" text-anchor="middle">
+      <text x="100" y="122">1</text><text x="240" y="122">10</text><text x="380" y="122">100</text>
+      <text x="520" y="122">1K</text><text x="660" y="122">10K</text><text x="800" y="122">100K</text>
+    </g>
+    <text x="450" y="140" text-anchor="middle" font-size="10.5" fill="#6b6a63">token distance (log scale)</text>
+
+    <!-- named callouts -->
+    <g font-size="9.5" fill="#0c447c" text-anchor="middle">
+      <line x1="211.7" y1="52" x2="211.7" y2="40" stroke="#0c447c" stroke-width="1"/>
+      <text x="211.7" y="34">j=0</text><text x="211.7" y="24">λ≈6</text>
+      <line x1="351.7" y1="52" x2="351.7" y2="40" stroke="#0c447c" stroke-width="1"/>
+      <text x="351.7" y="34">j=16</text><text x="351.7" y="24">λ≈63</text>
+      <line x1="491.7" y1="52" x2="491.7" y2="40" stroke="#0c447c" stroke-width="1"/>
+      <text x="491.7" y="34">j=32</text><text x="491.7" y="24">λ≈628</text>
+    </g>
+    <g font-size="9.5" fill="#3f1f72" text-anchor="middle">
+      <line x1="631.7" y1="52" x2="631.7" y2="40" stroke="#3f1f72" stroke-width="1"/>
+      <text x="631.7" y="34">j=48</text><text x="631.7" y="24">λ≈6.3K</text>
+      <line x1="763.0" y1="52" x2="763.0" y2="40" stroke="#3f1f72" stroke-width="1"/>
+      <text x="763.0" y="34">j=63</text><text x="763.0" y="24">λ≈54K</text>
+    </g>
+
+    <!-- legend band -->
+    <rect x="100" y="164" width="426" height="26" rx="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.2"/>
+    <text x="313" y="181" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0c447c">pairs 0–35 · wrap fully inside a 1K prompt</text>
+    <rect x="526" y="164" width="274" height="26" rx="6" fill="#f1e8fb" stroke="#bfa0eb" stroke-width="1.2"/>
+    <text x="663" y="181" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3f1f72">pairs 36–63 · do not</text>
+
+    <text x="450" y="212" text-anchor="middle" font-size="11" fill="#6b6a63">Like a clock: the fast hands tell you which token came first, the slow hands tell you where you are in the document.</text>
+    <text x="450" y="230" text-anchor="middle" font-size="9.5" fill="#8a8f98">The 1K split (pair 36) is computed in §7 and is what makes RoPE-coupled fits fail to extrapolate.</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 9 · 64 wavelengths spread evenly on a log axis over four orders of magnitude. Drawn by the author from θ<sub>j</sub> above.</span><span class="ko">그림 9 · 4자릿수에 걸친 64개 파장, 로그 축에 고르게 분포. 위 θ<sub>j</sub>로 직접 그림.</span></p>
+
+  <p class="en">Like a clock, no single hand tells the time. Fast pairs pin down local order but wrap constantly; slow pairs never repeat but barely move. The <b>combination</b> of 64 phases specifies the position.</p>
+  <p class="ko">시계처럼 바늘 하나로는 시각을 읽을 수 없다. 빠른 쌍은 가까운 순서를 잡지만 금방 한 바퀴를 돌고, 느린 쌍은 반복하지 않지만 거의 움직이지 않는다. 위치는 64개 위상의 <b>조합</b>으로 정해진다.</p>
+
+
+  <svg class="fig" viewBox="0 0 880 452" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Two eight by eight grids of small clock faces, one per rotation pair, for token positions 1000 and 1003. The fast pairs in the first rows point in completely different directions between the two grids, while the slow pairs in the last rows are visually identical.">
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">What one cached key actually is: 64 little hands, each at its own angle</text>
+
+    <text x="220" y="50" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">token at position 1,000</text>
+    <text x="220" y="64" text-anchor="middle" font-size="9.5" fill="#8a8f98">reading order: j=0 top-left → j=63 bottom-right</text>
+    <circle cx="80" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="80" y1="96" x2="87.3" y2="85.3" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="80" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="120" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="120" y1="96" x2="125.7" y2="107.7" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="120" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="160" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="160" y1="96" x2="152.4" y2="85.5" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="160" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="200" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="200" y1="96" x2="192.2" y2="85.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="200" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="240" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="240" y1="96" x2="227.0" y2="96.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="240" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="280" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="280" y1="96" x2="267.0" y2="96.3" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="280" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="320" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="320" y1="96" x2="329.7" y2="87.4" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="320" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="360" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="360" y1="96" x2="369.5" y2="87.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="360" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="80" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="80" y1="136" x2="73.8" y2="124.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="80" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="120" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="120" y1="136" x2="108.7" y2="142.5" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="120" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="160" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="160" y1="136" x2="159.3" y2="149.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="160" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="200" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="200" y1="136" x2="194.7" y2="147.9" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="200" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="240" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="240" y1="136" x2="235.8" y2="123.7" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="240" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="280" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="280" y1="136" x2="267.0" y2="136.7" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="280" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="320" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="320" y1="136" x2="322.1" y2="123.2" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="320" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="360" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="360" y1="136" x2="350.6" y2="127.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="360" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="80" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="80" y1="176" x2="91.2" y2="182.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="80" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="120" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="120" y1="176" x2="122.6" y2="188.7" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="120" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="160" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="160" y1="176" x2="171.9" y2="181.2" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="160" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="200" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="200" y1="176" x2="193.4" y2="164.8" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="200" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="240" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="240" y1="176" x2="252.4" y2="180.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="240" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="280" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="280" y1="176" x2="280.0" y2="189.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="280" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="320" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="320" y1="176" x2="316.9" y2="188.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="320" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="360" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="360" y1="176" x2="364.9" y2="188.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="360" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="80" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="80" y1="216" x2="92.7" y2="213.3" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="80" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="120" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="120" y1="216" x2="111.8" y2="205.9" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="120" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="160" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="160" y1="216" x2="162.0" y2="228.9" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="160" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="200" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="200" y1="216" x2="198.5" y2="203.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="200" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="240" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="240" y1="216" x2="246.3" y2="227.4" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="240" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="280" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="280" y1="216" x2="267.6" y2="212.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="280" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="320" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="320" y1="216" x2="329.3" y2="207.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="320" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="360" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="360" y1="216" x2="366.8" y2="227.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="360" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="80" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="80" y1="256" x2="69.1" y2="263.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="80" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="120" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="120" y1="256" x2="110.6" y2="247.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="120" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="160" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="160" y1="256" x2="164.5" y2="243.8" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="160" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="200" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="200" y1="256" x2="212.7" y2="253.3" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="200" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="240" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="240" y1="256" x2="250.3" y2="264.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="240" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="280" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="280" y1="256" x2="282.0" y2="268.8" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="280" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="320" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="320" y1="256" x2="313.8" y2="267.4" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="320" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="360" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="360" y1="256" x2="348.7" y2="262.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="360" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="80" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="80" y1="296" x2="67.0" y2="296.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="80" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="120" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="120" y1="296" x2="108.0" y2="290.9" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="120" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="160" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="160" y1="296" x2="150.7" y2="286.9" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="160" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="200" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="200" y1="296" x2="194.0" y2="284.5" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="200" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="240" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="240" y1="296" x2="237.3" y2="283.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="240" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="280" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="280" y1="296" x2="280.4" y2="283.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="280" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="320" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="320" y1="296" x2="323.1" y2="283.4" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="320" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="360" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="360" y1="296" x2="365.3" y2="284.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="360" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="80" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="80" y1="336" x2="87.0" y2="325.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="80" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="120" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="120" y1="336" x2="128.4" y2="326.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="120" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="160" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="160" y1="336" x2="169.5" y2="327.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="160" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="200" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="200" y1="336" x2="210.4" y2="328.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="200" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="240" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="240" y1="336" x2="251.0" y2="329.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="240" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="280" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="280" y1="336" x2="291.5" y2="329.9" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="280" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="320" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="320" y1="336" x2="331.9" y2="330.7" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="320" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="360" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="360" y1="336" x2="372.1" y2="331.4" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="360" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="80" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="80" y1="376" x2="92.4" y2="372.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="80" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="120" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="120" y1="376" x2="132.5" y2="372.5" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="120" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="160" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="160" y1="376" x2="172.6" y2="372.9" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="160" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="200" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="200" y1="376" x2="212.7" y2="373.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="200" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="240" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="240" y1="376" x2="252.8" y2="373.7" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="240" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="280" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="280" y1="376" x2="292.8" y2="374.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="280" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="320" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="320" y1="376" x2="332.9" y2="374.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="320" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="360" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="360" y1="376" x2="372.9" y2="374.5" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="360" cy="376" r="1.6" fill="#6b6a63"/>
+
+    <text x="640" y="50" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3a3934">token at position 1,003</text>
+    <text x="640" y="64" text-anchor="middle" font-size="9.5" fill="#8a8f98">only three tokens later</text>
+    <circle cx="500" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="500" y1="96" x2="491.2" y2="105.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="500" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="540" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="540" y1="96" x2="541.1" y2="83.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="540" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="580" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="580" y1="96" x2="576.6" y2="108.5" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="580" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="620" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="620" y1="96" x2="613.2" y2="107.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="620" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="660" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="660" y1="96" x2="661.5" y2="108.9" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="660" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="700" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="700" y1="96" x2="698.8" y2="108.9" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="700" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="740" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="740" y1="96" x2="734.7" y2="84.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="740" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="780" cy="96" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="780" y1="96" x2="776.5" y2="83.5" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="780" cy="96" r="1.6" fill="#6b6a63"/>
+    <circle cx="500" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="500" y1="136" x2="487.1" y2="134.4" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="500" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="540" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="540" y1="136" x2="537.1" y2="148.7" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="540" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="580" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="580" y1="136" x2="588.0" y2="146.3" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="580" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="620" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="620" y1="136" x2="622.5" y2="148.8" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="620" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="660" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="660" y1="136" x2="650.1" y2="127.5" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="660" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="700" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="700" y1="136" x2="688.7" y2="142.4" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="700" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="740" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="740" y1="136" x2="737.0" y2="123.4" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="740" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="780" cy="136" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="780" y1="136" x2="768.1" y2="130.8" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="780" cy="136" r="1.6" fill="#6b6a63"/>
+    <circle cx="500" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="500" y1="176" x2="512.7" y2="179.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="500" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="540" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="540" y1="176" x2="545.8" y2="187.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="540" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="580" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="580" y1="176" x2="592.8" y2="178.4" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="580" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="620" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="620" y1="176" x2="611.3" y2="166.3" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="620" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="660" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="660" y1="176" x2="672.9" y2="177.9" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="660" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="700" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="700" y1="176" x2="701.9" y2="188.9" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="700" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="740" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="740" y1="176" x2="738.5" y2="188.9" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="740" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="780" cy="176" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="780" y1="176" x2="786.2" y2="187.4" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="780" cy="176" r="1.6" fill="#6b6a63"/>
+    <circle cx="500" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="500" y1="216" x2="512.4" y2="212.1" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="500" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="540" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="540" y1="216" x2="531.0" y2="206.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="540" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="580" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="580" y1="216" x2="582.9" y2="228.7" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="580" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="620" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="620" y1="216" x2="617.7" y2="203.2" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="620" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="660" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="660" y1="216" x2="666.9" y2="227.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="660" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="700" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="700" y1="216" x2="687.4" y2="212.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="700" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="740" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="740" y1="216" x2="749.0" y2="206.6" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="740" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="780" cy="216" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="780" y1="216" x2="787.2" y2="226.8" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="780" cy="216" r="1.6" fill="#6b6a63"/>
+    <circle cx="500" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="500" y1="256" x2="489.3" y2="263.4" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="500" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="540" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="540" y1="256" x2="530.4" y2="247.2" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="540" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="580" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="580" y1="256" x2="584.2" y2="243.7" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="580" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="620" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="620" y1="256" x2="632.7" y2="253.0" stroke="#85b7eb" stroke-width="2.4"/>
+    <circle cx="620" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="660" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="660" y1="256" x2="670.4" y2="263.8" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="660" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="700" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="700" y1="256" x2="702.2" y2="268.8" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="700" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="740" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="740" y1="256" x2="734.0" y2="267.5" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="740" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="780" cy="256" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="780" y1="256" x2="768.7" y2="262.5" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="780" cy="256" r="1.6" fill="#6b6a63"/>
+    <circle cx="500" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="500" y1="296" x2="487.0" y2="296.4" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="500" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="540" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="540" y1="296" x2="528.0" y2="291.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="540" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="580" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="580" y1="296" x2="570.6" y2="287.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="580" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="620" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="620" y1="296" x2="613.9" y2="284.5" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="620" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="660" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="660" y1="296" x2="657.3" y2="283.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="660" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="700" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="700" y1="296" x2="700.3" y2="283.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="700" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="740" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="740" y1="296" x2="743.0" y2="283.4" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="740" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="780" cy="296" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="780" y1="296" x2="785.2" y2="284.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="780" cy="296" r="1.6" fill="#6b6a63"/>
+    <circle cx="500" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="500" y1="336" x2="507.0" y2="325.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="500" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="540" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="540" y1="336" x2="548.4" y2="326.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="540" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="580" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="580" y1="336" x2="589.5" y2="327.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="580" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="620" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="620" y1="336" x2="630.3" y2="328.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="620" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="660" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="660" y1="336" x2="671.0" y2="329.1" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="660" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="700" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="700" y1="336" x2="711.5" y2="329.9" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="700" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="740" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="740" y1="336" x2="751.9" y2="330.7" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="740" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="780" cy="336" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="780" y1="336" x2="792.1" y2="331.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="780" cy="336" r="1.6" fill="#6b6a63"/>
+    <circle cx="500" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="500" y1="376" x2="512.4" y2="371.9" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="500" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="540" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="540" y1="376" x2="552.5" y2="372.5" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="540" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="580" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="580" y1="376" x2="592.6" y2="372.9" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="580" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="620" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="620" y1="376" x2="632.7" y2="373.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="620" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="660" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="660" y1="376" x2="672.8" y2="373.7" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="660" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="700" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="700" y1="376" x2="712.8" y2="374.0" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="700" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="740" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="740" y1="376" x2="752.9" y2="374.3" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="740" cy="376" r="1.6" fill="#6b6a63"/>
+    <circle cx="780" cy="376" r="13" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+    <line x1="780" y1="376" x2="792.9" y2="374.5" stroke="#bfa0eb" stroke-width="2.4"/>
+    <circle cx="780" cy="376" r="1.6" fill="#6b6a63"/>
+
+    <line x1="440" y1="60" x2="440" y2="400" stroke="#e3e1d8" stroke-dasharray="5 4"/>
+
+    <rect x="60" y="404" width="360" height="34" rx="8" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.3"/>
+    <text x="240" y="418" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0c447c">■ pairs 0–35 — fast hands</text>
+    <text x="240" y="432" text-anchor="middle" font-size="9.5" fill="#0c447c">swung visibly in 3 tokens: they encode local order</text>
+
+    <rect x="440" y="404" width="380" height="34" rx="8" fill="#f1e8fb" stroke="#bfa0eb" stroke-width="1.3"/>
+    <text x="630" y="418" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3f1f72">■ pairs 36–63 — slow hands</text>
+    <text x="630" y="432" text-anchor="middle" font-size="9.5" fill="#3f1f72">did not budge: they only speak about long distances</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 10 · A cached key as 64 clock hands, three tokens apart (at 30,000 tokens apart the picture would reverse). Drawn by the author: t·θ<sub>j</sub> mod 2π, θ<sub>j</sub> = 10<sup>−j/16</sup>.</span><span class="ko">그림 10 · 3토큰 떨어진 두 key의 바늘 64개(30,000토큰 차이면 반대 양상). 직접 그림: t·θ<sub>j</sub> mod 2π, θ<sub>j</sub> = 10<sup>−j/16</sup>.</span></p>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">a code-reading trap: two pairing conventions</span><span class="ko">코드 읽을 때의 함정: 쌍 묶는 방식이 둘</span></span>
+    <span class="en">Which dimensions form a pair is <b>not</b> standardized.<br>
+    · <b>Interleaved</b> (the RoFormer paper): <code class="inl">(x₀,x₁), (x₂,x₃), …</code><br>
+    · <b>Half-split</b> (the HuggingFace / Llama implementation): <code class="inl">(x₀,x₆₄), (x₁,x₆₅), …</code><br>
+    They differ by a permutation that can be absorbed into <code class="inl">W_q</code> and <code class="inl">W_k</code>, so they are mathematically equivalent, but weights laid out for one cannot be used with the other. A common source of silent bugs when porting weights.</span>
+    <span class="ko">어느 차원끼리 쌍이 되는지는 <b>표준이 없다.</b><br>
+    · <b>Interleaved</b> (RoFormer 논문): <code class="inl">(x₀,x₁), (x₂,x₃), …</code><br>
+    · <b>Half-split</b> (HuggingFace / Llama 구현): <code class="inl">(x₀,x₆₄), (x₁,x₆₅), …</code><br>
+    둘은 차원 순서만 다르고 그 차이는 <code class="inl">W_q</code>·<code class="inl">W_k</code>에 흡수된다. 수학적으로는 같지만 한쪽 배치의 가중치를 다른 쪽에 그대로 쓸 수는 없다. 가중치를 옮길 때 조용한 버그가 자주 나는 곳이다.</span>
+  </div>
+
+  <h3><span class="en">5.2 — Why long-context models raise the base</span>
+      <span class="ko">5.2 긴 컨텍스트 모델이 base를 올리는 이유</span></h3>
+  <p class="en">With <code class="inl">base = 10,000</code> the slowest wavelength is ~54K tokens; beyond that even the slowest hand wraps and "near the start" looks like "near the end". The remedy is to <b>raise the base</b>, slowing every pair. Llama 3 uses <code class="inl">base = 500,000</code> <a class="src" href="https://arxiv.org/abs/2407.21783">(Llama 3 paper, §3.1)</a>, stretching it to roughly <b>2.5M tokens</b>.</p>
+  <p class="ko"><code class="inl">base = 10,000</code>이면 가장 느린 파장이 약 54K 토큰이다. 컨텍스트가 그보다 길면 가장 느린 바늘도 한 바퀴를 넘어 "앞쪽"과 "뒤쪽"을 구별하지 못한다. 처방은 <b>base를 키워</b> 모든 쌍을 느리게 하는 것이다. Llama 3는 <code class="inl">base = 500,000</code>을 쓰고 <a class="src" href="https://arxiv.org/abs/2407.21783">(Llama 3 논문 §3.1)</a>, 가장 느린 파장은 약 <b>250만 토큰</b>이 된다.</p>
+  <p class="en">So two models in one family can disagree about the angle of position 5,000, which is why §7 maps in a position-free space.</p>
+  <p class="ko">그래서 같은 패밀리의 두 모델도 5,000번 위치의 각도가 서로 다를 수 있다. §7에서 위치 없는 공간에서 매핑하는 이유다.</p>
+</section>
+
+<!-- ============ 6. IMPLEMENTATION ============ -->
+<section id="s6">
+  <h2><span class="num">6</span>
+    <span class="en">What the kernels actually compute</span>
+    <span class="ko">커널이 실제로 계산하는 것</span>
+  </h2>
+
+  <p class="en">Nobody materializes <code class="inl">R_Θ(m)</code>: of its 16,384 entries only <b>256 are nonzero</b> (1.6%), so a full matmul wastes 98% of the FLOPs. The rotation becomes <b>two elementwise multiplies and one add</b>.</p>
+  <p class="ko"><code class="inl">R_Θ(m)</code>를 행렬로 만들어 쓰지는 않는다. 성분 16,384개 중 <b>0이 아닌 것은 256개</b>(1.6%)뿐이라 통째로 곱하면 FLOP의 98%가 0에 낭비된다. 대신 <b>원소별 곱 두 번과 덧셈 한 번</b>으로 계산한다.</p>
+
+  <p class="en">Under half-split (pair <i>i</i> = dims <i>i</i>, <i>i</i>+64), define a helper that swaps the halves and negates one:</p>
+  <p class="ko">half-split(쌍 <i>i</i> = 차원 <i>i</i>, <i>i</i>+64)에서 두 절반을 맞바꾸고 한쪽 부호를 뒤집는 헬퍼를 쓴다.</p>
+
+  <div class="eq">
+    rotate_half(x) = [ −x<sub>64…127</sub> , x<sub>0…63</sub> ]<br><br>
+    RoPE(x, m) = x ⊙ cos(mΘ)  +  rotate_half(x) ⊙ sin(mΘ)
+  </div>
+
+  <p class="en"><code class="inl">cos(mΘ)</code> holds each of the 64 cosines <b>twice</b>. Dimensions <i>i</i> and <i>i</i>+64 get:</p>
+  <p class="ko"><code class="inl">cos(mΘ)</code>는 코사인 64개를 <b>두 번씩</b> 담은 128차원 벡터다. 차원 <i>i</i>와 <i>i</i>+64에는 이렇게 들어간다.</p>
+  <div class="eq"><span class="mat">dim i     :   x_i     · cos(mθ_i)  +  (−x_i+64) · sin(mθ_i)   =   x_i     cos − x_i+64 sin
+dim i+64  :   x_i+64  · cos(mθ_i)  +  ( x_i   ) · sin(mθ_i)   =   x_i+64  cos + x_i     sin</span></div>
+  <p class="en">This matches §4's <code class="inl">R(mθ)·[a; b] = [a cos − b sin ; a sin + b cos]</code> with <code class="inl">a = x_i</code>, <code class="inl">b = x_{i+64}</code>. ✓ Not an approximation: the same operation, skipping the zeros.</p>
+  <p class="ko">§4의 <code class="inl">R(mθ)·[a; b] = [a cos − b sin ; a sin + b cos]</code>에 <code class="inl">a = x_i</code>, <code class="inl">b = x_{i+64}</code>를 넣은 것과 같다. ✓ 근사가 아니라 <b>0을 건너뛴 같은 연산</b>이다.</p>
+
+
+  <svg class="fig" viewBox="0 0 880 372" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Left, the 128 by 128 rotation matrix drawn to scale, almost entirely empty with 64 tiny two by two blocks along the diagonal. Right, the equivalent elementwise computation, where the vector is split in half, the halves are swapped and one is negated, then combined with cosine and sine tables.">
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Nobody builds this matrix — 98.4% of it is zeros</text>
+
+    <!-- left: the sparse matrix, to scale -->
+    <rect x="60" y="60" width="256" height="256" fill="#faf9f5" stroke="#c2c0b6" stroke-width="1.3"/>
+    <rect x="60" y="60" width="4" height="4" fill="#3f1f72"/>
+    <rect x="64" y="64" width="4" height="4" fill="#3f1f72"/>
+    <rect x="68" y="68" width="4" height="4" fill="#3f1f72"/>
+    <rect x="72" y="72" width="4" height="4" fill="#3f1f72"/>
+    <rect x="76" y="76" width="4" height="4" fill="#3f1f72"/>
+    <rect x="80" y="80" width="4" height="4" fill="#3f1f72"/>
+    <rect x="84" y="84" width="4" height="4" fill="#3f1f72"/>
+    <rect x="88" y="88" width="4" height="4" fill="#3f1f72"/>
+    <rect x="92" y="92" width="4" height="4" fill="#3f1f72"/>
+    <rect x="96" y="96" width="4" height="4" fill="#3f1f72"/>
+    <rect x="100" y="100" width="4" height="4" fill="#3f1f72"/>
+    <rect x="104" y="104" width="4" height="4" fill="#3f1f72"/>
+    <rect x="108" y="108" width="4" height="4" fill="#3f1f72"/>
+    <rect x="112" y="112" width="4" height="4" fill="#3f1f72"/>
+    <rect x="116" y="116" width="4" height="4" fill="#3f1f72"/>
+    <rect x="120" y="120" width="4" height="4" fill="#3f1f72"/>
+    <rect x="124" y="124" width="4" height="4" fill="#3f1f72"/>
+    <rect x="128" y="128" width="4" height="4" fill="#3f1f72"/>
+    <rect x="132" y="132" width="4" height="4" fill="#3f1f72"/>
+    <rect x="136" y="136" width="4" height="4" fill="#3f1f72"/>
+    <rect x="140" y="140" width="4" height="4" fill="#3f1f72"/>
+    <rect x="144" y="144" width="4" height="4" fill="#3f1f72"/>
+    <rect x="148" y="148" width="4" height="4" fill="#3f1f72"/>
+    <rect x="152" y="152" width="4" height="4" fill="#3f1f72"/>
+    <rect x="156" y="156" width="4" height="4" fill="#3f1f72"/>
+    <rect x="160" y="160" width="4" height="4" fill="#3f1f72"/>
+    <rect x="164" y="164" width="4" height="4" fill="#3f1f72"/>
+    <rect x="168" y="168" width="4" height="4" fill="#3f1f72"/>
+    <rect x="172" y="172" width="4" height="4" fill="#3f1f72"/>
+    <rect x="176" y="176" width="4" height="4" fill="#3f1f72"/>
+    <rect x="180" y="180" width="4" height="4" fill="#3f1f72"/>
+    <rect x="184" y="184" width="4" height="4" fill="#3f1f72"/>
+    <rect x="188" y="188" width="4" height="4" fill="#3f1f72"/>
+    <rect x="192" y="192" width="4" height="4" fill="#3f1f72"/>
+    <rect x="196" y="196" width="4" height="4" fill="#3f1f72"/>
+    <rect x="200" y="200" width="4" height="4" fill="#3f1f72"/>
+    <rect x="204" y="204" width="4" height="4" fill="#3f1f72"/>
+    <rect x="208" y="208" width="4" height="4" fill="#3f1f72"/>
+    <rect x="212" y="212" width="4" height="4" fill="#3f1f72"/>
+    <rect x="216" y="216" width="4" height="4" fill="#3f1f72"/>
+    <rect x="220" y="220" width="4" height="4" fill="#3f1f72"/>
+    <rect x="224" y="224" width="4" height="4" fill="#3f1f72"/>
+    <rect x="228" y="228" width="4" height="4" fill="#3f1f72"/>
+    <rect x="232" y="232" width="4" height="4" fill="#3f1f72"/>
+    <rect x="236" y="236" width="4" height="4" fill="#3f1f72"/>
+    <rect x="240" y="240" width="4" height="4" fill="#3f1f72"/>
+    <rect x="244" y="244" width="4" height="4" fill="#3f1f72"/>
+    <rect x="248" y="248" width="4" height="4" fill="#3f1f72"/>
+    <rect x="252" y="252" width="4" height="4" fill="#3f1f72"/>
+    <rect x="256" y="256" width="4" height="4" fill="#3f1f72"/>
+    <rect x="260" y="260" width="4" height="4" fill="#3f1f72"/>
+    <rect x="264" y="264" width="4" height="4" fill="#3f1f72"/>
+    <rect x="268" y="268" width="4" height="4" fill="#3f1f72"/>
+    <rect x="272" y="272" width="4" height="4" fill="#3f1f72"/>
+    <rect x="276" y="276" width="4" height="4" fill="#3f1f72"/>
+    <rect x="280" y="280" width="4" height="4" fill="#3f1f72"/>
+    <rect x="284" y="284" width="4" height="4" fill="#3f1f72"/>
+    <rect x="288" y="288" width="4" height="4" fill="#3f1f72"/>
+    <rect x="292" y="292" width="4" height="4" fill="#3f1f72"/>
+    <rect x="296" y="296" width="4" height="4" fill="#3f1f72"/>
+    <rect x="300" y="300" width="4" height="4" fill="#3f1f72"/>
+    <rect x="304" y="304" width="4" height="4" fill="#3f1f72"/>
+    <rect x="308" y="308" width="4" height="4" fill="#3f1f72"/>
+    <rect x="312" y="312" width="4" height="4" fill="#3f1f72"/>
+    <text x="188" y="44" text-anchor="middle" font-size="11" font-weight="700" fill="#3a3934">R_Θ(m), drawn to scale</text>
+    <text x="188" y="334" text-anchor="middle" font-size="10.5" fill="#3f1f72">64 blocks × 4 entries = <tspan font-weight="700">256 nonzero</tspan></text>
+    <text x="188" y="350" text-anchor="middle" font-size="10.5" fill="#6b6a63">out of 128 × 128 = 16,384  →  1.6%</text>
+    <text x="188" y="366" text-anchor="middle" font-size="9.5" fill="#8a8f98">a full matmul would spend 98% of its FLOPs on zeros</text>
+
+    <text x="348" y="190" font-size="22" fill="#8a8f98">→</text>
+
+    <!-- right: the elementwise form -->
+    <text x="620" y="44" text-anchor="middle" font-size="11" font-weight="700" fill="#3a3934">what actually runs</text>
+
+    <text x="396" y="80" font-size="10.5" fill="#6b6a63">x</text>
+    <rect x="420" y="66" width="200" height="24" rx="4" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.4"/>
+    <rect x="620" y="66" width="200" height="24" rx="4" fill="#eaf3de" stroke="#97c459" stroke-width="1.4"/>
+    <text x="520" y="83" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0c447c">x[0:64]</text>
+    <text x="720" y="83" text-anchor="middle" font-size="10.5" font-weight="700" fill="#27500a">x[64:128]</text>
+
+    <path d="M520,94 C520,124 720,124 720,150" fill="none" stroke="#8a8f98" stroke-width="1.3" stroke-dasharray="3 2"/>
+    <path d="M720,94 C720,124 520,124 520,150" fill="none" stroke="#8a8f98" stroke-width="1.3" stroke-dasharray="3 2"/>
+    <text x="620" y="118" text-anchor="middle" font-size="9.5" fill="#8a8f98">swap halves, negate the one that moves left</text>
+
+    <text x="342" y="170" font-size="10.5" fill="#6b6a63">rotate_half(x)</text>
+    <rect x="420" y="152" width="200" height="24" rx="4" fill="#eaf3de" stroke="#97c459" stroke-width="1.4"/>
+    <rect x="620" y="152" width="200" height="24" rx="4" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.4"/>
+    <text x="520" y="169" text-anchor="middle" font-size="10.5" font-weight="700" fill="#27500a">−x[64:128]</text>
+    <text x="720" y="169" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0c447c">x[0:64]</text>
+
+    <rect x="396" y="200" width="440" height="70" rx="9" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.5"/>
+    <text x="616" y="228" text-anchor="middle" font-size="13" font-family="'SF Mono',Menlo,monospace" font-weight="700" fill="#6b4a06">x ⊙ cos(mΘ)  +  rotate_half(x) ⊙ sin(mΘ)</text>
+    <text x="616" y="250" text-anchor="middle" font-size="10" fill="#6b4a06">two elementwise multiplies, one add — 256 multiply-adds total</text>
+    <text x="616" y="264" text-anchor="middle" font-size="9.5" fill="#8a8f98">cos/sin are lookup tables built once at load</text>
+
+    <text x="396" y="296" font-size="10.5" fill="#6b6a63">Identical arithmetic to the matrix on the left — for pair i this produces</text>
+    <text x="396" y="312" font-size="11" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(x_i cos − x_i+64 sin,   x_i+64 cos + x_i sin)</text>
+    <text x="396" y="330" font-size="10.5" fill="#6b6a63">which is exactly R(mθ_i) applied to the pair. Not an approximation:</text>
+    <text x="396" y="346" font-size="10.5" fill="#6b6a63">the same operation, written so the zeros are never touched.</text>
+    <text x="396" y="364" font-size="10" fill="#8a8f98">O(d) instead of O(d²)</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 11 · Sparse block-diagonal matrix vs the elementwise form. Drawn by the author.</span><span class="ko">그림 11 · 거의 0인 블록 대각 행렬과 원소별 계산. 직접 그림.</span></p>
+
+  <pre># the whole thing, once per layer per forward pass
+# --- precomputed once at load, cached for all positions ---
+inv_freq = base ** (-torch.arange(0, d, 2).float() / d)   # 64 values: theta_0 .. theta_63
+angles   = torch.outer(positions, inv_freq)                # [T, 64]
+emb      = torch.cat([angles, angles], dim=-1)             # [T, 128] each theta twice
+cos, sin = emb.cos(), emb.sin()                            # lookup tables
+
+# --- per forward pass ---
+def rotate_half(x):
+    x1, x2 = x[..., : d // 2], x[..., d // 2 :]
+    return torch.cat([-x2, x1], dim=-1)
+
+q = q * cos + rotate_half(q) * sin      # queries: recomputed every decode step
+k = k * cos + rotate_half(k) * sin      # keys: rotated ONCE, then cached this way
+# v is never touched — values carry no positional encoding</pre>
+
+  <div class="grid2">
+    <div class="mini">
+      <h4><span class="en">Cost</span><span class="ko">비용</span></h4>
+      <p><span class="en"><b>O(d)</b>, not O(d²): 256 multiply-adds per vector instead of 16,384. <code class="inl">cos</code>/<code class="inl">sin</code> tables are built once and indexed by position.</span><span class="ko">O(d²)가 아니라 <b>O(d)</b>다. 벡터당 16,384번 대신 256번 곱셈-덧셈을 한다. <code class="inl">cos</code>/<code class="inl">sin</code> 테이블은 로드 때 한 번 만들고 위치로 찾아 쓴다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">The asymmetry that matters</span><span class="ko">중요한 비대칭</span></h4>
+      <p><span class="en">Queries are rotated each step and discarded. <b>Keys are rotated once and stored rotated</b>, so the cache holds "meaning ⊗ position" entangled (§7).</span><span class="ko">query는 스텝마다 회전되고 버려진다. <b>key는 한 번 회전된 채로 저장</b>되므로 KV 캐시에는 "의미 ⊗ 위치"가 엉켜 있다(§7).</span></p>
+    </div>
+  </div>
+
+  <div class="callout c-blue">
+    <span class="tag"><span class="en">6.1 – 6.5 · in a real engine</span><span class="ko">6.1 – 6.5 · 실제 엔진에서</span></span>
+    <span class="en">The next subsections follow this operation through vLLM's source. Links are pinned to commit <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c"><code class="inl">a0f1b9a</code></a> (2026-08-24). Shapes are for Llama-3-8B (32 query heads, 8 KV heads, head_size 128, base 500,000), printed by running the code.</span>
+    <span class="ko">이어지는 소절에서는 같은 연산을 vLLM 소스에서 따라간다. 링크는 커밋 <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c"><code class="inl">a0f1b9a</code></a>(2026-08-24)에 고정했다. shape은 Llama-3-8B 기준(query head 32개, KV head 8개, head_size 128, base 500,000)이고, 코드를 실제로 실행해 출력한 값이다.</span>
+  </div>
+
+  <h3><span class="en">6.1 — Where it is called: inside attention, right after the QKV projection</span>
+      <span class="ko">6.1 어디서 호출되나: attention 안, QKV projection 바로 다음</span></h3>
+
+  <p class="en">RoPE is not a layer. Each attention module owns a <code class="inl">rotary_emb</code> built by <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/__init__.py#L33"><code class="inl">get_rope()</code></a> and applies it to <code class="inl">q</code> and <code class="inl">k</code> between projection and attention:</p>
+  <p class="ko">RoPE는 독립 레이어가 아니다. attention 모듈마다 <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/__init__.py#L33"><code class="inl">get_rope()</code></a>가 config로 만든 <code class="inl">rotary_emb</code>가 있고, projection과 attention 커널 사이에서 <code class="inl">q</code>와 <code class="inl">k</code>에 적용된다.</p>
+
+  <pre># vllm/model_executor/models/llama.py — LlamaAttention.forward
+qkv, _ = self.qkv_proj(hidden_states)                    # [N, 4096 + 1024 + 1024]
+q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+q, k = self.rotary_emb(positions, q, k)                  # ← RoPE: q and k only
+attn_output = self.attn(q, k, v)                         # k, v are written to the KV cache in here
+output, _ = self.o_proj(attn_output)</pre>
+  <p class="figcap"><span class="en">Source: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/models/llama.py#L221-L231">llama.py L221–231</a>. Most RoPE models in vLLM share this shape.</span><span class="ko">출처: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/models/llama.py#L221-L231">llama.py L221–231</a>. vLLM의 RoPE 모델 대부분이 같은 구조다.</span></p>
+
+  <ol class="en">
+    <li><code class="inl">v</code> never goes through RoPE.</li>
+    <li>The order is <b>rotate, then cache</b>: by the time <code class="inl">self.attn</code> writes <code class="inl">k</code> to the paged KV cache it is already rotated. That is why §7 exists.</li>
+  </ol>
+  <ol class="ko">
+    <li><code class="inl">v</code>는 RoPE를 거치지 않는다.</li>
+    <li>순서는 <b>회전한 뒤 캐시에 쓰기</b>다. <code class="inl">self.attn</code>이 <code class="inl">k</code>를 paged KV cache에 쓸 때는 이미 회전된 상태다. §7의 출발점이 여기다.</li>
+  </ol>
+
+  <p class="en">The cos/sin table is built <b>once</b> at construction (<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L80-L104"><code class="inl">_compute_inv_freq</code> / <code class="inl">_compute_cos_sin_cache</code></a>). Unlike the pseudo-code, each row holds <b>64 cosines followed by 64 sines</b>, broadcast over both halves by the kernels.</p>
+  <p class="ko">cos/sin 테이블은 모듈 생성 때 <b>한 번만</b> 만든다(<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L80-L104"><code class="inl">_compute_inv_freq</code> / <code class="inl">_compute_cos_sin_cache</code></a>). 의사 코드와 달리 코사인을 두 번 저장하지 않고, 한 행에 <b>코사인 64개와 사인 64개</b>를 이어 담아 커널이 양쪽 절반에 broadcast한다.</p>
+
+  <table>
+    <thead><tr><th><span class="en">tensor</span><span class="ko">텐서</span></th><th class="num">shape</th><th><span class="en">meaning</span><span class="ko">의미</span></th></tr></thead>
+    <tbody>
+      <tr><td><code class="inl">inv_freq</code></td><td class="num">(64,)</td><td><span class="en">θ<sub>j</sub> = base<sup>−2j/128</sup>, one speed per pair</span><span class="ko">θ<sub>j</sub> = base<sup>−2j/128</sup>, 쌍마다 회전 속도 하나</span></td></tr>
+      <tr><td><code class="inl">freqs = einsum(t, inv_freq)</code></td><td class="num">(8192, 64)</td><td><span class="en">angle m·θ<sub>j</sub> for every position m</span><span class="ko">모든 위치 m에 대한 각도 m·θ<sub>j</sub></span></td></tr>
+      <tr><td><code class="inl">cos_sin_cache = cat(cos, sin)</code></td><td class="num">(8192, 128)</td><td><span class="en">row m = [cos ×64 | sin ×64]</span><span class="ko">m번째 행 = [cos 64개 | sin 64개]</span></td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">8192 is this run's <code class="inl">max_position_embeddings</code>. Scaling variants (YaRN, Llama-3 scaling, NTK…) in <code class="inl">rotary_embedding/*_rope.py</code> mostly change only this table; the apply step is shared.</span><span class="ko">8192는 이번 실행의 <code class="inl">max_position_embeddings</code>다. <code class="inl">rotary_embedding/*_rope.py</code>의 스케일링 변형(YaRN, Llama-3 스케일링, NTK 등)은 대부분 이 테이블만 바꾸고 적용 단계는 같다.</span></p>
+
+  <h3><span class="en">6.2 — <code class="inl">forward_native</code>, step by step with shapes</span>
+      <span class="ko">6.2 <code class="inl">forward_native</code>를 shape과 함께 한 단계씩</span></h3>
+
+  <p class="en"><code class="inl">rotary_emb</code> is a <code class="inl">RotaryEmbedding</code>, a vLLM <code class="inl">CustomOp</code> with a <code class="inl">forward_native</code> (plain PyTorch) and per-platform <code class="inl">forward_cuda</code> / <code class="inl">forward_hip</code> / …. The native one is easiest to read and, per §6.5, is what the default compiled server runs. It lives in two functions: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L161-L201"><code class="inl">RotaryEmbedding.forward_static</code></a> (gather, split heads, reassemble) and <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/common.py#L146-L184"><code class="inl">ApplyRotaryEmb.forward_static</code></a> (the rotation itself).</p>
+  <p class="ko"><code class="inl">rotary_emb</code>는 vLLM <code class="inl">CustomOp</code>인 <code class="inl">RotaryEmbedding</code>이다. <code class="inl">forward_native</code>(순수 PyTorch)와 플랫폼별 <code class="inl">forward_cuda</code> / <code class="inl">forward_hip</code> 등의 구현이 있다. native가 가장 읽기 쉽고, §6.5에서 보듯 기본 컴파일 서버가 실제로 돌리는 것도 이것이다. 코드는 두 함수에 있다. <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L161-L201"><code class="inl">RotaryEmbedding.forward_static</code></a>은 cos/sin 조회와 head 분리·재조립을, <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/common.py#L146-L184"><code class="inl">ApplyRotaryEmb.forward_static</code></a>은 회전 자체를 맡는다.</p>
+
+  <p class="en">Input: 5 tokens, <code class="inl">positions = [0, 1, 2, 17, 18]</code> (three prefill tokens of one request, two of another). vLLM flattens all requests into one token axis, so <b>there is no batch dimension</b>; each token carries its own position.</p>
+  <p class="ko">입력은 토큰 5개, <code class="inl">positions = [0, 1, 2, 17, 18]</code>이다(한 요청의 prefill 토큰 3개와 다른 요청의 토큰 2개). vLLM은 한 스텝의 모든 요청을 토큰 축 하나로 이어 붙이므로 <b>batch 차원이 없다</b>. 토큰마다 자기 위치를 갖고 있을 뿐이다.</p>
+
+  <table>
+    <thead><tr><th>#</th><th><span class="en">code</span><span class="ko">코드</span></th><th class="num">shape</th><th><span class="en">what happened</span><span class="ko">일어난 일</span></th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><code class="inl">positions</code>, <code class="inl">query</code>, <code class="inl">key</code></td><td class="num">(5,) (5, 4096) (5, 1024)</td><td><span class="en">straight from <code class="inl">qkv.split</code>: 32×128 and 8×128 (GQA)</span><span class="ko"><code class="inl">qkv.split</code>에서 바로 온 값: 32×128과 8×128(GQA)</span></td></tr>
+      <tr><td>1</td><td><code class="inl">cos_sin_cache.index_select(0, positions)</code></td><td class="num">(5, 128)</td><td><span class="en">one table row per token</span><span class="ko">토큰마다 테이블 한 행</span></td></tr>
+      <tr><td>2</td><td><code class="inl">cos, sin = cos_sin.chunk(2, -1)</code></td><td class="num">(5, 64) ×2</td><td><span class="en">64 angles per token — one per pair</span><span class="ko">토큰당 각도 64개, 쌍마다 하나</span></td></tr>
+      <tr><td>3</td><td><code class="inl">query.view(N, -1, head_size)</code></td><td class="num">(5, 32, 128)</td><td><span class="en">expose the head axis (a view, no copy)</span><span class="ko">head 축을 드러냄(view라서 복사 없음)</span></td></tr>
+      <tr><td>4</td><td><code class="inl">query[..., :rotary_dim]</code> / <code class="inl">[..., rotary_dim:]</code></td><td class="num">(5, 32, 128) / (5, 32, 0)</td><td><span class="en">rot / pass split; pass is empty for full rotary</span><span class="ko">rot / pass 분리. full rotary라서 pass는 비어 있음</span></td></tr>
+      <tr><td>5</td><td><code class="inl">cos.unsqueeze(-2)</code></td><td class="num">(5, 1, 64)</td><td><span class="en">insert a head axis of size 1 → broadcast to all heads</span><span class="ko">크기 1인 head 축 삽입 → 모든 head로 broadcast</span></td></tr>
+      <tr><td>6</td><td><code class="inl">x1, x2 = torch.chunk(x, 2, dim=-1)</code></td><td class="num">(5, 32, 64) ×2</td><td><span class="en">NeoX: first half / second half = the 64 pairs</span><span class="ko">NeoX: 앞 절반 / 뒤 절반 = 쌍 64개</span></td></tr>
+      <tr><td>7</td><td><code class="inl">o1 = x1*cos - x2*sin</code><br><code class="inl">o2 = x2*cos + x1*sin</code></td><td class="num">(5, 32, 64) ×2</td><td><span class="en">the 2×2 rotation from §4, on all pairs at once</span><span class="ko">§4의 2×2 회전을 모든 쌍에 한꺼번에 적용</span></td></tr>
+      <tr><td>8</td><td><code class="inl">torch.cat((o1, o2), -1)</code></td><td class="num">(5, 32, 128)</td><td><span class="en">halves back together</span><span class="ko">두 절반을 다시 합침</span></td></tr>
+      <tr><td>9</td><td><code class="inl">cat((rot, pass), -1).reshape(query.shape)</code></td><td class="num">(5, 4096)</td><td><span class="en">identical to the input shape</span><span class="ko">입력 shape과 동일</span></td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">The key follows the same path with 8 heads: (5, 1024) → (5, 8, 128) → x1, x2 (5, 8, 64) → (5, 1024). For partial rotary with <code class="inl">rotary_dim = 64</code>, step 4 gives rot (5, 8, 64) and an untouched pass (5, 8, 64).</span><span class="ko">key도 head 8개로 같은 경로를 거친다: (5, 1024) → (5, 8, 128) → x1, x2 (5, 8, 64) → (5, 1024). partial rotary에서 <code class="inl">rotary_dim = 64</code>이면 4단계가 rot (5, 8, 64)와 손대지 않는 pass (5, 8, 64)로 나눈다.</span></p>
+
+  <svg class="fig" viewBox="0 0 880 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Shape flow of forward_native. On the left the query of shape 5 by 4096 is viewed as 5 by 32 by 128 and chunked into two halves of 5 by 32 by 64. On the right the cos-sin table of 8192 by 128 is indexed by position to 5 by 128, split into cos and sin of 5 by 64, then unsqueezed to 5 by 1 by 64 so it broadcasts over the 32 heads. At the bottom the two halves and the cos and sin combine into the rotation and are concatenated back to 5 by 4096.">
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">forward_native — every tensor's shape (Llama-3-8B, 5 tokens)</text>
+
+    <!-- LEFT: query path -->
+    <text x="20" y="46" font-size="11" font-weight="700" fill="#0c447c">query</text>
+    <text x="66" y="46" font-size="11" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(5, 4096)</text>
+    <rect x="20" y="54" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <rect x="20" y="61" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <rect x="20" y="68" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <rect x="20" y="75" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <rect x="20" y="82" width="400" height="6" fill="#e6f1fb" stroke="#85b7eb" stroke-width="0.8"/>
+    <text x="134" y="46" font-size="9.5" fill="#8a8f98">one stripe = one token</text>
+
+    <line x1="150" y1="92" x2="150" y2="112" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M146,107 L150,114 L154,107" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="160" y="107" font-size="10" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">.view(N, −1, 128)</text>
+
+    <rect x="28" y="126" width="264" height="96" rx="5" fill="#f3f1ea" stroke="#c2c0b6"/>
+    <rect x="24" y="122" width="264" height="96" rx="5" fill="#f7f5ef" stroke="#c2c0b6"/>
+    <rect x="20" y="118" width="264" height="96" rx="5" fill="#ffffff" stroke="#c2c0b6"/>
+    <rect x="28" y="126" width="124" height="12" fill="#e6f1fb" stroke="#85b7eb"/><rect x="152" y="126" width="124" height="12" fill="#eaf3de" stroke="#97c459"/>
+    <rect x="28" y="142" width="124" height="12" fill="#e6f1fb" stroke="#85b7eb"/><rect x="152" y="142" width="124" height="12" fill="#eaf3de" stroke="#97c459"/>
+    <rect x="28" y="158" width="124" height="12" fill="#e6f1fb" stroke="#85b7eb"/><rect x="152" y="158" width="124" height="12" fill="#eaf3de" stroke="#97c459"/>
+    <rect x="28" y="174" width="124" height="12" fill="#e6f1fb" stroke="#85b7eb"/><rect x="152" y="174" width="124" height="12" fill="#eaf3de" stroke="#97c459"/>
+    <text x="152" y="203" text-anchor="middle" font-size="12" fill="#8a8f98">⋮</text>
+    <text x="90" y="232" text-anchor="middle" font-size="9.5" fill="#0c447c">dims 0 … 63</text>
+    <text x="214" y="232" text-anchor="middle" font-size="9.5" fill="#27500a">dims 64 … 127</text>
+    <text x="300" y="138" font-size="11" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(5, 32, 128)</text>
+    <text x="300" y="156" font-size="10" fill="#6b6a63">one row = one head</text>
+    <text x="300" y="171" font-size="10" fill="#6b6a63">32 heads per token,</text>
+    <text x="300" y="186" font-size="10" fill="#6b6a63">5 token-plates stacked</text>
+
+    <line x1="150" y1="240" x2="150" y2="258" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M146,253 L150,260 L154,253" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="160" y="254" font-size="10" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">torch.chunk(x, 2, dim=−1)</text>
+
+    <rect x="20" y="266" width="124" height="40" rx="5" fill="#e6f1fb" stroke="#85b7eb" stroke-width="1.4"/>
+    <text x="82" y="284" text-anchor="middle" font-size="11" font-weight="700" fill="#0c447c">x1</text>
+    <text x="82" y="299" text-anchor="middle" font-size="10" font-family="'SF Mono',Menlo,monospace" fill="#0c447c">(5, 32, 64)</text>
+    <rect x="160" y="266" width="124" height="40" rx="5" fill="#eaf3de" stroke="#97c459" stroke-width="1.4"/>
+    <text x="222" y="284" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">x2</text>
+    <text x="222" y="299" text-anchor="middle" font-size="10" font-family="'SF Mono',Menlo,monospace" fill="#27500a">(5, 32, 64)</text>
+    <text x="300" y="284" font-size="10" fill="#6b6a63">pair j = (x1[…, j], x2[…, j])</text>
+    <text x="300" y="299" font-size="9.5" fill="#8a8f98">GPT-J style: x[…, ::2], x[…, 1::2]</text>
+
+    <!-- RIGHT: cos/sin path -->
+    <text x="470" y="46" font-size="11" font-weight="700" fill="#6b4a06">cos_sin_cache</text>
+    <text x="560" y="46" font-size="11" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(8192, 128)</text>
+    <rect x="470" y="54" width="64" height="164" fill="#fbf0d9" stroke="#e6b54f"/>
+    <rect x="534" y="54" width="64" height="164" fill="#eeedfe" stroke="#afa9ec"/>
+    <rect x="470" y="58" width="128" height="3" fill="#b5651d"/>
+    <rect x="470" y="63" width="128" height="3" fill="#b5651d"/>
+    <rect x="470" y="68" width="128" height="3" fill="#b5651d"/>
+    <rect x="470" y="98" width="128" height="3" fill="#b5651d"/>
+    <rect x="470" y="103" width="128" height="3" fill="#b5651d"/>
+    <text x="466" y="68" text-anchor="end" font-size="9" fill="#b5651d">m = 0, 1, 2</text>
+    <text x="466" y="105" text-anchor="end" font-size="9" fill="#b5651d">m = 17, 18</text>
+    <text x="534" y="200" text-anchor="middle" font-size="12" fill="#8a8f98">⋮</text>
+    <text x="502" y="232" text-anchor="middle" font-size="9.5" fill="#6b4a06">cos ×64</text>
+    <text x="566" y="232" text-anchor="middle" font-size="9.5" fill="#3f1f72">sin ×64</text>
+
+    <line x1="602" y1="80" x2="650" y2="80" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M645,76 L652,80 L645,84" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="627" y="62" text-anchor="middle" font-size="9" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">index</text>
+    <text x="627" y="73" text-anchor="middle" font-size="9" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">_select</text>
+
+    <rect x="660" y="62" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="62" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <rect x="660" y="69" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="69" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <rect x="660" y="76" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="76" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <rect x="660" y="83" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="83" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <rect x="660" y="90" width="64" height="6" fill="#fbf0d9" stroke="#e6b54f" stroke-width="0.8"/><rect x="724" y="90" width="64" height="6" fill="#eeedfe" stroke="#afa9ec" stroke-width="0.8"/>
+    <text x="796" y="82" font-size="11" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(5, 128)</text>
+
+    <line x1="724" y1="102" x2="724" y2="120" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M720,115 L724,122 L728,115" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="734" y="115" font-size="9.5" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">chunk(2)</text>
+
+    <rect x="660" y="126" width="60" height="36" rx="4" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.3"/>
+    <text x="690" y="142" text-anchor="middle" font-size="10.5" font-weight="700" fill="#6b4a06">cos</text>
+    <text x="690" y="155" text-anchor="middle" font-size="9" font-family="'SF Mono',Menlo,monospace" fill="#6b4a06">(5, 64)</text>
+    <rect x="728" y="126" width="60" height="36" rx="4" fill="#eeedfe" stroke="#afa9ec" stroke-width="1.3"/>
+    <text x="758" y="142" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3f1f72">sin</text>
+    <text x="758" y="155" text-anchor="middle" font-size="9" font-family="'SF Mono',Menlo,monospace" fill="#3f1f72">(5, 64)</text>
+
+    <line x1="724" y1="166" x2="724" y2="184" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M720,179 L724,186 L728,179" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <text x="734" y="180" font-size="9.5" font-family="'SF Mono',Menlo,monospace" fill="#6b6a63">unsqueeze(−2)</text>
+
+    <rect x="660" y="192" width="128" height="10" fill="#fbf0d9" stroke="#e6b54f"/>
+    <rect x="660" y="207" width="128" height="10" fill="none" stroke="#e6b54f" stroke-dasharray="3 2"/>
+    <rect x="660" y="222" width="128" height="10" fill="none" stroke="#e6b54f" stroke-dasharray="3 2"/>
+    <text x="724" y="246" text-anchor="middle" font-size="12" fill="#8a8f98">⋮</text>
+    <text x="796" y="201" font-size="11" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">(5, 1, 64)</text>
+    <text x="796" y="217" font-size="9.5" fill="#6b6a63">size-1 head axis →</text>
+    <text x="796" y="230" font-size="9.5" fill="#6b6a63">shared by all</text>
+    <text x="796" y="243" font-size="9.5" fill="#6b6a63">32 heads</text>
+
+    <!-- arrows into the combine box -->
+    <line x1="152" y1="310" x2="152" y2="336" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M148,331 L152,338 L156,331" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+    <line x1="724" y1="256" x2="724" y2="336" stroke="#8a8f98" stroke-width="1.3"/>
+    <path d="M720,331 L724,338 L728,331" fill="none" stroke="#8a8f98" stroke-width="1.3"/>
+
+    <!-- BOTTOM: combine -->
+    <rect x="20" y="342" width="840" height="62" rx="9" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.5"/>
+    <text x="40" y="366" font-size="12.5" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#6b4a06">o1 = x1·cos − x2·sin</text>
+    <text x="40" y="390" font-size="12.5" font-weight="700" font-family="'SF Mono',Menlo,monospace" fill="#6b4a06">o2 = x2·cos + x1·sin</text>
+    <text x="340" y="366" font-size="10.5" font-family="'SF Mono',Menlo,monospace" fill="#6b4a06">(5, 32, 64) ⊙ (5, 1, 64) → (5, 32, 64)</text>
+    <text x="340" y="390" font-size="10" fill="#6b4a06">pair j of every head rotated by angle m·θ_j of its own token</text>
+
+    <rect x="20" y="420" width="124" height="22" rx="4" fill="#e6f1fb" stroke="#85b7eb"/><text x="82" y="435" text-anchor="middle" font-size="10" font-weight="700" fill="#0c447c">o1</text>
+    <rect x="144" y="420" width="124" height="22" rx="4" fill="#eaf3de" stroke="#97c459"/><text x="206" y="435" text-anchor="middle" font-size="10" font-weight="700" fill="#27500a">o2</text>
+    <text x="282" y="435" font-size="10.5" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">cat → (5, 32, 128)   reshape → (5, 4096)</text>
+    <text x="282" y="456" font-size="10" fill="#6b6a63">same shape as the input — attention never sees that RoPE happened</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 12 · Shape flow of <code class="inl">forward_native</code>; step 5's size-1 head axis lets one cos/sin row serve all 32 heads. Shapes printed by running vLLM on CPU.</span><span class="ko">그림 12 · <code class="inl">forward_native</code>의 shape 흐름. 5단계의 크기 1 head 축 덕분에 cos/sin 한 행을 32개 head가 같이 쓴다. vLLM을 CPU에서 실행해 출력한 shape.</span></p>
+
+  <h3><span class="en">6.3 — <code class="inl">forward_cuda</code>: same math, one in-place kernel</span>
+      <span class="ko">6.3 <code class="inl">forward_cuda</code>: 수학은 같고, in-place 커널 하나</span></h3>
+
+  <pre># vllm/model_executor/layers/rotary_embedding/base.py — RotaryEmbedding.forward_cuda
+if self.use_flashinfer:                      # False for plain RotaryEmbedding (see below)
+    torch.ops.vllm.flashinfer_rotary_embedding(positions, query, key, ...)
+    return query, key
+cos_sin_cache = self._match_cos_sin_cache_dtype(query)
+# ops.rotary_embedding() is an in-place operation
+# that updates the query and key tensors.
+ops.rotary_embedding(positions, query, key, self.head_size,
+                     cos_sin_cache, self.is_neox_style)
+return query, key                            # the SAME tensor objects that came in</pre>
+  <p class="figcap"><span class="en">Source: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L221-L252">base.py L221–252</a>, abridged.</span><span class="ko">출처: <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L221-L252">base.py L221–252</a>, 일부 생략.</span></p>
+
+  <p class="en">The arithmetic matches 6.2; everything around it changes:</p>
+  <p class="ko">계산은 6.2와 같고, 그 주변이 달라진다.</p>
+
+  <table>
+    <thead><tr><th></th><th><code class="inl">forward_native</code></th><th><code class="inl">forward_cuda</code> → <code class="inl">ops.rotary_embedding</code></th></tr></thead>
+    <tbody>
+      <tr><td><span class="en">output</span><span class="ko">출력</span></td><td><span class="en">new tensors (<code class="inl">cat</code> + <code class="inl">reshape</code>)</span><span class="ko">새 텐서(<code class="inl">cat</code> + <code class="inl">reshape</code>)</span></td><td><span class="en"><b>in-place</b> — overwrites the (5, 4096) and (5, 1024) buffers</span><span class="ko"><b>in-place</b>: (5, 4096)와 (5, 1024) 버퍼를 덮어씀</span></td></tr>
+      <tr><td><span class="en">head axis</span><span class="ko">head 축</span></td><td><code class="inl">view(N, -1, 128)</code> + <span class="en">broadcast</span><span class="ko">broadcast</span></td><td><span class="en">no reshaping at all; the kernel computes addresses from <code class="inl">query_stride</code> and <code class="inl">head_stride</code>, so it accepts both <code class="inl">[N, H·D]</code> and <code class="inl">[N, H, D]</code></span><span class="ko">reshape을 전혀 하지 않음. 커널이 <code class="inl">query_stride</code>와 <code class="inl">head_stride</code>로 주소를 계산하므로 <code class="inl">[N, H·D]</code>와 <code class="inl">[N, H, D]</code>를 모두 받음</span></td></tr>
+      <tr><td><span class="en">kernel launches (eager)</span><span class="ko">커널 실행 횟수(eager)</span></td><td><span class="en">about a dozen small ops (index_select, 4 muls, sub, add, several cats)</span><span class="ko">작은 연산 십여 개(index_select, 곱셈 4번, 뺄셈, 덧셈, cat 여러 번)</span></td><td><span class="en"><b>one</b> launch that rotates q and k together</span><span class="ko">q와 k를 함께 회전하는 실행 <b>한 번</b></span></td></tr>
+      <tr><td><span class="en">precision</span><span class="ko">정밀도</span></td><td><span class="en">computes in the activation dtype (bf16) — cos/sin are cast down to <code class="inl">x.dtype</code></span><span class="ko">activation dtype(bf16)으로 계산. cos/sin을 <code class="inl">x.dtype</code>으로 내려서 씀</span></td><td><span class="en">loads into <b>fp32</b>, rotates, casts back on store</span><span class="ko"><b>fp32</b>로 읽어서 회전한 뒤 저장할 때 원래 dtype으로 변환</span></td></tr>
+      <tr><td><span class="en">extras</span><span class="ko">부가 기능</span></td><td>—</td><td><span class="en"><code class="inl">inverse=True</code> (un-rotate) and <code class="inl">rope_dim_offset</code>, exposed through <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/_custom_ops.py#L201-L220"><code class="inl">_custom_ops.rotary_embedding</code></a></span><span class="ko"><code class="inl">inverse=True</code>(회전 되돌리기)와 <code class="inl">rope_dim_offset</code>. <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/_custom_ops.py#L201-L220"><code class="inl">_custom_ops.rotary_embedding</code></a>으로 노출됨</span></td></tr>
+    </tbody>
+  </table>
+
+  <p class="en">The FlashInfer branch is <b>switched off</b> in the base class: the enabling condition is commented out with <i>"TODO(mgoin): disabled for now due to failures"</i> (<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L37-L48">base.py L37–48</a>) — and only the DeepSeek scaling variant turns it back on. On ROCm, <code class="inl">forward_hip</code> uses AITER's Triton rotary kernel only when <code class="inl">VLLM_ROCM_USE_AITER_TRITON_ROPE=1</code> (default off); otherwise it falls through to <code class="inl">forward_cuda</code> and the same C++ kernel, hipified.</p>
+  <p class="ko">FlashInfer 분기는 기본 클래스에서 <b>꺼져 있다</b>. 활성화 조건이 <i>"TODO(mgoin): disabled for now due to failures"</i> 주석과 함께 막혀 있고(<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/model_executor/layers/rotary_embedding/base.py#L37-L48">base.py L37–48</a>), DeepSeek 스케일링 변형만 다시 켠다. ROCm에서 <code class="inl">forward_hip</code>은 <code class="inl">VLLM_ROCM_USE_AITER_TRITON_ROPE=1</code>일 때만(기본값은 꺼짐) AITER의 Triton rotary 커널을 쓰고, 아니면 <code class="inl">forward_cuda</code>로 넘어가 같은 C++ 커널의 hipify 버전을 돌린다.</p>
+
+  <h3><span class="en">6.4 — The kernel body: one block per token, one thread per (head, pair)</span>
+      <span class="ko">6.4 커널 본체: 토큰마다 블록 하나, (head, 쌍)마다 스레드 하나</span></h3>
+
+  <p class="en">The whole kernel is about 80 lines in <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/csrc/libtorch_stable/pos_encoding_kernels.cu#L1-L102"><code class="inl">csrc/libtorch_stable/pos_encoding_kernels.cu</code></a>, in three nested layers. The innermost is literally the 2×2 rotation from §4:</p>
+  <p class="ko">커널 전체는 <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/csrc/libtorch_stable/pos_encoding_kernels.cu#L1-L102"><code class="inl">csrc/libtorch_stable/pos_encoding_kernels.cu</code></a>의 약 80줄이고 세 겹으로 되어 있다. 가장 안쪽이 §4의 2×2 회전 그대로다.</p>
+
+  <pre>// innermost: rotate ONE pair of ONE head  (apply_token_rotary_embedding, L9–33)
+if (IS_NEOX) {                         // half-split: pair = (i, i + rot_dim/2)
+  x_index = rot_offset;
+  y_index = embed_dim + rot_offset;
+} else {                               // GPT-J interleaved: pair = (2i, 2i+1)
+  x_index = 2 * rot_offset;
+  y_index = 2 * rot_offset + 1;
+}
+cos_f = (float) cos_ptr[rot_offset];   // row m of cos_sin_cache, first half
+sin_f = (float) sin_ptr[rot_offset];   // same row, second half
+if (inverse) sin_f = -sin_f;           // R(−mθ) = R(mθ)ᵀ  → strips RoPE
+x_f = (float) arr[x_index];  y_f = (float) arr[y_index];
+arr[x_index] = x_f * cos_f - y_f * sin_f;
+arr[y_index] = y_f * cos_f + x_f * sin_f;
+
+// middle: loop over every (head, pair) of this token  (apply_rotary_embedding, L36–74)
+for (i = threadIdx.x; i &lt; num_heads * embed_dim; i += blockDim.x)
+  rotate(query + token*query_stride + (i / embed_dim)*head_stride, rot_offset = i % embed_dim);
+for (i = threadIdx.x; i &lt; num_kv_heads * embed_dim; i += blockDim.x)
+  rotate(key   + token*key_stride   + (i / embed_dim)*head_stride, rot_offset = i % embed_dim);
+
+// outer: one block per token  (rotary_embedding_kernel, L77–100)
+token_idx = blockIdx.x;
+cache_ptr = cos_sin_cache + positions[token_idx] * rot_dim;   // = index_select, for free
+
+// launch (L167–168)
+grid  = num_tokens;
+block = min(num_heads * rot_dim / 2, 512);</pre>
+  <p class="figcap"><span class="en">Abridged from the kernel source; template/dtype plumbing and <code class="inl">rope_dim_offset</code> removed.</span><span class="ko">커널 소스에서 발췌. 템플릿/dtype 처리와 <code class="inl">rope_dim_offset</code>은 생략.</span></p>
+
+  <p class="en">How 6.2's steps map onto the kernel (nothing is allocated):</p>
+  <ul class="en">
+    <li>Step 1 (<code class="inl">index_select</code>): a pointer offset.</li>
+    <li>Steps 3–6 (view, split, chunk, unsqueeze): index arithmetic. <code class="inl">i / embed_dim</code> is the head, <code class="inl">i % embed_dim</code> the pair; every head reading the same <code class="inl">cos_ptr[rot_offset]</code> <i>is</i> the broadcast.</li>
+    <li>Steps 7–9 (rotate, cat, reshape): two stores back into the original slots.</li>
+  </ul>
+  <p class="ko">6.2의 단계가 커널에서는 이렇게 바뀐다. 새로 할당하는 메모리는 없다.</p>
+  <ul class="ko">
+    <li>1단계(<code class="inl">index_select</code>): 포인터 오프셋 하나.</li>
+    <li>3–6단계(view, 분리, chunk, unsqueeze): 인덱스 계산. <code class="inl">i / embed_dim</code>이 head, <code class="inl">i % embed_dim</code>이 쌍이고, 모든 head가 같은 <code class="inl">cos_ptr[rot_offset]</code>을 읽는 것이 <i>곧</i> broadcast다.</li>
+    <li>7–9단계(회전, cat, reshape): 원래 자리에 값 두 개를 저장.</li>
+  </ul>
+
+  <svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Thread mapping for Llama-3-8B. The grid has five blocks, one per token. Inside one block, 512 threads cover the 2048 query head-pair items in four strided passes, and then the 512 key items in a single pass.">
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Launch shape for Llama-3-8B, 5 tokens: grid = 5, block = min(32·64, 512) = 512</text>
+
+    <!-- grid of blocks -->
+    <text x="20" y="50" font-size="10.5" font-weight="700" fill="#6b6a63">grid</text>
+    <rect x="60" y="38" width="56" height="20" rx="4" fill="#fbf0d9" stroke="#e6b54f" stroke-width="1.8"/><text x="88" y="52" text-anchor="middle" font-size="9.5" fill="#6b4a06">m = 0</text>
+    <rect x="122" y="38" width="56" height="20" rx="4" fill="#f7f5ef" stroke="#c2c0b6"/><text x="150" y="52" text-anchor="middle" font-size="9.5" fill="#6b6a63">m = 1</text>
+    <rect x="184" y="38" width="56" height="20" rx="4" fill="#f7f5ef" stroke="#c2c0b6"/><text x="212" y="52" text-anchor="middle" font-size="9.5" fill="#6b6a63">m = 2</text>
+    <rect x="246" y="38" width="56" height="20" rx="4" fill="#f7f5ef" stroke="#c2c0b6"/><text x="274" y="52" text-anchor="middle" font-size="9.5" fill="#6b6a63">m = 17</text>
+    <rect x="308" y="38" width="56" height="20" rx="4" fill="#f7f5ef" stroke="#c2c0b6"/><text x="336" y="52" text-anchor="middle" font-size="9.5" fill="#6b6a63">m = 18</text>
+    <text x="378" y="52" font-size="10" fill="#6b6a63">one block per token; it reads only row m of cos_sin_cache</text>
+    <path d="M88,60 L40,84" fill="none" stroke="#e6b54f" stroke-width="1.2" stroke-dasharray="3 2"/>
+    <path d="M88,60 L860,84" fill="none" stroke="#e6b54f" stroke-width="1.2" stroke-dasharray="3 2"/>
+
+    <!-- zoom: query items -->
+    <rect x="20" y="86" width="840" height="196" rx="10" fill="#ffffff" stroke="#e6b54f" stroke-width="1.3"/>
+    <text x="36" y="108" font-size="11" font-weight="700" fill="#0c447c">query: 32 heads × 64 pairs = 2048 items</text>
+    <text x="330" y="108" font-size="10" fill="#6b6a63">512 threads stride over them → 4 passes</text>
+    <rect x="36" y="118" width="200" height="22" fill="#e6f1fb" stroke="#85b7eb"/><text x="136" y="133" text-anchor="middle" font-size="9.5" fill="#0c447c">pass 1: i = tid</text>
+    <rect x="236" y="118" width="200" height="22" fill="#d6e8f8" stroke="#85b7eb"/><text x="336" y="133" text-anchor="middle" font-size="9.5" fill="#0c447c">pass 2: i = tid + 512</text>
+    <rect x="436" y="118" width="200" height="22" fill="#e6f1fb" stroke="#85b7eb"/><text x="536" y="133" text-anchor="middle" font-size="9.5" fill="#0c447c">pass 3: i = tid + 1024</text>
+    <rect x="636" y="118" width="200" height="22" fill="#d6e8f8" stroke="#85b7eb"/><text x="736" y="133" text-anchor="middle" font-size="9.5" fill="#0c447c">pass 4: i = tid + 1536</text>
+    <text x="36" y="156" font-size="9.5" fill="#8a8f98">heads 0–7</text><text x="236" y="156" font-size="9.5" fill="#8a8f98">heads 8–15</text><text x="436" y="156" font-size="9.5" fill="#8a8f98">heads 16–23</text><text x="636" y="156" font-size="9.5" fill="#8a8f98">heads 24–31</text>
+
+    <text x="36" y="182" font-size="11" font-weight="700" fill="#27500a">key: 8 heads × 64 pairs = 512 items</text>
+    <text x="330" y="182" font-size="10" fill="#6b6a63">→ 1 pass, every thread one item</text>
+    <rect x="36" y="192" width="200" height="22" fill="#eaf3de" stroke="#97c459"/><text x="136" y="207" text-anchor="middle" font-size="9.5" fill="#27500a">i = tid</text>
+
+    <text x="36" y="240" font-size="10.5" font-family="'SF Mono',Menlo,monospace" fill="#3a3934">item i  →  head = i / 64,  pair = i % 64  →  load (x, y, cos, sin) · 2 FMA pairs · store (x′, y′)</text>
+    <text x="36" y="262" font-size="10" fill="#6b6a63">All 32 heads of a token read the same 64 cos/sin values — that shared read is the broadcast from 6.2.</text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 13 · Thread mapping for Llama-3-8B; with GQA the key loop is a quarter of the query loop. Drawn by the author from the kernel launch config.</span><span class="ko">그림 13 · Llama-3-8B의 스레드 배치. GQA라서 key 루프는 query 루프의 4분의 1이다. 커널 launch 설정으로 직접 그림.</span></p>
+
+  <h3><span class="en">6.5 — In real serving: compiled from <code class="inl">forward_native</code>, or fused into its neighbours</span>
+      <span class="ko">6.5 실제 서빙: <code class="inl">forward_native</code>에서 컴파일되거나, 이웃 연산과 퓨전된다</span></h3>
+
+  <p class="en">Under vLLM's default settings, the C++ kernel from 6.4 is usually <b>not</b> what runs. The default compilation mode uses the Inductor backend, and in that mode vLLM sets <code class="inl">custom_ops = ["none"]</code> (<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L1462-L1468">vllm.py L1462–1468</a>). Every <code class="inl">CustomOp</code>, <code class="inl">RotaryEmbedding</code> included, then dispatches to <code class="inl">forward_native</code>; Dynamo traces 6.2's PyTorch code and Inductor generates a Triton kernel, possibly merged with adjacent elementwise ops. The config docstring says so:</p>
+  <p class="ko">vLLM 기본 설정에서는 6.4의 C++ 커널이 대개 실행되지 <b>않는다</b>. 기본 컴파일 모드는 Inductor 백엔드를 쓰고, 이때 vLLM은 <code class="inl">custom_ops = ["none"]</code>으로 둔다(<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L1462-L1468">vllm.py L1462–1468</a>). 그러면 <code class="inl">RotaryEmbedding</code>을 포함한 모든 <code class="inl">CustomOp</code>이 <code class="inl">forward_native</code>로 간다. Dynamo가 6.2의 PyTorch 코드를 추적하면 Inductor가 Triton 커널을 만들고, 이웃한 원소별 연산과 합치기도 한다. config docstring에 그대로 적혀 있다.</p>
+
+  <blockquote class="q">
+    <p>"By default, all custom ops are enabled when running without Inductor and disabled when running with Inductor: mode&gt;CompilationMode.NONE and backend="inductor". Inductor generates (fused) Triton kernels for disabled custom ops."</p>
+    <cite>— <code class="inl">CompilationConfig.custom_ops</code> · <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/compilation.py#L495-L507">vllm/config/compilation.py L495–507</a></cite>
+  </blockquote>
+
+  <table>
+    <thead><tr><th><span class="en">how the server is launched</span><span class="ko">서버 실행 방식</span></th><th><span class="en">what actually computes RoPE</span><span class="ko">RoPE를 실제로 계산하는 것</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="en">default (compiled, Inductor)</span><span class="ko">기본값(컴파일, Inductor)</span></td><td><span class="en">Inductor-generated Triton kernel from <code class="inl">forward_native</code>; in a trace it shows up under a <code class="inl">triton_poi_fused_…</code>-style name, not as <code class="inl">rotary_embedding_kernel</code></span><span class="ko"><code class="inl">forward_native</code>에서 Inductor가 만든 Triton 커널. 트레이스에서는 <code class="inl">rotary_embedding_kernel</code>이 아니라 <code class="inl">triton_poi_fused_…</code> 같은 이름으로 보임</span></td></tr>
+      <tr><td><code class="inl">--enforce-eager</code></td><td><span class="en">custom ops default to <code class="inl">"all"</code> → <code class="inl">forward_cuda</code> → the C++ kernel from 6.4</span><span class="ko">custom op 기본값이 <code class="inl">"all"</code> → <code class="inl">forward_cuda</code> → 6.4의 C++ 커널</span></td></tr>
+      <tr><td><code class="inl">-cc.custom_ops+=+rotary_embedding</code></td><td><span class="en">compiled graph, but RoPE kept as the custom op → C++ kernel (or AITER on ROCm); this is also the precondition for the ROCm fusions below</span><span class="ko">그래프는 컴파일하되 RoPE는 custom op로 유지 → C++ 커널(ROCm에서는 AITER). 아래 ROCm 퓨전의 전제 조건이기도 함</span></td></tr>
+    </tbody>
+  </table>
+
+  <p class="en">On top of that, <code class="inl">torch.compile</code> passes in <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion"><code class="inl">vllm/compilation/passes/fusion/</code></a> can pattern-match RoPE with its neighbours and swap in one hand-written kernel. RoPE writes k, the cache write reads it again; fusing removes that memory round-trip, which matters most for small decode batches.</p>
+  <p class="ko">여기에 더해 <a href="https://github.com/vllm-project/vllm/tree/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion"><code class="inl">vllm/compilation/passes/fusion/</code></a>에 있는 <code class="inl">torch.compile</code> 패스는 RoPE와 앞뒤 연산을 패턴 매칭해 손으로 짠 커널 하나로 바꿔 넣는다. RoPE가 쓴 k를 캐시 쓰기가 다시 읽는데, 퓨전하면 이 메모리 왕복이 사라진다. 실행 오버헤드와 메모리 트래픽이 큰 작은 디코드 배치에서 효과가 가장 크다.</p>
+
+  <table>
+    <thead><tr><th><span class="en">pass</span><span class="ko">패스</span></th><th><span class="en">what gets merged into one kernel</span><span class="ko">커널 하나로 합쳐지는 것</span></th><th><span class="en">when it is on (at a0f1b9a)</span><span class="ko">켜지는 조건(a0f1b9a 기준)</span></th></tr></thead>
+    <tbody>
+      <tr><td><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion/qk_norm_rope_fusion.py#L197"><code class="inl">qk_norm_rope_fusion</code></a></td><td><span class="en">per-head Q/K RMSNorm + RoPE → <code class="inl">_C.fused_qk_norm_rope</code> (<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/csrc/libtorch_stable/fused_qknorm_rope_kernel.cu#L104">CUDA kernel</a>); for QK-norm models such as Qwen3</span><span class="ko">head별 Q/K RMSNorm + RoPE → <code class="inl">_C.fused_qk_norm_rope</code>(<a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/csrc/libtorch_stable/fused_qknorm_rope_kernel.cu#L104">CUDA 커널</a>). Qwen3처럼 QK-norm이 있는 모델용</span></td><td><span class="en">opt-in only: <code class="inl">enable_qk_norm_rope_fusion</code> is <code class="inl">False</code> at every -O level</span><span class="ko">명시적으로 켜야 함: <code class="inl">enable_qk_norm_rope_fusion</code>이 모든 -O 레벨에서 <code class="inl">False</code></span></td></tr>
+      <tr><td><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion/rope_kvcache_fusion.py#L412"><code class="inl">rope_kvcache_fusion</code></a></td><td><span class="en">RoPE + writing k/v into the paged KV cache (optionally + static FP8 quant of q) → <code class="inl">fused_rope_and_unified_kv_cache_update</code></span><span class="ko">RoPE + paged KV cache에 k/v 쓰기(선택적으로 q의 static FP8 quant까지) → <code class="inl">fused_rope_and_unified_kv_cache_update</code></span></td><td><span class="en">ROCm with AITER, -O2/-O3, <b>and</b> <code class="inl">+rotary_embedding</code> enabled; only for batches ≤ <code class="inl">rope_kvcache_fusion_max_token_num</code> (256) — prefill-sized batches use the unfused path</span><span class="ko">ROCm + AITER, -O2/-O3, <b>그리고</b> <code class="inl">+rotary_embedding</code> 활성화. 배치가 <code class="inl">rope_kvcache_fusion_max_token_num</code>(256) 이하일 때만 적용되고, prefill 규모의 배치는 퓨전하지 않은 경로를 씀</span></td></tr>
+      <tr><td><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion/qk_norm_rope_kvcache_fusion.py#L415"><code class="inl">qk_norm_rope_kvcache_fusion</code></a></td><td><span class="en">QK-norm + RoPE + KV cache update in one AITER HIP kernel; supersedes the two rows above for layers that support it (e.g. Qwen3-MoE)</span><span class="ko">QK-norm + RoPE + KV cache 갱신을 AITER HIP 커널 하나로. 지원하는 레이어(예: Qwen3-MoE)에서는 위 두 패스를 대체함</span></td><td><span class="en">same conditions as the row above</span><span class="ko">위 행과 같은 조건</span></td></tr>
+      <tr><td><a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/compilation/passes/fusion/mla_rope_kvcache_cat_fusion.py#L240"><code class="inl">mla_rope_kvcache_cat_fusion</code></a></td><td><span class="en">MLA (DeepSeek): RoPE on the decoupled <code class="inl">q_pe</code>/<code class="inl">k_pe</code> part + concatenating <code class="inl">k_pe</code> with the compressed latent <code class="inl">kv_c</code> + the cache write</span><span class="ko">MLA(DeepSeek): 분리된 <code class="inl">q_pe</code>/<code class="inl">k_pe</code>에 RoPE 적용 + <code class="inl">k_pe</code>와 압축 latent <code class="inl">kv_c</code> 이어 붙이기 + 캐시 쓰기</span></td><td><span class="en">-O2/-O3 when the KV-cache update is not a graph-splitting op (or Inductor graph partition is on)</span><span class="ko">-O2/-O3에서, KV cache 갱신이 그래프 분할 지점이 아닐 때(또는 Inductor graph partition이 켜져 있을 때)</span></td></tr>
+    </tbody>
+  </table>
+  <p class="figcap"><span class="en">Fusion passes that involve RoPE. Conditions read from <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L204-L252"><code class="inl">vllm/config/vllm.py</code> L204–252</a> and the -O level tables below them; the default level is -O2. The fused RoPE + cache op is only implemented by AITER-backed ROCm attention backends.</span><span class="ko">RoPE가 관련된 퓨전 패스. 조건은 <a href="https://github.com/vllm-project/vllm/blob/a0f1b9ad05452ae5e73764dcf4cc11463be7807c/vllm/config/vllm.py#L204-L252"><code class="inl">vllm/config/vllm.py</code> L204–252</a>와 그 아래 -O 레벨 테이블 기준. 기본 레벨은 -O2. RoPE + 캐시 퓨전 op는 AITER 기반 ROCm attention 백엔드만 구현한다.</span></p>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">reading a profiler trace</span><span class="ko">프로파일러 트레이스 읽는 법</span></span>
+    <span class="en">No <code class="inl">rotary_embedding_kernel</code> in a trace is expected: on default CUDA it sits inside an Inductor Triton kernel, on tuned ROCm possibly inside a fused RoPE + KV-cache kernel. Rerun with <code class="inl">--enforce-eager</code> to see it as its own launch (one block per token, as in 6.4).</span>
+    <span class="ko">트레이스에 <code class="inl">rotary_embedding_kernel</code>이 안 보이는 건 정상이다. 기본 CUDA 서버에서는 Inductor Triton 커널 안에, 튜닝된 ROCm 서버에서는 RoPE + KV cache 퓨전 커널 안에 있을 수 있다. 따로 보려면 <code class="inl">--enforce-eager</code>로 다시 돌리면 6.4처럼 토큰당 블록 하나인 독립 커널로 나온다.</span>
+  </div>
+</section>
+
+<!-- ============ 7. WHY IT MATTERS FOR KV REUSE ============ -->
+<section id="s7">
+  <h2><span class="num">7</span>
+    <span class="en">Why this matters for KV-cache reuse</span>
+    <span class="ko">KV 캐시 재사용에서 왜 중요한가</span>
+  </h2>
+
+  <p class="en">This section connects to the <a class="src" href="../papers/cross-model-kv-cache-transfer.html">cross-model KV cache transfer</a> paper, whose §3.3 is about RoPE handling.</p>
+  <p class="ko">이 절은 <a class="src" href="../papers/cross-model-kv-cache-transfer.html">cross-model KV cache transfer</a> 논문과 이어진다. 그 논문의 §3.3이 RoPE 처리를 다룬다.</p>
+
+  <h3><span class="en">7.1 — The cache holds meaning entangled with position</span>
+      <span class="ko">7.1 캐시에는 의미와 위치가 엉켜 있다</span></h3>
+  <div class="eq">
+    k<sub>cached</sub>(t) = R<sub>Θ</sub>(t) · k<sub>content</sub><span class="lbl">   ← stored, position baked in</span><br>
+    q(t) = R<sub>Θ</sub>(t) · q<sub>content</sub><span class="lbl">   ← recomputed each step, never stored</span><br>
+    v<sub>cached</sub>(t) = v<sub>content</sub><span class="lbl">   ← no rotation at all</span>
+  </div>
+  <p class="en">Any <i>meaning</i>-level operation on a cached key (mapping to another model, re-indexing, splicing caches) acts on something with position welded on. Step one is separating them.</p>
+  <p class="ko">캐시된 key로 <i>의미</i> 수준의 작업(다른 모델로 매핑, 재색인, 캐시 이어 붙이기)을 하려면 위치가 붙어 있는 값을 다뤄야 한다. 그래서 먼저 둘을 떼어내야 한다.</p>
+
+  <h3><span class="en">7.2 — Separating them is exact, and free</span>
+      <span class="ko">7.2 분리는 정확하고, 공짜다</span></h3>
+  <p class="en">By §4's fact 2, <code class="inl">R_Θ</code>'s inverse is its transpose: no pseudo-inverse or least-squares. Undoing it is the same <code class="inl">O(d)</code> op with the sign of <code class="inl">sin</code> flipped.</p>
+  <p class="ko">§4의 사실 2에 따라 <code class="inl">R_Θ</code>의 역행렬은 전치다. 유사역행렬도 최소제곱 근사도 필요 없다. 되돌리기는 <code class="inl">sin</code> 부호만 뒤집은 같은 <code class="inl">O(d)</code> 연산이다.</p>
+  <blockquote class="q">
+    <p>"Since R<sub>Θ</sub> is orthogonal, the inversion is exact at negligible cost. Values carry no positional encoding and are mapped directly."</p>
+    <cite>— Heo et al., §3.3 · <a href="https://arxiv.org/html/2608.03893v1#S3.SS3">원문 보기 (§3.3)</a></cite>
+  </blockquote>
+  <p class="en">The paper's pipeline: strip the source's rotation, map in content space, re-apply the <i>target's</i> rotation.</p>
+  <p class="ko">논문의 파이프라인은 소스 회전을 벗기고, content space에서 매핑한 뒤, <i>타깃</i> 회전을 다시 입히는 순서다.</p>
+  <div class="eq">K̂<sub>t</sub> = ( K<sub>s</sub> · R<sub>Θs</sub><sup>−1</sup>(t) · W<sub>K</sub> + b<sub>K</sub> ) · R<sub>Θt</sub>(t)</div>
+  <p class="en"><code class="inl">R_Θs⁻¹</code> un-rotates, <code class="inl">W_K</code> maps meaning, <code class="inl">R_Θt</code> re-rotates with the receiver's base. <b><code class="inl">W_K</code> never sees an angle.</b></p>
+  <p class="ko"><code class="inl">R_Θs⁻¹</code>이 회전을 풀고, <code class="inl">W_K</code>가 의미를 옮기고, <code class="inl">R_Θt</code>가 받는 모델의 base로 다시 돌린다. <b><code class="inl">W_K</code>는 각도를 보지 않는다.</b></p>
+
+  <h3><span class="en">7.3 — Why a fit on rotated keys refuses to extrapolate</span>
+      <span class="ko">7.3 회전된 key로 피팅하면 왜 외삽이 안 되는가</span></h3>
+  <p class="en">Fitting on RoPE-coupled keys <b>works fine</b> on the paper's benchmarks, within noise of the decoupled pipeline. The objection is structural, not empirical:</p>
+  <p class="ko">RoPE가 붙은 key로 피팅해도 논문의 벤치마크에서는 <b>잘 된다</b>. 분리형과 노이즈 범위 안에서 같다. 반론은 실험이 아니라 구조에서 나온다.</p>
+  <blockquote class="q">
+    <p>"Fitting the mapper directly on RoPE-coupled keys also works within noise on short-context benchmarks (Table 2), but ties the weights to the 1024-token position distribution seen at fit. The decoupled formulation extends to longer contexts by construction, which matters for serving prompts up to 32k tokens."</p>
+    <cite>— Heo et al., §3.3, ¶2 · <a href="https://arxiv.org/html/2608.03893v1#S3.SS3">원문 보기 (§3.3)</a></cite>
+  </blockquote>
+  <p class="en">§5 makes this quantitative. Calibration uses <b>1,024-token</b> sequences; after <i>t</i> tokens pair <i>j</i> sits at angle <code class="inl">t·θ_j</code>. How much of its circle does each pair visit?</p>
+  <p class="ko">§5의 표로 이를 수치화할 수 있다. 캘리브레이션은 <b>1,024 토큰</b> 시퀀스를 쓰고, <i>t</i>토큰 뒤 쌍 <i>j</i>의 각도는 <code class="inl">t·θ_j</code>다. 각 쌍이 그동안 원을 얼마나 도는지 보자.</p>
+
+  <svg class="fig" viewBox="0 0 880 336" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="A grid comparing three rotation pairs. At 1024 tokens the fast pair has swept its whole circle while the slowest pair has covered only a 6.8 degree sliver. At 32768 tokens the slowest pair sits at 216.8 degrees, an angle it never visited during calibration.">
+    <defs>
+      <marker id="a7" markerWidth="8" markerHeight="8" refX="6" refY="2.8" orient="auto"><path d="M0,0 L6,2.8 L0,5.6 Z" fill="#6f2a12"/></marker>
+    </defs>
+    <text x="14" y="18" font-size="12" font-weight="700" fill="#3a3934">How much of its circle does each pair visit?</text>
+
+    <!-- column headers -->
+    <text x="300" y="42" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0c447c">calibration · t ≤ 1,024</text>
+    <text x="560" y="42" text-anchor="middle" font-size="11.5" font-weight="700" fill="#6f2a12">serving · t = 32,768</text>
+
+    <!-- row labels -->
+    <g font-size="11" fill="#3a3934" text-anchor="end">
+      <text x="200" y="76">pair j=0</text>
+      <text x="200" y="171">pair j=48</text>
+      <text x="200" y="266">pair j=63</text>
+    </g>
+    <g font-size="9.5" fill="#8a8f98" text-anchor="end">
+      <text x="200" y="90">θ = 1.0</text>
+      <text x="200" y="185">θ = 0.001</text>
+      <text x="200" y="280">θ = 1.15e-4</text>
+    </g>
+
+    <!-- j=0 -->
+    <circle cx="300" cy="80" r="38" fill="none" stroke="#e3e1d8" stroke-width="1.3"/>
+    <circle cx="300" cy="80" r="38" fill="none" stroke="#0c447c" stroke-width="4"/>
+    <text x="352" y="78" font-size="10.5" font-weight="700" fill="#0c447c">163 full turns</text>
+    <text x="352" y="92" font-size="9.5" fill="#6b6a63">whole circle covered</text>
+    <circle cx="560" cy="80" r="38" fill="none" stroke="#e3e1d8" stroke-width="1.3"/>
+    <circle cx="560" cy="80" r="38" fill="none" stroke="#27500a" stroke-width="4"/>
+    <text x="612" y="78" font-size="10.5" font-weight="700" fill="#27500a">5,215 turns — fine</text>
+    <text x="612" y="92" font-size="9.5" fill="#6b6a63">nothing new to see</text>
+
+    <!-- j=48 -->
+    <circle cx="300" cy="175" r="38" fill="none" stroke="#e3e1d8" stroke-width="1.3"/>
+    <path d="M338,175 A38,38 0 0,0 319.7,142.5" fill="none" stroke="#0c447c" stroke-width="4"/>
+    <line x1="300" y1="175" x2="338" y2="175" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="3 2"/>
+    <text x="352" y="173" font-size="10.5" font-weight="700" fill="#0c447c">58.7°</text>
+    <text x="352" y="187" font-size="9.5" fill="#6b6a63">one sixth of the circle</text>
+    <circle cx="560" cy="175" r="38" fill="none" stroke="#e3e1d8" stroke-width="1.3"/>
+    <circle cx="560" cy="175" r="38" fill="none" stroke="#27500a" stroke-width="4"/>
+    <text x="612" y="173" font-size="10.5" font-weight="700" fill="#27500a">5.2 turns</text>
+    <text x="612" y="187" font-size="9.5" fill="#6b6a63">wraps past the fitted arc</text>
+
+    <!-- j=63 -->
+    <circle cx="300" cy="270" r="38" fill="none" stroke="#e3e1d8" stroke-width="1.3"/>
+    <path d="M338,270 A38,38 0 0,0 337.7,265.5" fill="none" stroke="#0c447c" stroke-width="4"/>
+    <line x1="300" y1="270" x2="338" y2="270" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="3 2"/>
+    <text x="352" y="268" font-size="10.5" font-weight="700" fill="#0c447c">6.8°</text>
+    <text x="352" y="282" font-size="9.5" fill="#6b6a63">a sliver — 1.9% of the circle</text>
+    <circle cx="560" cy="270" r="38" fill="none" stroke="#e3e1d8" stroke-width="1.3"/>
+    <path d="M598,270 A38,38 0 1,0 529.6,292.8" fill="none" stroke="#6f2a12" stroke-width="4"/>
+    <line x1="560" y1="270" x2="598" y2="270" stroke="#c2c0b6" stroke-width="1" stroke-dasharray="3 2"/>
+    <line x1="560" y1="270" x2="529.6" y2="292.8" stroke="#6f2a12" stroke-width="2" marker-end="url(#a7)"/>
+    <text x="612" y="262" font-size="10.5" font-weight="700" fill="#6f2a12">216.8°</text>
+    <text x="612" y="276" font-size="9.5" fill="#6f2a12">an angle W never saw at fit</text>
+    <text x="612" y="290" font-size="9.5" fill="#8a8f98">32× outside the calibrated arc</text>
+
+    <line x1="14" y1="308" x2="866" y2="308" stroke="#e3e1d8"/>
+    <text x="440" y="328" text-anchor="middle" font-size="11" fill="#6b6a63">Full turn within 1,024 tokens requires 1024·θ ≥ 2π, i.e. j ≤ 35. So <tspan font-weight="700">pairs 36–63 — 28 of 64 (44%) — only ever see a partial arc.</tspan></text>
+  </svg>
+  <p class="figcap"><span class="en">Fig 14 · Arc covered per pair at 1,024 vs 32,768 tokens. Drawn by the author (t·θ<sub>j</sub>).</span><span class="ko">그림 14 · 1,024토큰과 32,768토큰에서 쌍별로 지나간 호. 직접 그림(t·θ<sub>j</sub>).</span></p>
+
+  <div class="callout c-purple">
+    <span class="tag"><span class="en">editor's note — my computation, not the paper's</span><span class="ko">편집자 주: 논문이 아니라 내 계산</span></span>
+    <ol class="en">
+      <li>The paper states the conclusion without deriving it; the arc arithmetic is mine.</li>
+      <li>A pair completes a full turn in 1,024 tokens iff <code class="inl">1024·θ_j ≥ 2π</code>, i.e. <code class="inl">θ_j ≥ 0.00614</code>, i.e. <code class="inl">j ≤ 35</code>. So <b>28 of the 64 pairs see only a partial arc during calibration</b>, and those are the pairs whose angles move into unseen territory at long context.</li>
+      <li>This also explains why the paper's ablation finds the coupled variant harmless: its accuracy benchmarks are short-context. The predicted failure would appear at 8K–32K, measured for latency but not accuracy.</li>
+    </ol>
+    <ol class="ko">
+      <li>논문은 결론만 적고 유도하지 않는다. 호(arc) 계산은 내 것이다.</li>
+      <li>1,024토큰 안에 한 바퀴를 다 도는 조건은 <code class="inl">1024·θ_j ≥ 2π</code>, 즉 <code class="inl">θ_j ≥ 0.00614</code>, 즉 <code class="inl">j ≤ 35</code>다. 따라서 <b>64개 쌍 중 28개는 캘리브레이션 동안 원의 일부만 본다.</b> 컨텍스트가 길어지면 이 쌍들의 각도가 본 적 없는 영역으로 넘어간다.</li>
+      <li>논문의 ablation이 결합형을 무해하다고 본 이유도 이것으로 설명된다. 정확도 벤치마크가 짧은 컨텍스트였다. 예상되는 실패는 8K~32K에서 드러날 텐데, 그 구간은 지연만 쟀고 정확도는 재지 않았다.</li>
+    </ol>
+  </div>
+
+  <h3><span class="en">7.4 — The two things content-space mapping buys</span>
+      <span class="ko">7.4 content-space 매핑이 사주는 두 가지</span></h3>
+  <div class="grid2">
+    <div class="mini">
+      <h4><span class="en">① Length independence</span><span class="ko">① 길이 독립성</span></h4>
+      <p><span class="en">Fit on 1K, serve 32K. The weights never saw position, so it holds "by construction", not by measurement.</span><span class="ko">1K로 피팅하고 32K를 서빙한다. 가중치가 위치를 본 적이 없으니 "구조적으로(by construction)" 성립한다.</span></p>
+    </div>
+    <div class="mini">
+      <h4><span class="en">② Config independence</span><span class="ko">② 설정 독립성</span></h4>
+      <p><span class="en">Base 10,000 vs 500,000 (§5.2) doesn't matter: strip with the source's base, re-apply with the target's. A content-space <code class="inl">W</code> is indifferent.</span><span class="ko">base 10,000과 500,000의 차이(§5.2)는 상관없다. 소스 base로 벗기고 타깃 base로 입히면 content-space <code class="inl">W</code>는 그대로다.</span></p>
+    </div>
+  </div>
+  <div class="callout c-teal">
+    <span class="tag"><span class="en">where else this shows up</span><span class="ko">이 성질이 또 등장하는 곳</span></span>
+    <span class="en">Strip-and-re-apply is needed by anything that moves a cached key to a new <i>position</i>: re-indexing after prefix eviction, splicing separately prefilled caches, prompt-cache reuse at a different offset. Each is well-defined only on <code class="inl">k_content</code>, which orthogonality reaches losslessly. <span class="muted">(Editor's note: a generalization, not a claim from the paper.)</span></span>
+    <span class="ko">캐시된 key를 다른 <i>위치</i>로 옮기는 작업은 모두 벗기고 다시 입히기가 필요하다. prefix evict 뒤 재색인, 따로 prefill한 캐시 이어 붙이기, 블록을 다른 offset에서 재사용하는 prompt-cache가 그렇다. 모두 <code class="inl">k_content</code>에서만 제대로 정의되고, 직교성 덕분에 손실 없이 거기 닿는다. <span class="muted">(편집자 주: 논문의 주장이 아니라 일반화다.)</span></span>
+  </div>
+</section>
+
+<!-- ============ SOURCES ============ -->
+<section id="sources">
+  <h2>📚
+    <span class="en">Sources</span>
+    <span class="ko">출처</span>
+  </h2>
+  <ul>
+    <li>Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, Yunfeng Liu. <i>RoFormer: Enhanced Transformer with Rotary Position Embedding.</i> <a class="src" href="https://arxiv.org/abs/2104.09864">arXiv:2104.09864</a> (Neurocomputing, 2024) — <span class="muted"><span class="en">the original derivation; §3.2 contains the 2-D solve and §3.4.2 the block-diagonal extension.</span><span class="ko">원래 유도. §3.2에 2차원 해법, §3.4.2에 블록 대각 확장이 있다.</span></span></li>
+    <li>Taekyung Heo et al. (NVIDIA). <i>Cross-Model KV Cache Transfer in LLM Families.</i> <a class="src" href="https://arxiv.org/abs/2608.03893">arXiv:2608.03893</a>, <a class="src" href="https://arxiv.org/html/2608.03893v1#S3.SS3">§3.3</a> — <span class="muted"><span class="en">the content-space (RoPE-factoring) formulation quoted in §7. Summarized in this repo as <a class="src" href="../papers/cross-model-kv-cache-transfer.html">the KV-transfer paper note</a>.</span><span class="ko">§7에서 인용한 content-space(RoPE factoring) 정식화. 이 레포의 <a class="src" href="../papers/cross-model-kv-cache-transfer.html">KV 전이 논문 정리</a>에 요약돼 있다.</span></span></li>
+    <li>Grattafiori et al. <i>The Llama 3 Herd of Models.</i> <a class="src" href="https://arxiv.org/abs/2407.21783">arXiv:2407.21783</a> — <span class="muted"><span class="en">source for the RoPE base frequency of 500,000 cited in §5.2.</span><span class="ko">§5.2에서 인용한 RoPE base 주파수 500,000의 출처.</span></span></li>
+    <li>Vaswani et al. <i>Attention Is All You Need.</i> <a class="src" href="https://arxiv.org/abs/1706.03762">arXiv:1706.03762</a> — <span class="muted"><span class="en">the absolute sinusoidal encoding contrasted in §1.1.</span><span class="ko">§1.1에서 대조한 절대 사인파 인코딩.</span></span></li>
+  </ul>
+  <p class="en"><b>What is mine rather than sourced:</b> the arc/extrapolation computation in §7.3 and its callout, the generalization in §7.4, and the numeric verification tables in §3–§4 (arithmetic I ran to check the identities). Everything presented as a paper's claim is quoted verbatim with a link.</p>
+  <p class="ko"><b>출처가 아닌 내 작업:</b> §7.3의 호(arc)/외삽 계산과 콜아웃, §7.4의 일반화, §3~§4의 수치 검증 표. 논문의 주장은 모두 원문 그대로 인용하고 링크를 달았다.</p>
+</section>
+
+<footer>
+  <span class="en">RoPE: <a href="https://arxiv.org/abs/2104.09864">arXiv:2104.09864</a> (Su et al.) · companion to the <a href="../papers/cross-model-kv-cache-transfer.html">cross-model KV cache transfer</a> note · written 2026-08-24.</span>
+  <span class="ko">RoPE: <a href="https://arxiv.org/abs/2104.09864">arXiv:2104.09864</a> (Su et al.) · <a href="../papers/cross-model-kv-cache-transfer.html">cross-model KV cache transfer</a> 노트의 부록 · 작성 2026-08-24.</span>
+</footer>
+
+</div>
+<script src="../assets/i18n.js"></script>
+</body>
+</html>

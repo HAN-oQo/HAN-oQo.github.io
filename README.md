@@ -5,7 +5,10 @@ AI Inference Study — notes on LLM inference internals. Source for [https://han
 ## Structure
 
 - `index.html` — landing page
-- `study/` — study notes (inference architecture, etc.)
+- `learn/` — Inference Onboarding (Basic question sheet + 13-week Advanced track) and concept explainers
+- `papers/` — paper notes · `models/` — model reports · `engines/` — serving-engine code walks
+- `lab/` — experiments, benchmarks, runbooks, infra ops · `briefings/` — daily AI briefings
+- `study/`, `logs/`, `infra/`, `post-training/`, `onboarding/` — redirect stubs only (moved 2026-11-24)
 - `assets/` — shared CSS/JS (language toggle `i18n.js`, "Ask Claude" launcher `ask.js`)
 
 Each page supports an English ↔ Korean toggle (top-right). Default is English; the choice is remembered in `localStorage`.
@@ -32,7 +35,7 @@ python3 -m http.server 8000
 
 ## Gated pages
 
-Two pages under `study/` are encrypted client-side with [StatiCrypt](https://github.com/robinmoisson/staticrypt). The unencrypted sources are not committed (`*.unencrypted.html` is in `.gitignore`).
+Some company-internal pages (under `engines/` and `lab/`) are encrypted client-side with [StatiCrypt](https://github.com/robinmoisson/staticrypt). The unencrypted sources are not committed (`*.unencrypted.html` is in `.gitignore`).
 
 ## Format & theme consistency (enforced)
 
