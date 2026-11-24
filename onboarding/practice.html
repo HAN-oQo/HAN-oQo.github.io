@@ -14,9 +14,9 @@
   <p class="sub">워크플로 · 엔진에서 실제로 손대는 지점 · 노브 · 흔한 병목 패턴 · Dynamic Bucketing</p>
   <p class="post-meta"><time datetime="2026-11-23">2026-11-23</time></p>
 
-  <div class="call warn">기준 버전: vLLM <code>v0.34.0</code> (<a href="https://github.com/vllm-project/vllm/tree/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca">62d4bc3</a>), SGLang main (<a href="https://github.com/sgl-project/sglang/tree/2544c9ac34be4447bdffa612c37015a3f8da9e84">2544c9a</a>). 이 페이지의 "루프"와 "패턴 표"는 공식 문서가 아니라 <b>현업 관행의 정리 — 작성자 추정</b>입니다. 코드 경로·플래그는 위 커밋에서 존재를 확인했습니다.</div>
+  <div class="call warn">기준 버전: vLLM <code>v0.34.0</code> (<a href="https://github.com/vllm-project/vllm/tree/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca">62d4bc3</a>), SGLang main (<a href="https://github.com/sgl-project/sglang/tree/2544c9ac34be4447bdffa612c37015a3f8da9e84">2544c9a</a>). 이 페이지의 "루프"와 "패턴 표"는 공식 문서가 아니라 <b>현업 관행을 정리한 작성자 추정</b>입니다. 코드 경로·플래그는 위 커밋에서 존재를 확인했습니다.</div>
 
-  <h2>1. 작업 루프 — 한 번의 최적화는 이렇게 돈다</h2>
+  <h2>1. 작업 루프: 한 번의 최적화는 이렇게 돈다</h2>
   <table>
     <tr><th>단계</th><th>하는 일</th><th>도구 / 근거</th><th>여기서 흔히 틀리는 것</th></tr>
     <tr><td><b>0. 워크로드 고정</b></td><td>입력/출력 길이 분포, 동시성·도착률, SLO(TTFT/TPOT p99)를 YAML로 고정. "빨라졌다"의 정의부터 합의.</td><td><code>vllm bench serve</code> (<a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/entrypoints/cli/benchmark/serve.py">cli/benchmark/serve.py</a>), <code>vllm bench sweep</code></td><td>평균 처리량만 보고 p99 TTFT 회귀를 놓침</td></tr>
@@ -55,7 +55,7 @@
       <td><code>--kv-transfer-config</code>, 플러그인 entry point <code>vllm.general_plugins</code></td></tr>
   </table>
 
-  <h2>3. 흔한 병목 패턴 — 증상에서 코드까지</h2>
+  <h2>3. 흔한 병목 패턴: 증상에서 코드까지</h2>
   <table>
     <tr><th>증상</th><th>흔한 원인</th><th>먼저 볼 곳</th></tr>
     <tr><td>decode 배치가 작은데 GPU util이 낮고 step이 들쭉날쭉</td><td>CPU 오버헤드(스케줄링·입력 준비·디토크나이즈)가 GPU를 굶김</td><td>timeline의 커널 사이 갭 → <code>--async-scheduling</code>, CUDA graph 적용 여부</td></tr>
@@ -66,22 +66,22 @@
     <tr><td>prefix hit rate가 예상보다 낮음</td><td>block 경계 미정렬, 시스템 프롬프트 템플릿 차이, eviction 정책</td><td><code>hash_block_tokens</code>, <code>--block-size</code></td></tr>
   </table>
 
-  <h2>4. Dynamic Bucketing — 세 가지 의미</h2>
+  <h2>4. Dynamic Bucketing: 세 가지 의미</h2>
   <div class="call">"버킷팅"은 문맥마다 다른 것을 가리킨다. 공통점은 하나: <b>가변 크기 입력을 미리 정한 몇 개의 크기로 맞춰서(패딩) 정적 shape의 이점을 얻고, 그 대가로 패딩 낭비를 낸다.</b> "dynamic"은 버킷 경계나 배치 크기를 런타임 분포·예산에 맞춰 정한다는 뜻.</div>
 
-  <h3>4-1. 정적 shape 실행을 위한 버킷 — CUDA graph, XLA/TPU, Gaudi</h3>
+  <h3>4-1. 정적 shape 실행을 위한 버킷: CUDA graph, XLA/TPU, Gaudi</h3>
   <p>CUDA graph는 캡처한 shape로만 replay할 수 있다. 그래서 vLLM은 몇 개의 배치/토큰 크기로 graph를 캡처해 두고, 실제 배치를 <b>그걸 담을 수 있는 가장 작은 graph</b>로 패딩해 실행한다. <a href="https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/worker/gpu/cudagraph_utils.py#L558"><code>dispatch()</code></a>의 docstring이 그대로 이 동작을 설명한다:</p>
   <blockquote class="small" style="border-left:3px solid var(--line);margin:8px 0;padding:4px 12px;color:var(--muted)">"A uniform decode batch takes the smallest decode graph of its query length that covers `num_tokens`, which may be padded…"<br>— vllm/v1/worker/gpu/cudagraph_utils.py L569–571</blockquote>
   <p>SGLang도 같은 일을 <a href="https://github.com/sgl-project/sglang/blob/2544c9ac34be4447bdffa612c37015a3f8da9e84/python/sglang/srt/model_executor/runner/base_cuda_graph_runner.py#L201"><code>bisect.bisect_left(buckets, raw_size)</code></a>로 한다. XLA/TPU나 Gaudi처럼 컴파일이 shape에 묶인 하드웨어에서는 prefill 길이까지 버킷으로 나눠 미리 컴파일한다 (vLLM의 TPU·Gaudi 백엔드 문서 참고. 세부 env 이름은 백엔드 버전마다 달라 <b>재확인 필요</b>).</p>
   <p><b>설계 판단:</b> 버킷을 촘촘히 → 패딩 낭비↓, 캡처 메모리·시간↑. 듬성듬성 → 반대. 실제 배치 크기 분포(히스토그램)에 버킷을 맞추는 것이 실무 튜닝.</p>
 
-  <h3>4-2. 요청 큐잉 측 dynamic batching — 언제 배치를 닫을 것인가</h3>
+  <h3>4-2. 요청 큐잉 측 dynamic batching: 언제 배치를 닫을 것인가</h3>
   <p>NVIDIA Triton Inference Server의 dynamic batcher는 <code>preferred_batch_size</code>와 <code>max_queue_delay_microseconds</code>로 "더 모을지 vs 지금 보낼지"를 정한다 (<a href="https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html">Triton 공식 문서: Batchers</a>). LLM 엔진의 continuous batching은 이 질문을 step마다 다시 묻는 것이라 대기 타이머가 거의 필요 없지만, <b>encoder형 음성 모델(ASR encoder, 코덱, FM TTS 한 step)</b>은 요청 단위 실행이라 이 트레이드오프가 그대로 남는다. 실시간 음성에선 max-wait가 곧 지연 예산이다.</p>
 
-  <h3>4-3. 가변장 음성의 길이 버킷 — 패딩 낭비를 줄이는 묶기</h3>
-  <p>길이가 제각각인 오디오를 한 배치에 넣으면 가장 긴 것에 맞춰 패딩한다. 비슷한 길이끼리 묶으면(버킷) 낭비가 준다. 학습 쪽 표준 구현이 lhotse의 <code>DynamicBucketingSampler</code>(총 duration 예산으로 배치 크기를 정하고, 데이터 분포로 버킷 경계 추정) — 2차적으로 참고 (<a href="https://lhotse.readthedocs.io/en/latest/datasets.html">lhotse 문서</a>). 추론 서버에서는 여기에 4-2의 max-wait가 붙는다: 같은 버킷의 짝을 기다리는 시간 vs 패딩 낭비.</p>
+  <h3>4-3. 가변장 음성의 길이 버킷: 패딩 낭비를 줄이는 묶기</h3>
+  <p>길이가 제각각인 오디오를 한 배치에 넣으면 가장 긴 것에 맞춰 패딩한다. 비슷한 길이끼리 묶으면(버킷) 낭비가 준다. 학습 쪽 표준 구현이 lhotse의 <code>DynamicBucketingSampler</code>(총 duration 예산으로 배치 크기를 정하고, 데이터 분포로 버킷 경계 추정)이며, 2차적으로 참고했다 (<a href="https://lhotse.readthedocs.io/en/latest/datasets.html">lhotse 문서</a>). 추론 서버에서는 여기에 4-2의 max-wait가 붙는다: 같은 버킷의 짝을 기다리는 시간 vs 패딩 낭비.</p>
   <div class="box">
-    <b>패딩 낭비 공식</b> — 배치 길이 <code>l₁…l_B</code>, 패딩 후 길이 <code>L = max lᵢ</code>:
+    <b>패딩 낭비 공식</b>: 배치 길이 <code>l₁…l_B</code>, 패딩 후 길이 <code>L = max lᵢ</code>:
     <pre><code>waste = 1 − Σ lᵢ / (B · L)</code></pre>
     예: 2s, 3s, 4s, 15s 를 한 배치 → 1 − 24/60 = <b>60%</b> 낭비. [2,3,4] / [15] 두 버킷으로 나누면 1 − 9/12 = 25%, 0% → 전체 계산량 12+15 = 27 vs 60.
     <details class="hint"><summary>왜 LLM 엔진은 버킷 대신 packing을 쓰나</summary>LLM prefill은 varlen attention(FlashAttention의 cu_seqlens, FlashInfer ragged)으로 여러 시퀀스를 패딩 없이 한 줄로 이어붙여(packing) 처리한다. 이 경우 버킷이 필요 없다. 반면 conv/정적 shape 커널을 쓰는 음성 encoder·코덱·CUDA graph 경로는 아직 패딩이 필요해서 버킷이 의미를 갖는다. Whisper는 입력을 30초 고정 윈도로 패딩하므로(<a href="https://arxiv.org/abs/2212.04356">2212.04356 §2</a>) 길이 버킷이 무의미하고, 대신 VAD로 잘라 30초 창을 채우는 쪽으로 최적화한다.</details>
