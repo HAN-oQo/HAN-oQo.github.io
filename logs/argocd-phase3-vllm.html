@@ -60,15 +60,15 @@
 
 <div class="tip"><strong><span class="en">Goal of this phase</span><span class="ko">이 단계 목표</span></strong><br>
 <span class="en">Put an actual inference server — an OpenAI <code>/v1</code> endpoint serving a real model — under the same Argo CD control as Phase 2, and do a <b>model version bump as a commit</b> (watch the rolling update). The point is operating the inference workload itself declaratively.</span>
-<span class="ko">실제 추론 서버 — 진짜 모델을 서빙하는 OpenAI <code>/v1</code> 엔드포인트 — 를 Phase 2와 같은 ArgoCD 통제 아래 두고, <b>모델 버전업을 커밋으로</b> 수행한다(롤링 업데이트 관찰). 핵심은 추론 워크로드 자체를 선언형으로 운영하는 것.</span></p>
+<span class="ko">진짜 모델을 서빙하는 OpenAI <code>/v1</code> 엔드포인트를 Phase 2와 같은 ArgoCD 통제 아래 두고, <b>모델 버전업을 커밋으로</b> 해 본다(롤링 업데이트 관찰). 추론 워크로드 자체를 선언형으로 운영하는 게 목표다.</span></p>
 
-<div class="note"><strong><span class="en">Engine choice — why llama.cpp, not vLLM, on this CPU path</span><span class="ko">엔진 선택 — 이 CPU 경로에서 vLLM 아닌 llama.cpp인 이유</span></strong><br>
+<div class="note"><strong><span class="en">Engine choice — why llama.cpp, not vLLM, on this CPU path</span><span class="ko">엔진 선택: 이 CPU 경로에서 vLLM 대신 llama.cpp를 쓴 이유</span></strong><br>
 <span class="en">The plan named "CPU vLLM," but vLLM's published images are CUDA-oriented and a CPU build is heavy to stand up in a kind pod (the earlier CPU-cluster log already established this). For a reliable, tiny, OpenAI-compatible server the stand-in is <code>llama.cpp</code> serving a Qwen2.5-0.5B GGUF. The GitOps lesson — and the API surface (<code>/v1/models</code>, <code>/v1/chat/completions</code>) — is identical; only the engine binary differs. Phase 5 is where a real GPU engine is attempted.</span>
-<span class="ko">계획엔 "CPU vLLM"이라 적었지만, vLLM 공개 이미지는 CUDA 지향이고 CPU 빌드를 kind 파드에 띄우는 건 무겁다(앞선 CPU-cluster 로그에서 확인). 작고 안정적인 OpenAI 호환 서버 스탠드인은 Qwen2.5-0.5B GGUF를 서빙하는 <code>llama.cpp</code>. GitOps 레슨과 API 표면(<code>/v1/models</code>, <code>/v1/chat/completions</code>)은 동일하고 엔진 바이너리만 다르다. 진짜 GPU 엔진은 Phase 5에서 시도.</span></div>
+<span class="ko">계획엔 "CPU vLLM"이라 적었지만, vLLM 공개 이미지는 CUDA 지향이고 CPU 빌드를 kind 파드에 띄우는 건 무겁다(앞선 CPU-cluster 로그에서 확인). 그래서 작고 안정적인 OpenAI 호환 서버로 Qwen2.5-0.5B GGUF를 서빙하는 <code>llama.cpp</code>를 대신 쓴다. GitOps 레슨과 API 표면(<code>/v1/models</code>, <code>/v1/chat/completions</code>)은 같고 엔진 바이너리만 다르다. 진짜 GPU 엔진은 Phase 5에서 시도한다.</span></div>
 
 <h2><span class="en">The manifest</span><span class="ko">매니페스트</span></h2>
 <p><span class="en">An <code>initContainer</code> downloads the GGUF to a shared volume, then the server loads it locally — this mirrors how a real model server loads weights via a PVC/initContainer (and it's robust, see the gotcha below).</span>
-<span class="ko"><code>initContainer</code>가 GGUF를 공유 볼륨에 받아두고, 서버는 그걸 로컬로 로드 — 실제 모델 서버가 PVC/initContainer로 가중치를 로딩하는 방식과 같다(그리고 견고하다, 아래 함정 참고).</span></p>
+<span class="ko"><code>initContainer</code>가 GGUF를 공유 볼륨에 받아 두면 서버가 그 파일을 로컬로 로드한다. 실제 모델 서버가 PVC/initContainer로 가중치를 올리는 방식과 같고, 더 견고하기도 하다(아래 함정 참고).</span></p>
 <pre><code># manifests/phase3-model/deployment.yaml  (excerpt)
 initContainers:
   - name: fetch-model            # weights as a separate, cacheable step
@@ -82,14 +82,14 @@ containers:
     args: ["-m","/models/model.gguf","--host","0.0.0.0","--port","8000","-c","4096","--alias","qwen2.5-0.5b-q4_k_m"]
     readinessProbe: { httpGet: { path: /health, port: 8000 }, failureThreshold: 60 }</code></pre>
 
-<div class="note"><strong><span class="en">Real gotcha — llama.cpp's <code>-hf</code> auto-download hit HTTP 401</span><span class="ko">실전 함정 — llama.cpp <code>-hf</code> 자동 다운로드가 HTTP 401</span></strong><br>
+<div class="note"><strong><span class="en">Real gotcha — llama.cpp's <code>-hf</code> auto-download hit HTTP 401</span><span class="ko">실전 함정: llama.cpp <code>-hf</code> 자동 다운로드가 HTTP 401로 실패</span></strong><br>
 <span class="en">The first version used llama.cpp's built-in <code>-hf ggml-org/...</code> fetcher. It crash-looped:</span>
-<span class="ko">첫 버전은 llama.cpp 내장 <code>-hf ggml-org/...</code> 페처를 썼다. 크래시루프:</span>
+<span class="ko">첫 버전은 llama.cpp 내장 <code>-hf ggml-org/...</code> 페처를 썼는데 크래시루프에 빠졌다.</span>
 <pre><code>E get_repo_commit: error: GET failed (401): Invalid username or password.
 W get_repo_files: failed to resolve commit for ggml-org/Qwen2.5-0.5B-Instruct-GGUF
 failed to download model from Hugging Face   → exitCode=1, CrashLoopBackOff</code></pre>
 <span class="en">The resolver authenticated badly against that repo path. Fix: stop using <code>-hf</code> and pull the GGUF directly with an <code>initContainer</code> (anonymous HTTPS works fine for the public <code>Qwen/...</code> repo). Robust <i>and</i> a better separation of concerns. This is the kind of thing that, once in Git, never bites the next operator.</span>
-<span class="ko">그 resolver가 해당 repo 경로에 인증을 잘못 했다. 해결: <code>-hf</code>를 버리고 <code>initContainer</code>로 GGUF를 직접 받음(public <code>Qwen/...</code> repo는 anonymous HTTPS로 잘 됨). 견고하고 관심사 분리도 더 낫다. 이런 건 한 번 Git에 박히면 다음 운영자를 다신 안 문다.</span></div>
+<span class="ko">그 resolver가 해당 repo 경로에 인증을 잘못 했다. <code>-hf</code>를 버리고 <code>initContainer</code>로 GGUF를 직접 받아 해결했다(public <code>Qwen/...</code> repo는 anonymous HTTPS로 잘 받아진다). 더 견고하고 관심사 분리도 낫다. 이런 수정은 한 번 Git에 들어가면 다음 운영자가 같은 문제를 다시 겪지 않는다.</span></div>
 
 <h2><span class="en">Register &amp; serve</span><span class="ko">등록 &amp; 서빙</span></h2>
 <pre><code>$ kubectl apply -f https://raw.githubusercontent.com/hanq-moreh/argocd-gitops-lab/main/apps/phase3-model.yaml
@@ -108,12 +108,12 @@ $ curl .../v1/chat/completions -d '{"model":"qwen2.5-0.5b-q4_k_m",
   "content":"GitOps is a model of continuous integration and deployment using Git, ..."}}],
  "usage":{"prompt_tokens":38,"completion_tokens":27,"total_tokens":65},
  "timings":{"prompt_per_second":30.8, <mark>"predicted_per_second":3.25</mark>}}    # ← CPU speed, real numbers</code></pre>
-<p class="cap"><span class="en">~3.25 tokens/s decode on CPU for a 0.5B Q4 model — slow, as expected, but it's a genuine model server now under GitOps control.</span><span class="ko">0.5B Q4 모델이 CPU에서 디코딩 ~3.25 tok/s — 예상대로 느리지만, 이제 GitOps 통제 아래의 진짜 모델 서버다.</span></p>
+<p class="cap"><span class="en">~3.25 tokens/s decode on CPU for a 0.5B Q4 model — slow, as expected, but it's a genuine model server now under GitOps control.</span><span class="ko">0.5B Q4 모델의 CPU 디코딩은 ~3.25 tok/s로 예상대로 느리다. 그래도 GitOps 통제 아래 도는 진짜 모델 서버다.</span></p>
 
 <div class="drill">
 <h3><span class="en">Drill — model version bump as a commit</span><span class="ko">드릴 — 모델 버전업을 커밋으로</span></h3>
 <p><span class="en">Change the quant <code>q4_k_m → q5_0</code> in Git (new weight URL + alias), commit, push. Argo CD does a rolling update: a new ReplicaSet downloads the new weights, becomes ready, and the old one scales to zero.</span>
-<span class="ko">Git에서 quant <code>q4_k_m → q5_0</code> 변경(새 가중치 URL + alias), 커밋, push. ArgoCD가 롤링 업데이트: 새 ReplicaSet이 새 가중치를 받아 ready가 되고 옛 것은 0으로 축소.</span></p>
+<span class="ko">Git에서 quant를 <code>q4_k_m → q5_0</code>로 바꾸고(새 가중치 URL + alias) 커밋, push한다. ArgoCD가 롤링 업데이트를 한다. 새 ReplicaSet이 새 가중치를 받아 ready가 되면 옛 ReplicaSet은 0으로 줄어든다.</span></p>
 <pre><code># local: git commit -am "model version bump q4_k_m -> q5_0" && git push   (commit ba709b5)
 
 $ kubectl -n serving get rs
@@ -122,7 +122,7 @@ model-server-69db74887f   desired=0  ready=0     # ← q4_k_m (rolled back to 0)
 model-server-78bb96b484   desired=0  ready=0     # ← original -hf attempt
 
 $ curl .../v1/models  →  "id":"<mark>qwen2.5-0.5b-q5_0</mark>"     # the new version is live</code></pre>
-<p class="cap"><span class="en">A model upgrade is now a reviewable commit with an automatic, ordered rollout — and rollback is <code>git revert</code>, exactly as in Phase 2.</span><span class="ko">모델 업그레이드가 이제 리뷰 가능한 커밋 + 자동·순차 롤아웃이고, 롤백은 Phase 2처럼 <code>git revert</code>.</span></p>
+<p class="cap"><span class="en">A model upgrade is now a reviewable commit with an automatic, ordered rollout — and rollback is <code>git revert</code>, exactly as in Phase 2.</span><span class="ko">이제 모델 업그레이드는 리뷰 가능한 커밋이고 롤아웃은 자동으로 순서대로 진행된다. 롤백은 Phase 2처럼 <code>git revert</code>다.</span></p>
 </div>
 
 <h2><span class="en">Reproduce</span><span class="ko">재현</span></h2>
@@ -136,7 +136,7 @@ kubectl -n serving run c --image=curlimages/curl:8.10.1 --rm -i --restart=Never 
 
 <h2><span class="en">Result</span><span class="ko">결과</span></h2>
 <p><span class="en">A real OpenAI-compatible model server runs under Argo CD: deployed from Git, weight-loaded via initContainer, version-bumped by commit with an automatic rolling update. The workload that used to be a hand-run <code>docker run</code> is now a reviewable, revertible, self-healing GitOps object. Phase 4 puts the llm-d routing layer (gateway + Inference Extension + endpoint picker) in front of it — as an app-of-apps with sync waves.</span>
-<span class="ko">진짜 OpenAI 호환 모델 서버가 ArgoCD 아래 돈다: Git에서 배포, initContainer로 가중치 로딩, 커밋으로 버전업 + 자동 롤링 업데이트. 손으로 <code>docker run</code>하던 워크로드가 이제 리뷰·되돌리기·self-heal 되는 GitOps 객체다. Phase 4는 그 앞에 llm-d 라우팅 계층(게이트웨이 + Inference Extension + endpoint picker)을 — sync wave 있는 app-of-apps로 — 둔다.</span></p>
+<span class="ko">진짜 OpenAI 호환 모델 서버가 ArgoCD 아래에서 돈다. Git에서 배포하고, initContainer로 가중치를 올리고, 커밋 하나로 버전업하면 롤링 업데이트가 자동으로 일어난다. 손으로 <code>docker run</code>하던 워크로드가 리뷰하고 되돌릴 수 있고 self-heal도 되는 GitOps 객체가 됐다. Phase 4에서는 그 앞에 llm-d 라우팅 계층(게이트웨이 + Inference Extension + endpoint picker)을 sync wave가 있는 app-of-apps로 둔다.</span></p>
 
 <div class="seriesnav">
   <a href="argocd-phase2-selfheal.html">← <span class="en">Phase 2: self-heal</span><span class="ko">Phase 2: self-heal</span></a>

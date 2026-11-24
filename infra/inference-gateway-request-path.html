@@ -76,8 +76,8 @@
     <span class="ko">모델 이름이 body 안에 있을 때, 요청은 어떻게 라우팅되나</span>
   </h1>
   <p class="lede">
-    <span class="en">Ordinary HTTP routing matches on paths and headers. An OpenAI-compatible API gives you neither — every request is <code class="inl">POST /v1/chat/completions</code> and the model name is buried in the JSON body. This note follows one request end to end through the Gateway API Inference Extension stack, names every Kubernetes object it passes, and explains what each one is actually for.</span>
-    <span class="ko">보통의 HTTP 라우팅은 path와 헤더로 판단한다. 그런데 OpenAI 호환 API는 둘 다 안 준다 — 모든 요청이 <code class="inl">POST /v1/chat/completions</code>이고 모델 이름은 JSON body 안에 묻혀 있다. 이 글은 요청 하나가 Gateway API Inference Extension 스택을 통과하는 전 과정을 따라가면서, 거쳐가는 쿠버네티스 오브젝트를 하나씩 이름으로 짚고 각각이 실제로 무슨 일을 하는지 설명한다.</span>
+    <span class="en">An OpenAI-compatible API sends every request to <code class="inl">POST /v1/chat/completions</code> with the model name in the JSON body, leaving path- and header-based routing nothing to match. This note follows one request through the Gateway API Inference Extension stack, read off a live cluster.</span>
+    <span class="ko">OpenAI 호환 API는 모든 요청을 <code class="inl">POST /v1/chat/completions</code>로 보내고 모델 이름은 JSON body에 넣어, path·헤더 라우팅이 기댈 곳이 없다. 이 글은 요청 하나가 Gateway API Inference Extension 스택을 지나는 길을 실제 클러스터 오브젝트로 따라간다.</span>
   </p>
   <p class="post-meta"><time datetime="2026-08-05">2026-08-05</time><span class="sep">·</span><span class="updated-label en">updated</span><span class="updated-label ko">갱신</span><time datetime="2026-08-06">2026-08-06</time></p>
 </header>
@@ -85,11 +85,11 @@
 <nav class="toc">
   <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
   <ol>
-    <li><a href="#s1"><span class="en">The problem: the router cannot read the body</span><span class="ko">문제 — 라우터는 body를 못 읽는다</span></a></li>
-    <li><a href="#s2"><span class="en">Three Kubernetes words first: Service, Operator, Gateway</span><span class="ko">먼저 쿠버네티스 단어 셋 — Service, Operator, Gateway</span></a></li>
+    <li><a href="#s1"><span class="en">The problem: the router cannot read the body</span><span class="ko">문제: 라우터는 body를 못 읽는다</span></a></li>
+    <li><a href="#s2"><span class="en">Three Kubernetes words first: Service, Operator, Gateway</span><span class="ko">먼저 쿠버네티스 단어 셋: Service, Operator, Gateway</span></a></li>
     <li><a href="#s3"><span class="en">The full path, end to end</span><span class="ko">전체 경로</span></a></li>
     <li><a href="#s4"><span class="en">The resources, one by one</span><span class="ko">리소스 하나씩</span></a></li>
-    <li><a href="#s5"><span class="en">The reverse path: how the picker knows anything</span><span class="ko">역방향 경로 — picker는 어떻게 아는가</span></a></li>
+    <li><a href="#s5"><span class="en">The reverse path: how the picker knows anything</span><span class="ko">역방향 경로: picker는 어떻게 아는가</span></a></li>
     <li><a href="#s6"><span class="en">Control path, data path, and where it breaks</span><span class="ko">control path와 data path, 그리고 깨지는 지점</span></a></li>
     <li><a href="#s7"><span class="en">The YAML, and how to read it off a cluster</span><span class="ko">YAML, 그리고 클러스터에서 직접 읽는 법</span></a></li>
   </ol>
@@ -98,7 +98,7 @@
 <section id="s1">
   <h2><span class="num">1</span>
     <span class="en">The problem: the router cannot read the body</span>
-    <span class="ko">문제 — 라우터는 body를 못 읽는다</span>
+    <span class="ko">문제: 라우터는 body를 못 읽는다</span>
   </h2>
 
   <p>
@@ -115,94 +115,87 @@
 }</pre>
 
   <p>
-    <span class="en">Now look at what a proxy has to work with. The path is <code class="inl">/v1/chat/completions</code> — identical for all eight models. There is no <code class="inl">Host</code> difference, no query string, no custom header. The only thing that distinguishes one model from another is a field <b>inside the request body</b>.</span>
-    <span class="ko">이제 프록시가 가진 재료를 보자. path는 <code class="inl">/v1/chat/completions</code> — 여덟 모델 전부 똑같다. <code class="inl">Host</code>가 다른 것도 아니고, 쿼리스트링도, 커스텀 헤더도 없다. 모델을 구분해주는 유일한 정보가 <b>요청 body 안</b>에 있다.</span>
+    <span class="en">The path is <code class="inl">/v1/chat/completions</code> for all eight models. There is no <code class="inl">Host</code> difference, no query string, no custom header. The only thing that tells the models apart is a field <b>inside the request body</b>.</span>
+    <span class="ko">path는 여덟 모델 모두 <code class="inl">/v1/chat/completions</code>로 같다. <code class="inl">Host</code>도, 쿼리스트링도, 커스텀 헤더도 다르지 않다. 모델을 구분하는 정보는 <b>요청 body 안</b>에만 있다.</span>
   </p>
 
   <div class="callout c-green">
-    <span class="tag"><span class="en">In plain words — proxy, L7, Envoy</span><span class="ko">쉽게 말하면 — 프록시 · L7 · Envoy</span></span>
+    <span class="tag"><span class="en">In plain words: proxy, L7, Envoy</span><span class="ko">쉽게 말하면: 프록시 · L7 · Envoy</span></span>
     <dl>
       <dt><span class="en">proxy</span><span class="ko">프록시</span></dt>
-      <dd><span class="en">A server that stands between the client and the real servers: it receives the request on their behalf and forwards it to whichever one should handle it. Here it is the single front door in front of eight models.</span>
-          <span class="ko">클라이언트와 진짜 서버들 사이에 서 있는 서버. 요청을 대신 받아서 처리해야 할 곳으로 넘겨준다. 여기서는 모델 여덟 개 앞에 놓인 단 하나의 정문이다.</span></dd>
+      <dd><span class="en">A server between clients and the real servers that receives each request and forwards it to the right one. Here it is the single front door for eight models.</span>
+          <span class="ko">클라이언트와 실제 서버 사이에서 요청을 대신 받아 알맞은 서버로 넘기는 서버다. 여기서는 모델 여덟 개 앞의 단일 정문이다.</span></dd>
       <dt>L7</dt>
-      <dd><span class="en">Layer 7 of the seven-layer network model — the application layer. An <b>L7</b> router understands HTTP, so it can decide based on the path, the method, the headers. An <b>L4</b> router sees only IP and port and forwards blindly. Routing by model name is an L7 job by definition.</span>
-          <span class="ko">네트워크를 일곱 층으로 나눈 모델의 7층, 즉 애플리케이션 계층. <b>L7</b> 라우터는 HTTP를 이해하므로 path·메서드·헤더를 보고 판단할 수 있다. <b>L4</b> 라우터는 IP와 포트만 보고 그냥 넘긴다. 모델 이름으로 라우팅하는 건 정의상 L7의 일이다.</span></dd>
+      <dd><span class="en">The application layer. An <b>L7</b> router decides on the HTTP path, method and headers. An <b>L4</b> router sees only IP and port. Routing by model name is an L7 job.</span>
+          <span class="ko">애플리케이션 계층이다. <b>L7</b> 라우터는 HTTP의 path·메서드·헤더를 보고 판단하고, <b>L4</b> 라우터는 IP와 포트만 본다. 모델 이름으로 라우팅하는 일은 L7의 몫이다.</span></dd>
       <dt>Envoy</dt>
-      <dd><span class="en">The most widely used open-source L7 proxy. Nearly every Kubernetes gateway implementation is Envoy underneath — including the one in this note. When this page says "the gateway", the thing actually running is an Envoy process.</span>
-          <span class="ko">가장 널리 쓰이는 오픈소스 L7 프록시. 쿠버네티스 게이트웨이 구현체는 거의 다 내부가 Envoy이고, 이 글의 것도 그렇다. 이 페이지에서 "게이트웨이"라고 하면 실제로 돌고 있는 건 Envoy 프로세스다.</span></dd>
+      <dd><span class="en">The most widely used open-source L7 proxy. Nearly every Kubernetes gateway, including the one here, is Envoy underneath. "The gateway" in this note means an Envoy process.</span>
+          <span class="ko">가장 널리 쓰이는 오픈소스 L7 프록시다. 쿠버네티스 게이트웨이 구현체는 거의 다 내부가 Envoy이고, 이 글의 "게이트웨이"도 Envoy 프로세스를 뜻한다.</span></dd>
     </dl>
-    <p style="margin:10px 0 0">
-      <span class="en"><b>Why headers but not the body?</b> Headers arrive at the front of a request, so a proxy can decide the moment they land. The body comes after and can be huge — waiting for all of it means holding the whole request in memory before you even know where it is going.</span>
-      <span class="ko"><b>왜 헤더는 되고 body는 안 되나?</b> 헤더는 요청 맨 앞에 도착하니 오는 즉시 판단할 수 있다. body는 그 뒤에 오고 얼마든지 커질 수 있다 — 그걸 다 기다린다는 건, 목적지도 모르는 요청을 통째로 메모리에 들고 있겠다는 뜻이다.</span>
-    </p>
   </div>
 
   <p>
-    <span class="en">And Envoy — like essentially every L7 router — makes its routing decision from the request line and headers. It does not buffer and parse the body to decide where to send something. That would mean holding the whole request in memory before you know its destination, which is exactly what you do not want in front of a streaming inference workload.</span>
-    <span class="ko">그런데 Envoy는 — 사실상 모든 L7 라우터가 그렇듯 — 요청 라인과 헤더만 보고 라우팅을 결정한다. 목적지를 정하려고 body를 통째로 버퍼링해서 파싱하지 않는다. 그러면 목적지를 알기도 전에 요청 전체를 메모리에 들고 있어야 하는데, 스트리밍 추론 워크로드 앞단에서 가장 피하고 싶은 게 바로 그거다.</span>
+    <span class="en">Envoy, like nearly every L7 router, routes on the request line and headers, which arrive first. The body comes later and can be huge. Routing on it means holding the whole request in memory before knowing where it goes, the last thing you want in front of streaming inference.</span>
+    <span class="ko">Envoy를 비롯한 L7 라우터는 요청 맨 앞에 오는 요청 라인과 헤더만 보고 라우팅한다. body는 뒤에 오고 얼마든지 커질 수 있다. body로 판단하려면 목적지도 모르는 요청을 통째로 메모리에 들고 있어야 하는데, 스트리밍 추론 앞단에서 가장 피하고 싶은 일이다.</span>
   </p>
 
   <div class="callout c-purple">
     <span class="tag"><span class="en">The gap</span><span class="ko">간극</span></span>
-    <span class="en">The information you need to route is in a place the router structurally cannot look. Everything in the rest of this note is downstream of that one sentence.</span>
-    <span class="ko">라우팅에 필요한 정보가, 라우터가 구조적으로 볼 수 없는 곳에 있다. 이 글의 나머지는 전부 이 한 문장에서 파생된다.</span>
+    <span class="en">The information needed to route sits where the router structurally cannot look. The rest of this note follows from that.</span>
+    <span class="ko">라우팅에 필요한 정보가 라우터가 구조적으로 볼 수 없는 곳에 있다. 이 글의 나머지는 모두 여기서 나온다.</span>
   </div>
 
   <p>
-    <span class="en">The <a href="https://github.com/kubernetes-sigs/gateway-api-inference-extension">Gateway API Inference Extension</a> solves it with a small component called <b>BBR</b> — Body-Based Routing. It is an <code class="inl">ext_proc</code> filter: Envoy streams the request to it over gRPC, BBR reads the <code class="inl">model</code> field, and sets a header:</span>
-    <span class="ko"><a href="https://github.com/kubernetes-sigs/gateway-api-inference-extension">Gateway API Inference Extension</a>은 <b>BBR</b>(Body-Based Routing)이라는 작은 컴포넌트로 이걸 푼다. <code class="inl">ext_proc</code> 필터다 — Envoy가 gRPC로 요청을 넘겨주면, BBR이 <code class="inl">model</code> 필드를 읽어서 헤더 하나를 심어준다.</span>
+    <span class="en">The <a href="https://github.com/kubernetes-sigs/gateway-api-inference-extension">Gateway API Inference Extension</a> solves this with a small component called <b>BBR</b> (Body-Based Routing). It is an <code class="inl">ext_proc</code> filter: Envoy streams the request to it over gRPC, and BBR reads the <code class="inl">model</code> field and sets a header.</span>
+    <span class="ko"><a href="https://github.com/kubernetes-sigs/gateway-api-inference-extension">Gateway API Inference Extension</a>은 <b>BBR</b>(Body-Based Routing)이라는 작은 컴포넌트로 이 문제를 푼다. BBR은 <code class="inl">ext_proc</code> 필터다. Envoy가 gRPC로 요청을 넘기면 BBR이 <code class="inl">model</code> 필드를 읽어 헤더 하나를 붙인다.</span>
   </p>
 
 <pre><span class="fn">X-Gateway-Model-Name</span>: meta-llama/Llama-3.1-70B-Instruct</pre>
 
   <div class="callout c-green">
-    <span class="tag"><span class="en">In plain words — ext_proc, gRPC, BBR</span><span class="ko">쉽게 말하면 — ext_proc · gRPC · BBR</span></span>
+    <span class="tag"><span class="en">In plain words: ext_proc, gRPC</span><span class="ko">쉽게 말하면: ext_proc · gRPC</span></span>
     <dl>
       <dt><code class="inl">ext_proc</code></dt>
-      <dd><span class="en">"External Processing" — Envoy's official way to phone a friend. Instead of building custom logic into the proxy, Envoy hands the request out to an <b>external program</b> and lets it inspect or modify it, then carries on. It is an extension point, not a product.</span>
-          <span class="ko">"External Processing" — Envoy가 외부에 물어보는 공식 창구. 프록시 안에 커스텀 로직을 박아 넣는 대신, 요청을 <b>외부 프로그램</b>에 넘겨 살펴보거나 고치게 한 뒤 하던 일을 이어간다. 제품이 아니라 확장 지점이다.</span></dd>
+      <dd><span class="en">"External Processing": Envoy's official extension point for handing a request to an <b>external program</b> that inspects or modifies it before Envoy carries on.</span>
+          <span class="ko">"External Processing". Envoy가 요청을 <b>외부 프로그램</b>에 넘겨 살펴보거나 고치게 한 뒤 이어서 처리하는 공식 확장 지점이다.</span></dd>
       <dt>gRPC</dt>
-      <dd><span class="en">The protocol used for that conversation — a fast, typed RPC over HTTP/2. For reading this page you can treat it as "the private line between Envoy and the external program".</span>
-          <span class="ko">그 대화에 쓰는 프로토콜. HTTP/2 위에서 도는 빠르고 타입이 정해진 RPC다. 이 글을 읽는 데는 "Envoy와 외부 프로그램 사이의 전용선" 정도로 봐도 충분하다.</span></dd>
-      <dt>BBR</dt>
-      <dd><span class="en">One such external program, and a tiny one. Its whole job: read <code class="inl">model</code> out of the JSON body and write it into a header. It makes no routing decision itself — it just moves one string from a place the router cannot see to a place it can.</span>
-          <span class="ko">그런 외부 프로그램 중 하나이고, 아주 작다. 하는 일 전부: JSON body에서 <code class="inl">model</code>을 읽어 헤더에 써 넣는 것. 라우팅을 직접 결정하지 않는다 — 문자열 하나를, 라우터가 못 보는 곳에서 볼 수 있는 곳으로 옮길 뿐이다.</span></dd>
+      <dd><span class="en">A fast, typed RPC over HTTP/2. Here, think of it as the private line between Envoy and the external program.</span>
+          <span class="ko">HTTP/2 위에서 도는 빠른 RPC다. 여기서는 Envoy와 외부 프로그램 사이의 전용선 정도로 보면 된다.</span></dd>
     </dl>
   </div>
 
   <p>
-    <span class="en">That is the entire job. From that header onward, ordinary header-based routing works again, and the rest of the stack never has to think about JSON.</span>
-    <span class="ko">하는 일은 이게 전부다. 이 헤더가 생긴 순간부터는 평범한 헤더 라우팅이 다시 작동하고, 그 뒤로는 스택 어디서도 JSON을 신경 쓸 필요가 없다.</span>
+    <span class="en">From that header onward, ordinary header-based routing works again and nothing else in the stack has to think about JSON.</span>
+    <span class="ko">이 헤더가 생기면 평범한 헤더 라우팅이 다시 통하고, 이후로는 스택 어디서도 JSON을 신경 쓰지 않는다.</span>
   </p>
 
   <p>
-    <span class="en">One consequence worth noticing early: BBR is wired in with <code class="inl">INSERT_FIRST</code>, at the very front of the HTTP filter chain. It has to be. No routing decision of any kind can be made before the model is known, so nothing may run ahead of it.</span>
-    <span class="ko">일찍 짚어둘 게 하나 있다. BBR은 <code class="inl">INSERT_FIRST</code>로, HTTP 필터 체인 맨 앞에 꽂힌다. 그럴 수밖에 없다. 모델을 알기 전에는 어떤 라우팅 판단도 불가능하므로, 그 앞에 뭔가가 먼저 돌 수 없다.</span>
+    <span class="en">BBR is wired in with <code class="inl">INSERT_FIRST</code>, at the very front of the HTTP filter chain. It has to be: no routing decision is possible before the model is known.</span>
+    <span class="ko">BBR은 <code class="inl">INSERT_FIRST</code>로 HTTP 필터 체인 맨 앞에 꽂힌다. 모델을 알기 전에는 어떤 라우팅 판단도 할 수 없으니 그럴 수밖에 없다.</span>
   </p>
 </section>
 
 <section id="s2">
   <h2><span class="num">2</span>
     <span class="en">Three Kubernetes words first: Service, Operator, Gateway</span>
-    <span class="ko">먼저 쿠버네티스 단어 셋 — Service, Operator, Gateway</span>
+    <span class="ko">먼저 쿠버네티스 단어 셋: Service, Operator, Gateway</span>
   </h2>
 
   <p>
-    <span class="en">These three get thrown around loosely and it makes everything after this harder than it needs to be. All three have a concrete instance in the path we are about to follow.</span>
-    <span class="ko">이 셋은 대충 섞어 쓰이는 경우가 많은데, 그러면 뒤의 내용이 필요 이상으로 어려워진다. 셋 다 곧 따라갈 경로 안에 실물이 하나씩 있다.</span>
+    <span class="en">These three are often used loosely. Each has a concrete instance in the path below.</span>
+    <span class="ko">이 셋은 자주 섞여 쓰인다. 셋 다 이어서 따라갈 경로 안에 실물이 있다.</span>
   </p>
 
-  <h3><span class="en">Service — a stable address in front of a moving set of pods</span><span class="ko">Service — 계속 바뀌는 pod 앞에 붙은 고정 주소</span></h3>
+  <h3><span class="en">Service: a stable address in front of a moving set of pods</span><span class="ko">Service: 계속 바뀌는 pod 앞의 고정 주소</span></h3>
 
   <p>
-    <span class="en">Pods are disposable. They get replaced, and every replacement gets a new IP. A <b>Service</b> is a fixed virtual IP and DNS name that load-balances to whichever pods currently match a label selector. In a well-formed config, nothing ever names a pod IP.</span>
-    <span class="ko">pod는 언제든 버려지는 것이다. 교체되고, 교체될 때마다 IP가 새로 붙는다. <b>Service</b>는 label selector에 현재 매칭되는 pod들에게 부하를 분산해주는, 고정된 가상 IP이자 DNS 이름이다. 제대로 된 설정이라면 어디에서도 pod IP를 직접 적지 않는다.</span>
+    <span class="en">Pods are disposable, and every replacement gets a new IP. A <b>Service</b> is a fixed virtual IP and DNS name that load-balances to whichever pods match a label selector. A well-formed config never names a pod IP.</span>
+    <span class="ko">pod는 언제든 교체되고, 그때마다 IP가 바뀐다. <b>Service</b>는 label selector에 매칭되는 pod들로 부하를 나눠 주는 고정 가상 IP이자 DNS 이름이다. 제대로 된 설정은 pod IP를 직접 적지 않는다.</span>
   </p>
 
   <p>
-    <span class="en">The types are worth knowing precisely, because one of them shows up later as a red herring:</span>
-    <span class="ko">타입은 정확히 알아두는 게 좋다. 그중 하나가 뒤에서 헷갈리는 요소로 등장하기 때문이다.</span>
+    <span class="en">The types matter, because one of them shows up later as a red herring:</span>
+    <span class="ko">타입을 구분해 두자. 그중 하나가 뒤에서 혼동을 일으킨다.</span>
   </p>
 
   <table class="kv">
@@ -217,27 +210,27 @@
         <td><span class="en">outside, if you can reach a node IP</span><span class="ko">노드 IP에 닿을 수 있다면 외부에서도</span></td></tr>
     <tr><td><code class="inl">LoadBalancer</code></td>
         <td><span class="en"><i>plus</i> an external load balancer provisioned by the cloud</span><span class="ko"><i>추가로</i> 클라우드가 프로비저닝하는 외부 로드밸런서</span></td>
-        <td><span class="en">outside, via the LB's IP</span><span class="ko">LB의 IP를 통해 외부에서</span></td></tr>
+        <td><span class="en">outside, via the LB's IP</span><span class="ko">LB의 IP로 외부에서</span></td></tr>
     <tr><td><span class="en">headless</span><span class="ko">headless</span> <span class="muted">(<code class="inl">clusterIP: None</code>)</span></td>
-        <td><span class="en">no virtual IP — DNS returns the pod IPs directly</span><span class="ko">가상 IP 없음 — DNS가 pod IP를 그대로 돌려준다</span></td>
+        <td><span class="en">no virtual IP; DNS returns the pod IPs directly</span><span class="ko">가상 IP 없음. DNS가 pod IP를 그대로 돌려준다</span></td>
         <td><span class="en">inside; the caller balances itself</span><span class="ko">내부. 부하 분산은 호출자가 직접</span></td></tr>
   </table>
 
   <p>
-    <span class="en"><b>NodePort exists as the low-tech way in from outside</b> when there is no cloud load balancer: pick a port, and every node in the cluster starts answering on it and forwards to the Service. The costs are an ugly high port number, no TLS termination, and the caller needing to know a node IP. Keep this one in mind — a cluster can have a NodePort Service sitting next to the real entry point without it being the path anything actually uses.</span>
-    <span class="ko"><b>NodePort는 클라우드 로드밸런서가 없을 때 외부에서 들어오는 저기술 통로다.</b> 포트 하나를 정하면 클러스터의 모든 노드가 그 포트로 응답하기 시작하고 Service로 넘긴다. 대가는 못생긴 고번호 포트, TLS 종료 없음, 그리고 호출자가 노드 IP를 알아야 한다는 것. 이건 기억해두자 — 실제 진입점 옆에 NodePort Service가 하나 놓여 있어도, 그게 실제로 쓰이는 경로가 아닐 수 있다.</span>
+    <span class="en"><b>NodePort is the low-tech way in from outside</b> without a cloud load balancer: every node answers on the chosen port and forwards to the Service. The costs are a high port, no TLS termination, and callers needing a node IP. A NodePort Service can sit next to the real entry point without being the path anything uses.</span>
+    <span class="ko"><b>NodePort는 클라우드 로드밸런서가 없을 때 외부에서 들어오는 저기술 통로다.</b> 모든 노드가 정한 포트로 받아 Service로 넘긴다. 대신 고번호 포트, TLS 종료 없음, 호출자가 노드 IP를 알아야 한다는 대가가 있다. 실제 진입점 옆에 NodePort Service가 있어도 실제로 쓰이는 경로가 아닐 수 있다.</span>
   </p>
 
-  <h3><span class="en">Operator — a controller that keeps reality matching a custom resource</span><span class="ko">Operator — 선언한 것과 현실을 계속 맞춰주는 컨트롤러</span></h3>
+  <h3><span class="en">Operator: a controller that keeps reality matching a custom resource</span><span class="ko">Operator: 선언과 현실을 계속 맞추는 컨트롤러</span></h3>
 
   <p>
-    <span class="en">Kubernetes natively understands only its built-in kinds. An <b>operator</b> extends it: you install a CRD (a new kind) plus a controller that watches those objects and continuously creates, updates and deletes real resources so the world matches what you declared. It is a loop, not a one-shot translation — delete something it manages and it puts the thing back.</span>
-    <span class="ko">쿠버네티스는 기본 제공 kind만 이해한다. <b>operator</b>는 그걸 확장한다 — CRD(새 kind)를 설치하고, 그 오브젝트를 감시하면서 선언한 대로 현실이 되도록 실제 리소스를 계속 만들고 고치고 지우는 컨트롤러를 함께 띄운다. 일회성 변환이 아니라 <b>루프</b>다. 그가 관리하는 걸 지우면 다시 만들어 놓는다.</span>
+    <span class="en">Kubernetes natively knows only its built-in kinds. An <b>operator</b> adds a CRD (a new kind) plus a controller that keeps real resources matching those objects. It is a loop, not a one-shot translation: delete something it manages and it comes back.</span>
+    <span class="ko">쿠버네티스는 기본 kind만 이해한다. <b>operator</b>는 CRD(새 kind)와, 그 오브젝트대로 실제 리소스를 계속 맞추는 컨트롤러를 함께 설치한다. 일회성 변환이 아니라 <b>루프</b>라서 관리 대상을 지우면 다시 만든다.</span>
   </p>
 
   <p>
-    <span class="en">Two operators appear in this request path. One turns a <code class="inl">Gateway</code> into an actual proxy; the other turns a custom "inference service" resource into a Deployment of engine pods. You can trace the second one entirely through ownership links:</span>
-    <span class="ko">이 경로에는 operator가 둘 등장한다. 하나는 <code class="inl">Gateway</code>를 실제 프록시로 만들고, 다른 하나는 커스텀 "inference service" 리소스를 엔진 pod들의 Deployment로 만든다. 두 번째는 ownership 링크만 따라가도 전부 추적된다.</span>
+    <span class="en">Two operators appear in this path. One turns a <code class="inl">Gateway</code> into a proxy, the other turns a custom "inference service" resource into a Deployment of engine pods. The second can be traced entirely through ownership links:</span>
+    <span class="ko">이 경로에는 operator가 둘 있다. 하나는 <code class="inl">Gateway</code>를 실제 프록시로, 다른 하나는 커스텀 "inference service" 리소스를 엔진 pod의 Deployment로 만든다. 두 번째는 ownership 링크만 따라가도 추적된다.</span>
   </p>
 
 <div class="ascii">InferenceService/llama-70b   (spec.replicas: 2)      ← what you declare
@@ -249,35 +242,35 @@
 
   <div class="callout c-blue">
     <span class="tag"><span class="en">Where the two worlds join</span><span class="ko">두 세계가 만나는 지점</span></span>
-    <span class="en">That last label is the seam. The operator stamps it onto every pod it creates; the routing layer's <code class="inl">InferencePool</code> selects on it. Neither side knows about the other — they agree on a label, and that is the whole contract.</span>
-    <span class="ko">마지막 줄의 label이 이음매다. operator가 자기가 만드는 모든 pod에 그걸 찍고, 라우팅 쪽의 <code class="inl">InferencePool</code>이 그걸로 고른다. 양쪽은 서로를 모른다 — label 하나에 합의했을 뿐이고, 계약은 그게 전부다.</span>
+    <span class="en">That last label is the seam. The operator stamps it on every pod it creates, and the <code class="inl">InferencePool</code> selects on it. Neither side knows the other. The label is the whole contract.</span>
+    <span class="ko">마지막 줄의 label이 이음매다. operator가 만드는 모든 pod에 이 label을 찍고, 라우팅 쪽 <code class="inl">InferencePool</code>이 이걸로 pod를 고른다. 양쪽은 서로를 모르고, label 하나가 계약의 전부다.</span>
   </div>
 
-  <h3><span class="en">Gateway — a declaration of a proxy, not the proxy</span><span class="ko">Gateway — 프록시 그 자체가 아니라 프록시를 선언한 것</span></h3>
+  <h3><span class="en">Gateway: a declaration of a proxy, not the proxy</span><span class="ko">Gateway: 프록시가 아니라 프록시의 선언</span></h3>
 
   <p>
-    <span class="en"><code class="inl">Gateway</code> is a <a href="https://gateway-api.sigs.k8s.io/">Gateway API</a> resource. It says <i>"I want a proxy listening on these ports"</i> and names a <code class="inl">gatewayClassName</code> to say who should provide it. It is <b>intent</b>. Something has to materialize it — and that something is an operator, which is why the previous subsection comes first.</span>
-    <span class="ko"><code class="inl">Gateway</code>는 <a href="https://gateway-api.sigs.k8s.io/">Gateway API</a> 리소스다. <i>"이 포트들로 듣는 프록시가 필요하다"</i>고 말하고, <code class="inl">gatewayClassName</code>으로 누가 제공할지를 지정한다. 이건 <b>의도</b>다. 누군가 실체로 만들어줘야 하고, 그 누군가가 operator다 — 앞 절을 먼저 둔 이유가 이거다.</span>
+    <span class="en"><code class="inl">Gateway</code> is a <a href="https://gateway-api.sigs.k8s.io/">Gateway API</a> resource. It says <i>"I want a proxy listening on these ports"</i> and names a <code class="inl">gatewayClassName</code> for who provides it. It is <b>intent</b>, and an operator materializes it.</span>
+    <span class="ko"><code class="inl">Gateway</code>는 <a href="https://gateway-api.sigs.k8s.io/">Gateway API</a> 리소스다. <i>"이 포트들로 듣는 프록시가 필요하다"</i>고 선언하고, <code class="inl">gatewayClassName</code>으로 제공자를 지정한다. 이건 <b>의도</b>이고, 실체로 만드는 건 operator다.</span>
   </p>
 
   <div class="callout c-green">
-    <span class="tag"><span class="en">In plain words — Istio and istiod</span><span class="ko">쉽게 말하면 — Istio 와 istiod</span></span>
+    <span class="tag"><span class="en">In plain words: Istio and istiod</span><span class="ko">쉽게 말하면: Istio와 istiod</span></span>
     <dl>
       <dt>Istio</dt>
-      <dd><span class="en">A service mesh: a layer that takes over networking between services in a cluster — routing, retries, mTLS, telemetry — so applications do not implement it themselves. Its data plane is Envoy. You do not have to adopt the mesh to use its gateway; here it is being used only as a <b>Gateway API implementation</b>.</span>
-          <span class="ko">서비스 메시. 클러스터 안 서비스들 사이의 네트워킹(라우팅·재시도·mTLS·텔레메트리)을 대신 떠맡아, 애플리케이션이 그걸 직접 구현하지 않게 해주는 계층이다. data plane 이 Envoy 다. 게이트웨이를 쓰려고 메시 전체를 도입할 필요는 없고, 여기서는 <b>Gateway API 구현체</b>로만 쓰이고 있다.</span></dd>
+      <dd><span class="en">A service mesh that takes over service-to-service networking (routing, retries, mTLS, telemetry). Its data plane is Envoy. Here it is used only as a <b>Gateway API implementation</b>, without adopting the mesh.</span>
+          <span class="ko">서비스 사이 네트워킹(라우팅·재시도·mTLS·텔레메트리)을 대신 맡는 서비스 메시다. data plane은 Envoy다. 여기서는 메시 없이 <b>Gateway API 구현체</b>로만 쓰인다.</span></dd>
       <dt>istiod</dt>
-      <dd><span class="en">Istio's control plane — the single process that watches Kubernetes objects and pushes configuration down to the Envoys. It is the thing that reads your <code class="inl">Gateway</code> and creates real pods for it.</span>
-          <span class="ko">Istio 의 control plane. 쿠버네티스 오브젝트를 감시하다가 Envoy 들에게 설정을 내려보내는 프로세스 하나다. 당신이 쓴 <code class="inl">Gateway</code> 를 읽고 실제 pod 를 만들어 주는 게 이 녀석이다.</span></dd>
+      <dd><span class="en">Istio's control plane: the process that watches Kubernetes objects and pushes config to the Envoys. It reads your <code class="inl">Gateway</code> and creates real pods for it.</span>
+          <span class="ko">Istio의 control plane. 쿠버네티스 오브젝트를 감시하다 Envoy에 설정을 내려보내고, <code class="inl">Gateway</code>를 읽어 실제 pod를 만든다.</span></dd>
       <dt><code class="inl">gatewayClassName</code></dt>
-      <dd><span class="en">Which implementation should honour this Gateway. <code class="inl">istio</code> means "istiod, this one is yours". Swap the value and a different controller — NGINX, Envoy Gateway, a cloud LB — provides the proxy instead, from the same YAML.</span>
-          <span class="ko">이 Gateway 를 누가 맡을지 지정한다. <code class="inl">istio</code> 면 "istiod, 이건 네 거다" 라는 뜻이다. 값만 바꾸면 같은 YAML 로 다른 컨트롤러(NGINX, Envoy Gateway, 클라우드 LB)가 프록시를 대신 제공한다.</span></dd>
+      <dd><span class="en">Which implementation provides this Gateway. <code class="inl">istio</code> hands it to istiod. Change the value and another controller (NGINX, Envoy Gateway, a cloud LB) provides the proxy from the same YAML.</span>
+          <span class="ko">이 Gateway를 누가 맡을지 지정한다. <code class="inl">istio</code>면 istiod가 맡는다. 값만 바꾸면 같은 YAML로 다른 컨트롤러(NGINX, Envoy Gateway, 클라우드 LB)가 프록시를 제공한다.</span></dd>
     </dl>
   </div>
 
   <p>
-    <span class="en">With <code class="inl">gatewayClassName: istio</code>, istiod's gateway controller materializes it as <b>a Deployment of Envoy pods plus a ClusterIP Service in front of them</b> — both owned by the Gateway object:</span>
-    <span class="ko"><code class="inl">gatewayClassName: istio</code>라면 istiod의 gateway controller가 이걸 <b>Envoy pod들의 Deployment와 그 앞의 ClusterIP Service</b>로 실체화한다. 둘 다 Gateway 오브젝트가 소유한다.</span>
+    <span class="en">With <code class="inl">gatewayClassName: istio</code>, istiod's gateway controller creates <b>a Deployment of Envoy pods plus a ClusterIP Service in front</b>, both owned by the Gateway:</span>
+    <span class="ko"><code class="inl">gatewayClassName: istio</code>면 istiod의 gateway controller가 <b>Envoy pod의 Deployment와 그 앞의 ClusterIP Service</b>를 만든다. 둘 다 Gateway 오브젝트가 소유한다.</span>
   </p>
 
 <div class="ascii">Gateway/gw                                    ← the declaration
@@ -287,20 +280,20 @@
         labels: gateway.istio.io/managed=istio.io-gateway-controller</div>
 
   <p>
-    <span class="en">And the Gateway reports back where it ended up, in <code class="inl">status.addresses</code>. That field — not any Service you happen to find nearby — is the authoritative answer to "what address is this gateway on?".</span>
-    <span class="ko">그리고 Gateway는 자기가 어디에 자리 잡았는지를 <code class="inl">status.addresses</code>에 보고한다. "이 게이트웨이의 주소가 뭐냐"의 정답은 근처에서 우연히 발견한 Service가 아니라 <b>이 필드</b>다.</span>
+    <span class="en">The Gateway reports where it ended up in <code class="inl">status.addresses</code>. That field, not some Service nearby, is the authoritative address.</span>
+    <span class="ko">Gateway는 자기 주소를 <code class="inl">status.addresses</code>에 보고한다. 근처에서 발견한 Service가 아니라 <b>이 필드</b>가 게이트웨이 주소의 정답이다.</span>
   </p>
 
   <p>
-    <span class="en"><code class="inl">HTTPRoute</code>s then attach to a Gateway through <code class="inl">parentRefs</code>. That is how a routing rule finds its proxy, and it is why routes and gateways can be owned by different teams in different namespaces.</span>
-    <span class="ko"><code class="inl">HTTPRoute</code>는 <code class="inl">parentRefs</code>로 Gateway에 붙는다. 라우팅 규칙이 자기 프록시를 찾는 방법이 이거고, 덕분에 route와 gateway를 서로 다른 네임스페이스의 다른 팀이 소유할 수 있다.</span>
+    <span class="en"><code class="inl">HTTPRoute</code>s attach to a Gateway through <code class="inl">parentRefs</code>, so routes and gateways can be owned by different teams in different namespaces.</span>
+    <span class="ko"><code class="inl">HTTPRoute</code>는 <code class="inl">parentRefs</code>로 Gateway에 붙는다. 그래서 route와 gateway를 서로 다른 네임스페이스의 다른 팀이 소유할 수 있다.</span>
   </p>
 
   <h3><span class="en">The rest of the cast, one line each</span><span class="ko">나머지 등장인물, 한 줄씩</span></h3>
 
   <p>
-    <span class="en">Everything below shows up by name from here on. Two of them are <b>processes</b> — actual programs running in pods. The others are <b>pieces of configuration</b>: YAML that changes what the processes do. Mixing up which is which is the single most common source of confusion in this stack.</span>
-    <span class="ko">아래 이름들이 여기서부터 계속 등장한다. 이 중 둘은 <b>프로세스</b> — pod 안에서 실제로 도는 프로그램이다. 나머지는 <b>설정</b>이다 — 그 프로세스들이 하는 일을 바꾸는 YAML. 어느 쪽인지 헷갈리는 게 이 스택에서 가장 흔한 혼란의 원인이다.</span>
+    <span class="en">Two of these are <b>processes</b> running in pods. The rest are <b>configuration</b>: YAML that changes what the processes do. Mixing the two up is the most common source of confusion in this stack.</span>
+    <span class="ko">이 중 둘은 pod 안에서 실제로 도는 <b>프로세스</b>이고, 나머지는 그 프로세스의 동작을 바꾸는 <b>설정</b>(YAML)이다. 둘을 헷갈리는 게 이 스택에서 가장 흔한 혼란이다.</span>
   </p>
 
   <table class="kv">
@@ -309,38 +302,38 @@
         <th><span class="en">What it is, in one line</span><span class="ko">한 줄 설명</span></th></tr>
     <tr><td>Envoy</td>
         <td><span class="en"><b>process</b></span><span class="ko"><b>프로세스</b></span></td>
-        <td><span class="en">The proxy every request actually passes through. Created for you by istiod when you declare a <code class="inl">Gateway</code>.</span>
-            <span class="ko">모든 요청이 실제로 지나가는 프록시. <code class="inl">Gateway</code>를 선언하면 istiod가 대신 만들어 준다.</span></td></tr>
+        <td><span class="en">The proxy every request passes through. istiod creates it when you declare a <code class="inl">Gateway</code>.</span>
+            <span class="ko">모든 요청이 지나가는 프록시. <code class="inl">Gateway</code>를 선언하면 istiod가 만든다.</span></td></tr>
     <tr><td>BBR</td>
         <td><span class="en"><b>process</b></span><span class="ko"><b>프로세스</b></span></td>
         <td><span class="en">Reads <code class="inl">model</code> from the body, writes it into a header. One deployment for the whole cluster.</span>
             <span class="ko">body에서 <code class="inl">model</code>을 읽어 헤더에 써 넣는다. 클러스터 전체에 배포 하나.</span></td></tr>
     <tr><td>EPP <span class="muted">(endpoint picker)</span></td>
         <td><span class="en"><b>process</b></span><span class="ko"><b>프로세스</b></span></td>
-        <td><span class="en">Given the candidate pods for one model, picks <i>which</i> one this request goes to — by queue depth, KV-cache pressure and so on. One per model. Plain round-robin is wrong for LLMs because pod load is wildly uneven.</span>
-            <span class="ko">한 모델의 후보 pod 중 이 요청을 <i>누구에게</i> 보낼지 고른다 — 큐 길이, KV 캐시 압력 등을 보고. 모델당 하나. LLM은 pod마다 부하가 극단적으로 다르기 때문에 단순 라운드로빈으로는 안 된다.</span></td></tr>
+        <td><span class="en">Picks <i>which</i> pod of one model gets the request, by queue depth, KV-cache pressure and so on. One per model, because LLM pod load is too uneven for round-robin.</span>
+            <span class="ko">큐 길이, KV 캐시 압력 등을 보고 한 모델의 pod 중 <i>누구에게</i> 보낼지 고른다. LLM은 pod별 부하 차이가 커서 라운드로빈이 맞지 않는다. 모델당 하나.</span></td></tr>
     <tr><td><code class="inl">EnvoyFilter</code></td>
         <td><span class="en">config</span><span class="ko">설정</span></td>
-        <td><span class="en">Istio's escape hatch for editing Envoy's filter chain directly. Here it is what plugs BBR in as an <code class="inl">ext_proc</code> call. Nothing runs; it only tells Envoy who to call.</span>
-            <span class="ko">Envoy의 필터 체인을 직접 손대는 Istio의 비상구. 여기서는 BBR을 <code class="inl">ext_proc</code> 호출로 꽂는 역할이다. 뭔가 실행되는 게 아니라, Envoy에게 누구를 호출할지 알려줄 뿐이다.</span></td></tr>
+        <td><span class="en">Istio's escape hatch for editing Envoy's filter chain. Here it plugs BBR in as an <code class="inl">ext_proc</code> call and runs nothing itself.</span>
+            <span class="ko">Envoy 필터 체인을 직접 고치는 Istio의 비상구. 여기서는 BBR을 <code class="inl">ext_proc</code> 호출로 꽂을 뿐, 스스로 실행되지 않는다.</span></td></tr>
     <tr><td><span class="en">filter chain</span><span class="ko">필터 체인</span></td>
         <td><span class="en">concept</span><span class="ko">개념</span></td>
-        <td><span class="en">The ordered list of steps Envoy runs on every request — auth, rewrites, ext_proc calls, and finally routing. Order matters, which is why BBR is forced to the front.</span>
-            <span class="ko">Envoy가 요청마다 순서대로 실행하는 단계 목록 — 인증, 재작성, ext_proc 호출, 마지막에 라우팅. 순서가 중요하고, 그래서 BBR이 맨 앞으로 강제된다.</span></td></tr>
+        <td><span class="en">The ordered steps Envoy runs on every request (auth, rewrites, ext_proc calls, then routing). Order matters, so BBR is forced to the front.</span>
+            <span class="ko">Envoy가 요청마다 차례로 실행하는 단계(인증, 재작성, ext_proc 호출, 마지막에 라우팅). 순서가 중요해서 BBR이 맨 앞에 온다.</span></td></tr>
     <tr><td><code class="inl">HTTPRoute</code></td>
         <td><span class="en">config</span><span class="ko">설정</span></td>
         <td><span class="en">One routing rule: <i>if this header equals this value, send it to that pool.</i> One per model.</span>
             <span class="ko">라우팅 규칙 한 장: <i>이 헤더가 이 값이면 저 풀로 보내라.</i> 모델당 하나.</span></td></tr>
     <tr><td><code class="inl">InferencePool</code></td>
         <td><span class="en">config</span><span class="ko">설정</span></td>
-        <td><span class="en">The candidate list: which pods serve this model (a label selector) and which EPP to ask. It does not pick — it says who is eligible and who decides.</span>
-            <span class="ko">후보 명단: 이 모델을 서빙하는 pod가 누구인지(label selector)와 어느 EPP에게 물을지. 직접 고르지는 않는다 — 자격자와 결정권자를 지정할 뿐이다.</span></td></tr>
+        <td><span class="en">The candidate list: which pods serve this model (a label selector) and which EPP to ask. It does not pick.</span>
+            <span class="ko">후보 명단. 서빙 pod(label selector)와 물어볼 EPP를 지정할 뿐 직접 고르지 않는다.</span></td></tr>
   </table>
 
   <div class="callout c-green">
     <span class="tag"><span class="en">The whole thing in one sentence</span><span class="ko">한 문장으로</span></span>
-    <span class="en"><b>BBR</b> moves the model name into a header so <b>Envoy</b> can route on it; the <code class="inl">HTTPRoute</code> says which <code class="inl">InferencePool</code> that model belongs to; the pool names an <b>EPP</b>, and the EPP picks the exact pod. Everything else in this note is detail hanging off those four steps.</span>
-    <span class="ko"><b>BBR</b>이 모델 이름을 헤더로 옮겨 <b>Envoy</b>가 그걸로 라우팅할 수 있게 하고, <code class="inl">HTTPRoute</code>가 그 모델이 어느 <code class="inl">InferencePool</code> 소속인지 말해주고, 풀이 지정한 <b>EPP</b>가 정확히 어느 pod인지 고른다. 이 글의 나머지는 전부 이 네 단계에 딸린 디테일이다.</span>
+    <span class="en"><b>BBR</b> moves the model name into a header so <b>Envoy</b> can route on it. The <code class="inl">HTTPRoute</code> maps that model to an <code class="inl">InferencePool</code>, the pool names an <b>EPP</b>, and the EPP picks the pod. The rest is detail on those four steps.</span>
+    <span class="ko"><b>BBR</b>이 모델 이름을 헤더로 옮기면 <b>Envoy</b>가 그걸로 라우팅한다. <code class="inl">HTTPRoute</code>가 그 모델의 <code class="inl">InferencePool</code>을 정하고, 풀이 지정한 <b>EPP</b>가 pod를 고른다. 나머지는 이 네 단계의 디테일이다.</span>
   </div>
 </section>
 
@@ -351,8 +344,8 @@
   </h2>
 
   <p>
-    <span class="en">Here is the whole thing. The single most important thing this diagram has to get right is that <b>everything happens inside Envoy</b> — BBR and the picker are side-calls, not stops on the way.</span>
-    <span class="ko">전체 그림이다. 이 그림이 반드시 정확히 담아야 하는 한 가지는 <b>모든 게 Envoy 안에서 일어난다</b>는 것이다 — BBR과 picker는 지나가는 정거장이 아니라 <b>곁가지 호출</b>이다.</span>
+    <span class="en"><b>Everything happens inside Envoy.</b> BBR and the picker are side-calls, not stops on the way.</span>
+    <span class="ko"><b>모든 일은 Envoy 안에서 일어난다.</b> BBR과 picker는 정거장이 아니라 <b>곁가지 호출</b>이다.</span>
   </p>
 
 <div class="ascii">client
@@ -384,40 +377,40 @@ Service/gw-istio   (ClusterIP :80)                 ← Gateway.status.addresses
 
   <p class="cap">
     <span class="en">Object names follow the convention <code class="inl">&lt;prefix&gt;-&lt;model&gt;</code>, one set per served model.</span>
-    <span class="ko">오브젝트 이름은 <code class="inl">&lt;prefix&gt;-&lt;model&gt;</code> 규칙을 따르며, 서빙하는 모델마다 한 세트씩 존재한다.</span>
+    <span class="ko">오브젝트 이름은 <code class="inl">&lt;prefix&gt;-&lt;model&gt;</code> 규칙을 따르고, 모델마다 한 세트씩 있다.</span>
   </p>
 
   <div class="callout c-red">
     <span class="tag"><span class="en">Two things it is easy to draw wrong</span><span class="ko">잘못 그리기 쉬운 두 가지</span></span>
-    <span class="en"><b>The picker does not forward the request.</b> <code class="inl">ext_proc</code> is a gRPC side-call: Envoy asks, the picker answers with an endpoint, control returns to Envoy, and <b>Envoy</b> proxies to the pod. Drawing the flow as continuing downward out of the picker into the engine is wrong, and it matters — it means the picker can never be the cause of a slow or truncated response body. It only ever answers one question.<br><br><b>A NodePort Service next door is not the entry point.</b> A cluster may well have one pointing at the same Envoy pods, left over or provisioned just in case. The authoritative address is whatever the Gateway itself reports in <code class="inl">status.addresses</code> — here a ClusterIP Service, meaning callers are in-cluster.</span>
-    <span class="ko"><b>picker는 요청을 넘겨주지 않는다.</b> <code class="inl">ext_proc</code>은 gRPC 곁가지 호출이다 — Envoy가 묻고, picker가 엔드포인트로 답하고, 제어는 Envoy로 돌아오고, 그다음 <b>Envoy</b>가 pod로 프록시한다. picker에서 아래로 이어져 엔진으로 들어가게 그리면 틀린 그림이고, 이건 실제로 중요하다 — picker는 응답이 느리거나 잘리는 원인이 <b>될 수 없다</b>는 뜻이기 때문이다. 질문 하나에만 답할 뿐이다.<br><br><b>옆에 있는 NodePort Service는 진입점이 아니다.</b> 같은 Envoy pod를 가리키는 NodePort가 남아 있거나 혹시 몰라 만들어져 있을 수 있다. 정답은 Gateway가 <code class="inl">status.addresses</code>에 스스로 보고하는 주소다 — 여기서는 ClusterIP Service이고, 즉 호출자가 클러스터 내부에 있다는 뜻이다.</span>
+    <span class="en"><b>The picker does not forward the request.</b> <code class="inl">ext_proc</code> is a gRPC side-call: Envoy asks, the picker answers with an endpoint, and <b>Envoy</b> proxies to the pod. So the picker can never cause a slow or truncated response body.<br><br><b>A NodePort Service next door is not the entry point.</b> The authoritative address is what the Gateway reports in <code class="inl">status.addresses</code>, here a ClusterIP Service, so callers are in-cluster.</span>
+    <span class="ko"><b>picker는 요청을 넘겨주지 않는다.</b> <code class="inl">ext_proc</code>은 gRPC 곁가지 호출이다. Envoy가 묻고 picker가 엔드포인트로 답하면 <b>Envoy</b>가 pod로 프록시한다. 따라서 picker는 응답이 느리거나 잘리는 원인이 <b>될 수 없다</b>.<br><br><b>옆에 있는 NodePort Service는 진입점이 아니다.</b> 정답은 Gateway가 <code class="inl">status.addresses</code>에 보고하는 주소다. 여기서는 ClusterIP Service이므로 호출자는 클러스터 내부에 있다.</span>
   </div>
 
   <p>
-    <span class="en">Two decisions get made on the way down, and they are made by two different components for two different reasons:</span>
-    <span class="ko">내려가는 길에 결정이 두 번 내려지는데, 서로 다른 이유로 서로 다른 컴포넌트가 내린다.</span>
+    <span class="en">Two decisions are made on the way down, by two different components:</span>
+    <span class="ko">내려가는 길에 두 번의 결정을 서로 다른 컴포넌트가 내린다.</span>
   </p>
 
   <div class="grid2">
     <div class="mini">
       <h4><span class="en">Which model?</span><span class="ko">어느 모델인가?</span></h4>
       <p class="muted" style="font-size:14px;margin:0">
-        <span class="en">Answered by BBR, once, globally, for every model. Cheap: parse JSON, set a header.</span>
-        <span class="ko">BBR이 답한다. 전역에 하나뿐이고 모든 모델이 공유한다. 값싼 작업이다 — JSON 파싱하고 헤더 심기.</span>
+        <span class="en">BBR, once, globally, for every model. Cheap: parse JSON, set a header.</span>
+        <span class="ko">BBR이 답한다. 전역에 하나이고 모든 모델이 공유한다. JSON 파싱과 헤더 추가뿐이라 싸다.</span>
       </p>
     </div>
     <div class="mini">
       <h4><span class="en">Which replica?</span><span class="ko">어느 replica인가?</span></h4>
       <p class="muted" style="font-size:14px;margin:0">
-        <span class="en">Answered by the EPP, per model, from live engine state. Expensive, and the whole point of the stack.</span>
-        <span class="ko">EPP가 답한다. 모델마다 따로 있고, 살아있는 엔진 상태를 보고 판단한다. 비싼 작업이고, 이 스택이 존재하는 이유다.</span>
+        <span class="en">The EPP, per model, from live engine state. Expensive, and the point of the stack.</span>
+        <span class="ko">EPP가 모델마다 따로, 살아 있는 엔진 상태를 보고 답한다. 비싸고, 이 스택이 존재하는 이유다.</span>
       </p>
     </div>
   </div>
 
   <p>
-    <span class="en">Note the asymmetry in cardinality — one BBR for the whole cluster, one EPP <i>per model</i>. That is not an accident, and it has a consequence we will get to in section 6.</span>
-    <span class="ko">개수의 비대칭을 눈여겨보자 — BBR은 클러스터 전체에 하나, EPP는 <i>모델마다</i> 하나. 우연이 아니고, 6절에서 다룰 결과를 낳는다.</span>
+    <span class="en">Note the asymmetry: one BBR for the cluster, one EPP <i>per model</i>. Section 6 shows why it matters.</span>
+    <span class="ko">BBR은 클러스터에 하나, EPP는 <i>모델마다</i> 하나라는 비대칭에 주목하자. 6절에서 그 결과를 다룬다.</span>
   </p>
 </section>
 
@@ -440,23 +433,23 @@ Service/gw-istio   (ClusterIP :80)                 ← Gateway.status.addresses
     </tr>
     <tr>
       <td><code class="inl">Gateway</code></td><td>1</td>
-      <td><span class="en">The Envoy instance. A single <code class="inl">http:80</code> listener with no hostname — everything arrives through one door.</span>
-          <span class="ko">Envoy 인스턴스. hostname 없는 <code class="inl">http:80</code> listener 하나뿐 — 전부 같은 문으로 들어온다.</span></td>
+      <td><span class="en">The Envoy instance. One <code class="inl">http:80</code> listener with no hostname, so everything arrives through one door.</span>
+          <span class="ko">Envoy 인스턴스. hostname 없는 <code class="inl">http:80</code> listener 하나로 모든 요청이 들어온다.</span></td>
     </tr>
     <tr>
       <td><code class="inl">EnvoyFilter</code></td><td>1</td>
-      <td><span class="en">Wires BBR into the filter chain as an <code class="inl">ext_proc</code> call. This is config, not a process.</span>
-          <span class="ko">BBR을 <code class="inl">ext_proc</code> 호출로 필터 체인에 꽂는 설정. 프로세스가 아니라 설정이다.</span></td>
+      <td><span class="en">Config that wires BBR into the filter chain as an <code class="inl">ext_proc</code> call.</span>
+          <span class="ko">BBR을 <code class="inl">ext_proc</code> 호출로 필터 체인에 꽂는 설정. 프로세스가 아니다.</span></td>
     </tr>
     <tr>
       <td><code class="inl">Deployment</code> (BBR)</td><td><b>1 pod</b></td>
-      <td><span class="en">BBR itself — the process the filter calls out to.</span>
-          <span class="ko">BBR 본체 — 위 필터가 호출하는 프로세스.</span></td>
+      <td><span class="en">BBR itself, the process the filter calls.</span>
+          <span class="ko">BBR 본체. 위 필터가 호출하는 프로세스다.</span></td>
     </tr>
     <tr>
       <td><code class="inl">HTTPRoute</code></td><td>N</td>
-      <td><span class="en">A routing rule: <i>if the model header equals this, hand off to that pool.</i> One per model.</span>
-          <span class="ko">라우팅 규칙 한 장: <i>모델 헤더가 이 값이면 저 풀로 넘겨라.</i> 모델당 하나.</span></td>
+      <td><span class="en">Routing rule: <i>if the model header equals this, hand off to that pool.</i> One per model.</span>
+          <span class="ko">라우팅 규칙: <i>모델 헤더가 이 값이면 저 풀로 넘겨라.</i> 모델당 하나.</span></td>
     </tr>
     <tr>
       <td><code class="inl">InferencePool</code></td><td>N</td>
@@ -471,13 +464,13 @@ Service/gw-istio   (ClusterIP :80)                 ← Gateway.status.addresses
   </table>
 
   <h3>
-    <span class="en">The name collision — read this before debugging anything</span>
-    <span class="ko">이름 충돌 — 디버깅 전에 반드시 알아둘 것</span>
+    <span class="en">The name collision: read this before debugging</span>
+    <span class="ko">이름 충돌: 디버깅 전에 알아둘 것</span>
   </h3>
 
   <p>
-    <span class="en">Everything for one model is named identically. Query that one name and four different kinds come back:</span>
-    <span class="ko">한 모델에 딸린 것들이 전부 같은 이름을 쓴다. 그 이름 하나로 조회하면 네 가지 종류가 나온다.</span>
+    <span class="en">Everything for one model shares one name. Query it and four kinds come back:</span>
+    <span class="ko">한 모델에 딸린 오브젝트가 모두 같은 이름을 쓴다. 그 이름으로 조회하면 네 종류가 나온다.</span>
   </p>
 
 <div class="ascii">httproute/epp-llama-70b                 routing rule       ← NOT the picker
@@ -488,8 +481,8 @@ pod/epp-llama-70b-&lt;hash&gt;-&lt;id&gt;           ┘</div>
 
   <div class="callout c-amber">
     <span class="tag"><span class="en">Practical rule</span><span class="ko">실전 규칙</span></span>
-    <span class="en">"the <code class="inl">epp-llama-70b</code>" is ambiguous on its own and will send someone editing the wrong object. Always say the kind — <i>the <code class="inl">HTTPRoute</code></i>, <i>the <code class="inl">InferencePool</code></i>. I have watched this exact ambiguity cost real minutes in a change request review.</span>
-    <span class="ko">"<code class="inl">epp-llama-70b</code>"만으로는 어느 것인지 알 수 없고, 엉뚱한 오브젝트를 고치게 만든다. 반드시 종류를 같이 말하자 — <i><code class="inl">HTTPRoute</code></i>, <i><code class="inl">InferencePool</code></i>처럼. 변경 요청 리뷰에서 이 모호함 때문에 실제로 시간을 날리는 걸 봤다.</span>
+    <span class="en">"the <code class="inl">epp-llama-70b</code>" alone is ambiguous and leads to editing the wrong object. Always say the kind: <i>the <code class="inl">HTTPRoute</code></i>, <i>the <code class="inl">InferencePool</code></i>. I have seen this ambiguity cost real minutes in a change request review.</span>
+    <span class="ko">"<code class="inl">epp-llama-70b</code>"만으로는 어느 오브젝트인지 알 수 없어 엉뚱한 것을 고치게 된다. <i><code class="inl">HTTPRoute</code></i>, <i><code class="inl">InferencePool</code></i>처럼 종류를 같이 말하자. 변경 요청 리뷰에서 이 모호함으로 실제로 시간을 날리는 걸 봤다.</span>
   </div>
 
   <h3>
@@ -498,8 +491,8 @@ pod/epp-llama-70b-&lt;hash&gt;-&lt;id&gt;           ┘</div>
   </h3>
 
   <p>
-    <span class="en">If the split between <code class="inl">Deployment</code> and <code class="inl">Service</code> has never quite clicked, this is a good place for it to. <b>The Deployment is the thing; the Service is its stable address.</b></span>
-    <span class="ko"><code class="inl">Deployment</code>와 <code class="inl">Service</code>의 구분이 아직 헷갈린다면 여기가 이해하기 좋은 지점이다. <b>Deployment는 실물이고, Service는 그 앞에 붙은 고정 주소다.</b></span>
+    <span class="en"><b>The Deployment is the thing; the Service is its stable address.</b></span>
+    <span class="ko"><b><code class="inl">Deployment</code>는 실물이고, <code class="inl">Service</code>는 그 앞의 고정 주소다.</b></span>
   </p>
 
 <div class="ascii">Deployment/epp-llama-70b   2/2
@@ -510,18 +503,18 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
   └─ load-balances to the two pods above</div>
 
   <p>
-    <span class="en">The Deployment's job is "keep two of these alive". When one dies it makes a new one — with a <b>different IP</b>. On the cluster I read this from, those two picker pods had already restarted three and two times respectively. Had anything hardcoded a pod IP, routing would have broken silently each time.</span>
-    <span class="ko">Deployment가 하는 일은 "이걸 두 개 살려둬라"다. 하나가 죽으면 새로 만드는데, 그 새 pod는 <b>IP가 다르다</b>. 내가 읽어온 클러스터에서 이 picker pod 두 개는 이미 각각 세 번, 두 번 재시작한 상태였다. 어딘가 pod IP를 박아뒀다면 그때마다 라우팅이 조용히 깨졌을 것이다.</span>
+    <span class="en">The Deployment keeps two pods alive, and each replacement gets a <b>different IP</b>. On the cluster I read, the two picker pods had already restarted three and two times. Anything hardcoding a pod IP would have broken silently each time.</span>
+    <span class="ko">Deployment는 pod 두 개를 살려 두고, 죽으면 새로 만든다. 새 pod는 <b>IP가 다르다</b>. 내가 읽은 클러스터에서 picker pod 두 개는 이미 각각 세 번, 두 번 재시작한 상태였다. pod IP를 박아 뒀다면 그때마다 라우팅이 조용히 깨졌을 것이다.</span>
   </p>
 
   <p>
-    <span class="en">That is precisely why <code class="inl">InferencePool.endpointPickerRef</code> points at a <code class="inl">Service</code>. Nothing in the configuration ever names a pod.</span>
-    <span class="ko"><code class="inl">InferencePool.endpointPickerRef</code>가 <code class="inl">Service</code>를 가리키는 이유가 바로 이거다. 설정 어디에도 pod를 직접 지목하는 곳이 없다.</span>
+    <span class="en">That is why <code class="inl">InferencePool.endpointPickerRef</code> points at a <code class="inl">Service</code>. No configuration names a pod.</span>
+    <span class="ko">그래서 <code class="inl">InferencePool.endpointPickerRef</code>는 <code class="inl">Service</code>를 가리킨다. 설정 어디에도 pod를 직접 지목하지 않는다.</span>
   </p>
 
   <p>
-    <span class="en">And that single Service carries three ports, all backed by the same two pods:</span>
-    <span class="ko">그리고 그 Service 하나가 포트 세 개를 갖는데, 전부 같은 pod 두 개로 연결된다.</span>
+    <span class="en">That Service carries three ports, all backed by the same two pods:</span>
+    <span class="ko">이 Service는 포트 세 개를 갖고, 모두 같은 pod 두 개로 연결된다.</span>
   </p>
 
   <table class="kv">
@@ -531,34 +524,34 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
     <tr><td><code class="inl">5557</code></td><td>vLLM → EPP</td>
       <td><code class="inl">--kv-events-config</code> — <span class="en">prefix cache state</span><span class="ko">prefix cache 상태</span></td></tr>
     <tr><td><code class="inl">9090</code></td><td>—</td>
-      <td><span class="en">metrics, most likely — I did not verify this one</span><span class="ko">메트릭으로 보이나, 이건 확인하지 않았다</span></td></tr>
+      <td><span class="en">metrics, most likely (not verified)</span><span class="ko">메트릭으로 보이나 확인하지 않았다</span></td></tr>
   </table>
 
   <p>
-    <span class="en">The first two are the two arrows into the picker in the section&nbsp;3 diagram — same Service, same pods, opposite directions.</span>
-    <span class="ko">앞의 둘이 3절 그림에서 picker로 들어가던 화살표 두 개다 — 같은 Service, 같은 pod, 방향만 반대.</span>
+    <span class="en">The first two are the two arrows into the picker in the section&nbsp;3 diagram: same Service, same pods, opposite directions.</span>
+    <span class="ko">앞의 둘이 3절 그림에서 picker로 들어가던 두 화살표다. 같은 Service, 같은 pod에 방향만 반대다.</span>
   </p>
 </section>
 
 <section id="s5">
   <h2><span class="num">5</span>
     <span class="en">The reverse path: how the picker knows anything</span>
-    <span class="ko">역방향 경로 — picker는 어떻게 아는가</span>
+    <span class="ko">역방향 경로: picker는 어떻게 아는가</span>
   </h2>
 
   <p>
-    <span class="en">Everything so far describes a request travelling down. But look at what the picker is being asked to do: given two identical replicas of the same model, choose the better one. On what basis?</span>
-    <span class="ko">여기까지는 요청이 아래로 내려가는 얘기였다. 그런데 picker가 요구받는 일을 보자 — 똑같은 모델의 replica 두 개 중 더 나은 쪽을 고르라는 것이다. 무엇을 근거로?</span>
+    <span class="en">So far the request has only travelled down. But the picker must choose the better of two identical replicas. On what basis?</span>
+    <span class="ko">지금까지는 요청이 내려가는 이야기였다. 그런데 picker는 같은 모델의 replica 두 개 중 나은 쪽을 골라야 한다. 무엇을 근거로 고를까?</span>
   </p>
 
   <p>
-    <span class="en">Queue depth and KV-cache utilization it can scrape from engine metrics. But the decision that actually matters for latency is <b>prefix cache locality</b>: if replica A already holds the KV blocks for this conversation's prefix and replica B does not, sending it to A can skip most of the prefill. That is not a metric you can average — it is a question about specific blocks on a specific pod.</span>
-    <span class="ko">큐 길이나 KV 캐시 사용률은 엔진 메트릭에서 긁어올 수 있다. 하지만 지연에 실제로 영향을 주는 판단은 <b>prefix cache locality</b>다 — 이 대화의 prefix에 해당하는 KV 블록을 replica A가 이미 들고 있고 B는 없다면, A로 보내면 prefill 대부분을 건너뛴다. 이건 평균 낼 수 있는 메트릭이 아니다. 특정 pod에 특정 블록이 있느냐는 질문이다.</span>
+    <span class="en">Queue depth and KV-cache utilization come from engine metrics. What matters most for latency is <b>prefix cache locality</b>: if only replica A holds the KV blocks for this prefix, sending it to A skips most of the prefill. That is a question about specific blocks on a specific pod, not an averageable metric.</span>
+    <span class="ko">큐 길이와 KV 캐시 사용률은 엔진 메트릭에서 얻는다. 지연에 가장 중요한 것은 <b>prefix cache locality</b>다. 이 prefix의 KV 블록을 replica A만 들고 있다면 A로 보내야 prefill 대부분을 건너뛴다. 평균 낼 수 있는 메트릭이 아니라 특정 pod에 특정 블록이 있는지의 문제다.</span>
   </p>
 
   <p>
-    <span class="en">So vLLM publishes it. Each engine is launched with a flag pointing back at the picker:</span>
-    <span class="ko">그래서 vLLM이 그걸 발행한다. 각 엔진은 picker를 가리키는 플래그를 달고 뜬다.</span>
+    <span class="en">So vLLM publishes it. Each engine starts with a flag pointing back at the picker:</span>
+    <span class="ko">그래서 vLLM이 이 정보를 발행한다. 각 엔진은 picker를 가리키는 플래그를 달고 뜬다.</span>
   </p>
 
 <pre>--kv-events-config '{
@@ -569,25 +562,25 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
 }'</pre>
 
   <p>
-    <span class="en">As blocks are cached and evicted, the engine streams those events over ZeroMQ to <code class="inl">:5557</code> on the picker's Service. The picker keeps a running index of which pod holds which prefix, and scores against it.</span>
-    <span class="ko">블록이 캐시되고 축출될 때마다 엔진이 그 이벤트를 ZeroMQ로 picker Service의 <code class="inl">:5557</code>에 흘려보낸다. picker는 어느 pod가 어느 prefix를 들고 있는지 색인을 유지하면서 그걸로 점수를 매긴다.</span>
+    <span class="en">As blocks are cached and evicted, the engine streams events over ZeroMQ to <code class="inl">:5557</code> on the picker's Service. The picker keeps an index of which pod holds which prefix and scores against it.</span>
+    <span class="ko">블록이 캐시되거나 축출될 때마다 엔진은 이벤트를 ZeroMQ로 picker Service의 <code class="inl">:5557</code>에 보낸다. picker는 어느 pod가 어느 prefix를 들고 있는지 색인을 유지하고 그걸로 점수를 매긴다.</span>
   </p>
 
   <div class="callout c-blue">
     <span class="tag"><span class="en">The shape of it</span><span class="ko">구조의 모양</span></span>
-    <span class="en">Requests flow down; the information needed to route them flows up. The control loop is closed by the engines themselves reporting their own cache state — which means the routing quality of the whole stack depends on a flag on each vLLM process, not on anything in the gateway.</span>
-    <span class="ko">요청은 아래로 흐르고, 그 요청을 라우팅하는 데 필요한 정보는 위로 흐른다. 제어 루프를 닫는 건 엔진이 스스로 자기 캐시 상태를 보고하는 행위다 — 즉 이 스택 전체의 라우팅 품질이 게이트웨이가 아니라 <b>각 vLLM 프로세스의 플래그 하나</b>에 달려 있다.</span>
+    <span class="en">Requests flow down; routing information flows up. Because the engines close the loop, routing quality depends on a flag on each vLLM process, not on the gateway.</span>
+    <span class="ko">요청은 아래로, 라우팅 정보는 위로 흐른다. 엔진의 보고로 루프가 닫히므로 라우팅 품질은 게이트웨이가 아니라 <b>각 vLLM 프로세스의 플래그 하나</b>에 달려 있다.</span>
   </div>
 
   <p>
-    <span class="en">That last point has a sharp edge, and it is the kind of thing you only notice by reading the actual launch arguments rather than the architecture diagram. On the cluster I looked at, <b>one of the eight models was running without <code class="inl">--kv-events-config</code> at all</b>. Nothing was broken; no alert fired. It was simply being routed with no cache-locality signal — the expensive picker in front of it degraded to something much closer to round-robin, silently, for as long as anyone cared to not look.</span>
-    <span class="ko">마지막 문장에 날카로운 구석이 있는데, 아키텍처 다이어그램이 아니라 실제 실행 인자를 읽어야만 보이는 종류의 것이다. 내가 본 클러스터에서는 <b>여덟 모델 중 하나가 <code class="inl">--kv-events-config</code> 없이 돌고 있었다</b>. 아무것도 고장 나지 않았고 알럿도 없었다. 그저 캐시 지역성 신호 없이 라우팅되고 있었을 뿐이다 — 앞에 붙은 비싼 picker가 조용히 라운드로빈에 가깝게 퇴화한 채로, 아무도 들여다보지 않는 동안 계속.</span>
+    <span class="en">On the cluster I looked at, <b>one of the eight models ran without <code class="inl">--kv-events-config</code> at all</b>, visible only in the launch arguments, not the architecture diagram. Nothing broke and no alert fired; its picker had silently degraded to near round-robin.</span>
+    <span class="ko">내가 본 클러스터에서는 <b>여덟 모델 중 하나가 <code class="inl">--kv-events-config</code> 없이 돌고 있었다</b>. 아키텍처 그림이 아니라 실행 인자를 읽어야 보이는 문제다. 고장도 알럿도 없이, 그 앞의 picker가 라운드로빈에 가깝게 퇴화해 있었다.</span>
   </p>
 
   <div class="callout c-red">
     <span class="tag"><span class="en">Failure mode with no symptom</span><span class="ko">증상 없는 장애</span></span>
-    <span class="en">A missing publisher flag does not produce an error anywhere. The engine serves correctly, the picker picks, the request succeeds. You lose only the thing you built the stack for. Worth an explicit check that every engine actually publishes, rather than trusting that it was configured once.</span>
-    <span class="ko">publisher 플래그가 빠져도 어디서도 에러가 나지 않는다. 엔진은 정상 응답하고, picker는 고르고, 요청은 성공한다. 잃는 건 이 스택을 만든 이유 딱 하나뿐이다. 한 번 설정했으니 되어 있겠지 믿는 대신, 모든 엔진이 실제로 발행하고 있는지 명시적으로 확인할 가치가 있다.</span>
+    <span class="en">No error anywhere: the request succeeds, and you lose only the reason the stack exists. Check that every engine actually publishes rather than trusting a one-time config.</span>
+    <span class="ko">어디서도 에러가 나지 않고 요청도 성공한다. 잃는 것은 이 스택을 만든 이유 하나다. 한 번 설정했다고 믿지 말고 모든 엔진이 실제로 발행하는지 확인하자.</span>
   </div>
 </section>
 
@@ -598,29 +591,29 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
   </h2>
 
   <div class="callout c-green">
-    <span class="tag"><span class="en">In plain words — control path, data path, sidecar</span><span class="ko">쉽게 말하면 — control path · data path · 사이드카</span></span>
+    <span class="tag"><span class="en">In plain words: control path, data path, sidecar</span><span class="ko">쉽게 말하면: control path · data path · 사이드카</span></span>
     <dl>
       <dt><span class="en">control path</span><span class="ko">control path</span></dt>
-      <dd><span class="en">The part that <b>decides</b>. It looks at a request just long enough to say "this one goes to pod X", then steps aside. Small traffic, big influence.</span>
-          <span class="ko"><b>결정</b>하는 쪽. 요청을 "이건 pod X로" 라고 말할 만큼만 들여다보고 비켜선다. 트래픽은 적고 영향력은 크다.</span></dd>
+      <dd><span class="en">The part that <b>decides</b> where a request goes, then steps aside. Little traffic, big influence.</span>
+          <span class="ko">요청이 어디로 갈지 <b>결정</b>하고 비켜서는 쪽. 트래픽은 적고 영향력은 크다.</span></dd>
       <dt><span class="en">data path</span><span class="ko">data path</span></dt>
-      <dd><span class="en">The part the <b>bytes actually flow through</b>. For an LLM that means every generated token. Anything on this path is directly in the latency budget.</span>
-          <span class="ko">실제로 <b>바이트가 흐르는</b> 쪽. LLM 이면 생성되는 토큰 전부가 여기를 지난다. 이 경로에 놓인 것은 곧바로 지연 예산에 들어간다.</span></dd>
+      <dd><span class="en">The part the <b>bytes actually flow through</b>, every generated token for an LLM. Anything here is in the latency budget.</span>
+          <span class="ko">실제로 <b>바이트가 흐르는</b> 쪽. LLM에서는 생성 토큰 전부가 지나가므로 곧바로 지연 예산에 들어간다.</span></dd>
       <dt><span class="en">sidecar</span><span class="ko">사이드카</span></dt>
-      <dd><span class="en">An extra container placed <i>inside the same pod</i> as the application, to intercept its traffic. Powerful, but a pod's container list is fixed at creation — adding one means <b>recreating the pod</b>, i.e. restarting the engine and reloading the weights.</span>
-          <span class="ko">애플리케이션과 <i>같은 pod 안에</i> 끼워 넣어 그 트래픽을 가로채는 추가 컨테이너. 강력하지만 pod 의 컨테이너 목록은 생성 시점에 고정된다 — 하나 붙이려면 <b>pod 를 다시 만들어야</b> 하고, 그건 엔진 재시작과 가중치 재적재를 뜻한다.</span></dd>
+      <dd><span class="en">An extra container <i>inside the same pod</i> that intercepts its traffic. A pod's container list is fixed at creation, so adding one means <b>recreating the pod</b>: restarting the engine and reloading weights.</span>
+          <span class="ko">애플리케이션과 <i>같은 pod 안에</i> 넣어 트래픽을 가로채는 추가 컨테이너. pod의 컨테이너 목록은 생성 시 고정되므로 붙이려면 <b>pod를 다시 만들어야</b> 한다. 엔진 재시작과 가중치 재적재가 따른다.</span></dd>
     </dl>
     <p style="margin:10px 0 0">
-      <span class="en"><b>Why this section exists.</b> Where a component sits decides both how much it can slow you down and how hard it is to replace. That is the whole argument below.</span>
-      <span class="ko"><b>이 절이 있는 이유.</b> 컴포넌트가 어느 쪽에 앉아 있느냐가 "얼마나 느려지게 할 수 있는가" 와 "교체가 얼마나 어려운가" 를 동시에 결정한다. 아래 내용은 전부 그 이야기다.</span>
+      <span class="en">Where a component sits decides how much it can slow you down and how hard it is to replace.</span>
+      <span class="ko">컴포넌트의 위치가 지연에 끼치는 영향과 교체 난이도를 정한다.</span>
     </p>
   </div>
 
   <h3><span class="en">"The tokens don't pass through" is half true</span><span class="ko">"토큰은 통과하지 않는다"는 절반만 맞다</span></h3>
 
   <p>
-    <span class="en">This stack is normally described as control-plane routing: the components decide where a request goes, and the tokens flow straight from Envoy to the engine. That framing is useful but it papers over a detail visible in the filter's own configuration:</span>
-    <span class="ko">이 스택은 보통 control-plane 라우팅이라고 설명된다 — 컴포넌트들은 요청이 어디로 갈지만 정하고, 토큰은 Envoy에서 엔진으로 직행한다는 것이다. 유용한 설명이지만, 필터 설정에 드러나는 디테일 하나를 덮는다.</span>
+    <span class="en">This stack is usually called control-plane routing: components pick the destination and tokens flow straight from Envoy to the engine. The filter config shows what that hides:</span>
+    <span class="ko">이 스택은 흔히 control-plane 라우팅으로 불린다. 컴포넌트는 목적지만 정하고 토큰은 Envoy에서 엔진으로 직행한다는 뜻이다. 필터 설정을 보면 이 설명이 가리는 부분이 있다.</span>
   </p>
 
   <table class="kv">
@@ -628,42 +621,42 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
       <th><span class="en">Request body (the prompt)</span><span class="ko">요청 body (프롬프트)</span></th>
       <th><span class="en">Response (generated tokens)</span><span class="ko">응답 (생성 토큰)</span></th></tr>
     <tr><td><b>BBR</b></td>
-      <td><span class="en"><b>passes through</b> — <code class="inl">request_body_mode: FULL_DUPLEX_STREAMED</code></span>
-          <span class="ko"><b>통과한다</b> — <code class="inl">request_body_mode: FULL_DUPLEX_STREAMED</code></span></td>
-      <td><span class="en">no — <code class="inl">response_body_mode: NONE</code>, headers <code class="inl">SKIP</code></span>
-          <span class="ko">아니다 — <code class="inl">response_body_mode: NONE</code>, 헤더도 <code class="inl">SKIP</code></span></td></tr>
+      <td><span class="en"><b>passes through</b>: <code class="inl">request_body_mode: FULL_DUPLEX_STREAMED</code></span>
+          <span class="ko"><b>통과한다</b>: <code class="inl">request_body_mode: FULL_DUPLEX_STREAMED</code></span></td>
+      <td><span class="en">no: <code class="inl">response_body_mode: NONE</code>, headers <code class="inl">SKIP</code></span>
+          <span class="ko">아니다: <code class="inl">response_body_mode: NONE</code>, 헤더도 <code class="inl">SKIP</code></span></td></tr>
     <tr><td><b>EPP</b></td>
       <td><span class="en">endpoint decision only</span><span class="ko">엔드포인트 결정만</span></td>
       <td><span class="en">no</span><span class="ko">아니다</span></td></tr>
   </table>
 
   <p>
-    <span class="en">So the prompt genuinely does traverse BBR. What never touches either component is the <b>response</b> stream — and that is where the token volume and the TTFT/TPOT sensitivity live. That is the honest version of the claim: this is not a data-path gateway <i>on the side that matters for latency</i>.</span>
-    <span class="ko">즉 프롬프트는 실제로 BBR을 지나간다. 두 컴포넌트 어느 쪽도 건드리지 않는 건 <b>응답</b> 스트림이고, 토큰 부피와 TTFT/TPOT 민감도가 사는 곳이 바로 거기다. 정직하게 말하면 이렇다 — <i>지연에 중요한 쪽에서는</i> data-path 게이트웨이가 아니다.</span>
+    <span class="en">The prompt does traverse BBR. What touches neither component is the <b>response</b> stream, where the token volume and TTFT/TPOT sensitivity live. The honest claim: this is not a data-path gateway <i>on the side that matters for latency</i>.</span>
+    <span class="ko">프롬프트는 실제로 BBR을 지나간다. 두 컴포넌트가 모두 건드리지 않는 것은 <b>응답</b> 스트림이고, 토큰 대부분과 TTFT/TPOT 민감도가 여기에 있다. 정확히 말하면 <i>지연에 중요한 쪽에서는</i> data-path 게이트웨이가 아니다.</span>
   </p>
 
   <p>
-    <span class="en">The distinction matters the moment you consider replacing this with a true data-path gateway, where every token passes through. Such a gateway needs a sidecar on the serving pod, and attaching a sidecar means <b>restarting the engine</b>. A control-plane router can be swapped with a config change; a data-path one cannot. That single fact dictates the entire shape of a migration — you can only move a model without downtime if it has a spare replica to carry traffic while the other restarts.</span>
-    <span class="ko">이 구분은 이걸 진짜 data-path 게이트웨이로 바꾸려는 순간 의미를 갖는다. 모든 토큰이 통과하는 게이트웨이는 서빙 pod에 사이드카가 필요하고, 사이드카를 붙이려면 <b>엔진을 재시작</b>해야 한다. control-plane 라우터는 설정 변경으로 교체되지만 data-path는 그럴 수 없다. 이 사실 하나가 마이그레이션 전체의 모양을 결정한다 — 여유 replica가 있어서 한쪽이 재시작하는 동안 트래픽을 받아줄 수 있는 모델만 무중단 전환이 가능하다.</span>
+    <span class="en">This matters once you consider a true data-path gateway, where every token passes through. It needs a sidecar on the serving pod, which means <b>restarting the engine</b>, whereas a control-plane router swaps with a config change. So only a model with a spare replica to carry traffic during the restart can migrate without downtime.</span>
+    <span class="ko">모든 토큰이 지나가는 진짜 data-path 게이트웨이로 바꾸려면 이 구분이 중요해진다. 그런 게이트웨이는 서빙 pod에 사이드카가 필요하고, 사이드카를 붙이려면 <b>엔진을 재시작</b>해야 한다. control-plane 라우터는 설정 변경만으로 바뀐다. 그래서 재시작 동안 트래픽을 받을 여유 replica가 있는 모델만 무중단으로 옮길 수 있다.</span>
   </p>
 
   <h3><span class="en">The blast radius is not symmetric</span><span class="ko">장애 반경은 대칭이 아니다</span></h3>
 
   <p>
-    <span class="en">Both components fail closed — BBR with <code class="inl">failure_mode_allow: false</code>, the picker with <code class="inl">failureMode: FailClose</code>. Identical policy, very different consequences, because of the cardinality asymmetry from section 3.</span>
-    <span class="ko">두 컴포넌트 다 fail closed다 — BBR은 <code class="inl">failure_mode_allow: false</code>, picker는 <code class="inl">failureMode: FailClose</code>. 정책은 같은데 결과는 전혀 다르다. 3절에서 본 개수 비대칭 때문이다.</span>
+    <span class="en">Both components fail closed: BBR with <code class="inl">failure_mode_allow: false</code>, the picker with <code class="inl">failureMode: FailClose</code>. Same policy, very different consequences, because of the cardinality asymmetry from section 3.</span>
+    <span class="ko">두 컴포넌트 모두 fail closed다. BBR은 <code class="inl">failure_mode_allow: false</code>, picker는 <code class="inl">failureMode: FailClose</code>. 정책은 같지만 3절에서 본 개수 비대칭 때문에 결과는 전혀 다르다.</span>
   </p>
 
   <div class="grid2">
     <div class="mini">
-      <h4 style="color:var(--red)">BBR — <span class="en">1 pod, global</span><span class="ko">pod 1개, 전역</span></h4>
+      <h4 style="color:var(--red)">BBR: <span class="en">1 pod, global</span><span class="ko">pod 1개, 전역</span></h4>
       <p class="muted" style="font-size:14px;margin:0">
-        <span class="en">If it dies, no request for <b>any</b> model can be routed — none of them get their model header. Every model goes down at once.</span>
-        <span class="ko">죽으면 <b>어떤</b> 모델의 요청도 라우팅될 수 없다 — 모델 헤더가 안 붙으니까. 전 모델이 동시에 죽는다.</span>
+        <span class="en">If it dies, no request for <b>any</b> model gets its model header. Every model goes down at once.</span>
+        <span class="ko">죽으면 <b>어떤</b> 모델의 요청에도 모델 헤더가 붙지 않는다. 전 모델이 동시에 멈춘다.</span>
       </p>
     </div>
     <div class="mini">
-      <h4><span class="en">EPP — 2 pods per model</span><span class="ko">EPP — 모델당 pod 2개</span></h4>
+      <h4>EPP: <span class="en">2 pods per model</span><span class="ko">모델당 pod 2개</span></h4>
       <p class="muted" style="font-size:14px;margin:0">
         <span class="en">Losing one is survivable. Losing both takes out that one model and nothing else.</span>
         <span class="ko">하나 잃는 건 버틴다. 둘 다 잃어도 그 모델 하나만 죽고 나머지는 멀쩡하다.</span>
@@ -672,14 +665,14 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
   </div>
 
   <p>
-    <span class="en">The component that is architecturally trivial — parse JSON, set a header — is the single point of failure for the entire fleet, while the component doing all the interesting work is comfortably redundant. It is worth noticing that this is an easy thing to get backwards when you reason from an architecture diagram, where BBR looks like a footnote and the picker looks like the system.</span>
-    <span class="ko">구조적으로 사소한 컴포넌트 — JSON 파싱하고 헤더 심기 — 가 전체 fleet의 단일 장애점이고, 정작 흥미로운 일을 다 하는 컴포넌트는 넉넉하게 이중화돼 있다. 아키텍처 다이어그램만 보고 판단하면 거꾸로 알기 쉬운 지점이다. 그림에서 BBR은 각주처럼 보이고 picker가 시스템처럼 보이기 때문이다.</span>
+    <span class="en">The trivial component (parse JSON, set a header) is the fleet's single point of failure, while the one doing the interesting work is redundant. Architecture diagrams make this easy to get backwards: BBR looks like a footnote, the picker like the system.</span>
+    <span class="ko">JSON 파싱과 헤더 추가만 하는 사소한 컴포넌트가 fleet 전체의 단일 장애점이고, 핵심 일을 하는 컴포넌트는 넉넉하게 이중화돼 있다. 아키텍처 그림에서는 BBR이 각주처럼, picker가 시스템처럼 보여서 거꾸로 알기 쉽다.</span>
   </p>
 
   <div class="callout c-purple">
     <span class="tag"><span class="en">What I'd take from this</span><span class="ko">여기서 가져갈 것</span></span>
-    <span class="en">Two things were only visible by reading the live objects rather than the design: an engine silently publishing no cache events, and a one-replica component gating every model in the cluster. Neither shows up as an error. Both are one <code class="inl">kubectl get -o yaml</code> away.</span>
-    <span class="ko">설계 문서가 아니라 실제 오브젝트를 읽어야만 보인 게 두 가지였다 — 캐시 이벤트를 조용히 발행하지 않던 엔진 하나, 그리고 클러스터의 모든 모델을 좌우하는 replica 1짜리 컴포넌트. 둘 다 에러로는 안 나타난다. 그리고 둘 다 <code class="inl">kubectl get -o yaml</code> 한 번이면 보인다.</span>
+    <span class="en">Two problems showed up only in the live objects: an engine publishing no cache events, and a one-replica component gating every model. Neither raises an error, and both are one <code class="inl">kubectl get -o yaml</code> away.</span>
+    <span class="ko">캐시 이벤트를 발행하지 않던 엔진, 모든 모델을 좌우하는 replica 1짜리 컴포넌트. 두 문제 모두 설계가 아니라 실제 오브젝트에서만 보였고, 에러 없이 <code class="inl">kubectl get -o yaml</code> 한 번이면 드러난다.</span>
   </div>
 </section>
 
@@ -691,8 +684,8 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
   </h2>
 
   <p>
-    <span class="en">Trimmed to the fields that matter — managed fields, timestamps and most of <code class="inl">status</code> removed. Read in order, these five objects are the whole path.</span>
-    <span class="ko">중요한 필드만 남기고 managed fields·타임스탬프·<code class="inl">status</code> 대부분을 걷어냈다. 순서대로 읽으면 이 다섯 오브젝트가 경로 전체다.</span>
+    <span class="en">Trimmed to the fields that matter (managed fields, timestamps and most of <code class="inl">status</code> removed). In order, these five objects are the whole path.</span>
+    <span class="ko">managed fields·타임스탬프·<code class="inl">status</code> 대부분을 걷어내고 중요한 필드만 남겼다. 순서대로 읽으면 이 다섯 오브젝트가 경로 전체다.</span>
   </p>
 
   <h3>1. <code class="inl">Gateway</code> — <span class="en">the declaration</span><span class="ko">선언</span></h3>
@@ -736,8 +729,8 @@ Service/epp-llama-70b      ClusterIP 10.43.x.x   ← does not change
     <span class="fn">targetPort</span>: http</pre>
 
   <p>
-    <span class="en">The <code class="inl">ownerReferences</code> block is the fingerprint of an operator. Nobody wrote this Service; the gateway controller derived it from the <code class="inl">Gateway</code> and will recreate it if you delete it.</span>
-    <span class="ko"><code class="inl">ownerReferences</code> 블록이 operator의 지문이다. 이 Service는 아무도 손으로 안 썼다. gateway controller가 <code class="inl">Gateway</code>에서 파생시킨 것이고, 지우면 다시 만들어 놓는다.</span>
+    <span class="en">The <code class="inl">ownerReferences</code> block is an operator's fingerprint. Nobody wrote this Service. The gateway controller derived it from the <code class="inl">Gateway</code> and recreates it if deleted.</span>
+    <span class="ko"><code class="inl">ownerReferences</code> 블록이 operator의 지문이다. 이 Service는 사람이 쓰지 않았다. gateway controller가 <code class="inl">Gateway</code>에서 만들어 냈고, 지우면 다시 만든다.</span>
   </p>
 
   <h3>3. <code class="inl">EnvoyFilter</code> — <span class="en">how BBR gets into the chain</span><span class="ko">BBR이 체인에 들어가는 방법</span></h3>
@@ -848,14 +841,10 @@ kubectl -n <span class="st">$NS</span> exec <span class="st">&lt;engine-pod&gt;<
 
   <div class="callout c-amber">
     <span class="tag"><span class="en">Two gotchas</span><span class="ko">두 가지 함정</span></span>
-    <span class="en"><code class="inl">-o jsonpath</code> has <b>no conditionals</b> — <code class="inl">{if .nodePort}</code> is not valid syntax and fails with <code class="inl">unrecognized identifier if</code>. Pipe into <code class="inl">jq</code> or <code class="inl">python3 -c</code> when you need logic.<br><br><code class="inl">-o yaml</code> includes <code class="inl">managedFields</code>, which is routinely longer than the object itself. The <code class="inl">sed</code> line above is the fastest way to cut it down to something readable.</span>
-    <span class="ko"><code class="inl">-o jsonpath</code>에는 <b>조건문이 없다</b> — <code class="inl">{if .nodePort}</code>는 유효한 문법이 아니고 <code class="inl">unrecognized identifier if</code>로 실패한다. 판단이 필요하면 <code class="inl">jq</code>나 <code class="inl">python3 -c</code>로 넘기자.<br><br><code class="inl">-o yaml</code>에는 <code class="inl">managedFields</code>가 딸려 오는데, 대개 오브젝트 본문보다 길다. 위의 <code class="inl">sed</code> 한 줄이 읽을 만한 크기로 줄이는 가장 빠른 방법이다.</span>
+    <span class="en"><code class="inl">-o jsonpath</code> has <b>no conditionals</b>: <code class="inl">{if .nodePort}</code> fails with <code class="inl">unrecognized identifier if</code>. Use <code class="inl">jq</code> or <code class="inl">python3 -c</code> for logic.<br><br><code class="inl">-o yaml</code> includes <code class="inl">managedFields</code>, often longer than the object. The <code class="inl">sed</code> line above trims it.</span>
+    <span class="ko"><code class="inl">-o jsonpath</code>에는 <b>조건문이 없어서</b> <code class="inl">{if .nodePort}</code>는 <code class="inl">unrecognized identifier if</code>로 실패한다. 판단은 <code class="inl">jq</code>나 <code class="inl">python3 -c</code>에 맡기자.<br><br><code class="inl">-o yaml</code>에 딸려 오는 <code class="inl">managedFields</code>는 대개 본문보다 길다. 위의 <code class="inl">sed</code> 한 줄로 걷어내면 된다.</span>
   </div>
 
-  <p>
-    <span class="en">That last command is worth singling out. Everything in this note came from reading live objects rather than the design docs — and the two findings in sections 5 and 6, the engine publishing nothing and the single-replica component gating the fleet, were both invisible in the architecture and one query away in the cluster.</span>
-    <span class="ko">마지막 명령은 따로 짚을 만하다. 이 글의 모든 내용은 설계 문서가 아니라 살아있는 오브젝트를 읽어서 나왔고, 5절과 6절의 발견 두 가지 — 아무것도 발행하지 않던 엔진, 그리고 fleet 전체를 좌우하는 replica 1짜리 컴포넌트 — 는 둘 다 아키텍처에서는 안 보이고 클러스터에서는 조회 한 번 거리였다.</span>
-  </p>
 </section>
 
 <footer>

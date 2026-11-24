@@ -54,20 +54,20 @@
   <a href="argocd-phase6-prodops.html"><span class="en">Phase 6: prod-ops &amp; DR</span><span class="ko">Phase 6: 실운영 &amp; DR</span> →</a>
 </div>
 
-<h1><span class="pchip">5b</span><span class="en">Follow-up — Docker vLLM-ROCm + Argo CD external Service. Does it work?</span><span class="ko">후속 — Docker vLLM-ROCm + ArgoCD 외부 Service. 되나?</span></h1>
-<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 (AMD MI250) · Status: <b class="status-ok">✓ YES — it works, end to end</b> · the documented Phase-5 fallback A, executed live</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 (AMD MI250) · 상태: <b class="status-ok">✓ 된다 — end to end 작동</b> · Phase 5의 문서화된 폴백 A, 실제 실행</span></p>
+<h1><span class="pchip">5b</span><span class="en">Follow-up — Docker vLLM-ROCm + Argo CD external Service. Does it work?</span><span class="ko">후속: Docker vLLM-ROCm + ArgoCD 외부 Service. 되나?</span></h1>
+<p class="sub"><span class="en">Date: 2026-06-12 · Node: mi250-052 (AMD MI250) · Status: <b class="status-ok">✓ YES — it works, end to end</b> · the documented Phase-5 fallback A, executed live</span><span class="ko">작성일: 2026-06-12 · 노드: mi250-052 (AMD MI250) · 상태: <b class="status-ok">✓ 된다. end to end 작동</b> · Phase 5에 적어 둔 폴백 A를 실제로 실행</span></p>
 
 <div class="tip"><strong><span class="en">The question</span><span class="ko">질문</span></strong><br>
 <span class="en">Phase 5 showed GPU passthrough <i>into a kind node</i> fails, but plain <code>docker run --device</code> exposes the MI250 fine. So: run vLLM-ROCm in Docker (GPU there), and have Argo CD manage an in-cluster Service that fronts it — is a "GPU model server under GitOps" actually reachable from the cluster? <b>Answer: yes.</b> Below is every step, including two real gotchas.</span>
-<span class="ko">Phase 5는 GPU passthrough가 <i>kind 노드로는</i> 안 되지만 평범한 <code>docker run --device</code>는 MI250를 잘 노출함을 보였다. 그래서: vLLM-ROCm을 Docker로(거기서 GPU) 띄우고 ArgoCD가 그걸 front하는 클러스터 내부 Service를 관리하면 — "GitOps 아래 GPU 모델서버"가 정말 클러스터에서 닿나? <b>답: 된다.</b> 아래는 함정 둘 포함 전 과정.</span></p>
+<span class="ko">Phase 5에서 GPU passthrough는 <i>kind 노드로는</i> 안 됐지만, 평범한 <code>docker run --device</code>로는 MI250가 잘 보였다. 그렇다면 vLLM-ROCm은 Docker에서 GPU로 띄우고, 그 앞단의 클러스터 내부 Service만 ArgoCD가 관리하면 "GitOps 아래 GPU 모델서버"에 클러스터에서 닿을까? <b>답은 된다.</b> 아래에 함정 두 개를 포함한 전 과정을 적었다.</span></p>
 
 <div class="diagram">[ kind cluster: gitops-lab ]                                  [ host: mi250-052 ]
   pod ──curl──► Service gpu-vllm ──► nginx proxy pod ──► 172.18.0.1:8001 ──► docker vLLM-ROCm ──► MI250 GCD0
                 (Argo CD-managed)    (Argo CD-managed)    (kind gateway=host)  (--device /dev/kfd…)  (Qwen2.5-1.5B)
                 └──────── declared in Git, reconciled ────────┘                └── docker run, device passthrough ──┘</div>
-<span class="cap"><span class="en">Fig — the full request path. Left of the gateway is GitOps-managed Kubernetes; right of it is a Docker GPU process.</span><span class="ko">그림 — 전체 요청 경로. 게이트웨이 왼쪽은 GitOps 관리 Kubernetes, 오른쪽은 Docker GPU 프로세스.</span></span>
+<span class="cap"><span class="en">Fig — the full request path. Left of the gateway is GitOps-managed Kubernetes; right of it is a Docker GPU process.</span><span class="ko">그림 · 전체 요청 경로. 게이트웨이 왼쪽은 GitOps가 관리하는 Kubernetes, 오른쪽은 Docker GPU 프로세스다. 직접 그림.</span></span>
 
-<h2><span class="en">Step 1 — vLLM-ROCm on the host (the GPU half)</span><span class="ko">1단계 — 호스트에서 vLLM-ROCm (GPU 쪽)</span></h2>
+<h2><span class="en">Step 1 — vLLM-ROCm on the host (the GPU half)</span><span class="ko">1단계: 호스트에서 vLLM-ROCm 띄우기 (GPU 쪽)</span></h2>
 <pre><code>docker run -d --name gpu-vllm \
   --device /dev/kfd --device /dev/dri --group-add video --group-add render \
   --ipc=host --security-opt seccomp=unconfined \
@@ -77,32 +77,32 @@
   vllm serve Qwen/Qwen2.5-1.5B-Instruct --port 8000 --max-model-len 4096 \
        --gpu-memory-utilization 0.5 --enforce-eager</code></pre>
 <p><span class="en">The <code>rocm/vllm:latest</code> image (30.7 GB) and the Qwen2.5-1.5B weights were already cached on the node, so no big pull. One GCD via <code>HIP_VISIBLE_DEVICES=0</code>.</span>
-<span class="ko"><code>rocm/vllm:latest</code> 이미지(30.7GB)와 Qwen2.5-1.5B 가중치가 노드에 이미 캐시돼 있어 큰 pull 없음. <code>HIP_VISIBLE_DEVICES=0</code>로 GCD 1개.</span></p>
+<span class="ko"><code>rocm/vllm:latest</code> 이미지(30.7GB)와 Qwen2.5-1.5B 가중치가 노드에 이미 캐시돼 있어 큰 pull은 없었다. <code>HIP_VISIBLE_DEVICES=0</code>로 GCD 1개만 쓴다.</span></p>
 
-<div class="note"><strong><span class="en">Gotcha 1 — the engine crashed on AMD's <code>aiter</code> kernels</span><span class="ko">함정 1 — AMD <code>aiter</code> 커널에서 엔진 크래시</span></strong><br>
+<div class="note"><strong><span class="en">Gotcha 1 — the engine crashed on AMD's <code>aiter</code> kernels</span><span class="ko">함정 1: AMD <code>aiter</code> 커널에서 엔진 크래시</span></strong><br>
 <span class="en">First run: the model loaded onto the GPU fine (3.04 GiB, ROCm attention backend), then the EngineCore died right after importing <code>aiter/module_rmsnorm.so</code> → <code>RuntimeError: Engine core initialization failed</code>. AMD's <code>aiter</code> JIT kernels didn't play nice on this gfx90a. Fix: <b><code>VLLM_ROCM_USE_AITER=0</code></b> → the KV-cache profiling then succeeded (GPU KV cache 1,017,488 tokens, 248× concurrency) and the API server came up.</span>
-<span class="ko">첫 실행: 모델은 GPU에 잘 로드(3.04 GiB, ROCm attention backend), 그 직후 <code>aiter/module_rmsnorm.so</code> import 하자 EngineCore가 죽음 → <code>RuntimeError: Engine core initialization failed</code>. AMD <code>aiter</code> JIT 커널이 이 gfx90a에서 말썽. 해결: <b><code>VLLM_ROCM_USE_AITER=0</code></b> → KV-cache profiling 성공(GPU KV cache 1,017,488 tokens, 248× 동시성)하고 API 서버 기동.</span></div>
+<span class="ko">첫 실행에서 모델은 GPU에 잘 올라갔다(3.04 GiB, ROCm attention backend). 그런데 <code>aiter/module_rmsnorm.so</code>를 import한 직후 EngineCore가 죽었다 → <code>RuntimeError: Engine core initialization failed</code>. AMD <code>aiter</code> JIT 커널이 이 gfx90a에서 말썽이었다. <b><code>VLLM_ROCM_USE_AITER=0</code></b>로 끄자 KV-cache profiling이 성공했고(GPU KV cache 1,017,488 tokens, 248× 동시성) API 서버도 떴다.</span></div>
 
 <pre><code># host check — vLLM serving on the MI250:
 $ curl localhost:8001/v1/models            → ["Qwen/Qwen2.5-1.5B-Instruct"]
 $ curl localhost:8001/v1/chat/completions  → "MI250 online ..."   # real GPU completion</code></pre>
 
-<h2><span class="en">Step 2 — bridge the host into the cluster (the GitOps half)</span><span class="ko">2단계 — 호스트를 클러스터에 연결 (GitOps 쪽)</span></h2>
+<h2><span class="en">Step 2 — bridge the host into the cluster (the GitOps half)</span><span class="ko">2단계: 호스트를 클러스터에 연결 (GitOps 쪽)</span></h2>
 <p><span class="en">A pod reaches the host via the kind Docker network's gateway — <code>docker network inspect kind</code> → <code>172.18.0.1</code>. The first instinct is a no-selector <code>Service</code> + a manual <code>Endpoints</code> pointing at <code>172.18.0.1:8001</code>. It routes correctly... but:</span>
-<span class="ko">파드는 kind Docker 네트워크 게이트웨이로 호스트에 닿는다 — <code>docker network inspect kind</code> → <code>172.18.0.1</code>. 첫 직감은 selector 없는 <code>Service</code> + <code>172.18.0.1:8001</code>을 가리키는 수동 <code>Endpoints</code>. 라우팅은 맞는데... 그런데:</span></p>
+<span class="ko">파드는 kind Docker 네트워크의 게이트웨이(<code>docker network inspect kind</code> → <code>172.18.0.1</code>)로 호스트에 닿는다. 처음에는 selector 없는 <code>Service</code>에 <code>172.18.0.1:8001</code>을 가리키는 수동 <code>Endpoints</code>를 붙였다. 라우팅은 맞았지만 문제가 있었다.</span></p>
 
-<div class="note"><strong><span class="en">Gotcha 2 — Argo CD ignores <code>Endpoints</code> by default</span><span class="ko">함정 2 — ArgoCD는 <code>Endpoints</code>를 기본 무시</span></strong><br>
+<div class="note"><strong><span class="en">Gotcha 2 — Argo CD ignores <code>Endpoints</code> by default</span><span class="ko">함정 2: ArgoCD는 기본으로 <code>Endpoints</code>를 무시한다</span></strong><br>
 <span class="en">The Application went <code>Synced/Healthy</code> but managed <b>only the Service</b> — the <code>Endpoints</code> object was never applied. Cause: Argo CD v3's default <code>resource.exclusions</code> includes <code>Endpoints</code> / <code>EndpointSlice</code> (they're high-churn, k8s-managed). Applied by hand it works, but it isn't GitOps-managed and won't self-heal. Two ways out: (a) un-exclude Endpoints in <code>argocd-cm</code>, or (b) front the host with a tiny proxy <code>Deployment</code> — normal resources Argo CD <i>does</i> manage. Took (b).</span>
-<span class="ko">Application은 <code>Synced/Healthy</code>인데 <b>Service만</b> 관리하고 <code>Endpoints</code>는 적용 안 됨. 원인: ArgoCD v3 기본 <code>resource.exclusions</code>에 <code>Endpoints</code> / <code>EndpointSlice</code> 포함(고-churn, k8s 관리). 손으로 적용하면 되지만 GitOps 관리가 아니고 self-heal도 안 됨. 탈출구 둘: (a) <code>argocd-cm</code>에서 Endpoints 제외 해제, 또는 (b) 작은 프록시 <code>Deployment</code>로 호스트를 front — ArgoCD가 <i>관리하는</i> 일반 리소스. (b) 선택.</span></div>
+<span class="ko">Application은 <code>Synced/Healthy</code>였지만 <b>Service만</b> 관리했고 <code>Endpoints</code>는 적용되지 않았다. ArgoCD v3의 기본 <code>resource.exclusions</code>에 <code>Endpoints</code> / <code>EndpointSlice</code>가 들어 있기 때문이다(자주 바뀌고 k8s가 관리하는 객체). 손으로 적용하면 동작하지만 GitOps 관리 대상이 아니라 self-heal도 안 된다. 방법은 두 가지다. (a) <code>argocd-cm</code>에서 Endpoints 제외를 푼다. (b) 작은 프록시 <code>Deployment</code>를 호스트 앞에 둔다. 이건 ArgoCD가 <i>관리하는</i> 일반 리소스다. 여기서는 (b)를 골랐다.</span></div>
 
 <p><span class="en">So the GitOps-managed unit is a 3-object slice — all normal, non-excluded resources:</span>
-<span class="ko">그래서 GitOps 관리 단위는 3-객체 — 전부 일반(비제외) 리소스:</span></p>
+<span class="ko">그래서 GitOps 관리 단위는 객체 3개이고, 모두 제외 대상이 아닌 일반 리소스다.</span></p>
 <pre><code># manifests/phase5-gpu-external/  (Argo CD app: phase5-gpu-external)
 ConfigMap  gpu-vllm-proxy-conf   # nginx.conf:  proxy_pass http://172.18.0.1:8001;  (buffering off → stream)
 Deployment gpu-vllm-proxy        # nginx:1.27-alpine shim → the host GPU server
 Service    gpu-vllm              # selector app=gpu-vllm-proxy, port 8000</code></pre>
 
-<h2><span class="en">Step 3 — call the GPU from inside the cluster</span><span class="ko">3단계 — 클러스터 안에서 GPU 호출</span></h2>
+<h2><span class="en">Step 3 — call the GPU from inside the cluster</span><span class="ko">3단계: 클러스터 안에서 GPU 호출</span></h2>
 <pre><code>$ kubectl -n argocd get application phase5-gpu-external -o ...
 ConfigMap/gpu-vllm-proxy-conf  Synced
 Service/gpu-vllm               Synced
@@ -116,19 +116,19 @@ $ curl .../v1/chat/completions -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct",
     "messages":[{"role":"user","content":"Reply with exactly: served by MI250 via ArgoCD"}]}'
 {"choices":[{"message":{"content":<mark>"Served by MI250 through ArgoCD"</mark>}}],
  "model":"Qwen/Qwen2.5-1.5B-Instruct","usage":{"completion_tokens":12,"total_tokens":55}}</code></pre>
-<p class="cap"><span class="en">That reply was generated by the MI250, reached from a pod inside the kind cluster, through the Argo CD-managed Service → nginx proxy → host Docker vLLM-ROCm. The whole left side is reconstructable from Git.</span><span class="ko">이 응답은 MI250가 생성했고, kind 클러스터 내부 파드에서 ArgoCD 관리 Service → nginx 프록시 → 호스트 Docker vLLM-ROCm을 거쳐 도달. 왼쪽 전체는 Git에서 재구성 가능.</span></p>
+<p class="cap"><span class="en">That reply was generated by the MI250, reached from a pod inside the kind cluster, through the Argo CD-managed Service → nginx proxy → host Docker vLLM-ROCm. The whole left side is reconstructable from Git.</span><span class="ko">이 응답은 MI250가 만들었고, kind 클러스터 내부 파드에서 ArgoCD 관리 Service → nginx 프록시 → 호스트 Docker vLLM-ROCm을 거쳐 왔다. 왼쪽 전체는 Git에서 다시 만들 수 있다.</span></p>
 
 <h2><span class="en">Verdict</span><span class="ko">결론</span></h2>
 <table>
 <tr><th><span class="en">Question</span><span class="ko">질문</span></th><th><span class="en">Answer</span><span class="ko">답</span></th></tr>
-<tr><td><span class="en">Does Docker vLLM-ROCm + Argo CD external Service work?</span><span class="ko">Docker vLLM-ROCm + ArgoCD 외부 Service, 되나?</span></td><td><b class="status-ok"><span class="en">Yes</span><span class="ko">된다</span></b> — <span class="en">cluster pod → MI250, proven.</span><span class="ko">클러스터 파드 → MI250, 증명.</span></td></tr>
-<tr><td><span class="en">Is the GPU process k8s-scheduled?</span><span class="ko">GPU 프로세스가 k8s 스케줄?</span></td><td><span class="en">No — it runs in Docker, outside k8s. The Service/proxy is the GitOps-managed bridge.</span><span class="ko">아니오 — Docker에서, k8s 밖. Service/프록시가 GitOps 관리 다리.</span></td></tr>
-<tr><td><span class="en">Right pattern for production?</span><span class="ko">프로덕션 정석?</span></td><td><span class="en">For a real fleet, prefer real K8s + AMD device plugin (Phase 5 Option B). This fallback shines when GPU lives outside the cluster.</span><span class="ko">실 fleet엔 진짜 K8s + AMD device plugin(Phase 5 선택지 B)이 낫다. 이 폴백은 GPU가 클러스터 밖일 때 빛난다.</span></td></tr>
+<tr><td><span class="en">Does Docker vLLM-ROCm + Argo CD external Service work?</span><span class="ko">Docker vLLM-ROCm + ArgoCD 외부 Service, 되나?</span></td><td><b class="status-ok"><span class="en">Yes</span><span class="ko">된다</span></b>. <span class="en">cluster pod → MI250, proven.</span><span class="ko">클러스터 파드 → MI250 경로 확인.</span></td></tr>
+<tr><td><span class="en">Is the GPU process k8s-scheduled?</span><span class="ko">GPU 프로세스가 k8s 스케줄?</span></td><td><span class="en">No. It runs in Docker, outside k8s. The Service/proxy is the GitOps-managed bridge.</span><span class="ko">아니다. k8s 밖 Docker에서 돈다. Service/프록시가 GitOps로 관리되는 다리 역할을 한다.</span></td></tr>
+<tr><td><span class="en">Right pattern for production?</span><span class="ko">프로덕션 정석?</span></td><td><span class="en">For a real fleet, prefer real K8s + AMD device plugin (Phase 5 Option B). This fallback shines when GPU lives outside the cluster.</span><span class="ko">실제 fleet이라면 진짜 K8s + AMD device plugin(Phase 5 선택지 B)이 낫다. 이 폴백은 GPU가 클러스터 밖에 있을 때 쓸모 있다.</span></td></tr>
 </table>
 
 <div class="tip"><strong><span class="en">Bench hygiene</span><span class="ko">벤치 위생</span></strong><br>
 <span class="en">After the demo the <code>gpu-vllm</code> Docker container was stopped to free GCD 0 on the shared node (<code>docker start gpu-vllm</code> to resume). The Argo CD-managed proxy/Service/ConfigMap stay in Git — cheap, CPU-only, and they reconnect the moment the GPU server is back.</span>
-<span class="ko">데모 후 공유 노드 GCD 0 반납을 위해 <code>gpu-vllm</code> 컨테이너 중지(<code>docker start gpu-vllm</code>으로 재개). ArgoCD 관리 프록시/Service/ConfigMap은 Git에 유지 — 싸고 CPU-only, GPU 서버 복귀 즉시 재연결.</span></p></div>
+<span class="ko">데모 후 공유 노드의 GCD 0을 돌려주려고 <code>gpu-vllm</code> 컨테이너를 멈췄다(<code>docker start gpu-vllm</code>으로 재개). ArgoCD가 관리하는 프록시/Service/ConfigMap은 Git에 그대로 둔다. CPU만 쓰는 가벼운 객체라 GPU 서버가 돌아오면 바로 다시 연결된다.</span></p></div>
 
 <h2><span class="en">Reproduce</span><span class="ko">재현</span></h2>
 <pre><code># host (GPU): the docker run above (note VLLM_ROCM_USE_AITER=0)

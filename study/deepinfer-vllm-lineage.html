@@ -72,6 +72,8 @@
   .sm{font:11px -apple-system,sans-serif;fill:var(--muted)}
   .xs{font:9.5px -apple-system,sans-serif;fill:var(--faint)}
   .bx{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+  .callout ol{margin:6px 0 0;padding-left:20px}
+  .callout ol li{margin:4px 0}
   footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
 </style>
 </head>
@@ -80,8 +82,8 @@
   <p class="crumb"><a href="../">Home</a> · <a href="./">Study</a> · <span class="en">DeepInfer &amp; vLLM lineage</span><span class="ko">DeepInfer 와 vLLM 계보</span></p>
 
   <header class="hero">
-    <h1><span class="en">DeepInfer — what DeepSeek kept from vLLM, and why every kernel is a DSL</span><span class="ko">DeepInfer — DeepSeek 이 vLLM 에서 남긴 것, 그리고 커널이 전부 DSL 인 이유</span></h1>
-    <p class="lede"><span class="en">DeepSeek open-sourced the engine behind its production service. It is not a vLLM fork, but it is not unrelated either: 23 files still carry <code class="inl">#&nbsp;Derived&nbsp;from&nbsp;vLLM</code>, and where they sit tells the whole story. The control plane is vLLM's. The execution plane was rebuilt from nothing — with <b>zero lines of hand-written CUDA</b>. This note traces the lineage file by file, pins the fork point to a six-week window, and answers why a company with world-class kernel engineers writes its kernels in a DSL.</span><span class="ko">DeepSeek 이 프로덕션 서비스를 돌리는 엔진을 공개했다. vLLM 포크는 아니지만 무관하지도 않다 — 23개 파일이 아직 <code class="inl">#&nbsp;Derived&nbsp;from&nbsp;vLLM</code> 를 달고 있고, 그것들이 <i>어디</i> 모여 있는지가 전부를 말해 준다. 제어면은 vLLM 것이다. 실행면은 바닥부터 다시 지었고, <b>손으로 쓴 CUDA 가 한 줄도 없다</b>. 이 노트는 계보를 파일 단위로 추적하고, 포크 시점을 6주 구간으로 좁히고, 세계 최고 수준의 커널 엔지니어를 가진 회사가 왜 커널을 DSL 로 쓰는지에 답한다.</span></p>
+    <h1><span class="en">DeepInfer — what DeepSeek kept from vLLM, and why every kernel is a DSL</span><span class="ko">DeepInfer: DeepSeek 이 vLLM 에서 남긴 것과 커널이 전부 DSL 인 이유</span></h1>
+    <p class="lede"><span class="en">DeepSeek open-sourced the engine behind its production service. It is not a vLLM fork, but 23 files still carry <code class="inl">#&nbsp;Derived&nbsp;from&nbsp;vLLM</code>, and where they sit tells the story. The control plane is vLLM's; the execution plane was rebuilt with <b>zero lines of hand-written CUDA</b>. This code read traces the lineage file by file, pins the fork point to a six-week window, and explains why every kernel is a DSL.</span><span class="ko">DeepSeek 이 프로덕션 서비스 엔진을 공개했다. vLLM 포크는 아니지만 23개 파일이 아직 <code class="inl">#&nbsp;Derived&nbsp;from&nbsp;vLLM</code> 를 달고 있고, 그 파일들이 <i>어디</i> 모여 있는지가 많은 걸 말해 준다. 제어면은 vLLM 것이고, 실행면은 <b>손으로 쓴 CUDA 한 줄 없이</b> 새로 지었다. 이 노트는 코드를 읽어 계보를 파일 단위로 추적하고, 포크 시점을 6주 구간으로 좁히고, 커널이 전부 DSL 인 이유를 정리한다.</span></p>
     <div class="meta">
       <span class="badge">Deep dive · fork-delta</span>
       <span class="badge">DeepInfer <a class="src" href="https://github.com/deepseek-ai/DeepInfer/tree/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9">code @ 9bd9cf2</a></span>
@@ -95,76 +97,76 @@
   <nav class="toc">
     <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
     <ol>
-      <li><a href="#s1"><span class="en">Not a fork — but 23 files say otherwise</span><span class="ko">포크는 아니다 — 그런데 23개 파일이 다른 말을 한다</span></a></li>
-      <li><a href="#s2"><span class="en">Which vLLM? Pinning the fork point</span><span class="ko">어떤 vLLM 인가 — 포크 시점 특정</span></a></li>
+      <li><a href="#s1"><span class="en">Not a fork — but 23 files say otherwise</span><span class="ko">포크는 아니지만, 23개 파일은 다른 말을 한다</span></a></li>
+      <li><a href="#s2"><span class="en">Which vLLM? Pinning the fork point</span><span class="ko">어떤 vLLM 인가: 포크 시점 특정</span></a></li>
       <li><a href="#s3"><span class="en">Only the control plane survived</span><span class="ko">살아남은 건 제어면뿐</span></a></li>
       <li><a href="#s4"><span class="en">Zero CUDA, and a C++ scheduler</span><span class="ko">CUDA 0줄, 그리고 C++ 스케줄러</span></a></li>
-      <li><a href="#s5"><span class="en">Why TileLang — the Ascend answer</span><span class="ko">왜 TileLang 인가 — Ascend 라는 답</span></a></li>
-      <li><a href="#s6"><span class="en">"Only useful for low latency?" — correcting the premise</span><span class="ko">"low latency 에서만 의미 있다?" — 전제 교정</span></a></li>
+      <li><a href="#s5"><span class="en">Why TileLang — the Ascend answer</span><span class="ko">왜 TileLang 인가: Ascend 라는 답</span></a></li>
+      <li><a href="#s6"><span class="en">"Only useful for low latency?" — correcting the premise</span><span class="ko">"low latency 에서만 의미 있다?"는 전제 바로잡기</span></a></li>
       <li><a href="#s7"><span class="en">Sources</span><span class="ko">출처</span></a></li>
     </ol>
   </nav>
 
   <div class="callout c-blue">
     <span class="tag"><span class="en">One-line summary</span><span class="ko">한 줄 요약</span></span>
-    <span class="en">DeepSeek took vLLM's v0-era <b>orchestration shell</b> — engine, worker, entrypoints, distributed — and replaced the entire <b>execution engine</b> underneath it. 14% of the engine-core Python is vLLM-derived and it is almost all control plane; <code class="inl">model_executor/</code> is 4%. There is not one <code class="inl">.cu</code> file in the repo: every GPU kernel is TileLang, because the same kernel must run on NVIDIA SM100 <i>and</i> Huawei Ascend 950. Latency is bought back elsewhere — the scheduler is C++.</span><span class="ko">DeepSeek 은 vLLM 의 v0 시절 <b>오케스트레이션 껍데기</b>(engine · worker · entrypoints · distributed)를 가져오고 그 아래 <b>실행 엔진</b>을 통째로 갈아끼웠다. 엔진 코어 Python 의 14% 가 vLLM 유래인데 거의 전부가 제어면이고, <code class="inl">model_executor/</code> 는 4% 다. 레포에 <code class="inl">.cu</code> 파일이 하나도 없다 — 같은 커널이 NVIDIA SM100 <i>과</i> Huawei Ascend 950 양쪽에서 돌아야 하므로 모든 GPU 커널이 TileLang 이다. 지연은 다른 데서 번다 — 스케줄러가 C++ 다.</span>
+    <span class="en">DeepSeek took vLLM's v0-era <b>orchestration shell</b> (engine, worker, entrypoints, distributed) and replaced the entire <b>execution engine</b> underneath it. 14% of the engine-core Python is vLLM-derived, almost all of it control plane; <code class="inl">model_executor/</code> is 4%. There is not one <code class="inl">.cu</code> file in the repo: every GPU kernel is TileLang, because the same kernel must run on NVIDIA SM100 <i>and</i> Huawei Ascend 950. Latency is bought back elsewhere, with a C++ scheduler.</span><span class="ko">DeepSeek 은 vLLM v0 시절의 <b>오케스트레이션 껍데기</b>(engine · worker · entrypoints · distributed)를 가져오고 그 아래 <b>실행 엔진</b>을 통째로 갈아끼웠다. 엔진 코어 Python 의 14% 가 vLLM 유래이고 거의 전부 제어면이다. <code class="inl">model_executor/</code> 는 4% 다. 레포에 <code class="inl">.cu</code> 파일이 하나도 없다. 같은 커널이 NVIDIA SM100 <i>과</i> Huawei Ascend 950 에서 모두 돌아야 해서 GPU 커널을 전부 TileLang 으로 썼다. 지연은 C++ 스케줄러로 번다.</span>
   </div>
 
   <h3><span class="en">Glossary</span><span class="ko">용어 정리</span></h3>
   <div class="grid3">
     <div class="mini">
       <h4><span class="en">Hard fork</span><span class="ko">하드 포크</span></h4>
-      <p><span class="en">Code taken from a project once and then developed independently, with no intent to merge back or track upstream. The opposite of a live fork that rebases on new releases.</span><span class="ko">프로젝트에서 코드를 한 번 떼어 온 뒤 독립적으로 발전시키는 것. 다시 합치거나 upstream 을 따라갈 의도가 없다. 새 릴리스에 리베이스하는 라이브 포크의 반대.</span></p>
+      <p><span class="en">Code taken once and developed independently, with no intent to merge back or track upstream.</span><span class="ko">코드를 한 번 떼어 온 뒤 upstream 을 따라가지 않고 독립적으로 발전시키는 포크다.</span></p>
     </div>
     <div class="mini">
       <h4><span class="en">Control vs execution plane</span><span class="ko">제어면 vs 실행면</span></h4>
-      <p><span class="en">Control decides <i>what</i> runs — batching, scheduling, request lifecycle. Execution does the arithmetic — kernels, model layers, memory movement.</span><span class="ko">제어면은 <i>무엇을</i> 돌릴지 정한다 — 배칭·스케줄링·요청 수명. 실행면은 산수를 한다 — 커널·모델 레이어·메모리 이동.</span></p>
+      <p><span class="en">Control decides <i>what</i> runs (batching, scheduling, request lifecycle). Execution does the arithmetic (kernels, model layers, memory movement).</span><span class="ko">제어면은 배칭·스케줄링·요청 수명처럼 <i>무엇을</i> 돌릴지 정한다. 실행면은 커널·모델 레이어·메모리 이동 같은 실제 연산을 맡는다.</span></p>
     </div>
     <div class="mini">
       <h4>TileLang</h4>
-      <p><span class="en">A tile-level DSL for GPU kernels: you write dataflow in Python, the compiler handles thread binding, layout and pipelining, and emits CUDA, HIP or other backends.</span><span class="ko">GPU 커널용 타일 단위 DSL. 파이썬으로 데이터플로를 쓰면 컴파일러가 스레드 바인딩·레이아웃·파이프라이닝을 처리해 CUDA·HIP 등으로 내보낸다.</span></p>
+      <p><span class="en">A tile-level GPU kernel DSL: you write dataflow in Python, and the compiler handles thread binding, layout and pipelining, emitting CUDA, HIP or other backends.</span><span class="ko">파이썬으로 데이터플로를 쓰면 컴파일러가 스레드 바인딩·레이아웃·파이프라이닝을 맡아 CUDA·HIP 등으로 내보내는 타일 단위 GPU 커널 DSL 이다.</span></p>
     </div>
     <div class="mini">
       <h4><span class="en">vLLM v0 vs v1</span><span class="ko">vLLM v0 vs v1</span></h4>
-      <p><span class="en">vLLM's original architecture (<code class="inl">llm_engine</code> + <code class="inl">worker/model_runner</code> + <code class="inl">cache_engine</code>) versus the later v1 rewrite. DeepInfer's skeleton is recognisably v0.</span><span class="ko">vLLM 초기 아키텍처(<code class="inl">llm_engine</code> + <code class="inl">worker/model_runner</code> + <code class="inl">cache_engine</code>)와 이후 v1 재작성. DeepInfer 의 골격은 분명히 v0 다.</span></p>
+      <p><span class="en">vLLM's original architecture (<code class="inl">llm_engine</code> + <code class="inl">worker/model_runner</code> + <code class="inl">cache_engine</code>) versus the later v1 rewrite. DeepInfer's skeleton is v0.</span><span class="ko">vLLM 초기 아키텍처(<code class="inl">llm_engine</code> + <code class="inl">worker/model_runner</code> + <code class="inl">cache_engine</code>)와 이후 v1 재작성. DeepInfer 골격은 v0 다.</span></p>
     </div>
     <div class="mini">
       <h4>SM100 / Ascend 950</h4>
-      <p><span class="en">NVIDIA's Blackwell-class compute capability, and Huawei's NPU generation. Two entirely different ISAs that DeepInfer must serve from one source tree.</span><span class="ko">NVIDIA 의 Blackwell 급 compute capability, 그리고 Huawei 의 NPU 세대. DeepInfer 가 하나의 소스 트리로 감당해야 하는 완전히 다른 두 ISA.</span></p>
+      <p><span class="en">NVIDIA's Blackwell-class compute capability and Huawei's NPU generation: two different ISAs served from one source tree.</span><span class="ko">NVIDIA Blackwell 급 compute capability 와 Huawei NPU 세대. DeepInfer 가 소스 트리 하나로 지원해야 하는 서로 다른 두 ISA 다.</span></p>
     </div>
     <div class="mini">
       <h4><span class="en">Memory-bound kernel</span><span class="ko">메모리 바운드 커널</span></h4>
-      <p><span class="en">A kernel whose runtime is set by data movement, not arithmetic — gathers, index math, normalisation. Vendor BLAS libraries do not cover these.</span><span class="ko">실행 시간이 연산이 아니라 데이터 이동으로 결정되는 커널 — gather, 인덱스 연산, 정규화. 벤더 BLAS 라이브러리가 다루지 않는 영역.</span></p>
+      <p><span class="en">A kernel whose runtime is set by data movement, not arithmetic (gathers, index math, normalisation). Vendor BLAS libraries do not cover these.</span><span class="ko">실행 시간을 연산이 아니라 데이터 이동이 정하는 커널(gather, 인덱스 연산, 정규화). 벤더 BLAS 라이브러리가 다루지 않는다.</span></p>
     </div>
   </div>
 
   <section id="s1">
-    <h2><span class="num">1</span><span class="en">Not a fork — but 23 files say otherwise</span><span class="ko">포크는 아니다 — 그런데 23개 파일이 다른 말을 한다</span></h2>
+    <h2><span class="num">1</span><span class="en">Not a fork — but 23 files say otherwise</span><span class="ko">포크는 아니지만, 23개 파일은 다른 말을 한다</span></h2>
 
-    <p><span class="en">First impression says no relationship at all. DeepInfer is 342 files and 7.7 MB; vLLM is over 6,700 files. You cannot diff them. But the README is explicit:</span><span class="ko">첫인상은 "무관" 이다. DeepInfer 는 342 파일 7.7 MB, vLLM 은 6,700 파일이 넘는다. diff 가 성립하지 않는다. 그런데 README 가 명시한다.</span></p>
+    <p><span class="en">At first glance there is no relationship. DeepInfer is 342 files and 7.7 MB; vLLM is over 6,700 files, so you cannot diff them. But the README is explicit:</span><span class="ko">겉보기엔 무관하다. DeepInfer 는 342 파일 7.7 MB, vLLM 은 6,700 파일이 넘어서 diff 자체가 성립하지 않는다. 그런데 README 가 계보를 밝힌다.</span></p>
 
     <blockquote class="q">
       <p>"DeepInfer was originally built primarily on vLLM, with additional inspiration from SGLang and TensorRT-LLM. We thank their developers."</p>
       <cite>— <a href="https://github.com/deepseek-ai/DeepInfer/blob/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9/README.md#L95">README.md:95</a></cite>
     </blockquote>
 
-    <p><span class="en">And the code agrees. <b>23 source files</b> carry a one-line provenance header — 21 under <code class="inl">deepinfer/</code>, plus <code class="inl">setup.py</code> and one test:</span><span class="ko">코드도 같은 말을 한다. <b>23개 소스 파일</b>이 한 줄짜리 출처 헤더를 단다 — <code class="inl">deepinfer/</code> 아래 21개, 그리고 <code class="inl">setup.py</code> 와 테스트 하나.</span></p>
+    <p><span class="en">The code agrees. <b>23 source files</b> (21 under <code class="inl">deepinfer/</code>, plus <code class="inl">setup.py</code> and one test) carry a one-line provenance header:</span><span class="ko">코드도 같은 말을 한다. <b>23개 소스 파일</b>(<code class="inl">deepinfer/</code> 아래 21개, <code class="inl">setup.py</code>, 테스트 하나)이 한 줄짜리 출처 헤더를 단다.</span></p>
 
     <pre># SPDX-License-Identifier: Apache-2.0
 # Derived from vLLM; modified by DeepSeek.</pre>
 
-    <p><span class="en">So the honest label is <b>hard fork</b>: code taken once, then developed with no intent to track upstream. The interesting question is not <i>whether</i> there is lineage but <b>which parts</b> kept it &mdash; and that turns out to be a clean, almost architectural split (&sect;3).</span><span class="ko">따라서 정직한 이름은 <b>하드 포크</b>다 — 한 번 떼어 온 뒤 upstream 을 따라갈 의도 없이 발전시킨 것. 흥미로운 질문은 계보가 <i>있느냐</i>가 아니라 <b>어느 부분이</b> 그것을 유지했느냐이고, 결과는 거의 아키텍처적이라 할 만큼 깔끔하게 갈린다(&sect;3).</span></p>
+    <p><span class="en">So the honest label is <b>hard fork</b>. The interesting question is not <i>whether</i> there is lineage but <b>which parts</b> kept it, and the answer is a clean, almost architectural split (&sect;3).</span><span class="ko">그래서 정확한 이름은 <b>하드 포크</b>다. 물어야 할 것은 계보가 <i>있느냐</i>가 아니라 <b>어느 부분이</b> 계보를 유지했느냐이고, 답은 아키텍처 경계를 따라 깔끔하게 갈린다(&sect;3).</span></p>
 
     <div class="callout c-amber">
-      <span class="tag"><span class="en">Scope note for every number in this note</span><span class="ko">이 노트의 모든 수치에 대한 범위 주의</span></span>
-      <span class="en">Unless stated otherwise, LOC figures cover the <b>engine core</b> — <code class="inl">deepinfer/</code> + <code class="inl">deep_cluster/</code>, 226 Python files, 47,009 LOC &mdash; and exclude <code class="inl">tests/</code>, <code class="inl">examples/</code>, <code class="inl">scripts/</code> and the six <code class="inl">vendor/</code> submodules (FlashMLA, DeepGEMM, DeepEP, DeepSelect and their Ascend variants), which are separate repositories. Repo-wide Python excluding vendor is 271 files / 54,978 LOC.</span><span class="ko">달리 명시하지 않으면 LOC 는 <b>엔진 코어</b> 기준이다 — <code class="inl">deepinfer/</code> + <code class="inl">deep_cluster/</code>, 226개 파이썬 파일, 47,009 LOC. <code class="inl">tests/</code>, <code class="inl">examples/</code>, <code class="inl">scripts/</code> 와 여섯 개의 <code class="inl">vendor/</code> 서브모듈(FlashMLA, DeepGEMM, DeepEP, DeepSelect 및 Ascend 변종)은 별도 레포이므로 제외했다. vendor 를 뺀 레포 전체 파이썬은 271 파일 / 54,978 LOC.</span>
+      <span class="tag"><span class="en">Scope of every number in this note</span><span class="ko">이 노트의 수치 범위</span></span>
+      <span class="en">Unless stated otherwise, LOC figures cover the <b>engine core</b> (<code class="inl">deepinfer/</code> + <code class="inl">deep_cluster/</code>, 226 Python files, 47,009 LOC). They exclude <code class="inl">tests/</code>, <code class="inl">examples/</code>, <code class="inl">scripts/</code> and the six <code class="inl">vendor/</code> submodules (FlashMLA, DeepGEMM, DeepEP, DeepSelect and their Ascend variants), which are separate repositories. Repo-wide Python excluding vendor is 271 files / 54,978 LOC.</span><span class="ko">달리 적지 않으면 LOC 는 <b>엔진 코어</b>(<code class="inl">deepinfer/</code> + <code class="inl">deep_cluster/</code>, 226개 파이썬 파일, 47,009 LOC) 기준이다. <code class="inl">tests/</code>, <code class="inl">examples/</code>, <code class="inl">scripts/</code> 와 별도 레포인 여섯 개 <code class="inl">vendor/</code> 서브모듈(FlashMLA, DeepGEMM, DeepEP, DeepSelect 및 Ascend 변종)은 뺐다. vendor 를 뺀 레포 전체 파이썬은 271 파일 / 54,978 LOC 다.</span>
     </div>
   </section>
 
   <section id="s2">
-    <h2><span class="num">2</span><span class="en">Which vLLM? Pinning the fork point</span><span class="ko">어떤 vLLM 인가 — 포크 시점 특정</span></h2>
+    <h2><span class="num">2</span><span class="en">Which vLLM? Pinning the fork point</span><span class="ko">어떤 vLLM 인가: 포크 시점 특정</span></h2>
 
-    <p><span class="en">File paths are a fingerprint. vLLM reorganises aggressively, so a path that exists in DeepInfer but not in current vLLM dates the copy. Comparing against vLLM <code class="inl">a0f1b9ad</code>:</span><span class="ko">파일 경로가 지문이다. vLLM 은 재구성을 자주 하므로, DeepInfer 에는 있고 현재 vLLM 에는 없는 경로가 복사 시점을 알려 준다. vLLM <code class="inl">a0f1b9ad</code> 와 대조한 결과다.</span></p>
+    <p><span class="en">File paths are a fingerprint. vLLM reorganises aggressively, so a path that exists in DeepInfer but not in current vLLM dates the copy. Comparing against vLLM <code class="inl">a0f1b9ad</code>:</span><span class="ko">파일 경로가 지문이다. vLLM 은 구조를 자주 바꾸므로, DeepInfer 에는 있고 현재 vLLM 에는 없는 경로가 복사 시점을 알려 준다. vLLM <code class="inl">a0f1b9ad</code> 와 대조했다.</span></p>
 
     <table>
       <thead><tr>
@@ -180,10 +182,10 @@
       </tbody>
     </table>
 
-    <p><span class="en">That signature &mdash; <code class="inl">llm_engine</code> + <code class="inl">worker/model_runner</code> + <code class="inl">cache_engine</code> + <code class="inl">sequence.py</code> &mdash; is unmistakably the <b>vLLM v0 architecture</b>. Two more clues date it further: <code class="inl">rotary_embedding.py</code> still carries <code class="inl">Copyright 2023 The vLLM team</code> and cites <code class="inl">transformers v4.33.2</code> (released September 2023).</span><span class="ko">이 지문 &mdash; <code class="inl">llm_engine</code> + <code class="inl">worker/model_runner</code> + <code class="inl">cache_engine</code> + <code class="inl">sequence.py</code> &mdash; 은 명백히 <b>vLLM v0 아키텍처</b>다. 시점을 더 좁히는 단서가 둘 더 있다. <code class="inl">rotary_embedding.py</code> 가 아직 <code class="inl">Copyright 2023 The vLLM team</code> 을 달고 있고 <code class="inl">transformers v4.33.2</code>(2023년 9월 릴리스)를 참조한다.</span></p>
+    <p><span class="en">That combination (<code class="inl">llm_engine</code> + <code class="inl">worker/model_runner</code> + <code class="inl">cache_engine</code> + <code class="inl">sequence.py</code>) is unmistakably the <b>vLLM v0 architecture</b>. Two more clues date it further: <code class="inl">rotary_embedding.py</code> still carries <code class="inl">Copyright 2023 The vLLM team</code> and cites <code class="inl">transformers v4.33.2</code> (released September 2023).</span><span class="ko"><code class="inl">llm_engine</code> + <code class="inl">worker/model_runner</code> + <code class="inl">cache_engine</code> + <code class="inl">sequence.py</code> 조합은 <b>vLLM v0 아키텍처</b>의 지문이다. 시점을 더 좁히는 단서도 있다. <code class="inl">rotary_embedding.py</code> 는 아직 <code class="inl">Copyright 2023 The vLLM team</code> 을 달고 <code class="inl">transformers v4.33.2</code>(2023년 9월 릴리스)를 참조한다.</span></p>
 
     <h3><span class="en">But it is not one fork point</span><span class="ko">그런데 포크 시점이 하나가 아니다</span></h3>
-    <p><span class="en">Two files in DeepInfer come from opposite sides of a boundary that never existed simultaneously in upstream vLLM:</span><span class="ko">DeepInfer 의 두 파일은 upstream vLLM 에서 <i>동시에 존재한 적 없는</i> 경계의 양쪽에서 왔다.</span></p>
+    <p><span class="en">Two files in DeepInfer never coexisted in upstream vLLM:</span><span class="ko">DeepInfer 의 두 파일은 upstream vLLM 에 <i>동시에 존재한 적이 없다</i>.</span></p>
 
     <svg class="fig" viewBox="0 0 860 170" role="img" aria-label="Timeline showing parallel_utils removed before shm_broadcast was added">
       <line x1="60" y1="96" x2="800" y2="96" stroke="var(--line)" stroke-width="2"/>
@@ -212,25 +214,25 @@
 
       <text x="60" y="158" class="sm">DeepInfer has BOTH. One snapshot cannot explain that.</text>
     </svg>
-    <p class="figcap"><span class="en">Dates from the vLLM commit history via the GitHub API: <code class="inl">63e7176f</code> (2024-04-10) and <code class="inl">d9a252bc</code> (2024-06-21).</span><span class="ko">vLLM 커밋 히스토리(GitHub API)의 날짜: <code class="inl">63e7176f</code>(2024-04-10), <code class="inl">d9a252bc</code>(2024-06-21).</span></p>
+    <p class="figcap"><span class="en">Figure 1 · When each file existed in vLLM. Dates from the vLLM commit history via the GitHub API: <code class="inl">63e7176f</code> (2024-04-10) and <code class="inl">d9a252bc</code> (2024-06-21).</span><span class="ko">그림 1 · 두 파일이 vLLM 에 존재한 기간. 날짜는 vLLM 커밋 히스토리(GitHub API) <code class="inl">63e7176f</code>(2024-04-10), <code class="inl">d9a252bc</code>(2024-06-21).</span></p>
 
     <ul>
-      <li><span class="en"><code class="inl">model_executor/parallel_utils/</code> &mdash; vLLM <b>removed</b> it on 2024-04-10, moving it to <code class="inl">vllm/distributed/</code> (PR #3950, <code class="inl">63e7176f</code>).</span><span class="ko"><code class="inl">model_executor/parallel_utils/</code> &mdash; vLLM 이 2024-04-10 에 <b>제거</b>하고 <code class="inl">vllm/distributed/</code> 로 옮겼다 (PR #3950, <code class="inl">63e7176f</code>).</span></li>
-      <li><span class="en"><code class="inl">distributed/shm_broadcast.py</code> &mdash; vLLM <b>added</b> it on 2024-06-21 (PR #5399, <code class="inl">d9a252bc</code>).</span><span class="ko"><code class="inl">distributed/shm_broadcast.py</code> &mdash; vLLM 이 2024-06-21 에 <b>추가</b>했다 (PR #5399, <code class="inl">d9a252bc</code>).</span></li>
+      <li><span class="en"><code class="inl">model_executor/parallel_utils/</code>: vLLM <b>removed</b> it on 2024-04-10, moving it to <code class="inl">vllm/distributed/</code> (PR #3950, <code class="inl">63e7176f</code>).</span><span class="ko"><code class="inl">model_executor/parallel_utils/</code>: vLLM 이 2024-04-10 에 <b>제거</b>하고 <code class="inl">vllm/distributed/</code> 로 옮겼다 (PR #3950, <code class="inl">63e7176f</code>).</span></li>
+      <li><span class="en"><code class="inl">distributed/shm_broadcast.py</code>: vLLM <b>added</b> it on 2024-06-21 (PR #5399, <code class="inl">d9a252bc</code>).</span><span class="ko"><code class="inl">distributed/shm_broadcast.py</code>: vLLM 이 2024-06-21 에 <b>추가</b>했다 (PR #5399, <code class="inl">d9a252bc</code>).</span></li>
     </ul>
 
     <div class="callout c-green">
       <span class="tag"><span class="en">What that implies</span><span class="ko">여기서 따라오는 것</span></span>
-      <span class="en">No single vLLM commit contains both. So DeepInfer is not a snapshot &mdash; it is an early v0-era skeleton plus <b>selective later cherry-picks</b>. DeepSeek kept watching upstream and pulled individual files that were worth taking, without ever rebasing. That is a deliberate engineering posture, and it explains why the directory names look archaic while some contents do not.</span><span class="ko">두 파일을 함께 가진 vLLM 커밋은 없다. 따라서 DeepInfer 는 스냅샷이 아니라 <b>초기 v0 골격 + 이후 선택적 체리픽</b>이다. DeepSeek 은 upstream 을 계속 보면서 가져갈 만한 파일만 개별적으로 끌어왔고, 리베이스는 하지 않았다. 의도적인 엔지니어링 자세이고, 디렉터리 이름이 고풍스러운데 일부 내용은 그렇지 않은 이유이기도 하다.</span>
+      <span class="en">No single vLLM commit contains both. So DeepInfer is not a snapshot but an early v0-era skeleton plus <b>selective later cherry-picks</b>: DeepSeek pulled individual files worth taking, without ever rebasing. That is why the directory names look archaic while some contents do not.</span><span class="ko">두 파일을 함께 가진 vLLM 커밋은 없다. DeepInfer 는 스냅샷이 아니라 <b>초기 v0 골격에 이후 파일을 선택적으로 체리픽</b>한 결과다. 리베이스 없이 upstream 에서 쓸 만한 파일만 하나씩 가져왔다. 디렉터리 이름은 옛것인데 일부 내용은 새것인 이유다.</span>
     </div>
 
-    <p class="muted"><span class="en">Even the "kept" files are heavily rewritten. <code class="inl">communication_op.py</code> still sits at the old path and imports <code class="inl">parallel_state</code> from beside it, but its contents now do context-parallel broadcast &mdash; a concept vLLM v0 did not have.</span><span class="ko">"남긴" 파일조차 대폭 개작됐다. <code class="inl">communication_op.py</code> 는 옛 경로에 그대로 있고 옆의 <code class="inl">parallel_state</code> 를 import 하지만, 내용은 context-parallel broadcast 를 한다 &mdash; vLLM v0 에 없던 개념이다.</span></p>
+    <p class="muted"><span class="en">Even the "kept" files are heavily rewritten. <code class="inl">communication_op.py</code> still sits at the old path and imports <code class="inl">parallel_state</code> from beside it, but now does context-parallel broadcast, a concept vLLM v0 did not have.</span><span class="ko">"남긴" 파일도 대폭 고쳐졌다. <code class="inl">communication_op.py</code> 는 옛 경로에서 옆의 <code class="inl">parallel_state</code> 를 import 하지만, 하는 일은 vLLM v0 에 없던 context-parallel broadcast 다.</span></p>
   </section>
 
   <section id="s3">
     <h2><span class="num">3</span><span class="en">Only the control plane survived</span><span class="ko">살아남은 건 제어면뿐</span></h2>
 
-    <p><span class="en">Count the vLLM-derived LOC per module and the split is not gradual &mdash; it is categorical.</span><span class="ko">모듈별로 vLLM 유래 LOC 를 세어 보면 분포가 점진적이지 않다. 범주적이다.</span></p>
+    <p><span class="en">Count the vLLM-derived LOC per module and the split is not gradual. It is categorical.</span><span class="ko">모듈별 vLLM 유래 LOC 를 세면 분포가 점진적이지 않고 둘로 딱 갈린다.</span></p>
 
     <svg class="fig" viewBox="0 0 860 300" role="img" aria-label="Per-module share of vLLM-derived code, control plane versus execution plane">
       <text x="20" y="24" class="lbl">Share of each module that is vLLM-derived</text>
@@ -269,17 +271,17 @@
 
       <text x="20" y="292" class="sm">Engine core total: 6,581 of 47,009 LOC = 14% vLLM-derived.</text>
     </svg>
-    <p class="figcap"><span class="en">Measured by counting LOC in files carrying the provenance header, per module. By <i>file count</i> the same modules would read 50 / 50 / 44 / 40 / 5% &mdash; the LOC view is the one that shows how much surviving vLLM code there actually is.</span><span class="ko">출처 헤더를 단 파일의 LOC 를 모듈별로 합산해 측정. <i>파일 수</i>로 세면 같은 모듈이 50 / 50 / 44 / 40 / 5% 로 읽힌다 &mdash; 살아남은 vLLM 코드의 실제 분량을 보여주는 건 LOC 쪽이다.</span></p>
+    <p class="figcap"><span class="en">Figure 2 · vLLM-derived share per module. LOC of files carrying the provenance header, summed per module. By <i>file count</i> the same modules read 50 / 50 / 44 / 40 / 5%.</span><span class="ko">그림 2 · 모듈별 vLLM 유래 비율. 출처 헤더를 단 파일의 LOC 를 모듈별로 합산했다. <i>파일 수</i>로 세면 50 / 50 / 44 / 40 / 5% 다.</span></p>
 
-    <p><span class="en">Read top to bottom, the picture is a company that wanted vLLM's <b>request lifecycle</b> and nothing else. The scheduler loop, the worker/engine handshake, the OpenAI-ish entry surface, the shared-memory broadcast between ranks &mdash; all problems that are tedious, well-solved, and unrelated to model quality. Everything that touches the model was rewritten.</span><span class="ko">위에서 아래로 읽으면, vLLM 에서 <b>요청 수명주기</b>만 원했던 회사의 그림이 나온다. 스케줄러 루프, worker/engine 핸드셰이크, OpenAI 풍 진입 표면, rank 간 공유 메모리 브로드캐스트 &mdash; 전부 지루하고, 이미 잘 풀렸고, 모델 품질과 무관한 문제들이다. 모델에 닿는 것은 전부 다시 썼다.</span></p>
+    <p><span class="en">DeepSeek wanted vLLM's <b>request lifecycle</b> and nothing else. The scheduler loop, the worker/engine handshake, the OpenAI-ish entry surface and the shared-memory broadcast between ranks are tedious, well-solved problems unrelated to model quality. Everything that touches the model was rewritten.</span><span class="ko">DeepSeek 이 vLLM 에서 원한 건 <b>요청 수명주기</b>뿐이었다. 스케줄러 루프, worker/engine 핸드셰이크, OpenAI 풍 진입 표면, rank 간 공유 메모리 브로드캐스트는 지루하고 이미 잘 풀린, 모델 품질과 무관한 문제다. 모델에 닿는 코드는 전부 다시 썼다.</span></p>
   </section>
 
   <section id="s4">
     <h2><span class="num">4</span><span class="en">Zero CUDA, and a C++ scheduler</span><span class="ko">CUDA 0줄, 그리고 C++ 스케줄러</span></h2>
 
-    <p><span class="en">The single most surprising fact in the repo: <b>there is not one <code class="inl">.cu</code> or <code class="inl">.cuh</code> file</b> outside the vendor submodules. A company whose kernel engineers are the reason anyone knows the name DeepSeek ships zero hand-written CUDA in its inference engine.</span><span class="ko">이 레포에서 가장 놀라운 사실 하나 — vendor 서브모듈 밖에 <b><code class="inl">.cu</code> 나 <code class="inl">.cuh</code> 파일이 하나도 없다</b>. DeepSeek 이라는 이름이 알려진 이유가 커널 엔지니어인 회사가, 자사 추론 엔진에 손으로 쓴 CUDA 를 한 줄도 넣지 않았다.</span></p>
+    <p><span class="en">The most surprising fact in the repo: <b>there is not one <code class="inl">.cu</code> or <code class="inl">.cuh</code> file</b> outside the vendor submodules. A company famous for its kernel engineers ships zero hand-written CUDA in its inference engine.</span><span class="ko">이 레포에서 가장 놀라운 사실은 vendor 서브모듈 밖에 <b><code class="inl">.cu</code> 나 <code class="inl">.cuh</code> 파일이 하나도 없다</b>는 점이다. 커널 엔지니어로 이름난 회사가 추론 엔진에 손으로 쓴 CUDA 를 넣지 않았다.</span></p>
 
-    <p><span class="en">There <i>is</i> C++ &mdash; 33 files, 5,908 LOC in <code class="inl">csrc/</code> &mdash; but look at what it does:</span><span class="ko">C++ 는 <i>있다</i> &mdash; <code class="inl">csrc/</code> 에 33개 파일 5,908 LOC. 그런데 무엇을 하는지 보라.</span></p>
+    <p><span class="en">There <i>is</i> C++ (33 files, 5,908 LOC in <code class="inl">csrc/</code>), but look at what it does:</span><span class="ko">C++ 는 <code class="inl">csrc/</code> 에 33개 파일 5,908 LOC 가 있다. 하는 일은 이렇다.</span></p>
 
     <pre>csrc/engine/
   scheduler.hpp          1,329 LOC   ← the batch scheduler
@@ -290,18 +292,18 @@
   mtp_varlen.hpp                     ← speculative-decoding bookkeeping
   pybind*.cpp                        ← the Python boundary</pre>
 
-    <p><span class="en">Not a kernel in sight. This is the <b>CPU-side hot path</b>: the per-step work that happens between forward passes and that, at high batch rates, becomes the thing standing between you and the GPU. The README's "asynchronous scheduling (zero-overhead batch scheduler)" is this code.</span><span class="ko">커널은 보이지 않는다. 이건 <b>CPU 쪽 핫패스</b>다 &mdash; forward pass 사이에 일어나는 스텝별 작업이고, 배치율이 높아지면 당신과 GPU 사이를 가로막는 바로 그것이 된다. README 의 "asynchronous scheduling (zero-overhead batch scheduler)" 가 이 코드다.</span></p>
+    <p><span class="en">Not a kernel in sight. This is the <b>CPU-side hot path</b>: the per-step work between forward passes that, at high batch rates, keeps the GPU waiting. The README's "asynchronous scheduling (zero-overhead batch scheduler)" is this code.</span><span class="ko">커널은 없다. 전부 forward pass 사이에 도는 <b>CPU 쪽 핫패스</b>이고, 배치율이 높아지면 GPU 를 기다리게 만드는 병목이 된다. README 의 "asynchronous scheduling (zero-overhead batch scheduler)" 가 이 코드다.</span></p>
 
     <div class="callout c-purple">
       <span class="tag"><span class="en">The inversion</span><span class="ko">뒤집힌 구도</span></span>
-      <span class="en">Conventional engines write <b>kernels in C++/CUDA</b> and the <b>scheduler in Python</b>. DeepInfer does the opposite: kernels go <i>up</i> into a DSL, the scheduler comes <i>down</i> into C++. Each move targets the constraint that actually binds in that layer &mdash; portability for kernels, per-step latency for scheduling. Whether or not you agree with it, it is a coherent position, not an accident.</span><span class="ko">보통의 엔진은 <b>커널을 C++/CUDA 로</b>, <b>스케줄러를 파이썬으로</b> 쓴다. DeepInfer 는 반대다 &mdash; 커널은 DSL 로 <i>올리고</i>, 스케줄러는 C++ 로 <i>내린다</i>. 각 이동이 그 계층에서 실제로 걸리는 제약을 겨냥한다 &mdash; 커널엔 이식성, 스케줄링엔 스텝당 지연. 동의하든 아니든, 사고가 아니라 일관된 입장이다.</span>
+      <span class="en">Conventional engines write <b>kernels in C++/CUDA</b> and the <b>scheduler in Python</b>. DeepInfer does the opposite: kernels go <i>up</i> into a DSL, the scheduler comes <i>down</i> into C++. Each move targets the constraint that actually binds in that layer: portability for kernels, per-step latency for scheduling. It is a coherent position, not an accident.</span><span class="ko">보통 엔진은 <b>커널을 C++/CUDA 로</b>, <b>스케줄러를 파이썬으로</b> 쓴다. DeepInfer 는 반대로 커널을 DSL 로 <i>올리고</i> 스케줄러를 C++ 로 <i>내렸다</i>. 커널에는 이식성, 스케줄링에는 스텝당 지연이라는, 각 계층에서 실제로 걸리는 제약을 겨냥한 일관된 선택이다.</span>
     </div>
   </section>
 
   <section id="s5">
-    <h2><span class="num">5</span><span class="en">Why TileLang — the Ascend answer</span><span class="ko">왜 TileLang 인가 — Ascend 라는 답</span></h2>
+    <h2><span class="num">5</span><span class="en">Why TileLang — the Ascend answer</span><span class="ko">왜 TileLang 인가: Ascend 라는 답</span></h2>
 
-    <p><span class="en">If every kernel is TileLang, the obvious question is why. The directory layout answers it before you read a line of kernel code.</span><span class="ko">모든 커널이 TileLang 이라면 당연한 질문은 "왜" 다. 커널 코드를 한 줄도 읽기 전에 디렉터리 구조가 답한다.</span></p>
+    <p><span class="en">Why TileLang? The directory layout answers before you read a line of kernel code.</span><span class="ko">왜 TileLang 일까. 커널 코드를 읽기 전에 디렉터리 구조가 답한다.</span></p>
 
     <svg class="fig" viewBox="0 0 860 250" role="img" aria-label="tilelang_ops structure: one dispatcher, two backends, one shared test harness">
       <defs><marker id="t1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -329,16 +331,16 @@
       <rect x="110" y="200" width="640" height="34" rx="8" fill="var(--card)" stroke="var(--line)" stroke-dasharray="5 4"/>
       <text x="126" y="222" class="sm">tilelang_ops/*.py — 29 files: the backend-neutral interface, a torch reference, and a differential test, per op</text>
     </svg>
-    <p class="figcap"><span class="en">29 ops, each with a public entry point, two DSL backends, a torch reference and a test that diffs them — all four living in one module per op.</span><span class="ko">연산 29개 각각이 공개 진입점 하나, DSL 백엔드 둘, torch 레퍼런스 하나, 그 둘을 대조하는 테스트 하나를 갖고, 넷이 연산당 한 모듈에 모여 있다.</span></p>
+    <p class="figcap"><span class="en">Figure 3 · tilelang_ops layout. Each of the 29 ops keeps its public entry point, two DSL backends, a torch reference and a differential test in one module.</span><span class="ko">그림 3 · tilelang_ops 구조. 연산 29개마다 공개 진입점, DSL 백엔드 둘, torch 레퍼런스, 대조 테스트를 한 모듈에 둔다.</span></p>
 
     <div class="callout c-blue">
       <span class="tag"><span class="en">The top-level files are the interface, not just tests</span><span class="ko">최상위 파일은 테스트가 아니라 인터페이스다</span></span>
-      <span class="en">It is tempting to read the 29 top-level <code class="inl">*.py</code> as a test suite, since every one imports <code class="inl">pytest</code>. They are more than that: each is the <b>backend-neutral public entry point</b> that production code calls. <code class="inl">layers/sampler_utils.py</code> does <code class="inl">from ...tilelang_ops.fused_sample import fused_sample</code>; <code class="inl">layers/vocab_parallel_embedding.py</code> imports <code class="inl">gather</code> the same way. Breaking down those 9,668 LOC by what each top-level function actually is:</span><span class="ko">최상위 <code class="inl">*.py</code> 29개는 전부 <code class="inl">pytest</code> 를 import 하니 테스트 스위트로 읽기 쉽다. 그 이상이다 &mdash; 각각이 프로덕션 코드가 호출하는 <b>백엔드 중립 공개 진입점</b>이다. <code class="inl">layers/sampler_utils.py</code> 가 <code class="inl">from ...tilelang_ops.fused_sample import fused_sample</code> 를 하고, <code class="inl">layers/vocab_parallel_embedding.py</code> 도 같은 식으로 <code class="inl">gather</code> 를 가져온다. 그 9,668 LOC 를 최상위 함수의 실제 역할로 쪼개면 이렇다.</span>
+      <span class="en">The 29 top-level <code class="inl">*.py</code> all import <code class="inl">pytest</code>, so they look like a test suite. They are more: each is the <b>backend-neutral public entry point</b> that production code calls. <code class="inl">layers/sampler_utils.py</code> does <code class="inl">from ...tilelang_ops.fused_sample import fused_sample</code>; <code class="inl">layers/vocab_parallel_embedding.py</code> imports <code class="inl">gather</code> the same way. Breaking down those 9,668 LOC by role:</span><span class="ko">최상위 <code class="inl">*.py</code> 29개는 모두 <code class="inl">pytest</code> 를 import 해서 테스트처럼 보이지만, 실제로는 프로덕션 코드가 호출하는 <b>백엔드 중립 공개 진입점</b>이다. <code class="inl">layers/sampler_utils.py</code> 가 <code class="inl">from ...tilelang_ops.fused_sample import fused_sample</code> 를 하고, <code class="inl">layers/vocab_parallel_embedding.py</code> 도 같은 식으로 <code class="inl">gather</code> 를 가져온다. 9,668 LOC 를 최상위 함수 역할별로 나누면 다음과 같다.</span>
       <pre>production interface (public entry points)   4,244 LOC   44%
 torch reference implementations (*_ref)      1,609 LOC   17%
 differential tests (test_*)                  2,913 LOC   30%
 imports, constants, module level               902 LOC    9%</pre>
-      <span class="en">So verification is <b>4,522 LOC against 12,386 LOC of kernels &mdash; roughly 0.37:1</b>, not the 1:1 a naive file-level count suggests. Still a serious investment, and still driven by the same cause: with two backends you cannot assert correctness by inspection, you have to diff them against a reference.</span><span class="ko">따라서 검증은 <b>커널 12,386 LOC 대비 4,522 LOC, 약 0.37:1</b> 이다. 파일 단위로 뭉뚱그려 세면 1:1 처럼 보이지만 그렇지 않다. 그래도 상당한 투자이고, 원인은 같다 &mdash; 백엔드가 둘이면 눈으로 정합성을 주장할 수 없고 레퍼런스와 대조해야 한다.</span>
+      <span class="en">So verification is <b>4,522 LOC against 12,386 LOC of kernels, roughly 0.37:1</b>, not the 1:1 a naive file-level count suggests. Still a serious investment, for the same reason: with two backends you cannot check correctness by inspection, you have to diff against a reference.</span><span class="ko">검증 코드는 <b>커널 12,386 LOC 대비 4,522 LOC, 약 0.37:1</b> 이다. 파일 단위로 세면 1:1 처럼 보이지만 아니다. 그래도 큰 투자다. 백엔드가 둘이면 눈으로는 정합성을 확인할 수 없어 레퍼런스와 대조해야 한다.</span>
     </div>
 
     <pre># deepinfer/model_executor/layers/tilelang_ops/ops.py — the whole mechanism
@@ -349,60 +351,60 @@ for _info in pkgutil.iter_modules(_pkg.__path__):
         if ... not _name.endswith("_tl"): continue
         globals()[_name] = _obj          # re-export the selected backend</pre>
 
-    <p><span class="en">And the platform object that drives it:</span><span class="ko">그리고 그것을 구동하는 플랫폼 객체.</span></p>
+    <p><span class="en">And the platform object that drives it:</span><span class="ko">이를 구동하는 플랫폼 객체는 다음과 같다.</span></p>
     <pre>class PlatformGPU(Platform):   tilelang_ops_backend = "cuda";  fp8_sf_type = torch.int32
 class PlatformNPU(Platform):   tilelang_ops_backend = "asc";   fp8_sf_type = torch.int16</pre>
 
-    <p><span class="en">So: <b>DeepSeek must run the same model on NVIDIA SM100 and Huawei Ascend 950.</b> Hand-writing that kernel set twice &mdash; once in CUDA C++, once in AscendC &mdash; produces two unrelated codebases that drift apart immediately. TileLang gives one language, one set of tiling concepts, one test harness, two targets. Under export controls that is not a performance decision; it is closer to a survival one.</span><span class="ko">정리하면 — <b>DeepSeek 은 같은 모델을 NVIDIA SM100 과 Huawei Ascend 950 에서 돌려야 한다.</b> 그 커널 세트를 CUDA C++ 로 한 번, AscendC 로 또 한 번 손으로 쓰면 즉시 서로 멀어지는 무관한 코드베이스 두 벌이 된다. TileLang 은 언어 하나, 타일링 개념 하나, 테스트 하네스 하나로 타깃 둘을 준다. 수출 규제 아래에서 이건 성능 결정이 아니라 생존 결정에 가깝다.</span></p>
+    <p><span class="en">So: <b>DeepSeek must run the same model on NVIDIA SM100 and Huawei Ascend 950.</b> Hand-writing the kernel set twice, in CUDA C++ and in AscendC, produces two unrelated codebases that drift apart immediately. TileLang gives one language, one set of tiling concepts, one test harness, two targets. Under export controls that is closer to a survival decision than a performance one.</span><span class="ko">정리하면 <b>DeepSeek 은 같은 모델을 NVIDIA SM100 과 Huawei Ascend 950 에서 돌려야 한다.</b> 커널 세트를 CUDA C++ 와 AscendC 로 따로 쓰면 곧바로 어긋나는 코드베이스 두 벌이 생긴다. TileLang 은 언어, 타일링 개념, 테스트 하네스를 하나로 두고 타깃만 둘로 나눈다. 수출 규제 아래에서 이건 성능보다 생존에 가까운 결정이다.</span></p>
 
     <div class="callout c-amber">
       <span class="tag"><span class="en">Portability is not free</span><span class="ko">이식성은 공짜가 아니다</span></span>
-      <span class="en"><code class="inl">asc/</code> is <b>49% longer</b> than <code class="inl">cuda/</code> (7,418 vs 4,968 LOC) and reaches for Ascend-specific primitives &mdash; <code class="inl">simd</code>, <code class="inl">get_num_vec_cores</code>. This is not write-once-run-anywhere. It is <i>same language, same concepts, same tests &mdash; still hand-written per target</i>. The win is shared tooling and shared reasoning, not shared source &mdash; and the verification bill that comes with it is quantified in the callout above.</span><span class="ko"><code class="inl">asc/</code> 는 <code class="inl">cuda/</code> 보다 <b>49% 길다</b>(7,418 대 4,968 LOC). <code class="inl">simd</code>, <code class="inl">get_num_vec_cores</code> 같은 Ascend 전용 프리미티브도 직접 쓴다. "한 번 쓰면 어디서나" 가 아니다. <i>같은 언어·같은 개념·같은 테스트로, 타깃별로 여전히 손으로 쓴다</i> 가 맞다. 얻는 건 소스 공유가 아니라 툴링과 사고의 공유다 &mdash; 그에 따르는 검증 비용은 위 콜아웃에 수치로 정리했다.</span>
+      <span class="en"><code class="inl">asc/</code> is <b>49% longer</b> than <code class="inl">cuda/</code> (7,418 vs 4,968 LOC) and reaches for Ascend-specific primitives (<code class="inl">simd</code>, <code class="inl">get_num_vec_cores</code>). This is not write-once-run-anywhere. It is <i>same language, same concepts, same tests, still hand-written per target</i>. The win is shared tooling and reasoning, not shared source; the verification bill is quantified in the callout above.</span><span class="ko"><code class="inl">asc/</code> 는 <code class="inl">cuda/</code> 보다 <b>49% 길고</b>(7,418 대 4,968 LOC), <code class="inl">simd</code>, <code class="inl">get_num_vec_cores</code> 같은 Ascend 전용 프리미티브를 쓴다. 한 번 쓰면 어디서나 도는 구조가 아니다. <i>같은 언어·개념·테스트로 타깃마다 여전히 손으로 쓴다</i>. 공유되는 건 소스가 아니라 툴링과 사고방식이고, 검증 비용은 위 callout 에 수치로 정리했다.</span>
     </div>
 
     <h3><span class="en">How complete is the Ascend side, really?</span><span class="ko">Ascend 쪽은 실제로 얼마나 완성됐나</span></h3>
-    <p><span class="en">LOC counts flatter it. Three things in the tree say CUDA is the lead backend and Ascend is following:</span><span class="ko">LOC 수치는 후하게 쳐 준 것이다. 트리의 세 가지가 CUDA 가 선도 백엔드이고 Ascend 가 뒤따르는 중임을 말한다.</span></p>
+    <p><span class="en">LOC counts flatter it. Three things in the tree show CUDA leading and Ascend following:</span><span class="ko">LOC 수치는 Ascend 를 후하게 보이게 한다. 트리의 세 가지를 보면 CUDA 가 앞서고 Ascend 가 뒤따르는 중이다.</span></p>
     <div class="grid3">
       <div class="mini">
         <h4><span class="en">1 · Pairing is partial</span><span class="ko">1 · 짝이 다 맞지 않는다</span></h4>
-        <p><span class="en">The two backends are not mirror images. Several kernels exist only on the CUDA side &mdash; <code class="inl">candidate_blocks</code>, <code class="inl">dflash</code>, <code class="inl">flash_mla_utils</code>, <code class="inl">outlier_detection</code> among them.</span><span class="ko">두 백엔드는 거울상이 아니다. CUDA 쪽에만 있는 커널이 여럿이다 &mdash; <code class="inl">candidate_blocks</code>, <code class="inl">dflash</code>, <code class="inl">flash_mla_utils</code>, <code class="inl">outlier_detection</code> 등.</span></p>
+        <p><span class="en">The two backends are not mirror images. Several kernels exist only on CUDA, among them <code class="inl">candidate_blocks</code>, <code class="inl">dflash</code>, <code class="inl">flash_mla_utils</code> and <code class="inl">outlier_detection</code>.</span><span class="ko">두 백엔드는 거울상이 아니다. <code class="inl">candidate_blocks</code>, <code class="inl">dflash</code>, <code class="inl">flash_mla_utils</code>, <code class="inl">outlier_detection</code> 등 CUDA 쪽에만 있는 커널이 여럿이다.</span></p>
       </div>
       <div class="mini">
         <h4><span class="en">2 · Observability is CUDA-only</span><span class="ko">2 · 관측은 CUDA 전용</span></h4>
-        <p><span class="en">Every entry point in <code class="inl">csrc/graph_timer/graph_timer_asc.cpp</code> throws <code class="inl">"NPU graph timer primitives are not implemented yet"</code>. You cannot do in-graph timing on Ascend today.</span><span class="ko"><code class="inl">csrc/graph_timer/graph_timer_asc.cpp</code> 의 모든 진입점이 <code class="inl">"NPU graph timer primitives are not implemented yet"</code> 를 던진다. 오늘 Ascend 에서는 in-graph 타이밍이 불가능하다.</span></p>
+        <p><span class="en">Every entry point in <code class="inl">csrc/graph_timer/graph_timer_asc.cpp</code> throws <code class="inl">"NPU graph timer primitives are not implemented yet"</code>. You cannot do in-graph timing on Ascend today.</span><span class="ko"><code class="inl">csrc/graph_timer/graph_timer_asc.cpp</code> 의 모든 진입점이 <code class="inl">"NPU graph timer primitives are not implemented yet"</code> 를 던진다. 지금은 Ascend 에서 in-graph 타이밍을 할 수 없다.</span></p>
       </div>
       <div class="mini">
         <h4><span class="en">3 · A rewrite, not a retarget</span><span class="ko">3 · 리타깃이 아니라 재작성</span></h4>
-        <p><span class="en">CUDA kernels use fragments, <code class="inl">T.Pipelined</code> and PDL sync; Ascend ones use <code class="inl">T.Persistent</code> vector-core loops with explicit UB staging and inter-core flag barriers. Same DSL, different program.</span><span class="ko">CUDA 커널은 fragment, <code class="inl">T.Pipelined</code>, PDL 동기화를 쓰고, Ascend 쪽은 명시적 UB 스테이징과 코어 간 플래그 배리어를 동반한 <code class="inl">T.Persistent</code> 벡터코어 루프를 쓴다. 같은 DSL, 다른 프로그램.</span></p>
+        <p><span class="en">CUDA kernels use fragments, <code class="inl">T.Pipelined</code> and PDL sync; Ascend ones use <code class="inl">T.Persistent</code> vector-core loops with explicit UB staging and inter-core flag barriers. Same DSL, different program.</span><span class="ko">CUDA 커널은 fragment, <code class="inl">T.Pipelined</code>, PDL 동기화를 쓴다. Ascend 커널은 명시적 UB 스테이징과 코어 간 플래그 배리어를 둔 <code class="inl">T.Persistent</code> 벡터코어 루프를 쓴다. DSL 은 같아도 프로그램은 다르다.</span></p>
       </div>
     </div>
-    <p><span class="en">Even the dependency files admit the asymmetry: <code class="inl">requirements-nvidia.txt</code> installs <code class="inl">torch==2.13.0+cu132</code> and <code class="inl">flash-attn-4</code>, while <code class="inl">requirements-ascend.txt</code> installs <code class="inl">torch==2.13.0+<b>cpu</b></code> and gets device support entirely from <code class="inl">torch-npu==2.13.0rc1</code> &mdash; an <code class="inl">rc</code> build.</span><span class="ko">의존성 파일조차 비대칭을 인정한다. <code class="inl">requirements-nvidia.txt</code> 는 <code class="inl">torch==2.13.0+cu132</code> 와 <code class="inl">flash-attn-4</code> 를 깔지만, <code class="inl">requirements-ascend.txt</code> 는 <code class="inl">torch==2.13.0+<b>cpu</b></code> 를 깔고 디바이스 지원을 전부 <code class="inl">torch-npu==2.13.0rc1</code> 에서 받는다 &mdash; <code class="inl">rc</code> 빌드다.</span></p>
+    <p><span class="en">Even the dependency files admit the asymmetry: <code class="inl">requirements-nvidia.txt</code> installs <code class="inl">torch==2.13.0+cu132</code> and <code class="inl">flash-attn-4</code>, while <code class="inl">requirements-ascend.txt</code> installs <code class="inl">torch==2.13.0+<b>cpu</b></code> and gets device support entirely from <code class="inl">torch-npu==2.13.0rc1</code>, an <code class="inl">rc</code> build.</span><span class="ko">의존성 파일도 비대칭을 드러낸다. <code class="inl">requirements-nvidia.txt</code> 는 <code class="inl">torch==2.13.0+cu132</code> 와 <code class="inl">flash-attn-4</code> 를 깔지만, <code class="inl">requirements-ascend.txt</code> 는 <code class="inl">torch==2.13.0+<b>cpu</b></code> 를 깔고 디바이스 지원을 <code class="inl">rc</code> 빌드인 <code class="inl">torch-npu==2.13.0rc1</code> 에 전부 맡긴다.</span></p>
 
-    <h4><span class="en">The delegated math is only half-ported &mdash; and you can trace the consequence</span><span class="ko">위임한 연산도 절반만 이식됐고, 그 결과가 추적된다</span></h4>
-    <p><span class="en">Look at which vendor submodules have an Ascend twin, and which do not:</span><span class="ko">어떤 vendor 서브모듈이 Ascend 쌍을 갖고 어떤 것이 없는지 보라.</span></p>
+    <h4><span class="en">The delegated math is only half-ported, and you can trace the consequence</span><span class="ko">위임한 연산도 절반만 이식됐고, 그 결과가 코드에 남아 있다</span></h4>
+    <p><span class="en">Which vendor submodules have an Ascend twin, and which do not:</span><span class="ko">Ascend 쌍이 있는 vendor 서브모듈과 없는 서브모듈은 다음과 같다.</span></p>
     <pre>vendor/DeepGEMM        vendor/DeepGEMM-Ascend     ← paired
 vendor/DeepEP          vendor/DeepEP-Ascend       ← paired
 vendor/FlashMLA        (none)                     ← CUDA only
 vendor/DeepSelect      (none)                     ← CUDA only</pre>
-    <p><span class="en">Now the shim package makes sense. <code class="inl">deepinfer/npu_ops/</code> exists to patch exactly the two gaps, and its own comments say so:</span><span class="ko">그러면 shim 패키지가 이해된다. <code class="inl">deepinfer/npu_ops/</code> 는 정확히 그 두 구멍을 메우려고 존재하고, 주석이 그렇다고 말한다.</span></p>
+    <p><span class="en">That explains the shim package. <code class="inl">deepinfer/npu_ops/</code> exists to patch exactly these two gaps, and its comments say so:</span><span class="ko">shim 패키지 <code class="inl">deepinfer/npu_ops/</code> 는 정확히 이 두 구멍을 메우려고 있고, 주석에도 그렇게 적혀 있다.</span></p>
     <pre>npu_ops/deep_select.py:20  # TODO(NPU): To be removed when `topk` for sampler is ready
 npu_ops/vit_attn.py:8      # TODO(NPU): To be removed when `_flash_attn_fwd` for ViT is ready</pre>
-    <p><span class="en">A clean causal chain: no Ascend build of DeepSelect and FlashMLA &rarr; sampler <code class="inl">topk</code> and ViT attention have no native NPU path &rarr; a shim package hooks <code class="inl">builtins.__import__</code> to redirect those two imports to lazy replacements &rarr; both are marked for deletion once the real thing lands.</span><span class="ko">깔끔한 인과 사슬이다 &mdash; DeepSelect 와 FlashMLA 의 Ascend 빌드 없음 &rarr; 샘플러 <code class="inl">topk</code> 와 ViT attention 에 네이티브 NPU 경로 없음 &rarr; shim 패키지가 <code class="inl">builtins.__import__</code> 를 후킹해 그 두 import 를 지연 대체물로 돌림 &rarr; 진짜가 들어오면 삭제 예정으로 표시.</span></p>
+    <p><span class="en">A clean causal chain: no Ascend build of DeepSelect and FlashMLA &rarr; sampler <code class="inl">topk</code> and ViT attention have no native NPU path &rarr; a shim package hooks <code class="inl">builtins.__import__</code> to redirect those two imports to lazy replacements &rarr; both are marked for deletion once the real thing lands.</span><span class="ko">인과 관계가 깔끔하다. DeepSelect 와 FlashMLA 의 Ascend 빌드가 없다 &rarr; 샘플러 <code class="inl">topk</code> 와 ViT attention 에 네이티브 NPU 경로가 없다 &rarr; shim 패키지가 <code class="inl">builtins.__import__</code> 를 후킹해 두 import 를 지연 대체물로 돌린다 &rarr; 진짜가 들어오면 지울 예정이라고 표시돼 있다.</span></p>
 
     <div class="callout c-red">
       <span class="tag"><span class="en">The best single illustration of portability friction</span><span class="ko">이식성 마찰을 가장 잘 보여주는 한 장면</span></span>
-      <span class="en">On an NPU-only host, <code class="inl">torch_npu</code>'s <code class="inl">transfer_to_npu</code> maps <code class="inl">torch.cuda.*</code> onto <code class="inl">torch.npu.*</code> &mdash; so <code class="inl">torch.cuda.is_available()</code> returns <b>True on a machine with no NVIDIA GPU</b>. TileLang gates its CUDA probe on exactly that call. Left alone, it would compile every kernel for CUDA on an Ascend box. The fix is one line, and the comment above it is the honest story of cross-vendor work:</span><span class="ko">NPU 전용 호스트에서 <code class="inl">torch_npu</code> 의 <code class="inl">transfer_to_npu</code> 가 <code class="inl">torch.cuda.*</code> 를 <code class="inl">torch.npu.*</code> 로 매핑한다 &mdash; 그래서 <code class="inl">torch.cuda.is_available()</code> 이 <b>NVIDIA GPU 가 없는 기계에서 True</b> 를 반환한다. TileLang 의 CUDA 탐지가 정확히 그 호출에 걸려 있다. 그대로 두면 Ascend 장비에서 모든 커널을 CUDA 로 컴파일한다. 수정은 한 줄이고, 그 위의 주석이 이종 벤더 작업의 정직한 실상이다.</span>
+      <span class="en">On an NPU-only host, <code class="inl">torch_npu</code>'s <code class="inl">transfer_to_npu</code> maps <code class="inl">torch.cuda.*</code> onto <code class="inl">torch.npu.*</code>, so <code class="inl">torch.cuda.is_available()</code> returns <b>True on a machine with no NVIDIA GPU</b>. TileLang gates its CUDA probe on exactly that call, so left alone it would compile every kernel for CUDA on an Ascend box. The fix is one line:</span><span class="ko">NPU 전용 호스트에서는 <code class="inl">torch_npu</code> 의 <code class="inl">transfer_to_npu</code> 가 <code class="inl">torch.cuda.*</code> 를 <code class="inl">torch.npu.*</code> 로 매핑한다. 그래서 <code class="inl">torch.cuda.is_available()</code> 이 <b>NVIDIA GPU 가 없는 기계에서 True</b> 를 반환한다. TileLang 의 CUDA 탐지가 바로 이 호출을 쓰므로, 그대로 두면 Ascend 장비에서 모든 커널을 CUDA 로 컴파일한다. 수정은 한 줄이다.</span>
       <pre>os.environ.setdefault("TILELANG_DEFAULT_TARGET", "ascend")</pre>
     </div>
-    <p class="muted"><span class="en">None of this makes the portability argument wrong. It makes it <i>current</i>: TileLang is the mechanism that makes a second backend tractable at all, and DeepSeek is visibly mid-port rather than done.</span><span class="ko">이것이 이식성 논거를 틀리게 만들지는 않는다. <i>현재진행형</i>으로 만들 뿐이다 &mdash; TileLang 은 두 번째 백엔드를 애초에 감당 가능하게 만드는 장치이고, DeepSeek 은 완료가 아니라 이식 중인 것이 눈에 보인다.</span></p>
+    <p class="muted"><span class="en">None of this makes the portability argument wrong, only <i>current</i>: TileLang is what makes a second backend tractable at all, and DeepSeek is visibly mid-port rather than done.</span><span class="ko">그렇다고 이식성 논거가 틀린 건 아니다. TileLang 은 두 번째 백엔드를 감당할 수 있게 해 주는 장치이고, DeepSeek 은 아직 이식이 <i>진행 중</i>일 뿐이다.</span></p>
   </section>
 
   <section id="s6">
-    <h2><span class="num">6</span><span class="en">"Only useful for low latency?" — correcting the premise</span><span class="ko">"low latency 에서만 의미 있다?" — 전제 교정</span></h2>
+    <h2><span class="num">6</span><span class="en">"Only useful for low latency?" — correcting the premise</span><span class="ko">"low latency 에서만 의미 있다?"는 전제 바로잡기</span></h2>
 
-    <p><span class="en">There is a common intuition that tile DSLs only pay off in latency-bound regimes, because vendor libraries dominate big dense GEMM. That intuition is <b>half right</b>, and DeepInfer shows exactly which half.</span><span class="ko">타일 DSL 은 벤더 라이브러리가 지배하는 큰 dense GEMM 때문에 지연 바운드 영역에서만 값을 한다는 직관이 흔하다. 그 직관은 <b>절반은 맞고</b>, DeepInfer 가 어느 절반인지 정확히 보여 준다.</span></p>
+    <p><span class="en">A common intuition says tile DSLs only pay off in latency-bound regimes, because vendor libraries dominate big dense GEMM. That intuition is <b>half right</b>, and DeepInfer shows which half.</span><span class="ko">벤더 라이브러리가 큰 dense GEMM 을 지배하니 타일 DSL 은 지연 바운드 영역에서만 쓸모 있다는 직관이 흔하다. 이 직관은 <b>절반만 맞고</b>, DeepInfer 가 어느 절반인지 보여 준다.</span></p>
 
-    <p><span class="en">DeepInfer does not use TileLang for heavy dense math <b>at all</b>. There are <b>zero GEMM or matmul kernels</b> in <code class="inl">tilelang_ops/</code>. The work is split:</span><span class="ko">DeepInfer 는 무거운 dense 연산에 TileLang 을 <b>전혀</b> 쓰지 않는다. <code class="inl">tilelang_ops/</code> 안에 <b>GEMM·matmul 커널이 0개</b>다. 분업은 이렇다.</span></p>
+    <p><span class="en">DeepInfer does not use TileLang for heavy dense math <b>at all</b>. There are <b>zero GEMM or matmul kernels</b> in <code class="inl">tilelang_ops/</code>. The work is split:</span><span class="ko">DeepInfer 는 무거운 dense 연산에 TileLang 을 <b>전혀</b> 쓰지 않는다. <code class="inl">tilelang_ops/</code> 에 <b>GEMM·matmul 커널은 0개</b>다. 분업은 다음과 같다.</span></p>
 
     <table>
       <thead><tr>
@@ -419,23 +421,36 @@ npu_ops/vit_attn.py:8      # TODO(NPU): To be removed when `_flash_attn_fwd` for
       </tbody>
     </table>
 
-    <p><span class="en">What "everything else" actually is:</span><span class="ko">"나머지 전부" 의 실체는 이것이다.</span></p>
+    <p><span class="en">What "everything else" actually is:</span><span class="ko">"나머지 전부"는 이런 커널들이다.</span></p>
     <pre>gather · gather_input_ids_zos · gather_engram_tokens_zos · load_paged_kv_cache
 store_kv_cache · get_kv_index · kv_index_cat · swa_index · compute_seqlens_k_zos
 prepare_decode_metadata · norm · quant · compress · sampler · random_sampling
 fused_sample · fused_transform · outlier_detection · structure_output
 schedule_mtp_varlen · state_cache · dflash · image_embed_ops · prepare_cp_mirror</pre>
 
-    <p><span class="en">Gathers, index arithmetic, KV-cache movement, sampling, normalisation, quantisation. <b>Memory-bound, irregular, fused glue</b> &mdash; the category where no vendor library exists and where a Triton-class DSL genuinely wins.</span><span class="ko">gather, 인덱스 연산, KV 캐시 이동, 샘플링, 정규화, 양자화. <b>메모리 바운드 · 불규칙 · fused glue</b> &mdash; 벤더 라이브러리가 아예 없고 Triton 계열 DSL 이 진짜로 이기는 범주다.</span></p>
+    <p><span class="en">Gathers, index arithmetic, KV-cache movement, sampling, normalisation, quantisation: <b>memory-bound, irregular, fused glue</b>, the category where no vendor library exists and a Triton-class DSL genuinely wins.</span><span class="ko">gather, 인덱스 연산, KV 캐시 이동, 샘플링, 정규화, 양자화. 모두 <b>메모리 바운드이고 불규칙한 fused glue</b> 커널이다. 벤더 라이브러리가 없고 Triton 계열 DSL 이 확실히 이기는 범주다.</span></p>
 
     <div class="callout c-green">
       <span class="tag"><span class="en">The premise, restated correctly</span><span class="ko">전제를 바르게 다시 쓰면</span></span>
-      <span class="en">"TileLang is pointless for dense GEMM" &mdash; <b>true here, and DeepSeek agrees</b>: that work goes to DeepGEMM. But "therefore it only matters for latency" does not follow. These glue kernels are pure overhead <i>between</i> the GEMMs. They dominate decode, yes &mdash; and they also tax throughput, because every microsecond spent gathering indices is a microsecond the tensor cores are idle. The right framing is not latency-vs-throughput. It is <b>commodity dense math vs the long tail</b>: buy the former, own the latter.</span><span class="ko">"dense GEMM 에서 TileLang 은 의미 없다" &mdash; <b>여기선 맞고, DeepSeek 도 동의한다</b>. 그 일은 DeepGEMM 이 가져간다. 하지만 "따라서 지연에서만 중요하다" 는 따라오지 않는다. 이 glue 커널들은 GEMM <i>사이</i>의 순수 오버헤드다. decode 를 지배하는 건 맞지만, throughput 에도 세금을 매긴다 &mdash; 인덱스를 모으는 1마이크로초는 텐서 코어가 노는 1마이크로초다. 옳은 구도는 지연 대 처리량이 아니다. <b>상품화된 dense 연산 대 롱테일</b> 이다 &mdash; 전자는 사오고, 후자는 소유한다.</span>
+      <span class="en">"TileLang is pointless for dense GEMM" is <b>true here, and DeepSeek agrees</b>: that work goes to DeepGEMM. But "therefore it only matters for latency" does not follow. These glue kernels are pure overhead <i>between</i> the GEMMs. They dominate decode, and they also tax throughput, because every microsecond spent gathering indices is a microsecond the tensor cores are idle. The right framing is not latency vs throughput but <b>commodity dense math vs the long tail</b>: buy the former, own the latter.</span><span class="ko">"dense GEMM 에서 TileLang 은 의미 없다"는 <b>여기서 맞고 DeepSeek 도 동의한다</b>. 그 일은 DeepGEMM 이 맡는다. 하지만 "그러니 지연에서만 중요하다"는 따라오지 않는다. glue 커널은 GEMM <i>사이</i>의 순수 오버헤드라서 decode 를 지배할 뿐 아니라 throughput 도 깎는다. 인덱스를 모으는 1마이크로초 동안 텐서 코어는 논다. 그래서 옳은 구도는 지연 대 처리량이 아니라 <b>상품화된 dense 연산 대 롱테일</b>이다. 전자는 사 오고, 후자는 직접 만든다.</span>
     </div>
 
     <div class="callout c-purple">
-      <span class="tag"><span class="en">Editor's note — not a claim by DeepSeek</span><span class="ko">편집자 주 — DeepSeek 의 주장 아님</span></span>
-      <span class="en">What I would take from this for our own work. The dual-backend structure is the part worth copying, independent of TileLang: <b>one dispatcher, two backends, and a shared differential test harness</b>. We have the same shape of problem on MI250 whenever a kernel must exist for both ROCm and something else, and the ~0.37:1 verification-to-kernel ratio measured above is the honest price tag for it &mdash; worth knowing before committing. Note the shape as much as the number: the reference implementation and the test live <i>in the same module as the public entry point</i>, so there is no separate test tree to drift out of sync. What I would <i>not</i> conclude is that TileLang beats hand-written CUDA on NVIDIA; nothing in this repo measures that, and DeepSeek's own choice to delegate GEMM suggests they did not believe it either. None of this is benchmarked &mdash; it is a code read of one commit.</span><span class="ko">우리 작업에 가져올 것. TileLang 과 무관하게 베낄 가치가 있는 건 이중 백엔드 구조다 &mdash; <b>디스패처 하나, 백엔드 둘, 공용 차분 테스트 하네스</b>. MI250 에서도 어떤 커널이 ROCm 과 다른 무언가 양쪽에 존재해야 할 때마다 같은 모양의 문제를 만나고, 위에서 측정한 약 0.37:1 검증 비율이 그 정직한 가격표다 &mdash; 착수 전에 알아 둘 값어치가 있다. 숫자만큼이나 형태도 볼 것 &mdash; 레퍼런스 구현과 테스트가 <i>공개 진입점과 같은 모듈에</i> 산다. 따로 떨어져 나가 어긋날 테스트 트리가 없다. 반대로 <i>내리지 않을</i> 결론은 "NVIDIA 에서 TileLang 이 손으로 쓴 CUDA 를 이긴다" 는 것이다. 이 레포엔 그걸 측정한 게 없고, GEMM 을 위임한 DeepSeek 자신의 선택도 그렇게 믿지 않았음을 시사한다. 전부 벤치마크가 아니라 커밋 하나에 대한 코드 읽기다.</span>
+      <span class="tag"><span class="en">Editor's note — not a claim by DeepSeek</span><span class="ko">편집자 주 (DeepSeek 의 주장 아님)</span></span>
+      <ol class="en">
+        <li>The part worth copying, independent of TileLang, is the dual-backend structure: <b>one dispatcher, two backends, and a shared differential test harness</b>. We hit the same shape of problem on MI250 whenever a kernel must exist for both ROCm and something else.</li>
+        <li>The ~0.37:1 verification-to-kernel ratio measured above is the honest price tag for it, worth knowing before committing.</li>
+        <li>Note the shape as much as the number: the reference implementation and the test live <i>in the same module as the public entry point</i>, so there is no separate test tree to drift out of sync.</li>
+        <li>What I would <i>not</i> conclude is that TileLang beats hand-written CUDA on NVIDIA. Nothing in this repo measures that, and DeepSeek's own choice to delegate GEMM suggests they did not believe it either.</li>
+        <li>None of this is benchmarked. It is a code read of one commit.</li>
+      </ol>
+      <ol class="ko">
+        <li>TileLang 과 무관하게 베낄 만한 건 이중 백엔드 구조다: <b>디스패처 하나, 백엔드 둘, 공용 차분 테스트 하네스</b>. MI250 에서도 ROCm 과 다른 백엔드 양쪽에 커널이 필요할 때마다 같은 문제를 만난다.</li>
+        <li>위에서 잰 약 0.37:1 검증 비율이 그 가격표다. 착수 전에 알아 둘 만하다.</li>
+        <li>숫자만큼 형태도 봐야 한다. 레퍼런스 구현과 테스트가 <i>공개 진입점과 같은 모듈에</i> 있어서, 따로 떨어져 어긋날 테스트 트리가 없다.</li>
+        <li>"NVIDIA 에서 TileLang 이 손으로 쓴 CUDA 를 이긴다"고 결론 내리지는 <i>않는다</i>. 이 레포엔 그런 측정이 없고, GEMM 을 위임한 DeepSeek 의 선택도 그렇게 믿지 않았음을 시사한다.</li>
+        <li>전부 벤치마크가 아니라 커밋 하나를 읽은 결과다.</li>
+      </ol>
     </div>
   </section>
 
@@ -454,13 +469,13 @@ schedule_mtp_varlen · state_cache · dflash · image_embed_ops · prepare_cp_mi
     </ul>
     <h4><span class="en">Commentary (not used for technical claims)</span><span class="ko">해설 (기술 주장의 근거로 쓰지 않음)</span></h4>
     <ul class="srcs">
-      <li><span class="en">Romain Egele, LinkedIn post on DeepSeek's production system — the source of the "no tensor parallelism" prompt for this analysis. Its throughput and revenue figures describe DeepSeek's deployed service, not this repo, and are not verifiable from the code.</span><span class="ko">Romain Egele, DeepSeek 프로덕션 시스템에 대한 LinkedIn 글 — 이 분석의 "tensor parallelism 없음" 단서를 준 출처. 처리량·수익 수치는 이 레포가 아니라 DeepSeek 의 배포된 서비스를 설명하며 코드로 검증 불가.</span></li>
+      <li><span class="en">Romain Egele, LinkedIn post on DeepSeek's production system, the source of the "no tensor parallelism" prompt for this analysis. Its throughput and revenue figures describe DeepSeek's deployed service, not this repo, and are not verifiable from the code.</span><span class="ko">Romain Egele 의 DeepSeek 프로덕션 시스템 LinkedIn 글. 이 분석의 "tensor parallelism 없음" 단서를 준 출처다. 처리량·수익 수치는 이 레포가 아니라 배포된 서비스 이야기라 코드로 검증할 수 없다.</span></li>
     </ul>
     <h4><span class="en">Companion notes</span><span class="ko">함께 보는 노트</span></h4>
     <ul class="srcs">
       <li><a href="deepinfer-engram.html"><span class="en">DeepInfer's Engram — a hash-indexed memory layer with its own parallel axis</span><span class="ko">DeepInfer 의 Engram — 자기 병렬 축을 가진 해시 메모리 레이어</span></a></li>
       <li><a href="deepinfer-knowledge-graph.html"><span class="en">DeepInfer interactive knowledge graph</span><span class="ko">DeepInfer 인터랙티브 지식 그래프</span></a></li>
-      <li><a href="nano-vllm-to-atom.html"><span class="en">nano-vllm → ATOM</span><span class="ko">nano-vllm → ATOM</span></a> <span class="muted"><span class="en">— the same origin-and-delta question, different project</span><span class="ko">— 같은 origin-delta 질문, 다른 프로젝트</span></span></li>
+      <li><a href="nano-vllm-to-atom.html"><span class="en">nano-vllm → ATOM</span><span class="ko">nano-vllm → ATOM</span></a> <span class="muted"><span class="en">(the same origin-and-delta question, different project)</span><span class="ko">(같은 origin-delta 질문, 다른 프로젝트)</span></span></li>
     </ul>
   </section>
 

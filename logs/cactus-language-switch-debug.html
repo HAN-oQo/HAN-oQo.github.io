@@ -48,62 +48,58 @@
 
 <p class="crumb"><a href="../">← 홈</a> · <a href="./">로그</a> · Cactus 언어 전환 디버깅</p>
 
-<h1>Cactus 언어 전환 실패 — 모델 문제인가, 프레임워크 문제인가</h1>
+<h1>Cactus 언어 전환 실패: 모델 문제인가, 프레임워크 문제인가</h1>
 <p class="sub">
-  <code>cactus run</code> 에서 1턴을 일본어로 물어본 뒤 “한국어로 이야기해줘” 라고 하면 계속 일본어로 답하는 현상.
-  체계적 디버깅으로 원인을 분리하고, 모든 실험을 재현 가능한 형태로 기록한다.
+  <code>cactus run</code> 에서 1턴을 일본어로 묻고 “한국어로 이야기해줘”라고 하면 계속 일본어로 답한다.
+  이 글은 그 원인을 실험으로 좁혀 가고, 모든 실험을 재현 가능한 형태로 남긴다.
 </p>
 <p class="post-meta"><time datetime="2026-07-30">2026-07-30</time></p>
 
 <div class="card">
   <h3 style="margin-top:0">한 줄 결론</h3>
   <p style="margin-bottom:0">
-    <strong>모델 능력의 문제가 아니라 프레임워크(엔진)의 문제다.</strong>
-    똑같은 대화를 <em>한 번에</em> 프리필하면 한국어 전환이 <span class="ok">5/5 성공</span>하지만,
-    <code>cactus run</code> 이 2턴째부터 타는 <strong>KV 캐시 증분 재사용 경로</strong>로 넣으면
-    <span class="no">0/5 실패</span>한다. 토큰 열은 동일하고 캐시 재사용 여부만 다르다.
+    <strong>모델 능력이 아니라 프레임워크(엔진)의 문제다.</strong>
+    같은 대화를 <em>한 번에</em> 프리필하면 한국어 전환이 <span class="ok">5/5 성공</span>하고,
+    <code>cactus run</code> 이 2턴부터 쓰는 <strong>KV 캐시 증분 재사용 경로</strong>로 넣으면 <span class="no">0/5 실패</span>한다.
+    토큰 열은 같고 캐시 재사용 여부만 다르다.
   </p>
   <p>
-    이 결함은 <strong>언어와 무관하다</strong>. 순수 영어 대화를 그리디(argmax)로 돌리면 warm 과 cold 의 출력이
-    <span class="no">6개 중 5개</span>에서 서로 다르다 — 같은 토큰 열, 같은 argmax인데 결과가 갈린다(<a href="#en-repro">§7.2</a>).
-    일본어→한국어는 그 차이가 <em>눈에 보이는 실패</em>로 넘어간 지점일 뿐이다.
+    결함은 <strong>언어와 무관하다</strong>. 영어 대화를 그리디(argmax)로 돌려도 warm 과 cold 출력이
+    <span class="no">6개 중 5개</span>에서 다르다(<a href="#en-repro">§7.2</a>). 일본어→한국어는 그 차이가 <em>눈에 보이는 실패</em>가 된 경우다.
   </p>
   <p>
-    근본 원인은 <strong>하나</strong>다 — <strong>배치 프리필 그래프(<code>decoder_prefill_chunk</code>)와
+    근본 원인은 <strong>하나</strong>다. <strong>배치 프리필 그래프(<code>decoder_prefill_chunk</code>)와
     단일 토큰 디코드 그래프(<code>decoder_step</code>)가 같은 토큰에 다른 값을 낸다.</strong>
-    패딩·청크 경계·warm/cold 는 원인이 아니라 <em>어느 토큰이 어느 그래프로 가는지</em>를 정하는 라우팅 규칙이다
-    (<a href="#rootcause">§7.3</a> 및 정정 → <a href="cactus-defect-fix-plan.html">수정 계획 문서</a>).
-    멀티턴 2턴째는 1턴과 라우팅이 완전히 달라지는 지점이다.
+    패딩·청크 경계·warm/cold 는 <em>어느 토큰이 어느 그래프로 가는지</em>를 정하는 라우팅 규칙이고, 2턴째에 이 라우팅이 1턴과 완전히 달라진다
+    (<a href="#rootcause">§7.3</a>, 정정은 <a href="cactus-defect-fix-plan.html">수정 계획 문서</a>).
   </p>
   <p style="margin-bottom:0">
-    부수적으로, <code>cactus serve</code>/Python 바인딩에는 <strong>모든 비-ASCII 입력이 깨지는 별개의 확정 버그</strong>가 있다.
+    별개로 <code>cactus serve</code>/Python 바인딩에는 <strong>모든 비-ASCII 입력을 깨뜨리는 확정 버그</strong>가 있다.
   </p>
 </div>
 
 <div class="toc">
   <strong>목차</strong>
-  <p style="margin:6px 0 2px"><a href="#figures"><strong>0. 그림으로 먼저 보기 — 도해 5장</strong></a> <span style="color:var(--muted)">(글이 안 읽히면 여기부터)</span></p>
+  <p style="margin:6px 0 2px"><a href="#figures"><strong>0. 그림으로 먼저 보기 (도해 5장)</strong></a> <span style="color:var(--muted)">(글이 안 읽히면 여기부터)</span></p>
   <ol>
     <li><a href="#env">재현 환경과 준비</a></li>
     <li><a href="#repro">증상 재현</a> · <a href="#byhand">손으로 직접 확인하는 3단계</a></li>
-    <li><a href="#exonerate">1차 용의자 소거 — 히스토리·챗 템플릿·토크나이저</a></li>
-    <li><a href="#decisive">결정적 실험 — warm(캐시 재사용) vs cold(재프리필)</a></li>
-    <li><a href="#path">경로 특정 — 세 가지 프리필 경로 비교</a></li>
-    <li><a href="#notbroken">반증 — 캐시가 “깨진” 것은 아니다</a></li>
-    <li><a href="#numerics">수치 비등가성 — 같은 프롬프트, 다른 로짓</a> · <a href="#en-repro">7.2 영어로도 재현된다</a> · <a href="#rootcause"><strong>7.3 근본 원인 — 결함은 두 개다</strong></a></li>
-    <li><a href="#asciibug">별건 버그 — serve/바인딩의 비-ASCII 파괴</a></li>
+    <li><a href="#exonerate">1차 용의자 소거: 히스토리·챗 템플릿·토크나이저</a></li>
+    <li><a href="#decisive">결정적 실험: warm(캐시 재사용) vs cold(재프리필)</a></li>
+    <li><a href="#path">경로 특정: 세 가지 프리필 경로 비교</a></li>
+    <li><a href="#notbroken">반증: 캐시가 “깨진” 것은 아니다</a></li>
+    <li><a href="#numerics">수치 비등가성: 같은 프롬프트, 다른 로짓</a> · <a href="#en-repro">7.2 영어로도 재현된다</a> · <a href="#rootcause"><strong>7.3 근본 원인: 결함은 두 개다</strong></a></li>
+    <li><a href="#asciibug">별건 버그: serve/바인딩의 비-ASCII 파괴</a></li>
     <li><a href="#verdict">판정과 워크어라운드</a> · <a href="#resetcost">9.4 서버는 왜 매 턴 리셋하나 (7× 비용)</a></li>
-    <li><a href="#appendix">부록 — 재현 스크립트 전문 / 인용 코드 위치</a></li>
+    <li><a href="#appendix">부록: 재현 스크립트 전문 / 인용 코드 위치</a></li>
   </ol>
 </div>
 
 <h2 id="figures">0. 그림으로 먼저 보기</h2>
 
-<p>
-  본문을 읽기 전에 그림 5장으로 전체 구조를 잡는다. 숫자는 모두 이 문서에서 실제로 측정한 값이다.
-</p>
+<p>그림의 숫자는 모두 이 문서에서 실제로 측정한 값이다.</p>
 
-<h3>그림 1 — 2턴에서 무엇을 다시 계산하는가</h3>
+<h3>그림 1. 2턴에서 무엇을 다시 계산하는가</h3>
 
 <svg class="fig" viewBox="0 0 880 268" xmlns="http://www.w3.org/2000/svg"
      font-family="-apple-system,sans-serif" role="img"
@@ -131,11 +127,10 @@
   <text x="0" y="262" font-size="11.5" fill="#6b6a63">측정된 prefill_tokens: COLD 81 (42~147 범위) · WARM 19 (15~20 범위)</text>
 </svg>
 <p class="cap">
-  여기까지는 정상적인 최적화다. 문제는 <strong>이 둘의 결과가 같아야 하는데 다르다</strong>는 것이다.
-  causal attention 에서 앞 토큰의 K/V 는 뒤에 뭐가 붙어도 안 변하므로, prefix caching 은 속도만 바꾸고 결과는 바꾸지 않아야 한다.
+  여기까지는 정상적인 최적화다. causal attention 에서 앞 토큰의 K/V 는 뒤에 무엇이 붙어도 변하지 않으므로 두 결과는 <strong>같아야 하는데 다르다</strong>.
 </p>
 
-<h3>그림 2 — 결함 ① : 꼬리 패딩. “몇 개를 넣었는지”가 결과를 바꾼다</h3>
+<h3>그림 2. 결함 ①: 꼬리 패딩. “몇 개를 넣었는지”가 결과를 바꾼다</h3>
 
 <svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg"
      font-family="-apple-system,sans-serif" role="img"
@@ -171,10 +166,10 @@
   <text x="16" y="276" font-size="12" fill="#6f2a12">CACTUS_DISABLE_PREFILL_TAIL_PAD=1 로 이 패딩을 끄면, 증분 프리필이 콜드 프리필과 confidence 까지 일치한다 (0/6 → 4/6).</text>
 </svg>
 <p class="cap">
-  KV 추가분은 <code>rollback_cache_padded_append</code> 로 되돌리지만, <strong>그 청크에서 계산된 출력 자체는 패딩과 함께 계산된 값</strong>이다.
+  KV 추가분은 <code>rollback_cache_padded_append</code> 로 되돌리지만 <strong>그 청크의 출력은 패딩과 함께 계산된 값</strong>이다.
 </p>
 
-<h3>그림 3 — 결함 ② : 캐시의 KV 를 누가 썼는가</h3>
+<h3>그림 3. 결함 ②: 캐시의 KV 를 누가 썼는가</h3>
 
 <svg class="fig" viewBox="0 0 880 292" xmlns="http://www.w3.org/2000/svg"
      font-family="-apple-system,sans-serif" role="img"
@@ -204,11 +199,11 @@
   <text x="16" y="262" font-size="12" fill="#6f2a12">그때만 cold 와 일치한다 → 두 arm 의 차이는 “이 구간을 누가 썼는가” 하나뿐이므로, 두 그래프의 수치가 다르다는 뜻이다.</text>
 </svg>
 <p class="cap">
-  최신 업스트림 커밋 제목이 “optimize attention and gemv kernels” 인 것도 참고가 된다 —
-  GEMV 는 단일 토큰 디코드 경로, GEMM 은 배치 프리필 경로다. 다만 <em>왜</em> 값이 다른지는 커널 레벨 대조가 필요하다(미확정).
+  최신 업스트림 커밋 제목이 “optimize attention and gemv kernels”인 것도 참고가 된다. GEMV 는 단일 토큰 디코드, GEMM 은 배치 프리필 경로다.
+  <em>왜</em> 값이 다른지는 커널 레벨 대조가 필요하다(미확정).
 </p>
 
-<h3>그림 4 — 실험 하나로 결함 두 개를 가른 방법</h3>
+<h3>그림 4. 실험 하나로 결함 두 개를 가른 방법</h3>
 
 <svg class="fig" viewBox="0 0 880 330" xmlns="http://www.w3.org/2000/svg"
      font-family="-apple-system,sans-serif" role="img"
@@ -240,9 +235,9 @@
   <rect x="0" y="282" width="880" height="44" rx="8" fill="#f1efe8" stroke="#c2c0b6"/>
   <text x="16" y="309" font-size="12" fill="#3a3934">P 는 warm 재사용을 그대로 하면서 decode 가 쓴 KV 만 없앤 조건이다 — 그래서 두 결함을 따로 떼어낼 수 있었다.</text>
 </svg>
-<p class="cap">§7.3 <code>root_cause.py</code> 결과. 처음 세운 가설(“decode 가 쓴 KV 때문”)은 패딩 ON 행에서 P 도 0/6 이라 반증됐고, 패딩을 끄고 나서야 두 성분이 분리됐다.</p>
+<p class="cap">§7.3 <code>root_cause.py</code> 결과. 첫 가설(“decode 가 쓴 KV 때문”)은 패딩 ON 에서 P 도 0/6 이라 반증됐고, 패딩을 끈 뒤에야 두 성분이 분리됐다.</p>
 
-<h3>그림 5 — 서버가 매 턴 리셋하며 버리는 비용</h3>
+<h3>그림 5. 서버가 매 턴 리셋하며 버리는 비용</h3>
 
 <svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg"
      font-family="-apple-system,sans-serif" role="img"
@@ -308,8 +303,8 @@
   <text x="0" y="292" font-size="12" fill="#3a3934">누적 프리필 토큰: WARM <tspan font-weight="700">1,348</tspan> vs COLD <tspan font-weight="700" fill="#6f2a12">9,418 (7.0배)</tspan> · 누적 TTFT 7.3초 vs 12.0초 (1.6배)</text>
 </svg>
 <p class="cap">
-  warm 은 2턴 이후 20 토큰 내외로 평평한데, cold 는 매 턴 전체를 다시 프리필하므로 대화가 길어질수록 계속 올라간다.
-  즉 현재 Cactus 는 <strong>품질(cold)과 속도(warm) 중 하나만 고를 수 있는 상태</strong>다 — 원래는 둘 다 가져야 한다.
+  cold 는 매 턴 전체를 다시 프리필하므로 대화가 길어질수록 올라간다.
+  지금 Cactus 는 <strong>품질(cold)과 속도(warm) 중 하나만 고를 수 있다</strong>. 원래는 둘 다 가져야 한다.
 </p>
 
 <h2 id="env">1. 재현 환경과 준비</h2>
@@ -319,7 +314,7 @@
   <tr><td>호스트</td><td>Apple M2 Pro · 16 GB · macOS (Darwin 25.3.0)</td></tr>
   <tr><td>Cactus</td><td><code>cactus 2.0.1</code> (Homebrew, <code>/opt/homebrew/bin/cactus</code>)</td></tr>
   <tr><td>소스</td><td><a href="https://github.com/cactus-compute/cactus">cactus-compute/cactus</a> @ <code>8e0eec1</code> (2026-07-29, <code>CACTUS_VERSION=v2.0.1</code>)</td></tr>
-  <tr><td>모델</td><td><code>google/gemma-4-E2B-it</code> → 번들 <code>gemma-4-e2b-it-cq4</code> (Cactus CQ 4-bit, 3.8 GB) — <code>cactus run</code> 의 <strong>기본 모델</strong></td></tr>
+  <tr><td>모델</td><td><code>google/gemma-4-E2B-it</code> → 번들 <code>gemma-4-e2b-it-cq4</code> (Cactus CQ 4-bit, 3.8 GB). <code>cactus run</code> 의 <strong>기본 모델</strong></td></tr>
   <tr><td>번들 설정</td><td><code>model_type=gemma4</code> · <code>context_length=131072</code> · <code>sliding_window=512</code> · 35 layers</td></tr>
 </table>
 
@@ -334,9 +329,9 @@ cd cactus &amp;&amp; git log -1 --format='%H %cd' --date=short
 </code></pre>
 
 <div class="note">
-  <strong>실험 설계 원칙.</strong> 이 문서의 모든 비교는 <em>한 번에 하나의 변수만</em> 바꾼다.
-  모델·가중치·샘플링 옵션·메시지 배열을 고정하고, 바꾸는 것은 “엔진이 어떤 프리필 경로를 타는가” 하나뿐이다.
-  샘플링이 개입하므로 단발 결과는 근거로 쓰지 않고, 모든 조건을 <strong>N=5 이상 반복</strong>해 비율로 보고한다.
+  <strong>실험 설계 원칙.</strong> 모든 비교는 <em>변수 하나만</em> 바꾼다.
+  모델·가중치·샘플링 옵션·메시지 배열은 고정하고 “엔진이 어떤 프리필 경로를 타는가”만 바꾼다.
+  샘플링이 개입하므로 모든 조건을 <strong>N=5 이상 반복</strong>해 비율로 보고한다.
 </div>
 
 <h2 id="repro">2. 증상 재현</h2>
@@ -352,9 +347,9 @@ cd cactus &amp;&amp; git log -1 --format='%H %cd' --date=short
 
 cactus run --no-cloud-handoff --max-new-tokens 200 &lt; cli_stdin.txt
 </code></pre>
-<p class="src"><code>--no-cloud-handoff</code> 는 클라우드 핸드오프 변수를 제거하기 위한 것. 이 계정엔 API 키가 없어 어차피 로컬로 떨어지지만, 명시적으로 껐다.</p>
+<p class="src"><code>--no-cloud-handoff</code> 로 클라우드 핸드오프를 명시적으로 껐다(이 계정엔 API 키가 없어 어차피 로컬로 떨어진다).</p>
 
-<p>1턴은 정상적으로 일본어로 답한다. 2턴에서 한국어 전환을 요청하면:</p>
+<p>1턴은 정상적으로 일본어로 답한다. 2턴에서 한국어 전환을 요청하면 다음과 같다.</p>
 
 <pre><code>You: Assistant (local): 承知いたしました。
 **「東京」について3文で説明してください。**という質問に対する回答を、日本語で記述したところでした。
@@ -368,7 +363,7 @@ You: (3턴) Assistant (local):
 [200 tokens | ... | confidence: 50.4% | ...]
 </code></pre>
 
-<p>같은 시나리오를 CLI에서 5회 반복한 결과(2턴 응답의 한글/가나 문자 수로 판정):</p>
+<p>같은 시나리오를 CLI에서 5회 반복했다. 2턴 응답의 한글/가나 문자 수로 판정한다.</p>
 
 <table>
   <tr><th>#</th><th class="num">한글 문자</th><th class="num">가나 문자</th><th>판정</th><th>2턴 응답 앞부분</th></tr>
@@ -378,11 +373,11 @@ You: (3턴) Assistant (local):
   <tr><td>4</td><td class="num">0</td><td class="num">26</td><td class="no">JA</td><td>承知いたしました。東京についての説明を求められているので、日本語での説明を維持します。</td></tr>
   <tr><td>5</td><td class="num">0</td><td class="num">6</td><td class="no">JA</td><td>承知いたしました。</td></tr>
 </table>
-<p class="cap">CLI 실제 재현: 한국어 전환 <strong>0/5</strong>. 사용자가 보고한 증상과 일치한다.</p>
+<p class="cap">CLI 재현: 한국어 전환 <strong>0/5</strong>. 보고된 증상과 같다.</p>
 
-<h3>대조군 — 언어만 바꿔 본다</h3>
+<h3>대조군: 언어만 바꿔 본다</h3>
 
-<p>같은 CLI, 같은 옵션으로 첫 턴 언어만 영어로 바꾸면:</p>
+<p>같은 CLI, 같은 옵션으로 첫 턴만 영어로 바꾸면 한국어로 전환된다.</p>
 
 <pre><code># 대조군: 1턴 영어 → 2턴 한국어 요청
 printf '%s\n' 'Explain Tokyo in three sentences.' '이제부터 한국어로 이야기해줘.' 'exit' \
@@ -395,23 +390,22 @@ You: Assistant (local): 알겠습니다. 요청하신 내용에 대해 한국어
 1. **도쿄는 일본의 활기차고 현대적인 도시이며, …**
 </code></pre>
 
-<p>그리고 히스토리 없이 한국어 단독으로 물으면 완벽하게 한국어로 답한다:</p>
+<p>히스토리 없이 한국어로만 물어도 완벽하게 답한다.</p>
 
 <pre><code>printf '%s\n' '한국어로 서울에 대해 세 문장으로 설명해줘.' 'exit' | cactus run --no-cloud-handoff
 # → 서울은 한국의 중심지이자, 역동적인 도시의 상징입니다. …  (confidence 99.3%)
 </code></pre>
 
 <div class="note">
-  <strong>이 시점의 관찰.</strong> 토크나이저·디토크나이저·한국어 생성 능력은 멀쩡하다(한국어 단독 정상).
-  다국어 전환 자체도 가능하다(영어→한국어 정상). <strong>일본어 컨텍스트에서만</strong> 무너진다.
-  여기서 “작은 양자화 모델의 언어 고착”으로 결론 내리기 쉬운데, 그건 아직 가설일 뿐이다.
+  <strong>이 시점의 관찰.</strong> 토크나이저·디토크나이저·한국어 생성 능력은 멀쩡하고, 영어→한국어 전환도 된다.
+  <strong>일본어 컨텍스트에서만</strong> 무너진다. “작은 양자화 모델의 언어 고착”으로 결론 내리기 쉽지만 아직 가설이다.
 </div>
 
 <h3 id="byhand">손으로 직접 확인하는 3단계</h3>
 
 <p>
-  스크립트 없이, 설치된 CLI 두 개(<code>cactus run</code> / <code>cactus serve</code>)만으로 결함을 눈으로 확인하는 절차다.
-  핵심은 <strong>이 둘이 서로 다른 프리필 경로를 탄다</strong>는 사실이다.
+  스크립트 없이 CLI 두 개(<code>cactus run</code> / <code>cactus serve</code>)만으로 결함을 확인한다.
+  <strong>둘은 서로 다른 프리필 경로를 탄다.</strong>
 </p>
 
 <table>
@@ -425,15 +419,15 @@ You: Assistant (local): 알겠습니다. 요청하신 내용에 대해 한국어
     <td>매 요청 직전에 <code>cactus_reset(slot.handle)</code> 를 호출한다 (<code>server.py:605</code>, <code>:802</code>) → 언제나 전체 재프리필</td>
   </tr>
 </table>
-<p class="src"><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/python/cactus/server.py#L800-L806">server.py#L800-L806</a> — 서버가 매 요청 리셋한다는 것은, 접두사 캐싱을 통째로 포기하는 대신 <strong>정상 경로만 쓴다</strong>는 뜻이다.</p>
+<p class="src"><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/python/cactus/server.py#L800-L806">server.py#L800-L806</a>. 서버는 접두사 캐싱을 통째로 포기하는 대신 <strong>정상 경로만 쓴다</strong>.</p>
 
-<p><strong>1단계 — 증상 보기 (warm).</strong> 두 줄만 치면 된다.</p>
+<p><strong>1단계: 증상 보기 (warm).</strong> 두 줄만 치면 된다.</p>
 <pre><code>cactus run --no-cloud-handoff
 You: 日本語で「東京」について3文で説明してください。
 You: 이제부터 한국어로 이야기해줘.        ← 일본어로 답하면 재현 성공
 </code></pre>
 
-<p><strong>2단계 — 모델은 멀쩡하다는 것 확인.</strong> 각각 새 세션으로.</p>
+<p><strong>2단계: 모델이 멀쩡한지 확인.</strong> 각각 새 세션으로 연다.</p>
 <pre><code>cactus run --no-cloud-handoff --prompt '한국어로 서울에 대해 세 문장으로 설명해줘.'
 # → 완벽한 한국어 (confidence 99%대). 토크나이저·한국어 능력 문제가 아니다.
 
@@ -443,9 +437,9 @@ You: 이제부터 한국어로 이야기해줘.        ← 이번엔 한국어�
 </code></pre>
 
 <p>
-  <strong>3단계 — 결함 자체를 영어로 확인 (warm vs cold).</strong>
-  같은 2턴 대화를 warm 쪽(<code>cactus run</code>)과 cold 쪽(<code>cactus serve</code>)에 각각 물어 답을 비교한다.
-  질문은 <em>정답이 하나로 정해진</em> 것을 쓰는 게 좋다 — “엽록소는 무슨 색인가”.
+  <strong>3단계: 결함을 영어로 확인 (warm vs cold).</strong>
+  같은 2턴 대화를 warm(<code>cactus run</code>)과 cold(<code>cactus serve</code>)에 물어 비교한다.
+  질문은 정답이 하나인 “엽록소는 무슨 색인가”를 쓴다.
 </p>
 
 <pre><code># (A) warm — cactus run 으로 5회
@@ -480,41 +474,37 @@ PY
 <table>
   <tr><th style="width:34%">경로</th><th class="num">정답(Green) 비율</th><th>실제 출력</th></tr>
   <tr><td><code>cactus run</code> · <strong>warm</strong></td><td class="num no">2 / 5</td>
-      <td><code>Chlorophyll</code> ×3 (오답 — 색을 물었는데 물질명), <code>**Green**</code> ×2</td></tr>
+      <td><code>Chlorophyll</code> ×3 (오답: 색을 물었는데 물질명), <code>**Green**</code> ×2</td></tr>
   <tr><td><code>cactus serve</code> · <strong>cold</strong></td><td class="num ok">5 / 5</td>
       <td><code>Green</code> ×5</td></tr>
 </table>
-<p class="cap">같은 모델·같은 샘플링(0.7 / 0.95 / 40)·같은 2턴 구조. 형식(“한 단어”)은 양쪽 다 지키는데 <strong>정확도가 갈린다</strong>.</p>
+<p class="cap">같은 모델·샘플링(0.7 / 0.95 / 40)·2턴 구조. 형식(“한 단어”)은 둘 다 지키지만 <strong>정확도가 갈린다</strong>.</p>
 
 <div class="note">
-  <strong>이 3단계 비교의 한계.</strong> <code>cactus run</code> 과 <code>cactus serve</code> 는 클라이언트가 달라
-  1턴 응답 문자열까지 완전히 통제되지는 않는다(엄밀한 단일변수 A/B 는 아니다).
-  손으로 빠르게 확인하는 용도로는 충분하지만, <strong>엄밀한 증명은 같은 핸들에서 <code>cactus_reset()</code> 하나만
-  토글한 <a href="#decisive">§4</a>·<a href="#en-repro">§7.2</a></strong> 쪽을 봐야 한다.
+  <strong>한계.</strong> 두 CLI 는 클라이언트가 달라 1턴 응답 문자열까지 통제되지 않는다(엄밀한 단일변수 A/B 가 아니다).
+  <strong>엄밀한 증명은 같은 핸들에서 <code>cactus_reset()</code> 하나만 토글한 <a href="#decisive">§4</a>·<a href="#en-repro">§7.2</a></strong>를 본다.
   <br><br>
-  <strong>한국어로는 3단계를 할 수 없다.</strong> <code>cactus serve</code> 는 비-ASCII 입력을 파괴하므로(<a href="#asciibug">§8</a>)
-  cold 대조군을 한국어로 만들 수 없다. 그래서 이 단계만 영어로 한다.
+  <strong>한국어로는 3단계를 할 수 없다.</strong> <code>cactus serve</code> 가 비-ASCII 입력을 파괴해서(<a href="#asciibug">§8</a>) 이 단계만 영어로 한다.
 </div>
 
-<h3>관찰 포인트 — CLI 가 매 턴 찍어 주는 confidence</h3>
+<h3>관찰 포인트: CLI 가 매 턴 찍어 주는 confidence</h3>
 
 <p>
-  <code>cactus run</code> 은 턴마다 <code>confidence: NN%</code> 를 출력한다. 이 값은 첫 생성 토큰의 top-1/top-2 로짓 마진에서 나오는
-  결정론적 값이라, 대화가 진행되며 어떻게 움직이는지 볼 만하다. 재현 세션에서는 <strong>98.6% → 72.5% → 50.4%</strong> 로 떨어지며
-  3턴째에 같은 문단을 반복하는 붕괴가 시작됐다.
+  <code>cactus run</code> 은 턴마다 <code>confidence: NN%</code> 를 출력한다. 첫 생성 토큰의 top-1/top-2 로짓 마진에서 나오는 결정론적 값이다.
+  재현 세션에서는 <strong>98.6% → 72.5% → 50.4%</strong> 로 떨어졌고, 3턴째에 같은 문단을 반복하며 붕괴했다.
 </p>
 <div class="note" style="border-left-color:var(--gray-bd);background:var(--gray-bg);color:var(--muted)">
-  다만 confidence 는 프롬프트마다 자연히 달라지므로 <strong>이 숫자 하나만으로는 증거가 되지 않는다</strong>.
-  증거가 되는 건 <em>같은 토큰 열</em>에 대해 경로별로 값이 다른 경우다(<a href="#numerics">§7</a>).
+  confidence 는 프롬프트마다 달라지므로 <strong>이 숫자만으로는 증거가 아니다</strong>.
+  <em>같은 토큰 열</em>에서 경로별로 값이 다를 때 증거가 된다(<a href="#numerics">§7</a>).
 </div>
 
-<h2 id="exonerate">3. 1차 용의자 소거 — 히스토리 · 챗 템플릿 · 토크나이저</h2>
+<h2 id="exonerate">3. 1차 용의자 소거: 히스토리 · 챗 템플릿 · 토크나이저</h2>
 
 <h3>3.1 CLI가 멀티턴 히스토리를 제대로 유지하는가 → 유지한다</h3>
 
 <p>
-  <code>cactus run</code> 의 실체는 C++ 바이너리다(<code>cli/run.py</code> 가 <code>launch_binary("run", …)</code> 로 호출).
-  그 소스는 <code>cactus-engine/tests/run.cpp</code> 이며, 매 턴 전체 메시지 배열을 다시 만들어 넘긴다.
+  <code>cactus run</code> 은 C++ 바이너리다(<code>cli/run.py</code> 가 <code>launch_binary("run", …)</code> 로 호출).
+  소스 <code>cactus-engine/tests/run.cpp</code> 는 매 턴 전체 메시지 배열을 다시 만들어 넘긴다.
 </p>
 
 <pre><code>// cactus-engine/tests/run.cpp:1091-1092
@@ -528,7 +518,7 @@ history.push_back({"assistant", assistant, "", ""});
 </code></pre>
 <p class="src">출처: <a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/tests/run.cpp#L1091-L1092">run.cpp#L1091</a>, <a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/tests/run.cpp#L1157-L1160">#L1157</a></p>
 
-<p>히스토리 왕복 시 인코딩이 깨지지 않는지도 확인했다. CLI 의 <code>escape_json</code> 은 비-ASCII 바이트를 그대로 통과시킨다(제어문자만 <code>\u00xx</code>):</p>
+<p>히스토리 왕복 인코딩도 확인했다. CLI 의 <code>escape_json</code> 은 비-ASCII 바이트를 그대로 통과시킨다(제어문자만 <code>\u00xx</code>).</p>
 
 <pre><code>// cactus-engine/tests/run.cpp:578-598
 std::string escape_json(const std::string&amp; s) {
@@ -542,8 +532,8 @@ std::string escape_json(const std::string&amp; s) {
 <h3>3.2 챗 템플릿이 모델 규격과 맞는가 → 맞는다</h3>
 
 <p>
-  Cactus 는 Jinja 를 쓰지 않고 C++ 로 템플릿을 하드코딩한다(<code>tokenizer.cpp</code> 의 <code>format_gemma4_style</code>).
-  번들에 동봉된 <strong>공식</strong> <code>chat_template.jinja2</code> 와 직접 대조했다.
+  Cactus 는 Jinja 대신 C++ 로 템플릿을 하드코딩한다(<code>tokenizer.cpp</code> 의 <code>format_gemma4_style</code>).
+  번들에 든 <strong>공식</strong> <code>chat_template.jinja2</code> 와 대조했다.
 </p>
 
 <table>
@@ -566,29 +556,28 @@ std::string escape_json(const std::string&amp; s) {
   </tr>
   <tr>
     <td>content 에 <code>| trim</code> 적용</td>
-    <td>trim 없음 — 유일한 차이, 본 증상과 무관</td>
+    <td>trim 없음. 유일한 차이이며 본 증상과 무관</td>
   </tr>
 </table>
 <p class="cap">번들 <code>~/.cache/cactus/weights/gemma-4-e2b-it-cq4/chat_template.jinja2</code> vs <a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/tokenizer.cpp#L679-L775">tokenizer.cpp#L679-L775</a> 대조.</p>
 
 <div class="good">
   <strong>소거 결과.</strong> 프롬프트 조립(히스토리 유지 · 챗 템플릿 · 인코딩)에는 문제가 없다.
-  “프레임워크가 이전 턴을 흘린다” 류의 단순 가설은 여기서 탈락.
+  “프레임워크가 이전 턴을 흘린다” 같은 단순 가설은 탈락한다.
 </div>
 
-<h2 id="decisive">4. 결정적 실험 — warm(캐시 재사용) vs cold(재프리필)</h2>
+<h2 id="decisive">4. 결정적 실험: warm(캐시 재사용) vs cold(재프리필)</h2>
 
 <h3>4.1 계측 도구를 바꾼다</h3>
 
 <p>
-  CLI 는 옵션을 하드코딩하고 대화 상태를 프로세스 안에 가둬서, 변수를 하나씩 통제하기 어렵다.
-  그래서 같은 엔진 <code>.dylib</code> 를 Python 바인딩으로 직접 호출한다. 두 가지를 지켜야 CLI 와 등가다.
+  CLI 는 옵션을 하드코딩하고 대화 상태를 프로세스 안에 가둬서 변수를 통제하기 어렵다.
+  그래서 같은 엔진 <code>.dylib</code> 를 Python 바인딩으로 직접 호출한다. CLI 와 등가가 되려면 두 가지를 지킨다.
 </p>
 <ul>
-  <li><strong>샘플링 옵션을 CLI 와 바이트 단위로 동일하게</strong> — <code>run.cpp:1093-1100</code> 에서 그대로 옮겼다
+  <li><strong>샘플링 옵션을 CLI 와 바이트 단위로 동일하게</strong>: <code>run.cpp:1093-1100</code> 에서 그대로 옮겼다
       (<code>temperature 0.7 / top_p 0.95 / top_k 40</code>, stop sequences 포함).</li>
-  <li><strong>메시지 JSON 을 <code>ensure_ascii=False</code> 로 직접 직렬화</strong> — 바인딩의 기본 경로에는
-      비-ASCII 를 파괴하는 별개 버그가 있다(<a href="#asciibug">8장</a>). 그 버그를 우회해야 CLI 와 같은 조건이 된다.</li>
+  <li><strong>메시지 JSON 을 <code>ensure_ascii=False</code> 로 직접 직렬화</strong>: 바인딩 기본 경로의 비-ASCII 파괴 버그(<a href="#asciibug">8장</a>)를 피한다.</li>
 </ul>
 
 <pre><code># evidence/lang_probe.py — 공통 설정
@@ -601,11 +590,11 @@ out = cactus_complete(h, json.dumps(msgs, ensure_ascii=False), OPTS)
 </code></pre>
 
 <p>
-  판정은 눈대중이 아니라 유니코드 스크립트 카운트로 한다. 한글 음절/자모는 <code>ko</code>,
-  <strong>가나는 일본어 확정 신호</strong>, 한자는 한글이 없을 때만 일본어 쪽으로 계산한다.
+  판정은 유니코드 스크립트 카운트로 한다. 한글 음절/자모는 <code>ko</code>,
+  <strong>가나는 일본어 확정 신호</strong>, 한자는 한글이 없을 때만 일본어로 센다.
 </p>
 
-<h3>4.2 실험 — 같은 대화, 캐시 재사용 여부만 다르게</h3>
+<h3>4.2 실험: 같은 대화, 캐시 재사용 여부만 다르게</h3>
 
 <pre><code># evidence/warm_vs_cold.py 의 핵심
 def trial(h, q1, warm):
@@ -620,8 +609,8 @@ def trial(h, q1, warm):
 </code></pre>
 
 <p>
-  두 갈래 모두 <strong>2턴에 넘기는 메시지 배열이 완전히 동일</strong>하다. 1턴 응답도 그 시행에서 생성한 같은 문자열을 쓴다.
-  다른 것은 <code>cactus_reset()</code> 한 줄, 즉 엔진이 KV 캐시를 재사용하느냐뿐이다.
+  두 갈래가 <strong>2턴에 넘기는 메시지 배열은 완전히 같다</strong>(1턴 응답도 같은 문자열).
+  다른 것은 <code>cactus_reset()</code> 한 줄, 곧 KV 캐시 재사용 여부뿐이다.
 </p>
 
 <table>
@@ -647,21 +636,20 @@ def trial(h, q1, warm):
     <td>네, 이제부터 한국어로 이야기하겠습니다.</td>
   </tr>
 </table>
-<p class="cap">각 조건 N=5. 모델·가중치·샘플러·메시지 배열 전부 동일, 캐시 재사용 여부만 상이.</p>
+<p class="cap">각 조건 N=5. 모델·가중치·샘플러·메시지 배열은 같고 캐시 재사용 여부만 다르다.</p>
 
 <div class="bad">
-  <strong>핵심 결과.</strong> 모델은 이 대화에서 한국어로 전환할 능력이 <em>있다</em> — 같은 대화를 통째로 다시 프리필하면 5/5 성공한다.
-  <code>cactus run</code> 이 쓰는 증분 재사용 경로에서만 실패한다. 즉 “작은 모델이 언어를 못 바꾼다”는 설명은 <strong>틀렸다</strong>.
+  <strong>핵심 결과.</strong> 모델은 한국어로 전환할 능력이 <em>있다</em>. 같은 대화를 통째로 다시 프리필하면 5/5 성공한다.
+  <code>cactus run</code> 의 증분 재사용 경로에서만 실패하므로 “작은 모델이 언어를 못 바꾼다”는 설명은 <strong>틀렸다</strong>.
 </div>
 
 <div class="note">
-  <strong>왜 영어 컨텍스트에선 티가 안 났나.</strong> <em>이 표만 보고 “영어에선 결함이 없다”고 읽으면 안 된다.</em>
-  이 결함은 결과를 무작위로 망가뜨리는 종류가 아니라 <em>경계선 판단을 뒤집는</em> 종류다.
-  영어→한국어 전환은 모델에게 마진이 큰 판단이라 warm 경로의 오차를 먹고도 살아남고, 일본어→한국어는 마진이 작아 뒤집힌다.
-  <strong>영어에서도 결함 자체는 그대로 존재하며, 측정하면 보인다</strong> — <a href="#en-repro">§7.2</a> 에서 순수 영어로 증명한다.
+  <strong>왜 영어 컨텍스트에선 티가 안 났나.</strong> 이 결함은 결과를 무작위로 망가뜨리지 않고 <em>경계선 판단을 뒤집는다</em>.
+  영어→한국어 전환은 마진이 커서 warm 경로의 오차를 견디고, 일본어→한국어는 마진이 작아 뒤집힌다.
+  <strong>영어에서도 결함은 그대로 있다</strong>. <a href="#en-repro">§7.2</a> 에서 순수 영어로 증명한다.
 </div>
 
-<h2 id="path">5. 경로 특정 — 엔진에는 프리필 구현이 세 갈래 있다</h2>
+<h2 id="path">5. 경로 특정: 엔진에는 프리필 구현이 세 갈래 있다</h2>
 
 <p>완성 경로의 분기점은 <code>complete.cpp:971-985</code> 한 곳이다.</p>
 
@@ -681,7 +669,7 @@ handle-&gt;processed_tokens = prompt.tokens;
 </code></pre>
 <p class="src"><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/complete.cpp#L971-L985">complete.cpp#L971-L985</a></p>
 
-<p>그리고 <code>do_prefill()</code> 안에서 다시 두 갈래로 나뉜다 — 캐시가 새 프롬프트의 접두사면 <strong>델타만</strong> 프리필한다.</p>
+<p><code>do_prefill()</code> 안에서 다시 두 갈래로 나뉜다. 캐시가 새 프롬프트의 접두사면 <strong>델타만</strong> 프리필한다.</p>
 
 <pre><code>// cactus-engine/src/complete.cpp:656-673
 result.was_prefix = prompt_context_matches(handle, prompt);
@@ -701,14 +689,13 @@ if (!result.was_prefix) {
   <tr><th style="width:12%">경로</th><th style="width:30%">진입 조건</th><th>구현</th></tr>
   <tr><td><strong>A · fused</strong></td><td>캐시가 비어 있음</td><td><code>prefill_and_sample_first_token(전체 프롬프트)</code></td></tr>
   <tr><td><strong>B · chunked</strong></td><td>캐시가 있지만 접두사 불일치</td><td><code>reset_cache()</code> 후 <code>Model::prefill()</code> 로 전체를 청크 프리필</td></tr>
-  <tr><td><strong>C · warm</strong></td><td>캐시가 새 프롬프트의 접두사</td><td>델타 토큰만 프리필 — <code>cactus run</code> 의 2턴 이후</td></tr>
+  <tr><td><strong>C · warm</strong></td><td>캐시가 새 프롬프트의 접두사</td><td>델타 토큰만 프리필. <code>cactus run</code> 의 2턴 이후</td></tr>
 </table>
 
 <h3>5.1 세 경로를 같은 메시지 배열로 비교</h3>
 
 <p>
-  응답 JSON 의 <code>prefill_tokens</code> 필드가 어느 경로가 실제로 돌았는지 증언한다.
-  작으면 델타만 프리필한 것(C), 크면 전체를 프리필한 것(A/B).
+  응답 JSON 의 <code>prefill_tokens</code> 로 실제 경로를 확인한다. 작으면 델타만(C), 크면 전체(A/B)를 프리필한 것이다.
 </p>
 
 <pre><code># evidence/three_way2.py — 세 갈래 모두 동일한 m2 를 받는다
@@ -729,18 +716,18 @@ cactus_reset(h); send(h, unrelated);   cold_chunked = send(h, m2)   # B
   <tr><td>A · cold fused</td><td class="num">71 – 85</td><td class="num">5 / 5</td><td class="num">0.78 – 0.81</td></tr>
   <tr><td>B · cold chunked</td><td class="num">71 – 85</td><td class="num">5 / 5</td><td class="num">0.57 – 0.61</td></tr>
 </table>
-<p class="cap"><code>prefill_tokens=17</code> 이 warm 경로가 실제로 탔음을 확정한다 — 2턴 델타(<code>&lt;turn|&gt;\n&lt;|turn&gt;user\n…&lt;|turn&gt;model\n</code>)만 프리필했다.</p>
+<p class="cap"><code>prefill_tokens=17</code> 은 warm 경로를 확정한다. 2턴 델타(<code>&lt;turn|&gt;\n&lt;|turn&gt;user\n…&lt;|turn&gt;model\n</code>)만 프리필했다.</p>
 
 <div class="bad">
-  <strong>범위 확정.</strong> 콜드 두 갈래(A·B)는 <em>둘 다</em> 성공한다. 즉 “청크 프리필 구현”은 무죄다.
-  실패하는 것은 <strong>이전 턴의 캐시를 이어받아 델타만 프리필하는 경로(C)</strong> 하나뿐이다.
+  <strong>범위 확정.</strong> 콜드 두 갈래(A·B)는 <em>둘 다</em> 성공하므로 “청크 프리필 구현”은 무죄다.
+  실패는 <strong>이전 턴 캐시를 이어받아 델타만 프리필하는 경로(C)</strong>에서만 난다.
 </div>
 
-<h2 id="notbroken">6. 반증 — 캐시가 “깨진” 것은 아니다</h2>
+<h2 id="notbroken">6. 반증: 캐시가 “깨진” 것은 아니다</h2>
 
 <p>
-  여기서 흔한 오진이 “KV 캐시가 손상됐다 / 위치 인코딩이 어긋났다” 이다. 이걸 직접 반증했다.
-  언어와 무관한 순수 ASCII 회수(recall) 과제로, 1턴에 코드를 심고 2턴에 되묻는다.
+  흔한 오진은 “KV 캐시가 손상됐다 / 위치 인코딩이 어긋났다”이다. 이를 순수 ASCII 회수(recall) 과제로 반증했다.
+  1턴에 코드를 심고 2턴에 되묻는다.
 </p>
 
 <pre><code># evidence/recall_test.py
@@ -755,9 +742,7 @@ secret=BRAVO-2085    WARM pf=24  HIT  BRAVO-2085      COLD pf=57  HIT  BRAVO-208
 ==== recall accuracy over 8: WARM 8/8   COLD 8/8
 </code></pre>
 
-<p>
-  또한 이 대화 길이에서는 손상을 일으킬 만한 기능이 아예 발동하지 않는다.
-</p>
+<p>이 대화 길이에서는 손상을 일으킬 만한 기능이 발동하지도 않는다.</p>
 
 <table>
   <tr><th>기능</th><th>기본값</th><th>이 대화</th><th>발동?</th></tr>
@@ -767,19 +752,19 @@ secret=BRAVO-2085    WARM pf=24  HIT  BRAVO-2085      COLD pf=57  HIT  BRAVO-208
 <p class="src">기본값 출처: <a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/engine.h#L141-L146">engine.h#L141-L146</a>, 트리거 조건 <a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/model.cpp#L3832-L3839">model.cpp#L3832</a>; <code>sliding_window</code> 은 번들 <code>config.txt</code>.</p>
 
 <div class="good">
-  <strong>반증 결과.</strong> warm 캐시에서도 이전 턴의 정보는 정확히 읽힌다(8/8). 위치가 어긋났거나 내용이 유실된 게 아니다.
-  압축·슬라이딩 윈도우도 무관하다. 남은 설명은 하나 — <strong>같은 토큰 열인데 경로에 따라 수치가 다르다</strong>.
+  <strong>반증 결과.</strong> warm 캐시에서도 이전 턴 정보는 정확히 읽힌다(8/8). 압축·슬라이딩 윈도우도 무관하다.
+  남은 설명은 <strong>같은 토큰 열인데 경로에 따라 수치가 다르다</strong>는 것뿐이다.
 </div>
 
-<h2 id="numerics">7. 수치 비등가성 — 같은 프롬프트인데 로짓이 다르다</h2>
+<h2 id="numerics">7. 수치 비등가성: 같은 프롬프트인데 로짓이 다르다</h2>
 
 <p>
-  <code>confidence</code> 는 첫 생성 토큰의 top-1 / top-2 로짓 마진에서 나온다
-  (<code>confidence = 1 − entropy</code>, <code>sample_component_logits</code>). 즉 <strong>샘플링과 무관한 결정론적 양</strong>이다.
-  같은 토큰 열을 넣었는데 이 값이 달라지면, 계산 자체가 다르다는 뜻이다.
+  <code>confidence</code> 는 첫 생성 토큰의 top-1 / top-2 로짓 마진에서 나오는
+  (<code>confidence = 1 − entropy</code>, <code>sample_component_logits</code>) <strong>결정론적 양</strong>이다.
+  같은 토큰 열에서 이 값이 다르면 계산 자체가 다르다.
 </p>
 
-<p>멀티턴을 배제하고, <strong>단일 프롬프트</strong>를 A(fused)와 B(chunked) 두 경로로만 통과시켜 비교했다.</p>
+<p>멀티턴을 빼고 <strong>단일 프롬프트</strong>를 A(fused)와 B(chunked) 두 경로로 통과시켰다.</p>
 
 <pre><code># evidence/numerics_probe.py  (greedy: temperature 0, top_k 1)
 cactus_reset(h);                          F = send(h, M2)   # A fused
@@ -793,16 +778,16 @@ cactus_reset(h); send(h, unrelated);      C = send(h, M2)   # B chunked
 </code></pre>
 
 <p>
-  토큰 73개로 완전히 동일한데 confidence 가 <strong>0.8397 vs 0.6619</strong>. 5장의 표에서도 같은 격차가 조건마다 반복된다
-  (JA: 0.83–0.86 vs 0.65–0.68, EN: 0.78–0.81 vs 0.57–0.61 — 20개 시행에서 일관).
-  수학적으로 동일해야 할 계산이 구현 경로에 따라 다른 로짓을 낸다.
+  토큰 73개가 똑같은데 confidence 는 <strong>0.8397 vs 0.6619</strong>다. 5장 표에서도 같은 격차가 반복된다
+  (JA: 0.83–0.86 vs 0.65–0.68, EN: 0.78–0.81 vs 0.57–0.61, 20개 시행에서 일관).
+  수학적으로 같아야 할 계산이 경로에 따라 다른 로짓을 낸다.
 </p>
 
-<h3>7.1 원인 후보를 하나 좁혔다 — prefill tail pad</h3>
+<h3>7.1 원인 후보 좁히기: prefill tail pad</h3>
 
 <p>
   엔진에는 프리필 꼬리 패딩을 끄는 숨은 환경변수가 있다(<code>model.cpp:573</code>).
-  이걸 켜자 fused 경로의 confidence 가 chunked 쪽으로 내려앉고, <strong>출력 자체가 뒤바뀐다</strong>.
+  이를 켜면 fused 경로의 confidence 가 chunked 쪽으로 내려앉고 <strong>출력도 뒤바뀐다</strong>.
 </p>
 
 <pre><code>$ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 python numerics_probe.py
@@ -817,21 +802,18 @@ cactus_reset(h); send(h, unrelated);      C = send(h, M2)   # B chunked
   <tr><td>기본</td><td class="num">0.8397</td><td class="num">0.6619</td><td class="ok">깨끗한 한국어 전환</td></tr>
   <tr><td><code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code></td><td class="num">0.6549</td><td class="num">0.6584</td><td class="no">일본어 주도 + 혼용 붕괴</td></tr>
 </table>
-<p class="cap">패딩을 끄면 두 경로의 confidence 가 서로 수렴한다(0.6549 ≈ 0.6584). 즉 <strong>fused 경로만 적용하는 꼬리 패딩</strong>이 두 경로의 수치 차이를 만드는 주요 성분이다.</p>
+<p class="cap">패딩을 끄면 두 경로의 confidence 가 수렴한다(0.6549 ≈ 0.6584). <strong>fused 경로만 적용하는 꼬리 패딩</strong>이 수치 차이의 주요 성분이다.</p>
 
-<h3 id="en-repro">7.2 영어로도 재현된다 — 그리디 결정성 테스트</h3>
+<h3 id="en-repro">7.2 영어로도 재현된다: 그리디 결정성 테스트</h3>
 
 <div class="note">
-  <strong>이 절이 필요한 이유.</strong> §4 의 표에서 영어 대조군이 warm 에서도 성공했기 때문에
-  “결함이 일본어에서만 생긴다”로 읽힐 여지가 있었다. 그건 틀린 독해다.
-  결함은 언어와 무관하고, 앞 절들이 보여준 것은 <em>증상</em>이 일본어에서 임계를 넘었다는 사실뿐이다.
-  여기서 <strong>한국어·일본어를 전혀 쓰지 않고</strong> 결함 자체를 증명한다.
+  <strong>이 절이 필요한 이유.</strong> §4 에서 영어 대조군은 warm 에서도 성공해서 “결함은 일본어에서만 생긴다”로 읽힐 수 있다.
+  실제로는 <em>증상</em>이 일본어에서 임계를 넘었을 뿐이다. 여기서는 <strong>한국어·일본어 없이</strong> 결함을 증명한다.
 </div>
 
 <p>
-  가장 깔끔한 증명은 <strong>그리디(argmax) 결정성</strong>이다.
-  warm 과 cold 는 완전히 같은 토큰 열을 보고, argmax 는 확률적 요소가 없다.
-  두 경로가 등가라면 출력이 <strong>바이트 단위로 같아야</strong> 한다. 다르면 그 자체로 비등가의 증거다 — 샘플링 운을 따질 여지가 없다.
+  가장 깔끔한 증명은 <strong>그리디(argmax) 결정성</strong>이다. warm 과 cold 는 같은 토큰 열을 보고 argmax 에는 확률 요소가 없다.
+  두 경로가 등가라면 출력이 <strong>바이트 단위로 같아야</strong> 하고, 다르면 그 자체로 비등가의 증거다.
 </p>
 
 <pre><code># evidence/english_repro.py  (Part 1)
@@ -882,21 +864,19 @@ def warm_cold(h, q1, q2, opts):
         <strong>C:</strong> “Ranking programming languages by release date is tricky because…” (교전)</td>
   </tr>
 </table>
-<p class="cap">그리디 디코딩, 영어 전용. <strong>6개 중 5개에서 출력이 다르다.</strong> 일부는 첫 글자(char 0)부터 갈린다. <code>prefill_tokens</code> 이 warm(17–19, 델타만) / cold(42–147, 전체) 경로를 확정한다.</p>
+<p class="cap">그리디 디코딩, 영어 전용. <strong>6개 중 5개에서 출력이 다르고</strong>, 일부는 첫 글자(char 0)부터 갈린다. <code>prefill_tokens</code> 가 warm(17–19, 델타만) / cold(42–147, 전체)를 확정한다.</p>
 
 <div class="bad">
-  <strong>이것이 결정적 증거다.</strong> argmax 는 결정론적이고 두 갈래가 보는 토큰 열은 동일하다.
-  그런데 출력이 다르다 ⇒ <strong>두 경로의 로짓이 다르다</strong>. 언어 문제도, 샘플링 운도, 모델의 다국어 능력도 개입할 여지가 없다.
-  §4 의 일본어 실험은 이 비등가성이 <em>사용자 눈에 보이는 실패</em>로 넘어간 사례였을 뿐이다.
+  <strong>결정적 증거.</strong> argmax 는 결정론적이고 토큰 열도 같은데 출력이 다르다. 곧 <strong>두 경로의 로짓이 다르다</strong>.
+  언어, 샘플링 운, 다국어 능력이 개입할 여지가 없다. §4 의 일본어 실험은 이 비등가성이 <em>눈에 보이는 실패</em>가 된 사례다.
 </div>
 
 <h4>영어에서 결함이 어떻게 “보이는가”</h4>
 
 <p>
-  영어에서는 하드 실패 대신 <strong>2턴 응답 품질 저하</strong>로 나타난다. 위 표에서 warm 쪽은 반복적으로
-  <em>과제를 수행하는 대신 과제에 대해 논평</em>하거나(“This request requires a slight shift in tone…”),
-  지시를 왜곡해서 받는다(“three uses that require different types of use”).
-  샘플링(N=5)으로 측정한 형식 전환 준수율은 두 갈래가 비슷했지만, <strong>내용의 정확도</strong>에서 갈렸다:
+  영어에서는 하드 실패 대신 <strong>2턴 응답 품질 저하</strong>로 나타난다. warm 쪽은 과제를 수행하지 않고 과제에 대해 논평하거나
+  (“This request requires a slight shift in tone…”) 지시를 왜곡한다(“three uses that require different types of use”).
+  샘플링(N=5)에서 형식 준수율은 비슷했지만 <strong>내용의 정확도</strong>가 갈렸다.
 </p>
 
 <pre><code>##### one-word switch   ("What colour is chlorophyll?" — 한 단어로 답하라)
@@ -911,30 +891,29 @@ def warm_cold(h, q1, q2, opts):
 </code></pre>
 
 <p>
-  “한 단어로 답하라”는 형식은 둘 다 지켰지만, <strong>warm 은 5/5 오답, cold 는 5/5 정답</strong>이다.
-  같은 메시지 배열, 캐시 재사용 여부만 다르다. 영어에서도 결함은 명확히 사용자에게 도달한다 — 다만
-  “일본어로 계속 답한다” 처럼 즉시 알아챌 수 있는 형태가 아니라, <em>조용히 답이 나빠지는</em> 형태라 놓치기 쉬울 뿐이다.
+  형식은 둘 다 지켰지만 <strong>warm 은 5/5 오답, cold 는 5/5 정답</strong>이다. 다른 것은 캐시 재사용 여부뿐이다.
+  영어에서도 결함은 사용자에게 닿는다. 다만 <em>조용히 답이 나빠지는</em> 형태라 놓치기 쉽다.
 </p>
 
-<h3 id="rootcause">7.3 근본 원인 — 결함은 두 개다 <span style="font-size:0.8rem;font-weight:400;color:var(--red-ink)">(→ 후속 조사에서 하나로 정정됨)</span></h3>
+<h3 id="rootcause">7.3 근본 원인: 결함은 두 개다 <span style="font-size:0.8rem;font-weight:400;color:var(--red-ink)">(→ 후속 조사에서 하나로 정정됨)</span></h3>
 
 <div class="bad">
-  <strong>정정 — 이 절의 “결함 ①(꼬리 패딩)” 은 오진이었다.</strong>
-  후속 문서 <a href="cactus-defect-fix-plan.html">수정 계획</a> 의 op 단위 테스트에서 두 가지가 밝혀졌다.
-  <br>· <code>ATTENTION_CACHED</code> 에 실제 N행 + 패딩 (128−N)행을 넣어도 앞 N행 출력은 <strong>비트 단위로 동일</strong>하다
-  (N=19·40·81·120·127, 패딩값 0.0/0.05 전부) → <strong>패딩 산술은 결백</strong>.
-  <br>· <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 은 패딩만 끄는 게 아니라, 조기 반환
-  (<code>model.cpp:1345-1350</code>)에 걸려 <strong>꼬리 토큰을 청크 그래프 대신 스칼라 그래프로 재라우팅</strong>한다.
-  즉 아래에서 “결함 ①” 으로 귀속한 변화는 실제로는 결함 ②(두 그래프 불일치)가 라우팅을 통해 드러난 것이다.
-  <br><br>
-  <strong>정정된 근본 원인은 하나다</strong> — 배치 청크 그래프와 단일 토큰 그래프가 같은 토큰에 다른 값을 낸다.
-  패딩·청크 경계·warm/cold 는 <em>어느 토큰이 어느 그래프로 가는지</em>를 정하는 라우팅 규칙일 뿐이다.
-  아래 실험 결과(0/6, 4/6 등)는 그대로 유효하고, 해석만 위와 같이 바뀐다.
+  <strong>정정: 이 절의 “결함 ①(꼬리 패딩)”은 오진이었다.</strong>
+  후속 문서 <a href="cactus-defect-fix-plan.html">수정 계획</a>의 op 단위 테스트에서 두 가지가 밝혀졌다.
+  <ol style="margin:6px 0">
+    <li><code>ATTENTION_CACHED</code> 에 실제 N행 + 패딩 (128−N)행을 넣어도 앞 N행 출력은 <strong>비트 단위로 같다</strong>
+    (N=19·40·81·120·127, 패딩값 0.0/0.05 전부). <strong>패딩 산술은 결백하다</strong>.</li>
+    <li><code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 은 패딩만 끄지 않는다. 조기 반환(<code>model.cpp:1345-1350</code>)에 걸려
+    <strong>꼬리 토큰을 청크 그래프 대신 스칼라 그래프로 재라우팅</strong>한다. 아래에서 “결함 ①”로 본 변화는 결함 ②(두 그래프 불일치)가 라우팅으로 드러난 것이다.</li>
+  </ol>
+  <strong>정정된 근본 원인은 하나다.</strong> 배치 청크 그래프와 단일 토큰 그래프가 같은 토큰에 다른 값을 낸다.
+  패딩·청크 경계·warm/cold 는 <em>어느 토큰이 어느 그래프로 가는지</em>를 정하는 라우팅 규칙이다.
+  아래 실험 결과(0/6, 4/6 등)는 그대로 유효하고 해석만 바뀐다.
 </div>
 
 <p>
-  “경로가 다르면 결과가 다르다”까지가 §7.1–7.2 였다. 그럼 <em>무엇 때문에</em> 다른가.
-  번들이 <strong>서로 다른 디코더 그래프 두 개</strong>를 싣고 있다는 데서 출발한다.
+  §7.1–7.2 는 “경로가 다르면 결과가 다르다”까지 보였다. <em>왜</em> 다른지는
+  번들에 <strong>서로 다른 디코더 그래프 두 개</strong>가 있다는 데서 출발한다.
 </p>
 
 <pre><code>$ ls ~/.cache/cactus/weights/gemma-4-e2b-it-cq4/components/
@@ -943,8 +922,8 @@ decoder_step              ← 단일 토큰 디코드용
 </code></pre>
 
 <p>
-  프롬프트 토큰의 KV 는 <code>decoder_prefill_chunk</code> 가 쓰고, <strong>생성된 토큰의 KV 는 <code>decoder_step</code> 이 쓴다.</strong>
-  cold 재프리필은 그 생성 토큰들의 KV 를 <em>프리필 그래프로 다시</em> 쓴다. 여기서 첫 가설이 나온다.
+  프롬프트 토큰의 KV 는 <code>decoder_prefill_chunk</code> 가, <strong>생성된 토큰의 KV 는 <code>decoder_step</code> 이 쓴다.</strong>
+  cold 재프리필은 생성 토큰의 KV 를 <em>프리필 그래프로 다시</em> 쓴다. 여기서 첫 가설이 나온다.
 </p>
 
 <div class="card">
@@ -952,8 +931,8 @@ decoder_step              ← 단일 토큰 디코드용
 </div>
 
 <p>
-  바인딩에 <code>cactus_prefill()</code> 이 노출돼 있어서 이걸 직접 가를 수 있다.
-  <strong>같은 대화를 “생성 없이 프리필만”으로 캐시에 넣으면</strong>, warm 재사용은 그대로면서 decode 가 쓴 KV 는 하나도 없는 상태가 된다.
+  바인딩의 <code>cactus_prefill()</code> 로 이를 직접 가를 수 있다.
+  <strong>같은 대화를 “생성 없이 프리필만”으로 캐시에 넣으면</strong> warm 재사용은 그대로이고 decode 가 쓴 KV 는 없다.
 </p>
 
 <pre><code># evidence/root_cause.py — 세 갈래 모두 동일한 M2, 그리디
@@ -966,81 +945,73 @@ decoder_step              ← 단일 토큰 디코드용
   <tr><th>설정</th><th class="num">W == C</th><th class="num">P == C</th><th>해석</th></tr>
   <tr>
     <td>기본</td><td class="num no">0 / 6</td><td class="num no">0 / 6</td>
-    <td><strong>H1 반증.</strong> decode 가 쓴 KV 를 전부 제거해도 warm 은 여전히 cold 와 다르다</td>
+    <td><strong>H1 반증.</strong> decode 가 쓴 KV 를 모두 없애도 warm 은 cold 와 다르다</td>
   </tr>
   <tr>
     <td><code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code></td>
     <td class="num no">0 / 6</td><td class="num ok">4 / 6</td>
-    <td>패딩을 끄면 P 는 cold 와 <strong>confidence 까지 동일</strong>해진다 (0.7718/0.7718, 0.7931/0.7931, 0.8105/0.8105).
-        그런데 W 는 여전히 0/6</td>
+    <td>패딩을 끄면 P 는 cold 와 <strong>confidence 까지 같아진다</strong> (0.7718/0.7718, 0.7931/0.7931, 0.8105/0.8105).
+        W 는 여전히 0/6</td>
   </tr>
 </table>
-<p class="cap">그리디(argmax) 6개 대화. 세 갈래가 받는 2턴 메시지 배열은 완전히 동일하고, 1턴 답변 문자열도 같다.</p>
+<p class="cap">그리디(argmax) 6개 대화. 세 갈래의 2턴 메시지 배열과 1턴 답변 문자열은 같다.</p>
 
-<p>이 두 줄이 결함을 정확히 두 개로 쪼갠다.</p>
+<p>이 두 줄이 결함을 두 개로 쪼갠다.</p>
 
 <div class="bad">
-  <strong>결함 ① — 꼬리 패딩이 배치 프리필 결과를 오염시킨다.</strong><br>
+  <strong>결함 ①: 꼬리 패딩이 배치 프리필 결과를 오염시킨다.</strong><br>
   Gemma 4 는 슬라이딩 윈도우 레이어가 있어 <code>pad_tail=false</code> · <code>use_padded_tail=true</code> 경로를 탄다
-  (<code>model.cpp:1327-1343</code>). 이 경로는 남은 꼬리를 <strong>128 폭 청크로 채워 실행</strong>하고,
-  <code>pads = 128 − tail_tokens</code> 만큼의 패딩 슬롯을 쓴 뒤 KV 추가분을 롤백한다.
+  (<code>model.cpp:1327-1343</code>). 남은 꼬리를 <strong>128 폭 청크로 채워 실행</strong>하고
+  <code>pads = 128 − tail_tokens</code> 만큼 패딩을 쓴 뒤 KV 추가분을 롤백한다.
   <br>· cold: tail ≈ 81 → 패딩 47칸 · warm: tail = 19 → 패딩 <strong>109칸</strong>
-  <br>같은 실제 토큰인데 패딩 양이 다르면 결과가 달라진다 ⇒ <strong>프리필이 “한 번에 몇 개를 넣었는지”에 의존한다</strong>.
-  패딩을 끄면 이 성분이 사라지고 P 가 cold 와 비트 단위로 일치한다.
+  <br>패딩 양이 다르면 결과가 달라지므로 <strong>프리필이 “한 번에 몇 개를 넣었는지”에 의존한다</strong>.
+  패딩을 끄면 P 가 cold 와 비트 단위로 일치한다.
 </div>
 
 <div class="bad">
-  <strong>결함 ② — 배치 그래프와 단일 토큰 그래프의 수치가 다르다.</strong><br>
-  패딩을 꺼도 W 는 <strong>0/6</strong>. W 와 P 의 차이는 오직 <em>1턴 답변의 KV 를 누가 썼는가</em>
-  (<code>decoder_step</code> vs <code>decoder_prefill_chunk</code>) 하나뿐이다.
-  즉 두 그래프가 같은 토큰·같은 위치에 대해 다른 KV/로짓을 낸다.
-  <br>패딩 off 에서 P 가 4/6 인 것(2개는 불일치)도 같은 결함으로 설명된다 — 그 2개는 1턴 답변이 가장 길어
-  전체 길이가 128 을 넘고, 그래서 <strong>어떤 토큰이 청크 그래프를 타고 어떤 토큰이 스칼라 경로를 타는지</strong>가
-  warm/cold 간에 달라진다.
+  <strong>결함 ②: 배치 그래프와 단일 토큰 그래프의 수치가 다르다.</strong><br>
+  패딩을 꺼도 W 는 <strong>0/6</strong>이다. W 와 P 의 차이는 <em>1턴 답변의 KV 를 누가 썼는가</em>
+  (<code>decoder_step</code> vs <code>decoder_prefill_chunk</code>)뿐이므로, 두 그래프가 같은 토큰·위치에 다른 KV/로짓을 낸다.
+  <br>패딩 off 에서 P 가 4/6 인 것도 같은 결함이다. 불일치한 2개는 1턴 답변이 가장 길어 전체 길이가 128 을 넘고,
+  <strong>어떤 토큰이 청크 그래프를, 어떤 토큰이 스칼라 경로를 타는지</strong>가 warm/cold 간에 달라진다.
 </div>
 
-<h4>그래서 멀티턴이 왜 깨지는가 — 한 문장</h4>
+<h4>그래서 멀티턴은 왜 깨지는가</h4>
 
 <div class="card">
   <p style="margin:0">
     Cactus 의 프리필은 <strong>토큰 열이 같아도 “그 호출에 몇 개를 넣었는지”에 따라 다른 결과를 낸다</strong>
-    (청크 경계 + 꼬리 패딩 + 어느 그래프를 타는지). 멀티턴에서 2턴 이후는 델타 17~19 토큰만 넣으므로
-    1턴과 기하가 완전히 다르고, 게다가 1턴 생성 토큰의 KV 는 디코드 그래프가 쓴 것이다.
-    <strong>결함 ①과 ②가 동시에 걸리는 지점이 바로 “2턴째”다.</strong>
+    (청크 경계 + 꼬리 패딩 + 어느 그래프를 타는지). 2턴 이후는 델타 17~19 토큰만 넣어 1턴과 기하가 완전히 다르고,
+    1턴 생성 토큰의 KV 는 디코드 그래프가 쓴 것이다. <strong>결함 ①과 ②가 동시에 걸리는 지점이 “2턴째”다.</strong>
   </p>
 </div>
 
 <p>
-  이것으로 앞선 관측들이 전부 한 원인으로 모인다 — fused ≠ chunked(§7.1)도, 영어 그리디 5/6 불일치(§7.2)도,
-  <code>prefill_tokens</code> 이 17 인 경로만 실패하는 것(§5)도 모두 “프리필이 기하에 불변이 아니다”의 결과다.
-  <strong>prefix caching 은 원래 속도만 바꾸고 결과는 바꾸지 않아야 하는 최적화인데, Cactus 에서는 그 전제가 성립하지 않는다.</strong>
+  fused ≠ chunked(§7.1), 영어 그리디 5/6 불일치(§7.2), <code>prefill_tokens</code> 17 경로만 실패(§5)가 모두
+  “프리필이 기하에 불변이 아니다”라는 한 원인에서 나온다.
+  <strong>prefix caching 은 속도만 바꾸고 결과는 바꾸지 않아야 하는데, Cactus 에서는 그 전제가 깨진다.</strong>
 </p>
 
 <div class="ed">
-  <strong>편집자 주 — 남는 부분.</strong> 결함 ①은 플래그로 켜고 끄며 확인했으므로 기전까지 확정이다.
-  결함 ②는 “두 그래프가 다르다”까지가 측정 결과이고, <em>왜</em> 다른지(양자화 스케일, GEMM↔GEMV 커널,
-  누산 순서 중 무엇인지)는 커널 레벨 대조가 필요하다.
-  또한 <strong>어느 쪽이 “옳은” 값인지</strong>도 참조 구현과 대조해야 알 수 있다 —
-  다만 실무적으로는 cold 쪽이 일관되게 더 나은 출력을 낸다.
+  <strong>편집자 주: 남는 부분.</strong>
+  <ol style="margin:6px 0 0">
+    <li>결함 ①은 플래그로 켜고 끄며 확인해 기전까지 확정이다. 결함 ②는 “두 그래프가 다르다”까지가 측정이고,
+    <em>왜</em> 다른지(양자화 스케일, GEMM↔GEMV 커널, 누산 순서)는 커널 레벨 대조가 필요하다.</li>
+    <li><strong>어느 쪽이 “옳은” 값인지</strong>(§7.1 포함)도 참조 구현과 로짓을 대조해야 안다. 실무적으로는 cold 쪽이 일관되게 낫다.</li>
+    <li>확실한 것은 <strong>세 경로가 등가가 아니고, 그 차이가 동작을 바꿀 만큼 크다</strong>는 점이다.
+    <code>cactus run</code> 은 1턴에 A 경로, 2턴 이후 C 경로를 타므로 <strong>대화가 길어질수록 사용자는 확신도가 낮은 계산 경로에 머문다.</strong></li>
+  </ol>
 </div>
 
-<div class="ed">
-  <strong>편집자 주 — §7.1 에 대한 해석.</strong> 위 관측(경로별 로짓 차이, 패딩 플래그의 영향)은 측정값이지만,
-  “<em>어느 쪽이 수학적으로 옳은 구현인가</em>” 는 이 실험만으로 단정할 수 없다. 커널 레벨에서 참조 구현과
-  로짓을 대조해야 한다. 확실한 것은 <strong>세 경로가 서로 등가가 아니며, 그 차이가 사용자에게 보이는 동작을 바꿀 만큼 크다</strong>는 사실이다.
-  <code>cactus run</code> 의 1턴은 A 경로, 2턴 이후는 C 경로를 타므로 — <strong>대화가 길어질수록 사용자는 계속 다른(그리고 확신도가 낮은) 계산 경로에 머문다.</strong>
-</div>
-
-<h2 id="asciibug">8. 별건 버그 — <code>cactus serve</code>/Python 바인딩이 모든 비-ASCII 입력을 파괴한다</h2>
+<h2 id="asciibug">8. 별건 버그: <code>cactus serve</code>/Python 바인딩이 모든 비-ASCII 입력을 파괴한다</h2>
 
 <p>
-  조사 중 별개의 확정적 버그를 발견했다. 사용자의 증상(<code>cactus run</code>)과는 원인이 다르지만,
-  같은 레포에서 훨씬 파급이 크다.
+  조사 중 별개의 확정 버그를 발견했다. 보고된 증상(<code>cactus run</code>)과 원인은 다르지만 파급은 훨씬 크다.
 </p>
 
 <h3>8.1 증상</h3>
 
-<p>CLI 에서 완벽히 답하는 바로 그 프롬프트가, 서버로 보내면 5/5 실패한다.</p>
+<p>CLI 에서 완벽히 답하는 프롬프트가 서버로 보내면 5/5 실패한다.</p>
 
 <pre><code>cactus serve google/gemma-4-E2B-it --no-cloud-handoff --port 8099
 
@@ -1051,9 +1022,9 @@ curl -s http://127.0.0.1:8099/v1/chat/completions -H 'Content-Type: application/
 → 죄송하지만, 제공해주신 텍스트가 어떤 언어인지 명확하지 않아 정확한 답변을 드리기 어렵습니다. …
 </code></pre>
 
-<p>모델이 “이 텍스트가 무슨 언어인지 모르겠다”고 말하는 게 힌트였다. 서버를 새로 띄워 <em>첫 요청</em>으로 보내도 동일 → 캐시 오염이 아니다.</p>
+<p>모델이 “무슨 언어인지 모르겠다”고 답한 게 힌트였다. 서버를 새로 띄워 <em>첫 요청</em>으로 보내도 같으므로 캐시 오염은 아니다.</p>
 
-<h3>8.2 원인 — 두 코드가 서로 어긋난다</h3>
+<h3>8.2 원인: 두 코드가 서로 어긋난다</h3>
 
 <pre><code># python/cactus/bindings/cactus.py:857-866
 def _to_json(obj):
@@ -1073,14 +1044,14 @@ while ((escape_pos = msg.content.find("\\\"", escape_pos)) != std::string::npos)
 <p class="src"><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/python/cactus/bindings/cactus.py#L857-L866">bindings/cactus.py#L857</a> · <a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/utils.h#L997-L1053">utils.h#L997-L1053</a></p>
 
 <p>
-  Python 쪽은 한글·일본어·이모지를 전부 <code>\uXXXX</code> 로 바꿔 보내는데, C++ 파서는 <code>\u</code> 를 풀 줄 모른다.
-  결과적으로 모델은 <strong>“<code>한국어로 …</code>” 라는 ASCII 문자열을 문자 그대로</strong> 읽는다.
-  앞서 그리디 실험에서 모델이 <code>日本語…</code> 를 그대로 뱉었던 것도 이것 때문이었다(응답을 앵무새처럼 반복).
+  Python 쪽은 한글·일본어·이모지를 모두 <code>\uXXXX</code> 로 바꿔 보내는데 C++ 파서는 <code>\u</code> 를 풀지 못한다.
+  모델은 <strong>“<code>한국어로 …</code>” 라는 ASCII 문자열을 문자 그대로</strong> 읽는다.
+  그리디 실험에서 모델이 <code>日本語…</code> 를 앵무새처럼 그대로 뱉은 것도 이 때문이다.
 </p>
 
 <h3>8.3 A/B 증명</h3>
 
-<p>같은 핸들, 같은 옵션, 같은 메시지. 다른 것은 JSON 인코딩 한 가지뿐이다.</p>
+<p>핸들·옵션·메시지는 같고 JSON 인코딩만 다르다.</p>
 
 <pre><code># evidence/ab_ensure_ascii.py
 ("A", MSGS)                                    # list → _to_json 이 ensure_ascii=True
@@ -1098,11 +1069,11 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
 </code></pre>
 
 <div class="bad">
-  <strong>영향 범위.</strong> <code>cactus serve</code>(OpenAI 호환 서버)와 Python 바인딩을 쓰는 <strong>모든 비영어 입력</strong>.
-  한국어·일본어·중국어·이모지·악센트 문자 전부. C++ CLI(<code>cactus run</code>)와 모바일 바인딩은 영향 없다.
-  <br><strong>고칠 곳은 한 줄이다</strong> — <code>json.dumps(obj, ensure_ascii=False).encode()</code>.
-  (근본적으로는 엔진의 <code>parse_messages_json</code> 이 <code>\uXXXX</code> 를 처리하도록 고치는 게 맞다.)
-  <br><strong>지금 당장의 우회</strong>: 바인딩 호출 시 메시지를 <code>json.dumps(msgs, ensure_ascii=False)</code> 문자열로 직접 넘기면 정상 동작한다.
+  <strong>영향 범위.</strong> <code>cactus serve</code>(OpenAI 호환 서버)와 Python 바인딩의 <strong>모든 비영어 입력</strong>
+  (한국어·일본어·중국어·이모지·악센트 문자). C++ CLI(<code>cactus run</code>)와 모바일 바인딩은 영향이 없다.
+  <br><strong>수정은 한 줄이다</strong>: <code>json.dumps(obj, ensure_ascii=False).encode()</code>.
+  근본적으로는 엔진의 <code>parse_messages_json</code> 이 <code>\uXXXX</code> 를 처리해야 한다.
+  <br><strong>당장의 우회</strong>: 메시지를 <code>json.dumps(msgs, ensure_ascii=False)</code> 문자열로 직접 넘긴다.
 </div>
 
 <h2 id="verdict">9. 판정과 워크어라운드</h2>
@@ -1117,7 +1088,7 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
   </tr>
   <tr>
     <td>모델이 언어 전환 지시를 못 따른다</td><td class="ok">기각</td>
-    <td>같은 대화를 콜드 프리필하면 JA→KO 전환 <strong>5/5 성공</strong> (§4). 영어 컨텍스트에선 warm 에서도 성공.</td>
+    <td>같은 대화를 콜드 프리필하면 JA→KO 전환 <strong>5/5 성공</strong> (§4). 영어 컨텍스트는 warm 에서도 성공.</td>
   </tr>
   <tr>
     <td>프레임워크가 히스토리를 흘린다 / 템플릿이 틀렸다</td><td class="ok">기각</td>
@@ -1146,25 +1117,22 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
 <div class="card">
   <h3 style="margin-top:0">그래서 답은</h3>
   <p>
-    <strong>프레임워크 문제다.</strong> 다만 “프레임워크가 대화를 잃어버린다” 같은 단순한 결함이 아니라,
-    <strong>엔진의 프리필 구현 세 갈래가 서로 등가가 아니고, <code>cactus run</code> 의 2턴 이후가 그중 품질이 떨어지는 갈래에 고정된다</strong>는 형태다.
+    <strong>프레임워크 문제다.</strong> 대화를 잃어버리는 단순한 결함이 아니라,
+    <strong>프리필 구현 세 갈래가 등가가 아니고 <code>cactus run</code> 의 2턴 이후가 품질이 떨어지는 갈래에 고정된다</strong>.
   </p>
   <p>
-    모델(Gemma 4 E2B, CQ4 4-bit)의 기여가 0 은 아니다. 이 모델은 언어 전환 판단의 마진이 작아서
-    수치가 조금만 틀어져도 결과가 뒤집힌다. 더 큰/덜 양자화된 모델이라면 같은 결함이 있어도 증상이 안 보였을 것이다.
-    <strong>결함은 프레임워크에 있고, 모델은 그 결함을 드러낸 리트머스지에 가깝다.</strong>
+    모델(Gemma 4 E2B, CQ4 4-bit)의 기여도 0 은 아니다. 언어 전환 판단의 마진이 작아 수치가 조금만 틀어져도 뒤집힌다.
+    더 크거나 덜 양자화된 모델이라면 증상이 안 보였을 것이다. <strong>결함은 프레임워크에 있고, 모델은 그걸 드러낸 리트머스지다.</strong>
   </p>
   <p style="margin-bottom:0">
-    <strong>영향 범위는 “일본어 대화”가 아니라 “모든 멀티턴 대화”다.</strong> 언어와 무관하게
-    <code>cactus run</code>·<code>cactus serve</code> 의 <strong>2턴 이후 모든 응답</strong>이 1턴과 다른 계산 경로에서 나온다.
-    영어에서는 하드 실패 대신 조용한 품질 저하로 나타나므로(<a href="#en-repro">§7.2</a>) 오히려 발견하기 더 어렵다.
-    사용자가 일본어로 시작한 덕분에 눈에 띄는 형태로 드러난 셈이다.
+    <strong>영향 범위는 “모든 멀티턴 대화”다.</strong> 언어와 무관하게 <code>cactus run</code>·<code>cactus serve</code> 의
+    <strong>2턴 이후 응답</strong>은 1턴과 다른 계산 경로에서 나온다. 영어에서는 조용한 품질 저하라(<a href="#en-repro">§7.2</a>) 오히려 찾기 어렵다.
   </p>
 </div>
 
 <h3>9.2 지금 쓸 수 있는 우회 방법</h3>
 
-<p>warm 경로(= 실제 <code>cactus run</code> 조건)에서 우회책들을 각각 5회씩 측정했다.</p>
+<p>warm 경로(실제 <code>cactus run</code> 조건)에서 우회책을 각각 5회씩 측정했다.</p>
 
 <table>
   <tr><th>방법</th><th class="num">한국어 전환</th><th class="num">confidence</th><th>비고</th></tr>
@@ -1174,7 +1142,7 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
   <tr><td><code>--system</code> + 강한 지시</td><td class="num ok">5 / 5</td><td class="num">0.80 – 0.83</td><td>가장 확실</td></tr>
 </table>
 
-<p><code>--system</code> 우회는 실제 CLI 에서도 그대로 확인된다:</p>
+<p><code>--system</code> 우회는 실제 CLI 에서도 확인된다.</p>
 
 <pre><code>cactus run --no-cloud-handoff \
   --system 'You must always answer in Korean, regardless of the language used earlier in the conversation.' \
@@ -1183,60 +1151,56 @@ B wire bytes: [{"role": "user", "content": "한국어로 서울에 대해 세 �
 
 <table>
   <tr><th>#</th><th>기본</th><th><code>--system</code> 적용</th></tr>
-  <tr><td>1</td><td class="no">JA — 承知いたしました。</td><td class="ok">KO — 네, 요청하신 대로 한국어로 답변하겠습니다.</td></tr>
-  <tr><td>2</td><td class="no">JA — 承知いたしました。東京についての説明を…</td><td class="ok">KO — 알겠습니다. 이제부터 한국어로 설명해 드리겠습니다.</td></tr>
-  <tr><td>3</td><td class="no">JA — 承知いたしました。</td><td class="ok">KO — 네, 이제부터 한국어로 이야기하라는 요청을 이해했습니다…</td></tr>
-  <tr><td>4</td><td class="no">JA — 承知いたしました。東京についての説明を求められているので…</td><td class="ok">KO — 알겠습니다. 이제부터 한국어로 이야기해 드리겠습니다.</td></tr>
-  <tr><td>5</td><td class="no">JA — 承知いたしました。</td><td class="ok">KO — 알겠습니다. 이제부터 한국어로 이야기해 드리겠습니다.</td></tr>
+  <tr><td>1</td><td class="no">JA: 承知いたしました。</td><td class="ok">KO: 네, 요청하신 대로 한국어로 답변하겠습니다.</td></tr>
+  <tr><td>2</td><td class="no">JA: 承知いたしました。東京についての説明を…</td><td class="ok">KO: 알겠습니다. 이제부터 한국어로 설명해 드리겠습니다.</td></tr>
+  <tr><td>3</td><td class="no">JA: 承知いたしました。</td><td class="ok">KO: 네, 이제부터 한국어로 이야기하라는 요청을 이해했습니다…</td></tr>
+  <tr><td>4</td><td class="no">JA: 承知いたしました。東京についての説明を求められているので…</td><td class="ok">KO: 알겠습니다. 이제부터 한국어로 이야기해 드리겠습니다.</td></tr>
+  <tr><td>5</td><td class="no">JA: 承知いたしました。</td><td class="ok">KO: 알겠습니다. 이제부터 한국어로 이야기해 드리겠습니다.</td></tr>
 </table>
 <p class="cap"><code>cactus run</code> end-to-end, 각 5회. 0/5 → 5/5.</p>
 
 <div class="good">
   <strong>실용 정리.</strong>
-  <br>① <strong>언어를 <code>--system</code> 으로 고정</strong>하라 — 대화 도중 바꾸지 말고 처음부터 못 박는 게 가장 확실하다.
-  <br>② 도중에 바꿔야 하면 <code>reset</code> 을 치고 새 대화로 시작하라 — 캐시가 비므로 콜드(정상) 경로를 탄다.
-  <br>③ <code>cactus serve</code>/Python 바인딩으로 비영어를 다룬다면 <code>ensure_ascii=False</code> 패치 전까지는 쓰지 말거나,
-  메시지를 직접 <code>json.dumps(..., ensure_ascii=False)</code> 문자열로 넘겨라.
+  <br>① <strong>언어를 <code>--system</code> 으로 처음부터 고정</strong>한다. 가장 확실하다.
+  <br>② 도중에 바꿔야 하면 <code>reset</code> 후 새 대화로 시작한다. 캐시가 비어 콜드(정상) 경로를 탄다.
+  <br>③ <code>cactus serve</code>/Python 바인딩으로 비영어를 다룬다면 <code>ensure_ascii=False</code> 패치 전까지 쓰지 않거나,
+  메시지를 <code>json.dumps(..., ensure_ascii=False)</code> 문자열로 직접 넘긴다.
   <br><br>
-  <strong>다만 ①·②는 증상 완화지 치료가 아니다.</strong> <code>--system</code> 은 언어 고착이라는 <em>한 가지</em> 증상을 덮을 뿐,
-  2턴 이후가 다른 계산 경로를 탄다는 사실은 그대로다 — <a href="#en-repro">§7.2</a> 의 영어 품질 저하는 <code>--system</code> 으로 해결되지 않는다.
-  품질이 중요한 멀티턴 작업이라면 근본 수정 전까지는 <strong>매 턴 새 프로세스/새 세션으로 전체 히스토리를 다시 보내는 것</strong>(= 콜드 경로 강제)이
-  유일하게 확실한 방법이다. 프리필 비용을 매 턴 다시 내는 대가를 치른다.
+  <strong>①·②는 증상 완화일 뿐이다.</strong> <code>--system</code> 은 언어 고착만 덮고, <a href="#en-repro">§7.2</a> 의 영어 품질 저하는 그대로다.
+  품질이 중요한 멀티턴 작업은 근본 수정 전까지 <strong>매 턴 새 세션으로 전체 히스토리를 다시 보내는 것</strong>(콜드 경로 강제)이
+  유일하게 확실하다. 대신 프리필 비용을 매 턴 다시 낸다.
 </div>
 
 <h3>9.3 업스트림에 보고할 내용</h3>
 
 <ol>
   <li>
-    <strong>[확정·간단] 비-ASCII 파괴</strong> — <code>python/cactus/bindings/cactus.py:857-866</code> 의
+    <strong>[확정·간단] 비-ASCII 파괴</strong>: <code>python/cactus/bindings/cactus.py:857-866</code> 의
     <code>json.dumps(obj)</code> 가 <code>ensure_ascii=True</code>인데 엔진 <code>utils.h:1042-1053</code> 의 파서는
     <code>\uXXXX</code> 를 풀지 않는다. 재현: §8.3 A/B 스크립트.
   </li>
   <li>
-    <strong>[확정] 프리필 꼬리 패딩이 결과를 청크 기하에 의존하게 만든다</strong> —
-    <code>use_padded_tail</code> 경로(<code>model.cpp:1327-1343</code>)가 꼬리를 128 폭 청크로 채워 실행하므로
-    패딩 양(cold 47칸 vs warm 109칸)이 결과를 바꾼다. <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 을 주면
+    <strong>[확정] 프리필 꼬리 패딩이 결과를 청크 기하에 의존하게 만든다</strong>:
+    <code>use_padded_tail</code> 경로(<code>model.cpp:1327-1343</code>)가 꼬리를 128 폭 청크로 채워 실행해
+    패딩 양(cold 47칸 vs warm 109칸)이 결과를 바꾼다. <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 이면
     증분 프리필이 콜드 프리필과 confidence 까지 일치한다(0/6 → 4/6). 재현: §7.3 <code>root_cause.py</code>.
   </li>
   <li>
-    <strong>[확정] <code>decoder_prefill_chunk</code> 와 <code>decoder_step</code> 의 수치가 다르다</strong> —
-    패딩을 꺼도, 캐시에 디코드 그래프가 쓴 KV 가 섞이면 여전히 0/6 불일치.
-    두 arm 의 차이는 “1턴 답변 KV 를 누가 썼는가” 하나뿐이다. <em>왜</em> 다른지(양자화 스케일 / GEMM↔GEMV /
-    누산 순서)는 커널 레벨 대조가 필요하다.
+    <strong>[확정] <code>decoder_prefill_chunk</code> 와 <code>decoder_step</code> 의 수치가 다르다</strong>:
+    패딩을 꺼도 캐시에 디코드 그래프가 쓴 KV 가 섞이면 0/6 불일치다. 두 arm 의 차이는 “1턴 답변 KV 를 누가 썼는가”뿐이다.
+    <em>왜</em> 다른지(양자화 스케일 / GEMM↔GEMV / 누산 순서)는 커널 레벨 대조가 필요하다.
   </li>
   <li>
-    <strong>최소 재현</strong>은 <strong>§7.2 의 영어 그리디 테스트</strong>가 가장 좋다 — 다국어·샘플링을 전부 배제하고
-    “argmax 인데 warm 과 cold 의 출력이 다르다(6개 중 5개)” 한 줄로 끝난다.
-    거기에 §7.3 의 <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 대조를 붙이면 원인 분해까지 같이 전달된다.
+    <strong>최소 재현</strong>은 <strong>§7.2 의 영어 그리디 테스트</strong>가 가장 좋다. 다국어·샘플링 없이
+    “argmax 인데 warm 과 cold 출력이 다르다(6개 중 5개)”로 끝난다. §7.3 의 <code>CACTUS_DISABLE_PREFILL_TAIL_PAD=1</code> 대조를 붙이면 원인 분해까지 전달된다.
   </li>
 </ol>
 
-<h3 id="resetcost">9.4 남는 의문 — 서버는 왜 매 턴 리셋하고, 그 대가는 얼마인가</h3>
+<h3 id="resetcost">9.4 남는 의문: 서버는 왜 매 턴 리셋하고, 그 대가는 얼마인가</h3>
 
 <p>
-  <code>cactus serve</code> 가 요청마다 <code>cactus_reset()</code> 을 부른다는 것은
-  <strong>prefix caching 을 통째로 포기한다</strong>는 뜻이다. 온디바이스 엔진에서 이건 작은 손해가 아니다.
-  실제로 재봤다 — 1턴에 ~1,200 토큰짜리 문서를 주고 7턴을 이어가는, 흔한 시나리오다.
+  <code>cactus serve</code> 는 요청마다 <code>cactus_reset()</code> 을 불러 <strong>prefix caching 을 통째로 포기한다</strong>.
+  온디바이스 엔진에서 작은 손해가 아니다. 1턴에 ~1,200 토큰 문서를 주고 7턴을 이어가는 흔한 시나리오로 재봤다.
 </p>
 
 <pre><code># evidence/cache_cost.py — 같은 8턴 대화, 캐시 유지 vs 매 턴 리셋
@@ -1249,8 +1213,8 @@ for turn in ...:
 <table>
   <tr>
     <th rowspan="2">턴</th>
-    <th colspan="2">WARM — 캐시 유지 (<code>cactus run</code>)</th>
-    <th colspan="2">COLD — 매 턴 리셋 (<code>cactus serve</code>)</th>
+    <th colspan="2">WARM: 캐시 유지 (<code>cactus run</code>)</th>
+    <th colspan="2">COLD: 매 턴 리셋 (<code>cactus serve</code>)</th>
   </tr>
   <tr><th class="num">prefill 토큰</th><th class="num">TTFT</th><th class="num">prefill 토큰</th><th class="num">TTFT</th></tr>
   <tr><td>1</td><td class="num">1244</td><td class="num">1667 ms</td><td class="num">1244</td><td class="num">1593 ms</td></tr>
@@ -1265,42 +1229,40 @@ for turn in ...:
     <td class="num no">9418 (7.0×)</td><td class="num no">11986 ms (1.6×)</td>
   </tr>
 </table>
-<p class="cap">M2 Pro, <code>gemma-4-e2b-it-cq4</code>. 프리필 연산량 <strong>7배</strong>, 누적 TTFT <strong>1.6배</strong>. 턴당 TTFT 가 warm 은 ~950 ms 로 평평한 반면 cold 는 1593 → 1824 ms 로 계속 올라간다.</p>
+<p class="cap">M2 Pro, <code>gemma-4-e2b-it-cq4</code>. 프리필 연산량 <strong>7배</strong>, 누적 TTFT <strong>1.6배</strong>. 턴당 TTFT 는 warm ~950 ms 로 평평하고 cold 는 1593 → 1824 ms 로 오른다.</p>
 
 <p>
-  TTFT 배수가 토큰 배수보다 작은 건, TTFT 에 프리필과 무관한 고정 오버헤드(~880 ms)가 섞여 있기 때문이다.
-  <strong>순수하게 낭비되는 몫은 턴당 ~800 ms 이고, 대화가 길어질수록 선형으로 늘어난다</strong>
-  (누적으로는 대화 길이의 제곱에 비례). 문서·시스템 프롬프트가 길수록, 턴이 많을수록 손해가 커진다.
+  TTFT 배수가 토큰 배수보다 작은 건 프리필과 무관한 고정 오버헤드(~880 ms) 때문이다.
+  <strong>순수 낭비는 턴당 ~800 ms 이고 대화가 길어질수록 선형으로 는다</strong>(누적은 대화 길이의 제곱에 비례).
+  문서·시스템 프롬프트가 길고 턴이 많을수록 손해가 커진다.
 </p>
 
 <h4>왜 이렇게 만들었을까</h4>
 
 <p>
-  슬롯이 <strong>모델당 하나</strong>라는 점이 배경으로 보인다 — <code>self.slots: dict[str, _ModelSlot]</code>,
-  즉 같은 모델을 쓰는 모든 클라이언트가 캐시 하나를 공유한다. 남의 대화 캐시가 섞이면 안 되니 매번 지우는 것이다.
+  슬롯이 <strong>모델당 하나</strong>(<code>self.slots: dict[str, _ModelSlot]</code>)라 같은 모델의 모든 클라이언트가 캐시 하나를 공유한다.
+  남의 대화 캐시가 섞이면 안 되니 매번 지우는 것으로 보인다.
 </p>
 
 <div class="ed">
-  <strong>편집자 주 — 여기부터는 추론이다.</strong> 그런데 그 안전장치는 엔진에 <em>이미</em> 있다.
-  <code>prompt_context_matches()</code> 가 캐시 토큰이 새 프롬프트의 접두사인지 검사하고, 아니면 알아서 리셋한다
-  (<a href="#path">§5</a>). 다른 대화의 캐시는 접두사가 될 수 없으므로 자동으로 걸러진다.
-  즉 <strong>명시적 리셋은 안전을 위해 필요한 게 아니라, 정당한 재사용까지 같이 없앤다.</strong>
-  <br><br>
-  더 그럴듯한 설명은 이 조사 결과와 맞물린다 — <strong>warm 경로를 믿을 수 없어서 우회한 것</strong>일 수 있다.
-  확증은 없다(커밋 메시지·이슈를 확인하지 않았다). 다만 결과적으로 두 진입점이 정반대 판단을 하고 있다:
-  <code>cactus run</code> 은 warm 을 <em>무조건</em> 쓰고, <code>cactus serve</code> 는 <em>무조건</em> 거부한다.
-  둘 중 하나는 틀렸고, 이 문서의 측정에 따르면 <strong>서버가 품질 면에서는 옳고 비용 면에서는 7배를 버리고 있다.</strong>
+  <strong>편집자 주: 여기부터는 추론이다.</strong>
+  <ol style="margin:6px 0 0">
+    <li>그 안전장치는 엔진에 <em>이미</em> 있다. <code>prompt_context_matches()</code> 가 캐시 토큰이 새 프롬프트의 접두사인지 검사하고
+    아니면 리셋한다(<a href="#path">§5</a>). <strong>명시적 리셋은 안전에 필요하지 않고 정당한 재사용까지 없앤다.</strong></li>
+    <li>더 그럴듯한 설명은 <strong>warm 경로를 믿을 수 없어서 우회했다</strong>는 것이다. 커밋·이슈는 확인하지 않아 확증은 없다.</li>
+    <li>결과적으로 <code>cactus run</code> 은 warm 을 <em>무조건</em> 쓰고 <code>cactus serve</code> 는 <em>무조건</em> 거부한다.
+    측정에 따르면 <strong>서버가 품질 면에서는 옳고 비용 면에서는 7배를 버린다.</strong></li>
+  </ol>
 </div>
 
 <p>
-  제대로 된 해법은 둘 중 하나를 고르는 게 아니라 <strong>둘 다 고치는 것</strong>이다 —
-  ① 증분 재사용이 콜드 프리필과 수치적으로 등가가 되도록 만들고,
-  ② 캐시를 <em>대화 단위</em>로 분리해 서버가 안심하고 재사용할 수 있게 한다.
-  vLLM·SGLang 의 prefix caching 이 정확히 그 구조다. Cactus 는 접두사 판정 로직(<code>prompt_context_matches</code>)은
-  이미 갖췄지만, 캐시가 모델당 하나뿐이고 재사용이 등가가 아니어서 <strong>두 진입점 중 어느 쪽도 이 기능을 제대로 쓰지 못하고 있다.</strong>
+  해법은 <strong>둘 다 고치는 것</strong>이다. ① 증분 재사용을 콜드 프리필과 수치적으로 등가로 만들고,
+  ② 캐시를 <em>대화 단위</em>로 분리해 서버가 안심하고 재사용하게 한다. vLLM·SGLang 의 prefix caching 이 이 구조다.
+  Cactus 는 접두사 판정(<code>prompt_context_matches</code>)은 갖췄지만, 캐시가 모델당 하나이고 재사용이 등가가 아니라
+  <strong>어느 진입점도 이 기능을 제대로 쓰지 못한다.</strong>
 </p>
 
-<h2 id="appendix">10. 부록 — 재현 스크립트 전문</h2>
+<h2 id="appendix">10. 부록: 재현 스크립트 전문</h2>
 
 <h3>10.0 실행 순서</h3>
 
@@ -1335,7 +1297,7 @@ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 $PY root_cause.py
 $PY cache_cost.py
 </code></pre>
 
-<h3>10.1 <code>lang_probe.py</code> — 공통 하네스 (다른 스크립트가 import 한다)</h3>
+<h3>10.1 <code>lang_probe.py</code>: 공통 하네스 (다른 스크립트가 import 한다)</h3>
 
 <pre><code>import json, collections
 from cactus.bindings.cactus import cactus_init, cactus_complete, cactus_reset, cactus_destroy
@@ -1372,12 +1334,12 @@ def classify(text):
 </code></pre>
 
 <div class="note">
-  <strong>주의 — 반드시 <code>ensure_ascii=False</code>.</strong> 아래 모든 스크립트는 메시지를
+  <strong>주의: 반드시 <code>ensure_ascii=False</code>.</strong> 아래 모든 스크립트는 메시지를
   <code>json.dumps(msgs, ensure_ascii=False)</code> <em>문자열</em>로 넘긴다.
   리스트로 넘기면 §8 의 버그를 그대로 밟아 실험이 무의미해진다.
 </div>
 
-<h3>10.2 <code>warm_vs_cold.py</code> — 핵심 A/B (§4)</h3>
+<h3>10.2 <code>warm_vs_cold.py</code>: 핵심 A/B (§4)</h3>
 
 <pre><code>import json, collections
 from cactus.bindings.cactus import cactus_init, cactus_complete, cactus_reset, cactus_destroy
@@ -1415,7 +1377,7 @@ finally:
     cactus_destroy(h)
 </code></pre>
 
-<h3>10.3 <code>three_way2.py</code> — 세 프리필 경로 비교 (§5)</h3>
+<h3>10.3 <code>three_way2.py</code>: 세 프리필 경로 비교 (§5)</h3>
 
 <pre><code>from lang_probe import MODEL, OPTS, classify, JA_Q, EN_Q, KO_REQ
 UNRELATED = "What is 2 + 2?"
@@ -1444,7 +1406,7 @@ def one_trial(h, q1):
 </code></pre>
 <p class="src">응답의 <code>prefill_tokens</code> 로 경로를 확정한다: WARM 은 17(델타만), COLD 는 71–97(전체).</p>
 
-<h3>10.4 <code>recall_test.py</code> — 캐시 손상 반증 (§6)</h3>
+<h3>10.4 <code>recall_test.py</code>: 캐시 손상 반증 (§6)</h3>
 
 <pre><code>SECRETS = ["ALPHA-7391", "BRAVO-2085", "DELTA-6417", "ECHO-5023",
            "FOXTROT-8846", "GOLF-1179", "HOTEL-3352", "INDIA-9604"]
@@ -1465,7 +1427,7 @@ def trial(secret, h):
 # 채점: secret.lower() in out.lower()   →  WARM 8/8, COLD 8/8
 </code></pre>
 
-<h3>10.5 <code>numerics_probe.py</code> — 경로별 로짓 비교 (§7)</h3>
+<h3>10.5 <code>numerics_probe.py</code>: 경로별 로짓 비교 (§7)</h3>
 
 <pre><code>GREEDY = {"temperature": 0.0, "top_k": 1, "top_p": 0.0, "max_tokens": 60,
           "auto_handoff": False, "enable_thinking_if_supported": False,
@@ -1477,7 +1439,7 @@ cactus_reset(h); send(h, [user(UNRELATED)], GREEDY);      C = send(h, M2, GREEDY
 # CACTUS_DISABLE_PREFILL_TAIL_PAD=1 로 다시 돌리면 0.6549 / 0.6584 로 수렴하고 출력이 뒤바뀐다
 </code></pre>
 
-<h3>10.6 <code>ab_ensure_ascii.py</code> — 비-ASCII 파괴 증명 (§8)</h3>
+<h3>10.6 <code>ab_ensure_ascii.py</code>: 비-ASCII 파괴 증명 (§8)</h3>
 
 <pre><code>import json
 from cactus.bindings.cactus import cactus_init, cactus_complete, cactus_reset, cactus_destroy
@@ -1498,7 +1460,7 @@ for label, payload in (
 cactus_destroy(m)
 </code></pre>
 
-<h3>10.7 <code>workaround_test.py</code> — 우회책 측정 (§9.2)</h3>
+<h3>10.7 <code>workaround_test.py</code>: 우회책 측정 (§9.2)</h3>
 
 <pre><code>KO_STRONG = "지금부터 모든 답변을 반드시 한국어로만 작성해줘. 일본어는 절대 쓰지 마."
 SYS_KO = ("You must always answer in Korean, regardless of the language used "
@@ -1519,7 +1481,7 @@ CASES = [("기본",                KO_REQ,    None),
          ("system + 강한 지시",   KO_STRONG, SYS_KO)]
 </code></pre>
 
-<h3>10.8 <code>english_repro.py</code> — 언어를 배제한 최소 재현 (§7.2)</h3>
+<h3>10.8 <code>english_repro.py</code>: 언어를 배제한 최소 재현 (§7.2)</h3>
 
 <pre><code>import json
 from cactus.bindings.cactus import cactus_init, cactus_complete, cactus_reset, cactus_destroy
@@ -1570,7 +1532,7 @@ print(f"&gt;&gt;&gt; greedy outputs differ in {diffs}/{len(PAIRS)} English conve
   (<code>temperature 0.7 / top_p 0.95 / top_k 40</code>)으로 N=5 반복하고, 케이스별 판정 함수로 채점한다.
 </p>
 
-<h3>10.9 <code>root_cause.py</code> — 결함 두 개를 가르는 실험 (§7.3)</h3>
+<h3>10.9 <code>root_cause.py</code>: 결함 두 개를 가르는 실험 (§7.3)</h3>
 
 <pre><code>from cactus.bindings.cactus import (cactus_init, cactus_complete, cactus_prefill,
                                     cactus_reset, cactus_destroy)
@@ -1605,8 +1567,8 @@ $ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 python root_cause.py  # 패딩만 끔
 </code></pre>
 
 <p class="src">
-  Part B(생성 길이 1·4·16·48·80 토큰으로 바꿔 보는 dose-response)는 <strong>용량 반응이 없음</strong>을 보인다 —
-  1 토큰만 생성해도 warm≠cold. 기본 설정에서는 결함 ①이 이미 전부를 설명하므로 생성 길이와 무관하다.
+  Part B(생성 길이 1·4·16·48·80 토큰의 dose-response)는 <strong>용량 반응이 없다</strong>.
+  1 토큰만 생성해도 warm≠cold 다. 기본 설정에서는 결함 ①이 전부를 설명하므로 생성 길이와 무관하다.
 </p>
 
 <h2>11. 인용한 코드 위치</h2>
@@ -1617,7 +1579,7 @@ $ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 python root_cause.py  # 패딩만 끔
   <tr><th style="width:34%">위치</th><th style="width:20%">무엇</th><th>이 조사에서의 역할</th></tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/tests/run.cpp#L755-L775">tests/run.cpp:755-775</a></td>
-    <td><code>build_messages()</code></td><td>매 턴 전체 히스토리를 JSON 배열로 재구성 — 히스토리 유실 가설 기각</td>
+    <td><code>build_messages()</code></td><td>매 턴 전체 히스토리를 JSON 배열로 재구성. 히스토리 유실 가설 기각</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/tests/run.cpp#L1093-L1100">tests/run.cpp:1093-1100</a></td>
@@ -1625,19 +1587,19 @@ $ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 python root_cause.py  # 패딩만 끔
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/tests/run.cpp#L578-L598">tests/run.cpp:578-598</a></td>
-    <td><code>escape_json()</code></td><td>CLI 는 UTF-8 을 그대로 통과 — §8 버그가 CLI 에는 없음을 확인</td>
+    <td><code>escape_json()</code></td><td>CLI 는 UTF-8 을 그대로 통과. §8 버그가 CLI 에는 없음을 확인</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/tokenizer.cpp#L679-L775">src/tokenizer.cpp:679-775</a></td>
-    <td><code>format_gemma4_style()</code></td><td>공식 <code>chat_template.jinja2</code> 와 대조 — 템플릿 불일치 가설 기각</td>
+    <td><code>format_gemma4_style()</code></td><td>공식 <code>chat_template.jinja2</code> 와 대조. 템플릿 불일치 가설 기각</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/complete.cpp#L971-L985">src/complete.cpp:971-985</a></td>
-    <td>fused ↔ chunked 분기</td><td><strong>핵심</strong> — 캐시가 비었는지에 따라 다른 프리필 구현으로 갈린다</td>
+    <td>fused ↔ chunked 분기</td><td><strong>핵심</strong>: 캐시가 비었는지에 따라 다른 프리필 구현으로 갈린다</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/complete.cpp#L647-L734">src/complete.cpp:647-734</a></td>
-    <td><code>do_prefill()</code></td><td><strong>핵심</strong> — 접두사 일치 시 델타만 프리필하는 warm 경로</td>
+    <td><code>do_prefill()</code></td><td><strong>핵심</strong>: 접두사 일치 시 델타만 프리필하는 warm 경로</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/complete.cpp#L502-L524">src/complete.cpp:502-524</a></td>
@@ -1645,15 +1607,15 @@ $ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 python root_cause.py  # 패딩만 끔
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/utils.h#L997-L1053">src/utils.h:997-1053</a></td>
-    <td><code>parse_messages_json()</code></td><td><strong>버그</strong> — <code>\n</code>, <code>\"</code> 만 unescape, <code>\uXXXX</code> 미처리</td>
+    <td><code>parse_messages_json()</code></td><td><strong>버그</strong>: <code>\n</code>, <code>\"</code> 만 unescape, <code>\uXXXX</code> 미처리</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/python/cactus/bindings/cactus.py#L857-L866">python/cactus/bindings/cactus.py:857-866</a></td>
-    <td><code>_to_json()</code></td><td><strong>버그</strong> — <code>json.dumps(obj)</code> 의 <code>ensure_ascii=True</code></td>
+    <td><code>_to_json()</code></td><td><strong>버그</strong>: <code>json.dumps(obj)</code> 의 <code>ensure_ascii=True</code></td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/utils.h#L506-L526">src/utils.h:506-526</a></td>
-    <td><code>InferenceOptions</code> 기본값</td><td><code>temperature 0 / top_p 0 / top_k 0 / min_p 0.15 / rep 1.1</code> — 서버가 옵션 생략 시의 값</td>
+    <td><code>InferenceOptions</code> 기본값</td><td><code>temperature 0 / top_p 0 / top_k 0 / min_p 0.15 / rep 1.1</code>. 서버가 옵션 생략 시의 값</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/model.cpp#L2116">src/model.cpp:2116</a></td>
@@ -1661,16 +1623,16 @@ $ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 python root_cause.py  # 패딩만 끔
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/engine.h#L141-L146">src/engine.h:141-146</a></td>
-    <td>KV 압축 기본값</td><td>트리거 4096 토큰 — 이 대화(~100)에선 미발동</td>
+    <td>KV 압축 기본값</td><td>트리거 4096 토큰. 이 대화(~100)에선 미발동</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/model.cpp#L573">src/model.cpp:573</a></td>
-    <td><code>CACTUS_DISABLE_PREFILL_TAIL_PAD</code></td><td>프리필 꼬리 패딩 토글 — 결함 ① 을 켜고 끄는 스위치</td>
+    <td><code>CACTUS_DISABLE_PREFILL_TAIL_PAD</code></td><td>프리필 꼬리 패딩 토글. 결함 ① 을 켜고 끄는 스위치</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/model.cpp#L1327-L1343">src/model.cpp:1327-1343</a></td>
     <td><code>pad_tail</code> / <code>use_padded_tail</code></td>
-    <td><strong>결함 ①</strong> — 슬라이딩 윈도우 모델은 꼬리를 128 폭 청크로 채워 실행한다.
+    <td><strong>결함 ①</strong>: 슬라이딩 윈도우 모델은 꼬리를 128 폭 청크로 채워 실행한다.
         <code>pads = 128 − tail_tokens</code> 이므로 한 번에 넣는 토큰 수가 결과를 바꾼다</td>
   </tr>
   <tr>
@@ -1682,7 +1644,7 @@ $ CACTUS_DISABLE_PREFILL_TAIL_PAD=1 python root_cause.py  # 패딩만 끔
   <tr>
     <td>번들 <code>components/decoder_prefill_chunk</code> · <code>components/decoder_step</code></td>
     <td>별개로 컴파일된 두 그래프</td>
-    <td><strong>결함 ②</strong> — 프롬프트 토큰 KV 는 전자가, 생성 토큰 KV 는 후자가 쓴다. 같은 토큰에 대해 값이 다르다</td>
+    <td><strong>결함 ②</strong>: 프롬프트 토큰 KV 는 전자가, 생성 토큰 KV 는 후자가 쓴다. 같은 토큰에 대해 값이 다르다</td>
   </tr>
   <tr>
     <td><a href="https://github.com/cactus-compute/cactus/blob/8e0eec1dbe382fdd33284b226c9d5315022360b7/cactus-engine/src/engine.h#L692">src/engine.h:692</a></td>

@@ -57,6 +57,8 @@
   .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fafbfd}
   .mini h4{margin:0 0 6px;font-size:13.5px}
   .mini p{margin:0;font-size:13px;color:var(--muted)}
+  .callout ul,.callout ol{margin:4px 0 0;padding-left:20px}
+  .callout li{margin:3px 0}
   blockquote.q{border-left:3px solid var(--blue-bd);background:var(--blue-bg);margin:14px 0;
     padding:11px 16px;border-radius:0 10px 10px 0;font-size:14px;color:var(--blue-ink)}
   blockquote.q p{margin:0;font-style:italic}
@@ -90,11 +92,11 @@
 <header class="hero">
   <h1>
     <span class="en">vLLM Dual Batch Overlap (DBO) — theory, effects, code flow, status</span>
-    <span class="ko">vLLM Dual Batch Overlap (DBO) — 이론·효과·코드 흐름·구현 상태</span>
+    <span class="ko">vLLM Dual Batch Overlap (DBO): 이론·효과·코드 흐름·구현 상태</span>
   </h1>
   <p class="lede">
-    <span class="en">DBO splits one inference batch into two micro-batches and ping-pongs them so that <b>while one micro-batch is doing the MoE all-to-all communication, the other is doing GPU compute</b> — hiding communication behind computation. In vLLM it currently targets <b>only data-parallel + expert-parallel (DP+EP) MoE</b> deployments. This note covers the theory, the expected (and measured) pros &amp; cons, how to turn it on, the code path with vLLM permalinks, and the implementation status.</span>
-    <span class="ko">DBO는 추론 배치 하나를 두 개의 마이크로배치로 쪼개 번갈아 돌려서, <b>한 마이크로배치가 MoE all-to-all 통신을 하는 동안 다른 마이크로배치는 GPU 연산을 하게</b> — 통신을 연산 뒤에 숨긴다. vLLM에서는 현재 <b>data-parallel + expert-parallel (DP+EP) MoE</b> 배포에서만 동작한다. 이 노트는 이론, 예상·실측 장단점, 켜는 법, vLLM permalink로 짚는 코드 경로, 구현 상태를 다룬다.</span>
+    <span class="en">DBO splits one batch into two micro-batches so that <b>while one does the MoE all-to-all, the other does GPU compute</b>. In vLLM it targets <b>only data-parallel + expert-parallel (DP+EP) MoE</b>. This note reads it from the design doc, PRs and commit-pinned code.</span>
+    <span class="ko">DBO는 배치 하나를 마이크로배치 둘로 쪼개, <b>한쪽이 MoE all-to-all 통신을 하는 동안 다른 쪽이 GPU 연산을 하게</b> 만든다. vLLM에서는 <b>data-parallel + expert-parallel (DP+EP) MoE</b> 배포에서만 동작한다. 설계 문서와 PR, 커밋에 고정한 코드를 근거로 정리했다.</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://docs.vllm.ai/en/latest/design/dbo/">vLLM DBO design doc</a></span>
@@ -108,53 +110,63 @@
 <nav class="toc">
   <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
   <ol>
-    <li><a href="#s1"><span class="en">1. Theory — why communication is the bottleneck, and what DBO hides</span><span class="ko">1. 이론 — 통신이 왜 병목이고 DBO가 무엇을 숨기나</span></a></li>
-    <li><a href="#s2"><span class="en">2. How it works — two micro-batches, two streams, a ping-pong</span><span class="ko">2. 동작 원리 — 두 마이크로배치·두 스트림·핑퐁</span></a></li>
-    <li><a href="#s3"><span class="en">3. Pros &amp; cons — theory vs. what's actually been reported</span><span class="ko">3. 장단점 — 이론 vs 실제로 리포트된 것</span></a></li>
-    <li><a href="#s4"><span class="en">4. Using it in vLLM — flags &amp; constraints</span><span class="ko">4. vLLM에서 쓰는 법 — 플래그와 제약</span></a></li>
+    <li><a href="#s1"><span class="en">1. Theory — why communication is the bottleneck, and what DBO hides</span><span class="ko">1. 이론: 통신이 왜 병목이고 DBO가 무엇을 숨기나</span></a></li>
+    <li><a href="#s2"><span class="en">2. How it works — two micro-batches, two streams, a ping-pong</span><span class="ko">2. 동작 원리: 두 마이크로배치·두 스트림·핑퐁</span></a></li>
+    <li><a href="#s3"><span class="en">3. Pros &amp; cons — theory vs. what's actually been reported</span><span class="ko">3. 장단점: 이론과 실제 보고 수치</span></a></li>
+    <li><a href="#s4"><span class="en">4. Using it in vLLM — flags &amp; constraints</span><span class="ko">4. vLLM에서 쓰는 법: 플래그와 제약</span></a></li>
     <li><a href="#s5"><span class="en">5. Code flow (with permalinks)</span><span class="ko">5. 코드 흐름 (permalink)</span></a></li>
     <li><a href="#s6"><span class="en">6. Implementation status</span><span class="ko">6. 구현 상태</span></a></li>
     <li><a href="#s7"><span class="en">7. Sources</span><span class="ko">7. 출처</span></a></li>
-    <li><a href="#s8"><span class="en">8. Appendix — parallelism × communication cheat-sheet (TP/EP/all-reduce/all-to-all/KV transfer)</span><span class="ko">8. 부록 — 병렬화 × 통신 한눈에 (TP/EP/all-reduce/all-to-all/KV transfer)</span></a></li>
+    <li><a href="#s8"><span class="en">8. Appendix — parallelism × communication cheat-sheet (TP/EP/all-reduce/all-to-all/KV transfer)</span><span class="ko">8. 부록: 병렬화 × 통신 한눈에 (TP/EP/all-reduce/all-to-all/KV transfer)</span></a></li>
   </ol>
 </nav>
 
 <div class="callout c-blue">
   <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
-  <span class="en">In large MoE serving, every layer must shuffle tokens to the GPUs holding their experts (all-to-all <b>dispatch</b>) and back (<b>combine</b>); across nodes this communication can roughly <b>equal the compute</b> (DeepSeek-V3 reports a ≈1:1 ratio). DBO splits the batch in two and overlaps µbatch-A's all-to-all with µbatch-B's compute. <b>It helps when communication is the bottleneck (multi-node, high expert-parallelism); it hurts on a single node</b> (one measurement: 38 ms → 49 ms per step) because the model weights get loaded twice. It is off by default, opt-in via <code class="inl">--enable-dbo</code>, and only implemented for the MoE all-to-all path — not generic tensor-parallel all-reduce.</span>
-  <span class="ko">대규모 MoE 서빙에선 매 레이어마다 토큰을 해당 전문가(expert)가 있는 GPU로 보냈다가(all-to-all <b>dispatch</b>) 다시 가져와야(<b>combine</b>) 한다. 노드를 넘어가면 이 통신이 <b>연산과 거의 맞먹을</b> 수 있다(DeepSeek-V3는 ≈1:1 비율 보고). DBO는 배치를 둘로 쪼개 µbatch-A의 all-to-all을 µbatch-B의 연산과 겹친다. <b>통신이 병목일 때(멀티노드·높은 expert-parallel) 이득, 단일노드에선 손해</b>(한 측정: 스텝당 38ms→49ms) — 모델 가중치를 두 번 로드하기 때문. 기본 꺼짐, <code class="inl">--enable-dbo</code>로 opt-in, 그리고 MoE all-to-all 경로에만 구현됨(일반 tensor-parallel all-reduce는 아직 아님).</span>
+  <ul class="en">
+    <li>In MoE serving, every layer sends tokens to their experts' GPUs (all-to-all <b>dispatch</b>) and back (<b>combine</b>). Across nodes this can <b>equal the compute</b> (DeepSeek-V3: ≈1:1).</li>
+    <li>DBO splits the batch in two and overlaps µbatch-A's all-to-all with µbatch-B's compute.</li>
+    <li><b>Helps when comm is the bottleneck (multi-node, high EP); hurts on a single node</b> (38 ms → 49 ms per step) because weights are loaded twice.</li>
+    <li>Off by default, opt-in via <code class="inl">--enable-dbo</code>, MoE all-to-all only (not tensor-parallel all-reduce).</li>
+  </ul>
+  <ul class="ko">
+    <li>MoE 서빙에서는 매 레이어가 토큰을 expert가 있는 GPU로 보냈다가(all-to-all <b>dispatch</b>) 다시 모은다(<b>combine</b>). 노드를 넘으면 이 통신이 <b>연산과 맞먹는다</b>(DeepSeek-V3 보고 ≈1:1).</li>
+    <li>DBO는 배치를 둘로 쪼개 µbatch-A의 all-to-all을 µbatch-B의 연산과 겹친다.</li>
+    <li><b>통신이 병목인 멀티노드·높은 expert-parallel에서는 이득이고, 단일 노드에서는 손해다</b>(스텝당 38ms→49ms). 가중치를 두 번 로드하기 때문이다.</li>
+    <li>기본은 꺼져 있고 <code class="inl">--enable-dbo</code>로 켠다. MoE all-to-all 경로에만 구현돼 있고 tensor-parallel all-reduce는 대상이 아니다.</li>
+  </ul>
 </div>
 
 <div class="grid3">
-  <div class="mini"><h4>MoE</h4><p><span class="en">Mixture-of-Experts: each token is routed to a few "expert" FFNs out of many. In large models the experts are spread across GPUs.</span><span class="ko">Mixture-of-Experts: 토큰마다 여러 expert FFN 중 일부로 라우팅. 큰 모델은 expert를 여러 GPU에 분산.</span></p></div>
-  <div class="mini"><h4>EP / DP</h4><p><span class="en">Expert Parallel = experts split across GPUs. Data Parallel = each GPU runs the full model on a different slice of requests. DBO needs <b>DP&gt;1 + EP</b>.</span><span class="ko">Expert Parallel = expert를 GPU에 분산. Data Parallel = GPU마다 다른 요청 묶음에 전체 모델 실행. DBO는 <b>DP&gt;1 + EP</b> 필요.</span></p></div>
-  <div class="mini"><h4><span class="en">all-to-all (dispatch / combine)</span><span class="ko">all-to-all (dispatch / combine)</span></h4><p><span class="en">The collective that sends each token to its expert's GPU and gathers the result back. The thing DBO hides.</span><span class="ko">각 토큰을 expert의 GPU로 보내고 결과를 모으는 집합통신. DBO가 숨기는 대상.</span></p></div>
-  <div class="mini"><h4>all-reduce</h4><p><span class="en">The tensor-parallel collective (sum partial results across GPUs). Background for "why comm matters" — but <b>not</b> what vLLM DBO overlaps.</span><span class="ko">tensor-parallel 집합통신(GPU 간 부분합 합산). "왜 통신이 문제인가" 배경 — 단 vLLM DBO가 겹치는 대상은 <b>아님</b>.</span></p></div>
-  <div class="mini"><h4><span class="en">micro-batch (ubatch)</span><span class="ko">마이크로배치 (ubatch)</span></h4><p><span class="en">Half of the batch. "ubatch" = µ-batch in ASCII. DBO hardcodes exactly 2.</span><span class="ko">배치의 절반. "ubatch"는 µ-batch의 ASCII 표기. DBO는 정확히 2개로 고정.</span></p></div>
-  <div class="mini"><h4>DeepEP</h4><p><span class="en">DeepSeek's high-throughput/low-latency all-to-all GPU kernels for MoE. The <b>only</b> all-to-all backend DBO supports today.</span><span class="ko">DeepSeek의 MoE용 고처리량/저지연 all-to-all GPU 커널. 현재 DBO가 지원하는 <b>유일한</b> all-to-all 백엔드.</span></p></div>
+  <div class="mini"><h4>MoE</h4><p><span class="en">Mixture-of-Experts. Each token goes to a few of many expert FFNs, spread across GPUs in large models.</span><span class="ko">Mixture-of-Experts. 토큰마다 여러 expert FFN 중 몇 개로 라우팅하고, 큰 모델은 expert를 여러 GPU에 나눠 둔다.</span></p></div>
+  <div class="mini"><h4>EP / DP</h4><p><span class="en">EP splits experts across GPUs; DP runs the full model per GPU on different requests. DBO needs <b>DP&gt;1 + EP</b>.</span><span class="ko">EP는 expert를 GPU에 나누고, DP는 GPU마다 전체 모델로 다른 요청을 처리한다. DBO는 <b>DP&gt;1 + EP</b>가 필요하다.</span></p></div>
+  <div class="mini"><h4><span class="en">all-to-all (dispatch / combine)</span><span class="ko">all-to-all (dispatch / combine)</span></h4><p><span class="en">The collective that sends each token to its expert's GPU and gathers the result back. The thing DBO hides.</span><span class="ko">토큰을 expert의 GPU로 보내고 결과를 다시 모으는 집합통신이다. DBO가 숨기는 대상이다.</span></p></div>
+  <div class="mini"><h4>all-reduce</h4><p><span class="en">The tensor-parallel collective that sums partial results across GPUs. Background only: vLLM DBO does <b>not</b> overlap it.</span><span class="ko">GPU 간 부분합을 더하는 tensor-parallel 집합통신이다. 배경 설명용이며 vLLM DBO가 겹치는 대상은 <b>아니다</b>.</span></p></div>
+  <div class="mini"><h4><span class="en">micro-batch (ubatch)</span><span class="ko">마이크로배치 (ubatch)</span></h4><p><span class="en">Half of the batch. "ubatch" = µ-batch in ASCII. DBO hardcodes exactly 2.</span><span class="ko">배치의 절반이다. "ubatch"는 µ-batch의 ASCII 표기이고, DBO는 2개로 고정한다.</span></p></div>
+  <div class="mini"><h4>DeepEP</h4><p><span class="en">DeepSeek's all-to-all GPU kernels for MoE. The <b>only</b> all-to-all backend DBO supports today.</span><span class="ko">DeepSeek의 MoE용 all-to-all GPU 커널이다. 현재 DBO가 지원하는 <b>유일한</b> all-to-all 백엔드다.</span></p></div>
 </div>
 
 
 <section id="s1">
-<h2><span class="num">1</span><span class="en">Theory — why communication is the bottleneck, and what DBO hides</span><span class="ko">이론 — 통신이 왜 병목이고 DBO가 무엇을 숨기나</span></h2>
+<h2><span class="num">1</span><span class="en">Theory — why communication is the bottleneck, and what DBO hides</span><span class="ko">이론: 통신이 왜 병목이고 DBO가 무엇을 숨기나</span></h2>
 
-<p><span class="en">A GPU forward pass is normally compute-bound: matrix multiplies keep the SMs busy. But distributed inference inserts <b>collective communication</b> into every layer, and that communication often <b>cannot overlap</b> with compute by default — the next compute needs the communicated result, so the GPU sits idle while bytes move over the wire.</span>
-<span class="ko">GPU forward는 보통 연산 바운드다 — 행렬곱이 SM을 바쁘게 한다. 그러나 분산 추론은 매 레이어에 <b>집합통신</b>을 끼워 넣고, 이 통신은 기본적으로 연산과 <b>겹치지 않는다</b> — 다음 연산이 통신 결과를 필요로 하므로, 바이트가 선을 타는 동안 GPU는 논다.</span></p>
+<p><span class="en">A GPU forward pass is normally compute-bound. Distributed inference adds <b>collective communication</b> to every layer, and by default it <b>does not overlap</b> with compute: the next op needs the result, so the GPU idles while bytes move.</span>
+<span class="ko">GPU forward는 보통 연산 바운드다. 그런데 분산 추론은 매 레이어에 <b>집합통신</b>을 넣고, 이 통신은 기본적으로 연산과 <b>겹치지 않는다</b>. 다음 연산이 통신 결과를 기다려야 해서 데이터가 오가는 동안 GPU는 논다.</span></p>
 
 <h3><span class="en">Two regimes of communication</span><span class="ko">통신의 두 가지 형태</span></h3>
 <p><span class="en"><b>Tensor parallel (TP)</b> shards each weight matrix across GPUs and does <b>two all-reduces per layer</b> (after attention, after the MLP) — this is the original Megatron pattern <a class="src" href="https://arxiv.org/abs/1909.08053">[Megatron-LM]</a>. It is blocking and not cheap: for a 70B model at TP=8 it can be <b>~38% of inference latency even over NVLink</b> <a class="src" href="https://arxiv.org/html/2501.06589v5">[Ladder-residual §2]</a>, and ~23% end-to-end on a single 8×H100 node <a class="src" href="https://arxiv.org/html/2505.11329v4">[TokenWeave §1]</a>.</span>
-<span class="ko"><b>Tensor parallel(TP)</b>는 각 가중치 행렬을 GPU에 쪼개고 <b>레이어당 all-reduce 2회</b>(attention 후, MLP 후)를 한다 — 원조 Megatron 패턴 <a class="src" href="https://arxiv.org/abs/1909.08053">[Megatron-LM]</a>. 블로킹이고 싸지 않다: 70B·TP=8이면 <b>NVLink로도 추론 지연의 ~38%</b> <a class="src" href="https://arxiv.org/html/2501.06589v5">[Ladder-residual §2]</a>, 단일 8×H100에서도 end-to-end ~23% <a class="src" href="https://arxiv.org/html/2505.11329v4">[TokenWeave §1]</a>.</span></p>
+<span class="ko"><b>Tensor parallel(TP)</b>는 가중치 행렬을 GPU에 쪼개고 <b>레이어당 all-reduce를 2회</b>(attention 후, MLP 후) 한다. Megatron에서 시작된 패턴이다 <a class="src" href="https://arxiv.org/abs/1909.08053">[Megatron-LM]</a>. 이 통신은 블로킹이고 비용도 크다. 70B·TP=8이면 <b>NVLink로도 추론 지연의 ~38%</b>를 차지하고 <a class="src" href="https://arxiv.org/html/2501.06589v5">[Ladder-residual §2]</a>, 단일 8×H100에서도 end-to-end ~23%다 <a class="src" href="https://arxiv.org/html/2505.11329v4">[TokenWeave §1]</a>.</span></p>
 
-<p><span class="en"><b>Expert parallel (EP)</b> for MoE is worse, and it's the regime DBO targets. Each MoE layer must route every token to whichever GPU holds its chosen experts — an <b>all-to-all dispatch</b> — run the experts, then <b>all-to-all combine</b> the outputs back. As you scale experts across more nodes, more of this traffic crosses the slow inter-node fabric.</span>
-<span class="ko">MoE의 <b>Expert parallel(EP)</b>은 더 나쁘고, DBO가 노리는 영역이다. 매 MoE 레이어가 모든 토큰을 선택된 expert가 있는 GPU로 보내야 하고(<b>all-to-all dispatch</b>), expert를 돌린 뒤 결과를 다시 모은다(<b>all-to-all combine</b>). expert를 더 많은 노드에 펼칠수록 이 트래픽의 더 많은 부분이 느린 노드 간 패브릭을 건넌다.</span></p>
+<p><span class="en"><b>Expert parallel (EP)</b> for MoE is worse, and it is what DBO targets. Each MoE layer sends every token to its experts' GPU (<b>all-to-all dispatch</b>), runs the experts, and sends outputs back (<b>all-to-all combine</b>). The more nodes the experts span, the more traffic crosses the slow inter-node fabric.</span>
+<span class="ko">MoE의 <b>Expert parallel(EP)</b>은 더 심하고, DBO가 노리는 곳이 여기다. MoE 레이어마다 토큰을 expert가 있는 GPU로 보내고(<b>all-to-all dispatch</b>), expert를 돌린 뒤 결과를 다시 모은다(<b>all-to-all combine</b>). expert를 여러 노드에 펼칠수록 느린 노드 간 링크를 건너는 트래픽이 늘어난다.</span></p>
 
 <blockquote class="q">
   <p>"the communication overhead introduced by cross-node expert parallelism results in an inefficient computation-to-communication ratio of approximately 1:1."</p>
   <cite>— DeepSeek-V3 Technical Report, §3.2.1 · <a href="https://arxiv.org/abs/2412.19437">arXiv:2412.19437</a></cite>
 </blockquote>
 
-<p><span class="en">A ≈1:1 ratio is the whole motivation: if communication takes about as long as compute and the two run back-to-back, you spend nearly <b>double</b> the time you "should". DeepSeek further notes the cross-node link (InfiniBand ~50 GB/s) is ~3.2× slower than intra-node NVLink (~160 GB/s), and that for MoE inference "the upper limit of MoE inference speed is dictated by interconnection bandwidth" <a class="src" href="https://arxiv.org/html/2505.09343v1">[Insights into DeepSeek-V3 §2.3.2]</a>. When comm is that large a fraction, <b>hiding it behind compute is the single highest-leverage optimization.</b></span>
-<span class="ko">≈1:1 비율이 곧 동기 전체다: 통신이 연산만큼 걸리고 둘이 차례로 돌면 "원래 걸려야 할" 시간의 거의 <b>두 배</b>를 쓴다. DeepSeek은 노드 간 링크(InfiniBand ~50 GB/s)가 노드 내 NVLink(~160 GB/s)보다 ~3.2배 느리며, MoE 추론에서 "MoE 추론 속도의 상한은 인터커넥트 대역폭이 결정한다"고 덧붙인다 <a class="src" href="https://arxiv.org/html/2505.09343v1">[Insights into DeepSeek-V3 §2.3.2]</a>. 통신이 그만큼 큰 비중이면 <b>그걸 연산 뒤에 숨기는 게 가장 레버리지 큰 최적화</b>다.</span></p>
+<p><span class="en">If comm takes as long as compute and they run back-to-back, a step takes nearly <b>double</b> what it should. DeepSeek adds that InfiniBand (~50 GB/s) is ~3.2× slower than NVLink (~160 GB/s) and "the upper limit of MoE inference speed is dictated by interconnection bandwidth" <a class="src" href="https://arxiv.org/html/2505.09343v1">[Insights into DeepSeek-V3 §2.3.2]</a>. So <b>hiding comm behind compute is the highest-leverage optimization.</b></span>
+<span class="ko">통신이 연산만큼 걸리고 둘이 차례로 돌면 스텝 시간이 거의 <b>두 배</b>가 된다. DeepSeek은 InfiniBand(~50 GB/s)가 NVLink(~160 GB/s)보다 ~3.2배 느리고, "MoE 추론 속도의 상한은 인터커넥트 대역폭이 결정한다"고 덧붙인다 <a class="src" href="https://arxiv.org/html/2505.09343v1">[Insights into DeepSeek-V3 §2.3.2]</a>. 그래서 <b>통신을 연산 뒤에 숨기는 것이 가장 효과가 큰 최적화</b>다.</span></p>
 
 <svg class="fig" viewBox="0 0 760 250" role="img" aria-label="MoE expert-parallel all-to-all communication">
   <style>
@@ -180,29 +192,29 @@
   <path class="a2a" d="M175,156 C 300,200 470,200 558,150"/>
   <text x="300" y="222" class="sm" text-anchor="middle">dispatch → run experts → combine, every layer · cross-node hop = slow IB (~50 GB/s vs NVLink ~160 GB/s, 3.2×)</text>
 </svg>
-<p class="figcap"><span class="en">Fig 1 — In MoE EP, every layer shuffles tokens to remote experts and back. Cross-node hops are the expensive part; DeepSeek-V3 measures comp:comm ≈ 1:1. Sources: DeepSeek-V3 §3.2 (arXiv:2412.19437), Insights into DeepSeek-V3 §2.3 (arXiv:2505.09343v1).</span><span class="ko">그림 1 — MoE EP에선 매 레이어가 토큰을 원격 expert로 보냈다 가져온다. 노드 간 hop이 비싼 부분; DeepSeek-V3는 연산:통신 ≈ 1:1 측정. 출처: DeepSeek-V3 §3.2, Insights into DeepSeek-V3 §2.3.</span></p>
+<p class="figcap"><span class="en">Fig 1 · MoE EP all-to-all across nodes. Sources: DeepSeek-V3 §3.2 (arXiv:2412.19437), Insights into DeepSeek-V3 §2.3 (arXiv:2505.09343v1).</span><span class="ko">그림 1 · 노드를 넘는 MoE EP all-to-all. 출처: DeepSeek-V3 §3.2 (arXiv:2412.19437), Insights into DeepSeek-V3 §2.3 (arXiv:2505.09343v1).</span></p>
 
 <div class="callout c-amber">
-  <span class="tag"><span class="en">important — what vLLM DBO actually overlaps</span><span class="ko">중요 — vLLM DBO가 실제로 겹치는 것</span></span>
-  <span class="en">The TP all-reduce numbers above are <b>background</b> for why comm-overlap matters in general. vLLM's DBO is <b>specifically the MoE expert-parallel all-to-all</b>, not TP all-reduce — the design doc says "this system currently only targets DP+EP deployments" <a class="src" href="https://docs.vllm.ai/en/latest/design/dbo/">[vLLM DBO doc]</a>. Overlapping TP all-reduce with compute is a separate, not-yet-merged effort (open PR #44677). Many secondary write-ups blur this; don't.</span>
-  <span class="ko">위의 TP all-reduce 수치는 통신-겹침이 왜 중요한지에 대한 <b>배경</b>이다. vLLM DBO가 겹치는 건 <b>구체적으로 MoE expert-parallel all-to-all</b>이지 TP all-reduce가 아니다 — 설계 문서는 "이 시스템은 현재 DP+EP 배포만 대상으로 한다"고 명시 <a class="src" href="https://docs.vllm.ai/en/latest/design/dbo/">[vLLM DBO doc]</a>. TP all-reduce 겹치기는 별개의 미병합 작업(open PR #44677). 2차 글들이 이를 흐리니 주의.</span>
+  <span class="tag"><span class="en">important: what vLLM DBO actually overlaps</span><span class="ko">중요: vLLM DBO가 실제로 겹치는 것</span></span>
+  <span class="en">The TP all-reduce numbers above are <b>background</b>. vLLM DBO overlaps <b>only the MoE expert-parallel all-to-all</b>: "this system currently only targets DP+EP deployments" <a class="src" href="https://docs.vllm.ai/en/latest/design/dbo/">[vLLM DBO doc]</a>. TP all-reduce overlap is a separate, unmerged effort (open PR #44677). Many secondary write-ups blur this.</span>
+  <span class="ko">위의 TP all-reduce 수치는 <b>배경</b>일 뿐이다. vLLM DBO가 겹치는 것은 <b>MoE expert-parallel all-to-all뿐</b>이고, 설계 문서도 "현재 DP+EP 배포만 대상으로 한다"고 적는다 <a class="src" href="https://docs.vllm.ai/en/latest/design/dbo/">[vLLM DBO doc]</a>. TP all-reduce 겹치기는 아직 병합되지 않은 별도 작업이다(open PR #44677). 2차 글들이 이 구분을 자주 흐린다.</span>
 </div>
 </section>
 
 
 <section id="s2">
-<h2><span class="num">2</span><span class="en">How it works — two micro-batches, two streams, a ping-pong</span><span class="ko">동작 원리 — 두 마이크로배치·두 스트림·핑퐁</span></h2>
+<h2><span class="num">2</span><span class="en">How it works — two micro-batches, two streams, a ping-pong</span><span class="ko">동작 원리: 두 마이크로배치·두 스트림·핑퐁</span></h2>
 
-<p><span class="en">DBO's idea is straight from DeepSeek's inference-side dual-microbatch overlap — vLLM's own blog calls it "DeepSeek's microbatching strategy" <a class="src" href="https://vllm.ai/blog/2025-12-17-large-scale-serving">[vLLM blog]</a>:</span>
-<span class="ko">DBO의 아이디어는 DeepSeek의 추론용 dual-microbatch overlap에서 곧장 왔다 — vLLM 블로그도 "DeepSeek의 microbatching 전략"이라 부른다 <a class="src" href="https://vllm.ai/blog/2025-12-17-large-scale-serving">[vLLM blog]</a>:</span></p>
+<p><span class="en">The idea comes from DeepSeek's inference-side dual-microbatch overlap. vLLM's blog calls it "DeepSeek's microbatching strategy" <a class="src" href="https://vllm.ai/blog/2025-12-17-large-scale-serving">[vLLM blog]</a>:</span>
+<span class="ko">아이디어는 DeepSeek의 추론용 dual-microbatch overlap에서 왔다. vLLM 블로그도 "DeepSeek의 microbatching 전략"이라고 부른다 <a class="src" href="https://vllm.ai/blog/2025-12-17-large-scale-serving">[vLLM blog]</a>.</span></p>
 
 <blockquote class="q">
   <p>"while one micro-batch executes a portion of MLA or MoE computation, the other micro-batch simultaneously performs the corresponding dispatch communication … seamless overlap of all-to-all communication with ongoing computation."</p>
   <cite>— Insights into DeepSeek-V3, §2.3.1 · <a href="https://arxiv.org/html/2505.09343v1">arXiv:2505.09343v1</a></cite>
 </blockquote>
 
-<p><span class="en">The mechanics in vLLM: split the batch into <b>2 micro-batches</b>, run each on its own <b>CPU worker thread</b>, with <b>two CUDA streams</b> (one compute, one communication). Only one thread runs at a time; at fixed <code class="inl">dbo_yield</code> points inside the MoE kernel a thread launches its async all-to-all and then hands the GPU to the other thread, whose compute now runs <i>over</i> the in-flight communication. The receiving side is finished later via a stashed "recv hook" <a class="src" href="https://github.com/vllm-project/vllm/pull/23693">[PR #23693]</a>.</span>
-<span class="ko">vLLM의 메커니즘: 배치를 <b>2개 마이크로배치</b>로 쪼개고, 각각을 자기 <b>CPU 워커 스레드</b>에서 돌리며, <b>CUDA 스트림 2개</b>(연산용·통신용)를 쓴다. 한 번에 한 스레드만 실행되고, MoE 커널 안의 고정된 <code class="inl">dbo_yield</code> 지점에서 한 스레드가 비동기 all-to-all을 띄운 뒤 GPU를 다른 스레드에 넘긴다 — 그 스레드의 연산이 진행 중인 통신 <i>위에서</i> 돈다. 수신 측은 저장해둔 "recv hook"으로 나중에 마무리 <a class="src" href="https://github.com/vllm-project/vllm/pull/23693">[PR #23693]</a>.</span></p>
+<p><span class="en">In vLLM, the batch is split into <b>2 micro-batches</b>, each on its own <b>CPU worker thread</b>, with <b>two CUDA streams</b> (compute and communication). One thread runs at a time. At <code class="inl">dbo_yield</code> points inside the MoE kernel, a thread launches its async all-to-all and hands over to the other thread, whose compute runs <i>over</i> the in-flight comm. The receive side finishes later via a stashed "recv hook" <a class="src" href="https://github.com/vllm-project/vllm/pull/23693">[PR #23693]</a>.</span>
+<span class="ko">vLLM은 배치를 <b>마이크로배치 2개</b>로 쪼개 각각 별도 <b>CPU 워커 스레드</b>에서 돌리고, <b>CUDA 스트림 2개</b>(연산용·통신용)를 쓴다. 한 번에 한 스레드만 실행된다. MoE 커널 안의 <code class="inl">dbo_yield</code> 지점에서 한 스레드가 비동기 all-to-all을 띄우고 다른 스레드에 넘기면, 그 스레드의 연산이 진행 중인 통신 <i>위에서</i> 돈다. 수신은 저장해 둔 "recv hook"으로 나중에 마무리한다 <a class="src" href="https://github.com/vllm-project/vllm/pull/23693">[PR #23693]</a>.</span></p>
 
 <svg class="fig" viewBox="0 0 760 330" role="img" aria-label="Timeline: without DBO vs with DBO">
   <style>
@@ -251,33 +263,33 @@
   <text x="588" y="238" class="k">not added)</text>
   <line x1="638" y1="42" x2="638" y2="260" stroke="var(--coral-bd)" stroke-width="1" stroke-dasharray="4 3"/>
 </svg>
-<p class="figcap"><span class="en">Fig 2 — Top: without DBO the all-to-all sits on the critical path (GPU idle, dashed). Bottom: DBO overlaps each micro-batch's all-to-all (amber, comm stream) with the other's compute (compute stream), so communication no longer adds to step time. Schematic — block widths illustrative. Mechanism per vLLM DBO doc &amp; PR #23693.</span><span class="ko">그림 2 — 위: DBO 없으면 all-to-all이 임계경로에 놓임(GPU 유휴, 점선). 아래: DBO는 각 마이크로배치의 all-to-all(amber, 통신 스트림)을 다른 쪽 연산(연산 스트림)과 겹쳐 통신이 스텝 시간에 더해지지 않게 한다. 개략도 — 블록 폭은 예시. 메커니즘 출처: vLLM DBO doc, PR #23693.</span></p>
+<p class="figcap"><span class="en">Fig 2 · Timeline without vs with DBO. Schematic, block widths illustrative. Mechanism per vLLM DBO doc &amp; PR #23693.</span><span class="ko">그림 2 · DBO 유무에 따른 타임라인. 개략도이며 블록 폭은 예시다. 메커니즘 출처: vLLM DBO doc, PR #23693.</span></p>
 
-<p class="muted"><span class="en">Orchestration in one line: Python <code class="inl">threading</code> (2 worker threads, one active at a time) + 2 CUDA streams + CUDA events for cross-stream ordering + a coroutine-like <code class="inl">dbo_yield</code> ping-pong driven from inside the fused-MoE kernel. Not asyncio. The two halves are concatenated back along the batch dimension at the end.</span>
-<span class="ko">오케스트레이션 한 줄 요약: Python <code class="inl">threading</code>(워커 스레드 2개, 한 번에 하나) + CUDA 스트림 2개 + 스트림 간 순서용 CUDA event + fused-MoE 커널 내부에서 구동되는 코루틴 같은 <code class="inl">dbo_yield</code> 핑퐁. asyncio 아님. 두 절반은 마지막에 배치 차원으로 다시 이어 붙인다.</span></p>
+<p class="muted"><span class="en">In short: Python <code class="inl">threading</code> (2 worker threads, one active) + 2 CUDA streams + CUDA events for ordering + a coroutine-like <code class="inl">dbo_yield</code> ping-pong inside the fused-MoE kernel. Not asyncio. The halves are concatenated along the batch dimension at the end.</span>
+<span class="ko">정리하면 Python <code class="inl">threading</code>(워커 스레드 2개, 한 번에 하나) + CUDA 스트림 2개 + 순서를 맞추는 CUDA event + fused-MoE 커널 안의 코루틴 같은 <code class="inl">dbo_yield</code> 핑퐁이다. asyncio는 쓰지 않는다. 두 절반은 마지막에 배치 차원으로 이어 붙인다.</span></p>
 </section>
 
 
 <section id="s3">
-<h2><span class="num">3</span><span class="en">Pros &amp; cons — theory vs. what's actually been reported</span><span class="ko">장단점 — 이론 vs 실제로 리포트된 것</span></h2>
+<h2><span class="num">3</span><span class="en">Pros &amp; cons — theory vs. what's actually been reported</span><span class="ko">장단점: 이론과 실제 보고 수치</span></h2>
 
-<p><span class="en">Split into (a) what theory predicts and (b) numbers people have actually published. The honest headline: <b>no public source isolates vLLM-DBO's standalone speedup</b>, and the one direct vLLM micro-measurement is a single-node <i>regression</i>. The strong wins are reported for the multi-node MoE regime DBO is built for.</span>
-<span class="ko">(a) 이론이 예측하는 것과 (b) 사람들이 실제로 공개한 수치로 나눈다. 정직한 헤드라인: <b>vLLM-DBO 단독 속도 향상을 분리해 보고한 공개 출처는 없고</b>, 직접적인 vLLM 마이크로 측정 하나는 단일노드에서 <i>회귀(느려짐)</i>다. 강한 이득은 DBO가 만들어진 멀티노드 MoE 영역에서 보고된다.</span></p>
+<p><span class="en">Bottom line: <b>no public source isolates vLLM-DBO's standalone speedup</b>, and the one direct vLLM measurement is a single-node <i>regression</i>. Strong wins are reported for the multi-node MoE regime DBO is built for.</span>
+<span class="ko">결론부터 말하면 <b>vLLM-DBO 단독 속도 향상을 따로 잰 공개 출처는 없다</b>. 직접 측정한 vLLM 수치 하나는 단일 노드에서 <i>느려진</i> 결과다. 큰 이득은 DBO가 겨냥한 멀티노드 MoE 환경에서 보고된다.</span></p>
 
-<h3><span class="en">Theory — when it should help / hurt</span><span class="ko">이론 — 언제 이득/손해여야 하는가</span></h3>
+<h3><span class="en">Theory: when it should help / hurt</span><span class="ko">이론: 언제 이득이고 언제 손해인가</span></h3>
 <table>
 <tr><th><span class="en">Pros (helps when…)</span><span class="ko">장점 (이럴 때 이득)</span></th><th><span class="en">Cons (hurts when…)</span><span class="ko">단점 (이럴 때 손해)</span></th></tr>
 <tr>
-<td><span class="en"><b>Communication-bound</b> deployments — comm ≳ compute. The maintainer: DBO is "only really beneficial when the communication time is &gt;1x GEMM time."</span><span class="ko"><b>통신 바운드</b> 배포 — comm ≳ compute. 메인테이너: DBO는 "통신 시간이 GEMM 시간의 1배보다 클 때만 실질적으로 이득."</span></td>
-<td><span class="en"><b>Compute-bound / single node</b> — comm is already cheap (NVLink), so there's little to hide and you pay the splitting overhead. "Not expected to provide speed-up in a single node environment."</span><span class="ko"><b>연산 바운드 / 단일 노드</b> — 통신이 이미 쌈(NVLink)이라 숨길 게 별로 없고 분할 오버헤드만 문다. "단일 노드 환경에서는 속도 향상이 기대되지 않음."</span></td>
+<td><span class="en"><b>Communication-bound</b> deployments (comm ≳ compute). The maintainer: DBO is "only really beneficial when the communication time is &gt;1x GEMM time."</span><span class="ko"><b>통신 바운드</b> 배포(comm ≳ compute). 메인테이너는 DBO가 "통신 시간이 GEMM 시간의 1배보다 클 때만 실질적으로 이득"이라고 했다.</span></td>
+<td><span class="en"><b>Compute-bound / single node</b>: comm is already cheap (NVLink), so little is hidden and you pay the split overhead. "Not expected to provide speed-up in a single node environment."</span><span class="ko"><b>연산 바운드 / 단일 노드</b>: 통신이 이미 싸서(NVLink) 숨길 게 적고 분할 비용만 낸다. "단일 노드에서는 속도 향상을 기대하지 않는다."</span></td>
 </tr>
 <tr>
-<td><span class="en"><b>High expert-parallelism / multi-node MoE</b> — more all-to-all crosses slow inter-node links; the comm fraction grows, so more is hidden.</span><span class="ko"><b>높은 expert-parallel / 멀티노드 MoE</b> — all-to-all이 느린 노드 간 링크를 더 많이 건넘; 통신 비중이 커져 더 많이 숨겨짐.</span></td>
-<td><span class="en"><b>Small batches</b> — splitting a small batch into two even-smaller GEMMs lowers kernel efficiency ("more severe as the fine-grained computations reduce" <a class="src" href="https://arxiv.org/html/2505.11329v4">[TokenWeave]</a>). vLLM guards this with token thresholds.</span><span class="ko"><b>작은 배치</b> — 작은 배치를 더 작은 GEMM 둘로 쪼개면 커널 효율↓("세분 연산이 작아질수록 더 심함" <a class="src" href="https://arxiv.org/html/2505.11329v4">[TokenWeave]</a>). vLLM은 토큰 임계값으로 방어.</span></td>
+<td><span class="en"><b>High expert-parallelism / multi-node MoE</b>: more all-to-all crosses slow inter-node links, so there is more to hide.</span><span class="ko"><b>높은 expert-parallel / 멀티노드 MoE</b>: all-to-all이 느린 노드 간 링크를 더 많이 건너서 숨길 통신이 많다.</span></td>
+<td><span class="en"><b>Small batches</b>: two even-smaller GEMMs lower kernel efficiency ("more severe as the fine-grained computations reduce" <a class="src" href="https://arxiv.org/html/2505.11329v4">[TokenWeave]</a>). vLLM guards this with token thresholds.</span><span class="ko"><b>작은 배치</b>: 더 작은 GEMM 둘로 쪼개면 커널 효율이 떨어진다("more severe as the fine-grained computations reduce" <a class="src" href="https://arxiv.org/html/2505.11329v4">[TokenWeave]</a>). vLLM은 토큰 임계값으로 막는다.</span></td>
 </tr>
 <tr>
-<td><span class="en"><b>Theoretical ceiling</b>: at a 1:1 comp:comm ratio, perfectly hiding comm approaches a ~2× step-time improvement in the ideal limit (inference from DeepSeek's ratio — <b>not</b> a reported number).</span><span class="ko"><b>이론적 상한</b>: 1:1 비율에서 통신을 완벽히 숨기면 이상적 극한으로 스텝 시간 ~2배 개선에 근접(DeepSeek 비율로부터의 추론 — 보고된 수치 <b>아님</b>).</span></td>
-<td><span class="en"><b>SM contention</b>: the all-to-all kernels reserve SMs (DeepEP ~20) that the overlapping compute can't use, so overlap is partial. Plus <b>weights are loaded twice</b> (once per micro-batch).</span><span class="ko"><b>SM 경합</b>: all-to-all 커널이 SM(DeepEP ~20개)을 점유해 겹치는 연산이 못 씀 → 겹침은 부분적. 게다가 <b>가중치를 두 번 로드</b>(마이크로배치당 1회).</span></td>
+<td><span class="en"><b>Theoretical ceiling</b>: at 1:1 comp:comm, perfectly hidden comm approaches ~2× step-time improvement (inferred from DeepSeek's ratio, <b>not</b> a reported number).</span><span class="ko"><b>이론적 상한</b>: 1:1 비율에서 통신을 완벽히 숨기면 스텝 시간이 최대 ~2배 줄어든다(DeepSeek 비율에서 추론한 값이며 보고된 수치가 <b>아니다</b>).</span></td>
+<td><span class="en"><b>SM contention</b>: the all-to-all kernels reserve SMs (DeepEP ~20) that the overlapping compute can't use, so overlap is partial. Plus <b>weights are loaded twice</b> (once per micro-batch).</span><span class="ko"><b>SM 경합</b>: all-to-all 커널이 SM(DeepEP ~20개)을 차지해 연산이 그만큼 못 쓰므로 겹침은 부분적이다. 또 <b>가중치를 두 번 로드</b>한다(마이크로배치당 1회).</span></td>
 </tr>
 </table>
 
@@ -293,15 +305,15 @@
   <text x="20" y="178" class="k2">no overlap</text><rect x="120" y="166" width="300" height="18" rx="3" fill="var(--gray-bd)"/><text x="426" y="180" class="v">compute + exposed comm</text>
   <text x="20" y="204" class="k2">+overlap</text><rect x="120" y="192" width="175" height="18" rx="3" fill="var(--green-bd)"/><text x="301" y="206" class="v" fill="var(--green-ink)">comm hidden under compute ✓</text>
 </svg>
-<p class="figcap"><span class="en">Fig 3 — The same feature, opposite signs. Single-node: a contributor measured 38→49 ms/step (PR #23693). Multi-node high-EP: comm is hidden (qualitative; no isolated vLLM-DBO number is published). Bottom bar is illustrative, not a measurement.</span><span class="ko">그림 3 — 같은 기능, 반대 부호. 단일노드: 기여자가 38→49ms/step 측정(PR #23693). 멀티노드 고-EP: 통신이 숨겨짐(정성적; 분리된 vLLM-DBO 수치는 미공개). 아래 막대는 예시이며 측정값 아님.</span></p>
+<p class="figcap"><span class="en">Fig 3 · Same feature, opposite signs. Top: measured 38→49 ms/step (PR #23693). Bottom: illustrative, not a measurement.</span><span class="ko">그림 3 · 같은 기능, 반대 결과. 위: 38→49ms/step 실측(PR #23693). 아래: 예시이며 측정값이 아니다.</span></p>
 
-<h3><span class="en">Reported numbers — read carefully</span><span class="ko">보고된 수치 — 주의해서 읽기</span></h3>
+<h3><span class="en">Reported numbers: read carefully</span><span class="ko">보고된 수치: 주의해서 읽기</span></h3>
 <table>
 <tr><th><span class="en">Source</span><span class="ko">출처</span></th><th><span class="en">Number</span><span class="ko">수치</span></th><th><span class="en">What it actually means</span><span class="ko">실제 의미</span></th></tr>
-<tr><td><span class="en">vLLM blog (Wide-EP)</span><span class="ko">vLLM 블로그 (Wide-EP)</span></td><td>~1.5k → 2.2k tok/s/H200 (≈47%)</td><td><span class="en"><b>Combined</b> gain from many changes (kernel fusions, Cutlass QKV, TP-attn fixes) <b>+</b> DBO for decode. <b>Not</b> DBO alone — don't attribute 47% to DBO.</span><span class="ko">여러 변경(커널 퓨전, Cutlass QKV, TP-attn 수정) <b>+</b> decode용 DBO의 <b>합산</b> 이득. DBO 단독 <b>아님</b> — 47%를 DBO 탓으로 돌리지 말 것.</span></td></tr>
-<tr><td><span class="en">vLLM PR #23693 (single node)</span><span class="ko">vLLM PR #23693 (단일노드)</span></td><td>38 ms → 49 ms / step (+29%, slower)</td><td><span class="en">Direct DBO on/off on DeepSeek-V2-Lite, H20, comm &lt;10%. The clearest <i>isolated</i> DBO measurement — and it's a regression, as theory predicts for single node.</span><span class="ko">DeepSeek-V2-Lite·H20·통신&lt;10%에서 DBO on/off 직접 비교. 가장 명확한 <i>분리</i> 측정 — 그리고 이론대로 단일노드 회귀.</span></td></tr>
-<tr><td><span class="en">SGLang blog (SBO)</span><span class="ko">SGLang 블로그 (SBO)</span></td><td>+8–10% @ BS 20–56</td><td><span class="en">Single-Batch Overlap — same family, different system. Useful order-of-magnitude, not vLLM DBO.</span><span class="ko">Single-Batch Overlap — 같은 계열, 다른 시스템. 자릿수 참고용, vLLM DBO 아님.</span></td></tr>
-<tr><td><span class="en">DHelix (training)</span><span class="ko">DHelix (학습)</span></td><td><span class="en">hides 50–70% of comm</span><span class="ko">통신의 50–70% 숨김</span></td><td><span class="en">Training-side analogue. Shows overlap is <b>partial</b> (SM contention limits it). Analogy only.</span><span class="ko">학습 측 유사물. 겹침이 <b>부분적</b>임을 보여줌(SM 경합 한계). 유추용.</span></td></tr>
+<tr><td><span class="en">vLLM blog (Wide-EP)</span><span class="ko">vLLM 블로그 (Wide-EP)</span></td><td>~1.5k → 2.2k tok/s/H200 (≈47%)</td><td><span class="en"><b>Combined</b> gain from many changes (kernel fusions, Cutlass QKV, TP-attn fixes) <b>+</b> DBO for decode. <b>Not</b> DBO alone; don't attribute 47% to DBO.</span><span class="ko">여러 변경(커널 퓨전, Cutlass QKV, TP-attn 수정) <b>+</b> decode용 DBO의 <b>합산</b> 이득이다. DBO 단독 수치가 <b>아니므로</b> 47%를 DBO 몫으로 보면 안 된다.</span></td></tr>
+<tr><td><span class="en">vLLM PR #23693 (single node)</span><span class="ko">vLLM PR #23693 (단일노드)</span></td><td>38 ms → 49 ms / step (+29%, slower)</td><td><span class="en">Direct DBO on/off on DeepSeek-V2-Lite, H20, comm &lt;10%. The clearest <i>isolated</i> measurement, and a regression as theory predicts.</span><span class="ko">DeepSeek-V2-Lite·H20·통신&lt;10%에서 DBO를 켜고 끈 직접 비교다. 가장 명확한 <i>단독</i> 측정이고, 이론대로 단일 노드에서 느려졌다.</span></td></tr>
+<tr><td><span class="en">SGLang blog (SBO)</span><span class="ko">SGLang 블로그 (SBO)</span></td><td>+8–10% @ BS 20–56</td><td><span class="en">Single-Batch Overlap: same family, different system. Order-of-magnitude only.</span><span class="ko">Single-Batch Overlap. 같은 계열의 다른 시스템이라 규모 감만 참고한다.</span></td></tr>
+<tr><td><span class="en">DHelix (training)</span><span class="ko">DHelix (학습)</span></td><td><span class="en">hides 50–70% of comm</span><span class="ko">통신의 50–70% 숨김</span></td><td><span class="en">Training-side analogue. Shows overlap is <b>partial</b> (SM contention limits it). Analogy only.</span><span class="ko">학습 쪽 사례로, 겹침이 <b>부분적</b>임을 보여 준다(SM 경합). 유추용이다.</span></td></tr>
 </table>
 
 <blockquote class="q">
@@ -310,18 +322,26 @@
 </blockquote>
 
 <div class="callout c-purple">
-  <span class="tag"><span class="en">editor's note — our angle (not a vLLM claim)</span><span class="ko">편집자 주 — 우리 관점 (vLLM 주장 아님)</span></span>
-  <span class="en">For our work this is a clean "know when to use it" feature. On a <b>single MI250 node</b> (our usual lab), DBO would almost certainly <i>regress</i> — comm is local and the weights-loaded-twice cost dominates, exactly the 38→49 ms case. It earns its keep only once a large MoE is spread across multiple nodes with expert parallelism (the llm-d / wide-EP serving regime). So: relevant to plan for at fleet scale, not something to flip on for a single-box benchmark. It also pairs with the EP all-to-all backends (DeepEP) we'd need for wide-EP anyway.</span>
-  <span class="ko">우리 작업엔 "언제 쓸지 아는 게 핵심"인 기능이다. <b>단일 MI250 노드</b>(우리 평소 랩)에선 DBO가 거의 확실히 <i>회귀</i> — 통신이 로컬이고 가중치 이중 로드 비용이 지배, 딱 38→49ms 사례다. 큰 MoE를 expert parallel로 여러 노드에 펼쳤을 때(llm-d / wide-EP 서빙 영역)에만 값을 한다. 즉 fleet 스케일에서 계획할 거리이지 단일 박스 벤치에서 켜볼 스위치는 아니다. 또한 wide-EP에 어차피 필요한 EP all-to-all 백엔드(DeepEP)와 함께 간다.</span>
+  <span class="tag"><span class="en">editor's note: our angle (not a vLLM claim)</span><span class="ko">편집자 주: 우리 관점 (vLLM 주장 아님)</span></span>
+  <ol class="en">
+    <li>On a <b>single MI250 node</b> (our usual lab), DBO would almost certainly <i>regress</i>: comm is local and the weights-loaded-twice cost dominates, the 38→49 ms case.</li>
+    <li>It pays off only for a large MoE spread across nodes with expert parallelism (llm-d / wide-EP). Plan for it at fleet scale, not for a single-box benchmark.</li>
+    <li>It pairs with the EP all-to-all backends (DeepEP) wide-EP needs anyway.</li>
+  </ol>
+  <ol class="ko">
+    <li><b>단일 MI250 노드</b>(우리 평소 랩)에서는 DBO가 거의 확실히 <i>느려진다</i>. 통신이 로컬이라 가중치 이중 로드 비용이 더 커지는 38→49ms 사례와 같다.</li>
+    <li>큰 MoE를 expert parallel로 여러 노드에 펼쳤을 때(llm-d / wide-EP)만 효과가 있다. 단일 박스 벤치가 아니라 fleet 규모에서 계획할 기능이다.</li>
+    <li>wide-EP에 어차피 필요한 EP all-to-all 백엔드(DeepEP)와 함께 쓴다.</li>
+  </ol>
 </div>
 </section>
 
 
 <section id="s4">
-<h2><span class="num">4</span><span class="en">Using it in vLLM — flags &amp; constraints</span><span class="ko">vLLM에서 쓰는 법 — 플래그와 제약</span></h2>
+<h2><span class="num">4</span><span class="en">Using it in vLLM — flags &amp; constraints</span><span class="ko">vLLM에서 쓰는 법: 플래그와 제약</span></h2>
 
-<p><span class="en">Example launch from the design doc — note it requires DP&gt;1, expert parallel, the DeepEP backend, and full CUDA graphs all together:</span>
-<span class="ko">설계 문서의 예시 — DP&gt;1, expert parallel, DeepEP 백엔드, full CUDA graph가 모두 동시에 필요하다:</span></p>
+<p><span class="en">Example launch from the design doc. DP&gt;1, expert parallel, the DeepEP backend and full CUDA graphs are all required.</span>
+<span class="ko">설계 문서의 실행 예시다. DP&gt;1, expert parallel, DeepEP 백엔드, full CUDA graph가 모두 필요하다.</span></p>
 <pre><code>vllm serve deepseek-ai/DeepSeek-V2-Lite --trust-remote-code \
     --data-parallel-size 2 \      # DP &gt; 1  (required)
     --enable-expert-parallel \    # EP      (required)
@@ -330,36 +350,49 @@
 
 <table>
 <tr><th><span class="en">Flag / knob</span><span class="ko">플래그 / 노브</span></th><th><span class="en">Default</span><span class="ko">기본값</span></th><th><span class="en">Meaning</span><span class="ko">의미</span></th></tr>
-<tr><td><code class="inl">--enable-dbo</code></td><td>off</td><td><span class="en">Master switch. Sets <code class="inl">num_ubatches=2</code>.</span><span class="ko">마스터 스위치. <code class="inl">num_ubatches=2</code> 설정.</span></td></tr>
-<tr><td><code class="inl">--dbo-decode-token-threshold</code></td><td>32</td><td><span class="en">Decode batches below this many tokens run un-split.</span><span class="ko">이 토큰 수 미만의 decode 배치는 안 쪼갬.</span></td></tr>
-<tr><td><code class="inl">--dbo-prefill-token-threshold</code></td><td>512 <span class="muted">(<code class="inl"># TODO: tune</code>)</span></td><td><span class="en">Prefill-containing batches below this run un-split.</span><span class="ko">이 미만의 prefill 포함 배치는 안 쪼갬.</span></td></tr>
-<tr><td><code class="inl">--all2all-backend</code></td><td>allgather_reducescatter</td><td><span class="en">Must be <code class="inl">deepep_low_latency</code> (decode-heavy) or <code class="inl">deepep_high_throughput</code> (prefill-heavy) for DBO.</span><span class="ko">DBO엔 <code class="inl">deepep_low_latency</code>(decode 위주) 또는 <code class="inl">deepep_high_throughput</code>(prefill 위주)여야.</span></td></tr>
-<tr><td><code class="inl">VLLM_DBO_COMM_SMS</code> (env)</td><td>20 / 64 (ROCm)</td><td><span class="en">SMs given to the comm kernels.</span><span class="ko">통신 커널에 줄 SM 수.</span></td></tr>
+<tr><td><code class="inl">--enable-dbo</code></td><td>off</td><td><span class="en">Master switch. Sets <code class="inl">num_ubatches=2</code>.</span><span class="ko">전체 스위치. <code class="inl">num_ubatches=2</code>로 설정한다.</span></td></tr>
+<tr><td><code class="inl">--dbo-decode-token-threshold</code></td><td>32</td><td><span class="en">Decode batches below this many tokens run un-split.</span><span class="ko">토큰 수가 이보다 적은 decode 배치는 쪼개지 않는다.</span></td></tr>
+<tr><td><code class="inl">--dbo-prefill-token-threshold</code></td><td>512 <span class="muted">(<code class="inl"># TODO: tune</code>)</span></td><td><span class="en">Prefill-containing batches below this run un-split.</span><span class="ko">이보다 적은 prefill 포함 배치는 쪼개지 않는다.</span></td></tr>
+<tr><td><code class="inl">--all2all-backend</code></td><td>allgather_reducescatter</td><td><span class="en">Must be <code class="inl">deepep_low_latency</code> (decode-heavy) or <code class="inl">deepep_high_throughput</code> (prefill-heavy) for DBO.</span><span class="ko">DBO에는 <code class="inl">deepep_low_latency</code>(decode 위주)나 <code class="inl">deepep_high_throughput</code>(prefill 위주)이 필요하다.</span></td></tr>
+<tr><td><code class="inl">VLLM_DBO_COMM_SMS</code> (env)</td><td>20 / 64 (ROCm)</td><td><span class="en">SMs given to the comm kernels.</span><span class="ko">통신 커널에 배정하는 SM 수.</span></td></tr>
 </table>
 
-<p><span class="en"><b>Hard constraints</b> (all enforced in code): <b>DP&gt;1 + expert-parallel</b> (else the DP-coordination step early-returns and DBO never triggers); <b>DeepEP all-to-all only</b> (pplx/naive backends are not supported); <b>full CUDA graphs</b> (or none) — full graphs are "essential for minimizing the CPU overhead"; a per-step <b>token threshold</b> must be cleared; and the decision is made <b>uniformly across all DP ranks</b> — if any rank can't split (e.g. padding would leave an empty 2nd micro-batch), DBO is disabled for that step on every rank. On CPU platforms it's silently disabled.</span>
-<span class="ko"><b>강한 제약</b>(전부 코드에 강제): <b>DP&gt;1 + expert-parallel</b>(아니면 DP 조정 단계가 조기 반환해 DBO가 안 켜짐); <b>DeepEP all-to-all만</b>(pplx/naive 미지원); <b>full CUDA graph</b>(또는 없음) — full graph는 "CPU 오버헤드 최소화에 필수"; 스텝마다 <b>토큰 임계값</b> 통과 필요; 그리고 결정은 <b>모든 DP rank에서 동일</b>하게 — 한 rank라도 못 쪼개면(예: 패딩 후 2번째 마이크로배치가 비면) 그 스텝은 전 rank에서 DBO 비활성. CPU 플랫폼에선 조용히 비활성.</span></p>
+<p><span class="en"><b>Hard constraints</b> (all enforced in code):</span><span class="ko"><b>강한 제약</b>(모두 코드에서 강제한다):</span></p>
+<ul class="en">
+<li><b>DP&gt;1 + expert-parallel</b>, else the DP-coordination step early-returns and DBO never triggers.</li>
+<li><b>DeepEP all-to-all only</b> (pplx/naive not supported).</li>
+<li><b>Full CUDA graphs</b> (or none): "essential for minimizing the CPU overhead".</li>
+<li>A per-step <b>token threshold</b> must be cleared.</li>
+<li>The decision is <b>uniform across DP ranks</b>: if any rank can't split (e.g. padding leaves an empty 2nd micro-batch), DBO is off for that step everywhere. On CPU platforms it is silently disabled.</li>
+</ul>
+<ul class="ko">
+<li><b>DP&gt;1 + expert-parallel</b>. 아니면 DP 조정 단계가 바로 반환해 DBO가 켜지지 않는다.</li>
+<li><b>DeepEP all-to-all만</b> 지원한다(pplx/naive 미지원).</li>
+<li><b>full CUDA graph</b>(또는 graph 없음). full graph는 "essential for minimizing the CPU overhead"다.</li>
+<li>스텝마다 <b>토큰 임계값</b>을 넘어야 한다.</li>
+<li>결정은 <b>모든 DP rank에서 같게</b> 내린다. 한 rank라도 못 쪼개면(예: 패딩 후 2번째 마이크로배치가 비면) 그 스텝은 모든 rank에서 DBO를 끈다. CPU 플랫폼에서는 조용히 꺼진다.</li>
+</ul>
 </section>
 
 
 <section id="s5">
 <h2><span class="num">5</span><span class="en">Code flow (with permalinks)</span><span class="ko">코드 흐름 (permalink)</span></h2>
 <p class="muted"><span class="en">All permalinks pinned to commit <code class="inl">f4359a7</code>. The end-to-end path for one forward pass with DBO enabled:</span>
-<span class="ko">모든 permalink은 커밋 <code class="inl">f4359a7</code>에 핀됨. DBO 켠 forward 한 번의 end-to-end 경로:</span></p>
+<span class="ko">permalink는 모두 커밋 <code class="inl">f4359a7</code>에 고정했다. DBO를 켠 forward 한 번의 경로는 다음과 같다.</span></p>
 
 <ol class="flow">
-<li><span class="en"><b>Config.</b> <code class="inl">enable_dbo</code> + thresholds parsed into <code class="inl">ParallelConfig</code>; <code class="inl">num_ubatches</code> hardcoded to 2.</span><span class="ko"><b>설정.</b> <code class="inl">enable_dbo</code>+임계값이 <code class="inl">ParallelConfig</code>로 파싱; <code class="inl">num_ubatches</code>는 2 고정.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/config/parallel.py#L514-L520">vllm/config/parallel.py#L514-L520</a></li>
-<li><span class="en"><b>Wrap the model</b> in <code class="inl">UBatchWrapper</code> at load time (if ubatching enabled).</span><span class="ko"><b>모델을</b> 로드 시 <code class="inl">UBatchWrapper</code>로 감쌈(ubatching 켜진 경우).</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_model_runner.py#L5304-L5312">vllm/v1/worker/gpu_model_runner.py#L5304-L5312</a></li>
-<li><span class="en"><b>Per-step threshold check</b> — <code class="inl">check_ubatch_thresholds</code> gates on decode/prefill token count.</span><span class="ko"><b>스텝별 임계값 검사</b> — <code class="inl">check_ubatch_thresholds</code>가 decode/prefill 토큰 수로 게이트.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatch_utils.py#L38-L46">vllm/v1/worker/ubatch_utils.py#L38-L46</a></li>
-<li><span class="en"><b>DP coordination</b> — <code class="inl">coordinate_batch_across_dp</code> all-reduces so all ranks agree to ubatch (and aborts if padding leaves an empty 2nd ubatch).</span><span class="ko"><b>DP 조정</b> — <code class="inl">coordinate_batch_across_dp</code>가 all-reduce로 전 rank 합의(패딩 후 2번째 ubatch가 비면 중단).</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/dp_utils.py#L57-L74">vllm/v1/worker/dp_utils.py#L57-L74</a></li>
-<li><span class="en"><b>Split into 2 ubatch slices</b> (default split point = <code class="inl">padded_num_tokens // 2</code>) and <b>slice attention metadata</b> in half.</span><span class="ko"><b>2개 ubatch 슬라이스로 분할</b>(기본 분할점 = <code class="inl">padded_num_tokens // 2</code>)하고 <b>attention 메타데이터</b>도 절반으로.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_model_runner.py#L4167-L4173">slices: gpu_model_runner.py#L4167-L4173</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatch_utils.py#L251-L264">split_attn_metadata: ubatch_utils.py#L251-L264</a></li>
-<li><span class="en"><b>Inject <code class="inl">ubatch_slices</code> into the forward context</b> — the signal <code class="inl">UBatchWrapper</code> keys off.</span><span class="ko"><b><code class="inl">ubatch_slices</code>를 forward context에 주입</b> — <code class="inl">UBatchWrapper</code>가 보는 신호.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_model_runner.py#L4298-L4309">gpu_model_runner.py#L4298-L4309</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/forward_context.py#L148-L148">forward_context.py#L148</a></li>
-<li><span class="en"><b><code class="inl">UBatchWrapper.__call__</code></b> — if <code class="inl">ubatch_slices is None</code> run normally; else build per-ubatch metadata and run/capture a CUDA graph.</span><span class="ko"><b><code class="inl">UBatchWrapper.__call__</code></b> — <code class="inl">ubatch_slices is None</code>이면 일반 실행; 아니면 ubatch별 메타데이터 구성 후 CUDA graph 실행/캡처.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_ubatch_wrapper.py#L431-L527">gpu_ubatch_wrapper.py#L431-L527</a></li>
-<li><span class="en"><b>Spawn 2 ubatch threads</b> gated by a <code class="inl">threading.Barrier</code> + per-thread events; main thread releases the first.</span><span class="ko"><b>ubatch 스레드 2개 생성</b> — <code class="inl">threading.Barrier</code>+스레드별 event로 게이트; 메인 스레드가 첫 스레드 해제.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_ubatch_wrapper.py#L295-L331">gpu_ubatch_wrapper.py#L295-L331 (_run_ubatches)</a></li>
-<li><span class="en"><b>Ping-pong primitives</b> — <code class="inl">dbo_yield</code> sleeps this thread &amp; wakes the other; <code class="inl">dbo_register_recv_hook</code> stashes a recv callback on the <i>other</i> ubatch's context.</span><span class="ko"><b>핑퐁 프리미티브</b> — <code class="inl">dbo_yield</code>가 현재 스레드를 재우고 다른 스레드를 깨움; <code class="inl">dbo_register_recv_hook</code>가 recv 콜백을 <i>다른</i> ubatch context에 저장.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatching.py#L94-L105">ubatching.py#L94-L105</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatching.py#L186-L190">#L186-L190</a></li>
-<li><span class="en"><b>The actual overlap</b> lives in the fused-MoE modular kernel: on dispatch it runs the other ubatch's pending recv hook, launches this ubatch's async all-to-all, registers its recv hook on the other ubatch, then <code class="inl">dbo_yield</code>. Combine is symmetric.</span><span class="ko"><b>실제 겹침</b>은 fused-MoE 모듈러 커널에 있음: dispatch 때 다른 ubatch의 대기 recv hook 실행, 이 ubatch의 비동기 all-to-all 발사, recv hook을 다른 ubatch에 등록, 그다음 <code class="inl">dbo_yield</code>. combine은 대칭.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/layers/fused_moe/modular_kernel.py#L1158-L1184">modular_kernel.py#L1158-L1184 (dispatch)</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/layers/fused_moe/modular_kernel.py#L1339-L1349">#L1339-L1349 (combine)</a></li>
-<li><span class="en"><b>The hidden collective</b> — DeepEP low-latency <code class="inl">dispatch</code>/<code class="inl">combine</code> return the recv hook the <i>other</i> ubatch fires.</span><span class="ko"><b>숨겨지는 집합통신</b> — DeepEP low-latency <code class="inl">dispatch</code>/<code class="inl">combine</code>이 <i>다른</i> ubatch가 발사할 recv hook을 반환.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/layers/fused_moe/prepare_finalize/deepep_ll.py#L298-L313">deepep_ll.py#L298-L313 (dispatch)</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/layers/fused_moe/prepare_finalize/deepep_ll.py#L386-L410">#L386-L410 (combine)</a></li>
-<li><span class="en"><b>Sync &amp; merge</b> — CUDA events order the comm/compute streams; the two halves are concatenated by ubatch id.</span><span class="ko"><b>동기화 &amp; 병합</b> — CUDA event가 통신/연산 스트림 순서화; 두 절반을 ubatch id로 이어 붙임.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatching.py#L113-L121">ubatching.py#L113-L121</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_ubatch_wrapper.py#L34-L48">gpu_ubatch_wrapper.py#L34-L48</a></li>
+<li><span class="en"><b>Config.</b> <code class="inl">enable_dbo</code> + thresholds parsed into <code class="inl">ParallelConfig</code>; <code class="inl">num_ubatches</code> hardcoded to 2.</span><span class="ko"><b>설정.</b> <code class="inl">enable_dbo</code>와 임계값을 <code class="inl">ParallelConfig</code>로 파싱하고, <code class="inl">num_ubatches</code>는 2로 고정한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/config/parallel.py#L514-L520">vllm/config/parallel.py#L514-L520</a></li>
+<li><span class="en"><b>Wrap the model</b> in <code class="inl">UBatchWrapper</code> at load time (if ubatching enabled).</span><span class="ko"><b>모델 감싸기.</b> ubatching이 켜져 있으면 로드할 때 <code class="inl">UBatchWrapper</code>로 감싼다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_model_runner.py#L5304-L5312">vllm/v1/worker/gpu_model_runner.py#L5304-L5312</a></li>
+<li><span class="en"><b>Per-step threshold check.</b> <code class="inl">check_ubatch_thresholds</code> gates on decode/prefill token count.</span><span class="ko"><b>스텝별 임계값 검사.</b> <code class="inl">check_ubatch_thresholds</code>가 decode/prefill 토큰 수로 거른다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatch_utils.py#L38-L46">vllm/v1/worker/ubatch_utils.py#L38-L46</a></li>
+<li><span class="en"><b>DP coordination.</b> <code class="inl">coordinate_batch_across_dp</code> all-reduces so all ranks agree to ubatch (and aborts if padding leaves an empty 2nd ubatch).</span><span class="ko"><b>DP 조정.</b> <code class="inl">coordinate_batch_across_dp</code>가 all-reduce로 모든 rank의 합의를 받는다. 패딩 후 2번째 ubatch가 비면 중단한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/dp_utils.py#L57-L74">vllm/v1/worker/dp_utils.py#L57-L74</a></li>
+<li><span class="en"><b>Split into 2 ubatch slices</b> (default split point = <code class="inl">padded_num_tokens // 2</code>) and <b>slice attention metadata</b> in half.</span><span class="ko"><b>ubatch 슬라이스 2개로 분할</b>(기본 분할점 = <code class="inl">padded_num_tokens // 2</code>)하고 <b>attention 메타데이터</b>도 반으로 나눈다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_model_runner.py#L4167-L4173">slices: gpu_model_runner.py#L4167-L4173</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatch_utils.py#L251-L264">split_attn_metadata: ubatch_utils.py#L251-L264</a></li>
+<li><span class="en"><b>Inject <code class="inl">ubatch_slices</code> into the forward context</b>, the signal <code class="inl">UBatchWrapper</code> keys off.</span><span class="ko"><b><code class="inl">ubatch_slices</code>를 forward context에 넣는다.</b> <code class="inl">UBatchWrapper</code>는 이 값을 보고 동작한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_model_runner.py#L4298-L4309">gpu_model_runner.py#L4298-L4309</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/forward_context.py#L148-L148">forward_context.py#L148</a></li>
+<li><span class="en"><b><code class="inl">UBatchWrapper.__call__</code></b>: if <code class="inl">ubatch_slices is None</code> run normally; else build per-ubatch metadata and run/capture a CUDA graph.</span><span class="ko"><b><code class="inl">UBatchWrapper.__call__</code></b>: <code class="inl">ubatch_slices is None</code>이면 그냥 실행하고, 아니면 ubatch별 메타데이터를 만든 뒤 CUDA graph를 실행하거나 캡처한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_ubatch_wrapper.py#L431-L527">gpu_ubatch_wrapper.py#L431-L527</a></li>
+<li><span class="en"><b>Spawn 2 ubatch threads</b> gated by a <code class="inl">threading.Barrier</code> + per-thread events; main thread releases the first.</span><span class="ko"><b>ubatch 스레드 2개 생성.</b> <code class="inl">threading.Barrier</code>와 스레드별 event로 묶어 두고, 메인 스레드가 첫 스레드를 풀어 준다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_ubatch_wrapper.py#L295-L331">gpu_ubatch_wrapper.py#L295-L331 (_run_ubatches)</a></li>
+<li><span class="en"><b>Ping-pong primitives.</b> <code class="inl">dbo_yield</code> sleeps this thread &amp; wakes the other; <code class="inl">dbo_register_recv_hook</code> stashes a recv callback on the <i>other</i> ubatch's context.</span><span class="ko"><b>핑퐁 프리미티브.</b> <code class="inl">dbo_yield</code>는 현재 스레드를 재우고 다른 스레드를 깨운다. <code class="inl">dbo_register_recv_hook</code>는 recv 콜백을 <i>다른</i> ubatch의 context에 저장한다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatching.py#L94-L105">ubatching.py#L94-L105</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatching.py#L186-L190">#L186-L190</a></li>
+<li><span class="en"><b>The actual overlap</b> lives in the fused-MoE modular kernel: on dispatch it runs the other ubatch's pending recv hook, launches this ubatch's async all-to-all, registers its recv hook on the other ubatch, then <code class="inl">dbo_yield</code>. Combine is symmetric.</span><span class="ko"><b>실제 겹침</b>은 fused-MoE 모듈러 커널에서 일어난다. dispatch 때 다른 ubatch의 대기 중인 recv hook을 실행하고, 이 ubatch의 비동기 all-to-all을 띄우고, recv hook을 다른 ubatch에 등록한 뒤 <code class="inl">dbo_yield</code>한다. combine도 같은 구조다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/layers/fused_moe/modular_kernel.py#L1158-L1184">modular_kernel.py#L1158-L1184 (dispatch)</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/layers/fused_moe/modular_kernel.py#L1339-L1349">#L1339-L1349 (combine)</a></li>
+<li><span class="en"><b>The hidden collective.</b> DeepEP low-latency <code class="inl">dispatch</code>/<code class="inl">combine</code> return the recv hook the <i>other</i> ubatch fires.</span><span class="ko"><b>숨겨지는 집합통신.</b> DeepEP low-latency <code class="inl">dispatch</code>/<code class="inl">combine</code>은 <i>다른</i> ubatch가 실행할 recv hook을 돌려준다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/layers/fused_moe/prepare_finalize/deepep_ll.py#L298-L313">deepep_ll.py#L298-L313 (dispatch)</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/model_executor/layers/fused_moe/prepare_finalize/deepep_ll.py#L386-L410">#L386-L410 (combine)</a></li>
+<li><span class="en"><b>Sync &amp; merge.</b> CUDA events order the comm/compute streams; the two halves are concatenated by ubatch id.</span><span class="ko"><b>동기화 &amp; 병합.</b> CUDA event로 통신·연산 스트림의 순서를 맞추고, 두 절반을 ubatch id 순으로 이어 붙인다.</span><br><a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/ubatching.py#L113-L121">ubatching.py#L113-L121</a> · <a class="pl" href="https://github.com/vllm-project/vllm/blob/f4359a70f9e04b0223ef9209db6f0d4d6a10f094/vllm/v1/worker/gpu_ubatch_wrapper.py#L34-L48">gpu_ubatch_wrapper.py#L34-L48</a></li>
 </ol>
 
 <div class="grid2">
@@ -369,27 +402,27 @@
   <code>…/ubatch_utils.py</code> — <span class="en">batch/attn splitting, thresholds</span><span class="ko">배치/attn 분할, 임계값</span><br>
   <code>…/dp_utils.py</code> — <span class="en">cross-DP-rank decision</span><span class="ko">DP rank 간 결정</span><br>
   <code>…/fused_moe/modular_kernel.py</code> — <span class="en">where the yields live</span><span class="ko">yield가 있는 곳</span></p></div>
-  <div class="mini"><h4><span class="en">Mechanism, precisely</span><span class="ko">메커니즘 정확히</span></h4><p><span class="en">Only the <b>MoE all-to-all</b> is overlapped — implemented solely in <code>FusedMoEModularKernel</code>. There are <code class="inl">assert not dbo_enabled()</code> guards on the non-async MoE paths, so DBO <i>must</i> use the async dispatch/finalize path. Dense/attention/TP layers are <b>not</b> overlapped.</span><span class="ko">오직 <b>MoE all-to-all</b>만 겹침 — <code>FusedMoEModularKernel</code>에만 구현. 비동기 아닌 MoE 경로엔 <code class="inl">assert not dbo_enabled()</code> 가드가 있어 DBO는 비동기 dispatch/finalize 경로를 <i>반드시</i> 써야 함. dense/attention/TP 레이어는 겹치지 <b>않음</b>.</span></p></div>
+  <div class="mini"><h4><span class="en">Mechanism, precisely</span><span class="ko">메커니즘 정확히</span></h4><p><span class="en">Only the <b>MoE all-to-all</b> is overlapped, implemented solely in <code>FusedMoEModularKernel</code>. There are <code class="inl">assert not dbo_enabled()</code> guards on the non-async MoE paths, so DBO <i>must</i> use the async dispatch/finalize path. Dense/attention/TP layers are <b>not</b> overlapped.</span><span class="ko"><b>MoE all-to-all</b>만 겹치며 <code>FusedMoEModularKernel</code>에만 구현돼 있다. 동기 MoE 경로에는 <code class="inl">assert not dbo_enabled()</code> 가드가 있어 DBO는 비동기 dispatch/finalize 경로를 <i>반드시</i> 쓴다. dense/attention/TP 레이어는 겹치지 <b>않는다</b>.</span></p></div>
 </div>
 </section>
 
 
 <section id="s6">
 <h2><span class="num">6</span><span class="en">Implementation status</span><span class="ko">구현 상태</span></h2>
-<p><span class="en"><b>Opt-in / early-stage</b> — off by default, narrowly scoped (DP+EP + DeepEP + full CUDA graph), MoE-all-to-all-only. Originally the <code class="inl">--enable-microbatching</code> flag, since renamed to <code class="inl">--enable-dbo</code>.</span>
-<span class="ko"><b>Opt-in / 초기 단계</b> — 기본 꺼짐, 좁은 범위(DP+EP + DeepEP + full CUDA graph), MoE-all-to-all 전용. 원래 <code class="inl">--enable-microbatching</code> 플래그였다가 <code class="inl">--enable-dbo</code>로 개명.</span></p>
+<p><span class="en"><b>Opt-in / early-stage</b>: off by default, narrowly scoped (DP+EP + DeepEP + full CUDA graph), MoE-all-to-all-only. Originally the <code class="inl">--enable-microbatching</code> flag, since renamed to <code class="inl">--enable-dbo</code>.</span>
+<span class="ko"><b>Opt-in / 초기 단계</b>다. 기본은 꺼져 있고 범위가 좁으며(DP+EP + DeepEP + full CUDA graph) MoE all-to-all 전용이다. 처음엔 <code class="inl">--enable-microbatching</code> 플래그였고 <code class="inl">--enable-dbo</code>로 이름이 바뀌었다.</span></p>
 
 <h4><span class="en">Hardcoded limits in the code</span><span class="ko">코드에 박힌 한계</span></h4>
 <ul>
-<li><span class="en">Exactly <b>2</b> micro-batches (<code class="inl">_NUM_UBATCHES = 2</code>) — extending to N is the proposed "XBO" (multi-batch overlap), issue #30105 / PR #30120.</span><span class="ko">정확히 <b>2개</b> 마이크로배치(<code class="inl">_NUM_UBATCHES = 2</code>) — N개 확장은 제안된 "XBO"(multi-batch overlap), issue #30105 / PR #30120.</span></li>
-<li><span class="en">Overlap implemented <b>only</b> for the MoE all-to-all. Overlapping <b>TP all-reduce</b> with compute is a separate open PR (#44677), not merged.</span><span class="ko">겹침은 MoE all-to-all에만 구현. <b>TP all-reduce</b> 겹치기는 별개의 open PR(#44677), 미병합.</span></li>
-<li><span class="en">Open TODOs in code: prefill threshold "<code class="inl"># TODO: tune</code>"; SM control only for DeepGEMM kernels so far.</span><span class="ko">코드 내 open TODO: prefill 임계값 "<code class="inl"># TODO: tune</code>"; SM 제어가 아직 DeepGEMM 커널만.</span></li>
+<li><span class="en">Exactly <b>2</b> micro-batches (<code class="inl">_NUM_UBATCHES = 2</code>). Extending to N is the proposed "XBO" (multi-batch overlap), issue #30105 / PR #30120.</span><span class="ko">마이크로배치는 정확히 <b>2개</b>다(<code class="inl">_NUM_UBATCHES = 2</code>). N개로 늘리는 안은 "XBO"(multi-batch overlap)로 제안돼 있다(issue #30105 / PR #30120).</span></li>
+<li><span class="en">Overlap implemented <b>only</b> for the MoE all-to-all. Overlapping <b>TP all-reduce</b> with compute is a separate open PR (#44677), not merged.</span><span class="ko">겹침은 MoE all-to-all에만 구현돼 있다. <b>TP all-reduce</b> 겹치기는 아직 병합되지 않은 별도 PR(#44677)이다.</span></li>
+<li><span class="en">Open TODOs in code: prefill threshold "<code class="inl"># TODO: tune</code>"; SM control only for DeepGEMM kernels so far.</span><span class="ko">코드에 남은 TODO: prefill 임계값의 "<code class="inl"># TODO: tune</code>", 그리고 SM 제어가 아직 DeepGEMM 커널에만 적용된다.</span></li>
 </ul>
 
 <h4><span class="en">PR lineage &amp; recent work</span><span class="ko">PR 계보 &amp; 최근 작업</span></h4>
 <table>
 <tr><th>PR / Issue</th><th><span class="en">What</span><span class="ko">내용</span></th></tr>
-<tr><td><a class="src" href="https://github.com/vllm-project/vllm/pull/20448">#20448</a></td><td><span class="en">first experimental DBO ("purely infrastructural… slow") — closed, split up</span><span class="ko">최초 실험적 DBO("순수 인프라… 느림") — 분할되어 닫힘</span></td></tr>
+<tr><td><a class="src" href="https://github.com/vllm-project/vllm/pull/20448">#20448</a></td><td><span class="en">first experimental DBO ("purely infrastructural… slow"); closed, split up</span><span class="ko">최초 실험 DBO("purely infrastructural… slow"). 여러 PR로 나뉘며 닫힘</span></td></tr>
 <tr><td><a class="src" href="https://github.com/vllm-project/vllm/pull/21153">#21153</a></td><td><span class="en">split <code class="inl">CommonAttentionMetadata</code> (prerequisite)</span><span class="ko"><code class="inl">CommonAttentionMetadata</code> 분할(선행)</span></td></tr>
 <tr><td><a class="src" href="https://github.com/vllm-project/vllm/pull/23693">#23693</a></td><td><span class="en"><b>[Core/DBO][1/N]</b> the mainline landing (merged 2025-09-16)</span><span class="ko"><b>[Core/DBO][1/N]</b> 메인라인 안착(2025-09-16 병합)</span></td></tr>
 <tr><td><a class="src" href="https://github.com/vllm-project/vllm/pull/24845">#24845</a></td><td><span class="en">[2/N] DeepEP high-throughput + prefill support</span><span class="ko">[2/N] DeepEP high-throughput + prefill 지원</span></td></tr>
@@ -398,8 +431,8 @@
 </table>
 
 <h4><span class="en">Known open issues</span><span class="ko">알려진 미해결 이슈</span></h4>
-<p class="muted"><span class="en">spec-decode + DBO still incomplete (#45378); DeepSeek V3.2 sparse-attention + DBO crashes (#35796, #43964); a GSM8K accuracy regression reported for DP+EP DBO (#35407); torch.compile padding IMA on Hopper+DBO (#25623). (There is also a <i>separate</i> DBO in the vllm-ascend fork — don't conflate.)</span>
-<span class="ko">spec-decode + DBO 미완(#45378); DeepSeek V3.2 sparse-attention + DBO 크래시(#35796, #43964); DP+EP DBO에서 GSM8K 정확도 회귀 보고(#35407); Hopper+DBO에서 torch.compile 패딩 IMA(#25623). (vllm-ascend 포크에 <i>별개</i>의 DBO도 있으니 혼동 주의.)</span></p>
+<p class="muted"><span class="en">spec-decode + DBO still incomplete (#45378); DeepSeek V3.2 sparse-attention + DBO crashes (#35796, #43964); a GSM8K accuracy regression reported for DP+EP DBO (#35407); torch.compile padding IMA on Hopper+DBO (#25623). (There is also a <i>separate</i> DBO in the vllm-ascend fork; don't conflate.)</span>
+<span class="ko">spec-decode + DBO는 아직 미완이다(#45378). DeepSeek V3.2 sparse-attention + DBO는 크래시가 난다(#35796, #43964). DP+EP DBO에서 GSM8K 정확도 회귀가 보고됐고(#35407), Hopper+DBO에서 torch.compile 패딩 IMA가 있다(#25623). vllm-ascend 포크에는 <i>별개의</i> DBO가 있으니 헷갈리지 말자.</span></p>
 </section>
 
 
@@ -432,30 +465,30 @@
 <li>SGLang/LMSYS "Single-Batch Overlap" (SBO +8–10%) — <a href="https://www.lmsys.org/blog/2025-09-26-sglang-ant-group/">lmsys.org/blog/2025-09-26-sglang-ant-group</a></li>
 <li>Perplexity multi-node DeepSeek (prefill compute-bound; split-cost figures, <i>unverified — 403 on fetch</i>) — <a href="https://www.perplexity.ai/hub/blog/lower-latency-and-higher-throughput-with-multi-node-deepseek-deployment">perplexity.ai/hub/blog/…</a></li>
 </ul>
-<p class="muted"><span class="en">Caveats: vLLM DBO targets DP+EP MoE all-to-all (not TP all-reduce). The ~1.5k→2.2k tok/s figure is a combined gain, not DBO-isolated. No public source isolates vLLM DBO's standalone speedup; the one direct isolated micro-measurement (PR #23693) is a single-node regression. Line numbers are valid at commit f4359a7 and may drift on other revisions.</span>
-<span class="ko">주의: vLLM DBO는 DP+EP MoE all-to-all 대상(TP all-reduce 아님). ~1.5k→2.2k tok/s는 합산 이득이지 DBO 단독 아님. vLLM DBO 단독 속도향상을 분리한 공개 출처는 없고, 직접 분리 측정 하나(PR #23693)는 단일노드 회귀. 줄 번호는 커밋 f4359a7 기준이며 다른 리비전에선 달라질 수 있음.</span></p>
+<p class="muted"><span class="en">Caveats: the ~1.5k→2.2k tok/s figure is a combined gain, not DBO-isolated (see §3). Line numbers are valid at commit f4359a7 and may drift.</span>
+<span class="ko">주의: ~1.5k→2.2k tok/s는 DBO 단독이 아닌 합산 이득이다(§3). 줄 번호는 커밋 f4359a7 기준이라 다른 리비전에서는 달라질 수 있다.</span></p>
 </section>
 
 <section id="s8">
-<h2><span class="num">8</span><span class="en">Appendix — parallelism × communication cheat-sheet</span><span class="ko">부록 — 병렬화 × 통신 한눈에</span></h2>
-<p><span class="en">DBO touches one specific collective (the MoE all-to-all). To keep the surrounding terms straight, here's which parallelism needs which communication, including the KV transfer used in P/D disaggregation (which is <i>not</i> a collective).</span>
-<span class="ko">DBO가 건드리는 건 딱 하나의 집합통신(MoE all-to-all)이다. 주변 용어를 정리하기 위해, 어떤 병렬화가 어떤 통신을 쓰는지 — P/D 분리에 쓰는 KV transfer(집합통신이 <i>아님</i>)까지 — 한 표로 정리한다.</span></p>
+<h2><span class="num">8</span><span class="en">Appendix — parallelism × communication cheat-sheet</span><span class="ko">부록: 병렬화 × 통신 한눈에</span></h2>
+<p><span class="en">DBO touches one collective, the MoE all-to-all. This table maps each parallelism to its communication, including P/D KV transfer (<i>not</i> a collective).</span>
+<span class="ko">DBO가 건드리는 집합통신은 MoE all-to-all 하나다. 아래 표는 병렬화마다 쓰는 통신을 정리했고, P/D 분리의 KV transfer(집합통신이 <i>아님</i>)도 넣었다.</span></p>
 
 <table>
 <tr><th><span class="en">Parallelism</span><span class="ko">병렬화</span></th><th><span class="en">What's split</span><span class="ko">무엇을 쪼개나</span></th><th><span class="en">Communication</span><span class="ko">통신</span></th><th><span class="en">When / where</span><span class="ko">언제 / 어디</span></th><th><span class="en">Note</span><span class="ko">노트</span></th></tr>
 <tr><td><b>Data Parallel (DP)</b></td><td><span class="en">requests / the batch (full model replicated on each rank)</span><span class="ko">요청 / 배치 (각 rank에 모델 전체 복제)</span></td><td><span class="en">~none for plain inference (DP-attention adds only small metadata sync)</span><span class="ko">순수 추론엔 거의 없음 (DP-attention은 작은 메타 동기화 정도)</span></td><td>—</td><td><span class="en">replicas independent; llm-d's DP is this</span><span class="ko">replica 독립; llm-d의 DP가 이것</span></td></tr>
 <tr><td><b>Tensor Parallel (TP)</b></td><td><span class="en">each weight matrix (heads / hidden dim sharded)</span><span class="ko">각 weight 행렬 (head / hidden 분할)</span></td><td><b>all-reduce</b> <span class="en">×2 per layer</span><span class="ko">×2/레이어</span></td><td><span class="en">after attention, after the MLP</span><span class="ko">attention 후, MLP 후</span></td><td><span class="en">sums partial outputs; usually intra-node (NVLink)</span><span class="ko">부분 출력 합산; 보통 노드 내(NVLink)</span></td></tr>
-<tr><td><b>Expert Parallel (EP)</b></td><td><span class="en">MoE experts (each GPU holds some experts)</span><span class="ko">MoE expert (GPU마다 일부 expert)</span></td><td><b>all-to-all</b> <span class="en">×2 per layer = <b>dispatch</b> + <b>combine</b></span><span class="ko">×2/레이어 = <b>dispatch</b> + <b>combine</b></span></td><td><span class="en">each MoE layer</span><span class="ko">매 MoE 레이어</span></td><td><span class="en">tokens → expert GPUs and back; expensive cross-node — <b>this is what DBO hides</b></span><span class="ko">토큰 ↔ expert GPU; 노드 넘으면 비쌈 — <b>DBO가 숨기는 대상</b></span></td></tr>
+<tr><td><b>Expert Parallel (EP)</b></td><td><span class="en">MoE experts (each GPU holds some experts)</span><span class="ko">MoE expert (GPU마다 일부 expert)</span></td><td><b>all-to-all</b> <span class="en">×2 per layer = <b>dispatch</b> + <b>combine</b></span><span class="ko">×2/레이어 = <b>dispatch</b> + <b>combine</b></span></td><td><span class="en">each MoE layer</span><span class="ko">매 MoE 레이어</span></td><td><span class="en">tokens → expert GPUs and back; expensive cross-node. <b>This is what DBO hides</b></span><span class="ko">토큰 ↔ expert GPU, 노드를 넘으면 비쌈. <b>DBO가 숨기는 대상</b></span></td></tr>
 <tr><td><b>Pipeline Parallel (PP)</b></td><td><span class="en">layers (into stages)</span><span class="ko">레이어 (stage 분할)</span></td><td><span class="en">point-to-point send/recv</span><span class="ko">point-to-point send/recv</span></td><td><span class="en">at stage boundaries</span><span class="ko">stage 경계</span></td><td><span class="en">passes activations between stages</span><span class="ko">stage 간 activation 전달</span></td></tr>
 <tr><td><b>P/D disaggregation</b></td><td><span class="en">prefill vs decode instances</span><span class="ko">prefill vs decode 인스턴스</span></td><td><b>KV transfer</b> <span class="en">(point-to-point, <i>not</i> a collective)</span><span class="ko">(point-to-point, 집합통신 <i>아님</i>)</span></td><td><span class="en">once per request (prefill → decode)</span><span class="ko">요청당 1회 (prefill → decode)</span></td><td><span class="en">moves the prompt's KV cache over NIXL/RDMA; same idea as KV offload/tiering to CPU</span><span class="ko">프롬프트 KV cache를 NIXL/RDMA로 이동; CPU로의 KV offload/tiering과 같은 발상</span></td></tr>
 </table>
 
-<h3><span class="en">The collectives, in one breath</span><span class="ko">집합통신, 한 호흡에</span></h3>
+<h3><span class="en">The collectives, in one breath</span><span class="ko">집합통신 한눈에</span></h3>
 <div class="grid2">
-  <div class="mini"><h4>all-reduce <span class="muted">(TP)</span></h4><p><span class="en">Every rank contributes a partial result; everyone ends with the <b>sum</b>. TP uses it to add up the partial outputs of a sharded matmul. Blocking — the next op needs the summed result.</span><span class="ko">모든 rank가 부분 결과를 기여하고, 모두가 <b>합</b>을 받음. TP가 sharded matmul의 부분 출력을 합산하는 데 사용. 블로킹 — 다음 연산이 합산 결과를 필요로 함.</span></p></div>
-  <div class="mini"><h4>all-to-all <span class="muted">(EP) = dispatch + combine</span></h4><p><span class="en">Every rank sends a <b>different</b> chunk to every other rank (a transpose). MoE does it twice: <b>dispatch</b> scatters each token to its expert's GPU; <b>combine</b> gathers the expert outputs back to the token's home GPU.</span><span class="ko">각 rank가 모든 rank에 <b>서로 다른</b> 조각을 보냄(transpose). MoE는 두 번: <b>dispatch</b>는 각 토큰을 expert의 GPU로 흩뿌리고, <b>combine</b>은 expert 출력을 원래 토큰의 GPU로 모음.</span></p></div>
-  <div class="mini"><h4>point-to-point <span class="muted">(PP)</span></h4><p><span class="en">One rank sends directly to one other (send/recv). PP passes a stage's activations to the next stage.</span><span class="ko">한 rank가 다른 한 rank로 직접(send/recv). PP가 한 stage의 activation을 다음 stage로 전달.</span></p></div>
-  <div class="mini"><h4>KV transfer <span class="muted">(P/D · offload)</span></h4><p><span class="en"><b>Not a collective</b> — a one-shot move of an already-computed KV cache: prefill→decode (P/D), or GPU→CPU/remote (offload/tiering). Carried by NIXL/RDMA, LMCache, etc.</span><span class="ko"><b>집합통신 아님</b> — 이미 계산된 KV cache를 1회 이동: prefill→decode(P/D), 또는 GPU→CPU/원격(offload/tiering). NIXL/RDMA, LMCache 등이 운반.</span></p></div>
+  <div class="mini"><h4>all-reduce <span class="muted">(TP)</span></h4><p><span class="en">Every rank contributes a partial result and everyone gets the <b>sum</b>. TP uses it for sharded matmul outputs. Blocking: the next op needs the sum.</span><span class="ko">모든 rank가 부분 결과를 내고 모두가 <b>합</b>을 받는다. TP는 sharded matmul의 부분 출력을 더할 때 쓴다. 다음 연산이 합을 기다리므로 블로킹이다.</span></p></div>
+  <div class="mini"><h4>all-to-all <span class="muted">(EP) = dispatch + combine</span></h4><p><span class="en">Every rank sends a <b>different</b> chunk to every other rank (a transpose). MoE does it twice: <b>dispatch</b> scatters each token to its expert's GPU; <b>combine</b> gathers the expert outputs back to the token's home GPU.</span><span class="ko">각 rank가 모든 rank에 <b>서로 다른</b> 조각을 보낸다(transpose). MoE는 이를 두 번 한다. <b>dispatch</b>는 토큰을 expert의 GPU로 흩뿌리고, <b>combine</b>은 expert 출력을 토큰의 원래 GPU로 모은다.</span></p></div>
+  <div class="mini"><h4>point-to-point <span class="muted">(PP)</span></h4><p><span class="en">One rank sends directly to one other (send/recv). PP passes a stage's activations to the next stage.</span><span class="ko">한 rank가 다른 한 rank로 직접 보낸다(send/recv). PP는 stage의 activation을 다음 stage로 넘길 때 쓴다.</span></p></div>
+  <div class="mini"><h4>KV transfer <span class="muted">(P/D · offload)</span></h4><p><span class="en"><b>Not a collective</b>: a one-shot move of an already-computed KV cache: prefill→decode (P/D), or GPU→CPU/remote (offload/tiering). Carried by NIXL/RDMA, LMCache, etc.</span><span class="ko"><b>집합통신이 아니다.</b> 이미 계산된 KV cache를 한 번 옮긴다. prefill→decode(P/D)나 GPU→CPU/원격(offload/tiering)이 그 예이고, NIXL/RDMA, LMCache 등이 맡는다.</span></p></div>
 </div>
 
 <svg class="fig" viewBox="0 0 760 210" role="img" aria-label="all-reduce vs all-to-all vs KV transfer">
@@ -497,30 +530,33 @@
   <text x="650" y="86" class="kk">KV once</text>
   <text x="560" y="150" class="kk">point-to-point, not a collective</text>
 </svg>
-<p class="figcap"><span class="en">Fig 4 — Three communication shapes around an LLM: all-reduce (TP, sum-and-broadcast), all-to-all (EP, the token↔expert transpose = dispatch+combine), and KV transfer (P/D, a one-shot point-to-point move). DBO overlaps the middle one. Schematic.</span><span class="ko">그림 4 — LLM 주변의 세 가지 통신 형태: all-reduce(TP, 합산-브로드캐스트), all-to-all(EP, 토큰↔expert transpose = dispatch+combine), KV transfer(P/D, 1회성 point-to-point 이동). DBO는 가운데 것을 겹친다. 개략도.</span></p>
+<p class="figcap"><span class="en">Fig 4 · all-reduce (TP), all-to-all (EP, dispatch+combine), KV transfer (P/D). DBO overlaps the middle one. Schematic.</span><span class="ko">그림 4 · all-reduce(TP), all-to-all(EP, dispatch+combine), KV transfer(P/D). DBO가 겹치는 것은 가운데다. 개략도.</span></p>
 
 <div class="callout c-blue">
   <span class="tag"><span class="en">where DBO fits</span><span class="ko">DBO의 위치</span></span>
-  <span class="en">DBO overlaps the <b>EP all-to-all (dispatch/combine)</b> with compute. It does <b>not</b> overlap TP all-reduce (separate, unmerged PR #44677), and KV transfer is a P/D concern, not DBO's. So: DBO ⊂ Expert Parallel, and its enabling backend is whatever runs the all-to-all (DeepEP — and now NIXL EP, below).</span>
-  <span class="ko">DBO는 <b>EP의 all-to-all(dispatch/combine)</b>을 연산과 겹친다. TP all-reduce는 겹치지 <b>않고</b>(별개·미병합 PR #44677), KV transfer는 P/D의 일이지 DBO가 아니다. 즉 DBO ⊂ Expert Parallel이고, 그 enabling backend는 all-to-all을 돌리는 것(DeepEP — 그리고 이제 아래 NIXL EP).</span>
+  <span class="en">DBO ⊂ Expert Parallel: it overlaps only the <b>EP all-to-all</b>, not TP all-reduce or KV transfer, and runs on whatever backend does the all-to-all (DeepEP, and now NIXL EP below).</span>
+  <span class="ko">DBO ⊂ Expert Parallel이다. <b>EP all-to-all</b>만 겹치고 TP all-reduce나 KV transfer는 건드리지 않으며, all-to-all 백엔드(DeepEP, 그리고 이제 아래의 NIXL EP) 위에서 돈다.</span>
 </div>
 
-<h3><span class="en">Forecast — DBO × NIXL EP (PR #45275, just merged)</span><span class="ko">전망 — DBO × NIXL EP (PR #45275, 방금 머지)</span></h3>
-<p><span class="en">PR <a class="src" href="https://github.com/vllm-project/vllm/pull/45275">#45275 "[EP] Enable DBO with NIXL EP"</a> merged 2026-06-15. It is small and surgical — per the PR description: <i>"DBO works with NIXL EP because it supports async prepare/finalize, but the backend validation only allowed DeepEP backends,"</i> plus it adds <code class="inl">nixl_ep</code> to the CUDA-graph guidance for decode-optimized all2all backends. It touches only <code class="inl">config/compilation.py</code> and <code class="inl">config/vllm.py</code> — i.e., it <b>unlocks an existing capability</b>, it doesn't add new overlap kernels.</span>
-<span class="ko">PR <a class="src" href="https://github.com/vllm-project/vllm/pull/45275">#45275 "[EP] Enable DBO with NIXL EP"</a>가 2026-06-15 머지됨. 작고 외과적이다 — PR 설명대로 <i>"DBO는 NIXL EP의 async prepare/finalize를 지원하므로 동작하는데, backend 검증이 DeepEP backend만 허용했었다"</i>, 그리고 <code class="inl">nixl_ep</code>를 decode 최적화 all2all backend의 CUDA-graph 가이던스에 추가. 건드린 파일은 <code class="inl">config/compilation.py</code>·<code class="inl">config/vllm.py</code>뿐 — 즉 <b>기존 역량의 잠금을 푼 것</b>이지 새 overlap 커널을 더한 게 아니다.</span></p>
+<h3><span class="en">Forecast: DBO × NIXL EP (PR #45275, just merged)</span><span class="ko">전망: DBO × NIXL EP (PR #45275, 방금 머지)</span></h3>
+<p><span class="en">PR <a class="src" href="https://github.com/vllm-project/vllm/pull/45275">#45275 "[EP] Enable DBO with NIXL EP"</a> merged 2026-06-15. Per the PR description: <i>"DBO works with NIXL EP because it supports async prepare/finalize, but the backend validation only allowed DeepEP backends,"</i> and it adds <code class="inl">nixl_ep</code> to the CUDA-graph guidance for decode-optimized all2all backends. It touches only <code class="inl">config/compilation.py</code> and <code class="inl">config/vllm.py</code>: it <b>unlocks an existing capability</b> rather than adding overlap kernels.</span>
+<span class="ko">PR <a class="src" href="https://github.com/vllm-project/vllm/pull/45275">#45275 "[EP] Enable DBO with NIXL EP"</a>가 2026-06-15에 머지됐다. PR 설명은 <i>"DBO works with NIXL EP because it supports async prepare/finalize, but the backend validation only allowed DeepEP backends"</i>이고, <code class="inl">nixl_ep</code>를 decode 최적화 all2all backend의 CUDA-graph 가이던스에도 넣었다. 바뀐 파일은 <code class="inl">config/compilation.py</code>·<code class="inl">config/vllm.py</code>뿐이다. 새 overlap 커널이 아니라 <b>이미 있던 기능의 잠금을 푼 것</b>이다.</span></p>
 
 <div class="callout c-purple">
-  <span class="tag"><span class="en">editor's note — prediction (not a vLLM claim)</span><span class="ko">편집자 주 — 예측 (vLLM 주장 아님)</span></span>
-  <span class="en">What this should buy, in order of confidence:
-  <b>(1) Wider reach.</b> Until now DBO required a DeepEP all-to-all backend; now it also runs on <b>NIXL EP</b>. NIXL (NVIDIA Inference Xfer Library) is the same backend-pluggable transfer layer vLLM already uses for <b>P/D KV transfer</b> — so a fleet that picked NIXL EP for its all-to-all (or wants one transfer stack for both KV transfer <i>and</i> EP) can now get DBO's comm-hiding without switching to DeepEP.
-  <b>(2) One fabric, composable.</b> Because NIXL abstracts UCX/RDMA/GPUDirect and is the shared transport for P/D + wide-EP, DBO-over-NIXL-EP should compose cleanly with disaggregated / wide-EP MoE serving on a single coherent fabric — exactly the multi-node regime where DBO actually pays off.
-  <b>(3) Full CUDA graphs on decode.</b> The PR adds <code class="inl">nixl_ep</code> to the decode-optimized cudagraph guidance, so DBO+NIXL EP can keep full CUDA graphs — which DBO needs to minimize the CPU ping-pong overhead.
-  <b>Caveat:</b> this is enablement, not a speedup kernel. The realized gain depends on whether NIXL EP's all-to-all is as fast as DeepEP's low-latency kernels; if NIXL EP is slower, DBO over it hides comm but the comm it hides is larger. Net: it broadens <i>where</i> DBO can run more than it speeds up a fixed DeepEP setup. For us, the interesting part is the convergence — NIXL becoming the single transfer layer under P/D KV transfer, wide-EP all-to-all, <i>and</i> DBO overlap.</span>
-  <span class="ko">이게 가져다줄 것, 확신 순서대로:
-  <b>(1) 적용 범위 확대.</b> 지금까진 DBO가 DeepEP all-to-all backend를 요구했는데, 이제 <b>NIXL EP</b>에서도 돈다. NIXL(NVIDIA Inference Xfer Library)은 vLLM이 <b>P/D KV transfer</b>에 이미 쓰는 backend-pluggable 전송 계층이라 — all-to-all로 NIXL EP를 고른(또는 KV transfer와 EP를 한 전송 스택으로 묶고 싶은) fleet이 DeepEP로 갈아타지 않고도 DBO의 통신 숨김을 얻는다.
-  <b>(2) 한 fabric, 조합 가능.</b> NIXL이 UCX/RDMA/GPUDirect를 추상화하고 P/D + wide-EP의 공용 전송이므로, DBO-over-NIXL-EP는 분리/wide-EP MoE 서빙과 한 fabric 위에서 깔끔히 조합될 것 — DBO가 실제로 값을 하는 멀티노드 영역이 바로 그것.
-  <b>(3) decode에서 full CUDA graph.</b> PR이 <code class="inl">nixl_ep</code>를 decode 최적화 cudagraph 가이던스에 추가 → DBO+NIXL EP가 full CUDA graph 유지 가능(DBO가 CPU 핑퐁 오버헤드 최소화에 필요).
-  <b>단서:</b> 이건 enablement이지 속도 커널이 아니다. 실제 이득은 NIXL EP의 all-to-all이 DeepEP low-latency 커널만큼 빠른지에 달렸다; NIXL EP가 더 느리면 DBO가 통신을 숨기되 숨기는 통신 자체가 더 크다. 요약: 고정된 DeepEP 셋업을 빠르게 한다기보다 DBO가 <i>돌 수 있는 곳</i>을 넓힌다. 우리에겐 흥미로운 지점이 수렴 — NIXL이 P/D KV transfer·wide-EP all-to-all·DBO overlap 아래 단일 전송 계층이 되는 것.</span>
+  <span class="tag"><span class="en">editor's note: prediction (not a vLLM claim)</span><span class="ko">편집자 주: 예측 (vLLM 주장 아님)</span></span>
+  <span class="en">Expected effects, in order of confidence:</span><span class="ko">기대 효과를 확신이 큰 순서로 적는다.</span>
+  <ol class="en">
+    <li><b>Wider reach.</b> DBO no longer needs DeepEP; it also runs on <b>NIXL EP</b>. NIXL (NVIDIA Inference Xfer Library) is the transfer layer vLLM already uses for <b>P/D KV transfer</b>, so a fleet on NIXL EP (or wanting one stack for KV transfer <i>and</i> EP) gets DBO without switching to DeepEP.</li>
+    <li><b>One fabric, composable.</b> NIXL abstracts UCX/RDMA/GPUDirect and is shared by P/D + wide-EP, so DBO-over-NIXL-EP should compose cleanly with disaggregated / wide-EP MoE serving, the multi-node regime where DBO pays off.</li>
+    <li><b>Full CUDA graphs on decode.</b> With <code class="inl">nixl_ep</code> in the decode-optimized cudagraph guidance, DBO+NIXL EP keeps full CUDA graphs, which DBO needs to minimize CPU ping-pong overhead.</li>
+    <li><b>Caveat:</b> this is enablement, not a speedup kernel. If NIXL EP's all-to-all is slower than DeepEP's low-latency kernels, DBO hides a larger comm. It broadens <i>where</i> DBO can run more than it speeds up a DeepEP setup. For us the interesting part is convergence: NIXL as the single transfer layer under P/D KV transfer, wide-EP all-to-all, <i>and</i> DBO overlap.</li>
+  </ol>
+  <ol class="ko">
+    <li><b>적용 범위 확대.</b> DBO가 DeepEP 없이 <b>NIXL EP</b>에서도 돈다. NIXL(NVIDIA Inference Xfer Library)은 vLLM이 <b>P/D KV transfer</b>에 이미 쓰는 전송 계층이다. NIXL EP를 쓰는 fleet(또는 KV transfer와 EP를 한 스택으로 묶고 싶은 fleet)은 DeepEP로 바꾸지 않고도 DBO를 쓸 수 있다.</li>
+    <li><b>한 fabric에서 조합.</b> NIXL은 UCX/RDMA/GPUDirect를 추상화하고 P/D와 wide-EP가 함께 쓴다. 그래서 DBO-over-NIXL-EP는 분리형·wide-EP MoE 서빙과 잘 맞물릴 것이다. DBO가 효과를 내는 멀티노드 환경이 바로 여기다.</li>
+    <li><b>decode에서 full CUDA graph.</b> <code class="inl">nixl_ep</code>가 decode 최적화 cudagraph 가이던스에 들어가 DBO+NIXL EP도 full CUDA graph를 유지한다. DBO가 CPU 핑퐁 오버헤드를 줄이려면 필요한 조건이다.</li>
+    <li><b>단서:</b> 속도를 올리는 커널이 아니라 사용 범위를 연 변경이다. NIXL EP의 all-to-all이 DeepEP low-latency 커널보다 느리면 DBO가 숨겨야 할 통신 자체가 커진다. DeepEP 환경을 빠르게 하기보다 DBO가 <i>돌 수 있는 곳</i>을 넓힌다. 우리에게 흥미로운 점은 NIXL이 P/D KV transfer, wide-EP all-to-all, DBO overlap 아래의 단일 전송 계층으로 모인다는 것이다.</li>
+  </ol>
 </div>
 </section>
 

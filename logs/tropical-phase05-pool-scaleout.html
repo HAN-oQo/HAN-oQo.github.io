@@ -49,20 +49,20 @@
 
 <div class="tip"><strong><span class="en">The question</span><span class="ko">질문</span></strong><br>
 <span class="en"><a href="tropical-phase0-baseline-bench.html">Phase 0</a> found a single TP=2 instance is queuing/TTFT-bound — TPOT never broke. The paper's "co-located = interference/TPOT-bound" comes from <b>4 workers behind an InFaaS dispatcher</b>. So Phase 0.5 builds exactly that — and asks: does 4× scale-out finally surface the interference regime? Building the dispatcher is also the point: it's the <b>seed of the Tropical multiplexing toggle</b>.</span>
-<span class="ko"><a href="tropical-phase0-baseline-bench.html">Phase 0</a>에서 단일 TP=2 인스턴스는 큐잉/TTFT-bound — TPOT가 안 깨졌다. 논문의 "co-located = 간섭/TPOT-bound"는 <b>4 워커 + InFaaS 디스패처</b>에서 온다. 그래서 Phase 0.5는 그걸 그대로 만든다 — 그리고 묻는다: 4× 스케일아웃이 드디어 간섭 체제를 드러내는가? 디스패처를 만드는 것 자체가 핵심이기도 하다 — <b>Tropical 멀티플렉싱 토글의 씨앗</b>이니까.</span></div>
+<span class="ko"><a href="tropical-phase0-baseline-bench.html">Phase 0</a>에서 단일 TP=2 인스턴스는 큐잉/TTFT-bound였고 TPOT는 깨지지 않았다. 논문의 "co-located = 간섭/TPOT-bound"는 <b>4 워커 + InFaaS 디스패처</b> 구성에서 나온 결과다. 그래서 Phase 0.5는 그 구성을 그대로 만들고, 4× 스케일아웃에서 드디어 간섭 체제가 드러나는지 본다. 디스패처 자체도 중요하다. <b>Tropical 멀티플렉싱 토글의 씨앗</b>이기 때문이다.</span></div>
 
-<h2><span class="pchip">1</span><span class="en">The dispatcher (= the toggle's seed) + the pool</span><span class="ko">디스패처(= 토글 씨앗) + 풀</span></h2>
+<h2><span class="pchip">1</span><span class="en">The dispatcher (= the toggle's seed) + the pool</span><span class="ko">디스패처(토글의 씨앗)와 풀</span></h2>
 <p><span class="en"><code>dispatcher.py</code> is a small async aiohttp service: it routes each request to the backend with the <b>fewest unfinished tokens</b> (in-flight <code>max_tokens</code> summed per worker) and streams the SSE response straight back. <code>pool_up.sh</code> brings up 4 vLLM-ROCm workers (TP=2 each, on GCD pairs (0,1)(2,3)(4,5)(6,7)) in parallel, then the dispatcher on <code>:8000</code>. This mirrors the paper's "4 workers, TP=2, InFaaS dispatch."</span>
-<span class="ko"><code>dispatcher.py</code>는 작은 비동기 aiohttp 서비스: 각 요청을 <b>미완 토큰이 가장 적은</b> 백엔드(워커별 in-flight <code>max_tokens</code> 합)로 라우팅하고 SSE 응답을 그대로 스트리밍한다. <code>pool_up.sh</code>는 vLLM-ROCm 워커 4개(각 TP=2, GCD 쌍 (0,1)(2,3)(4,5)(6,7))를 병렬 기동 후 <code>:8000</code>에 디스패처. 논문의 "4 워커, TP=2, InFaaS dispatch"를 그대로.</span></p>
+<span class="ko"><code>dispatcher.py</code>는 작은 비동기 aiohttp 서비스다. 각 요청을 <b>미완 토큰이 가장 적은</b> 백엔드(워커별 in-flight <code>max_tokens</code> 합)로 라우팅하고 SSE 응답을 그대로 스트리밍한다. <code>pool_up.sh</code>는 vLLM-ROCm 워커 4개(각 TP=2, GCD 쌍 (0,1)(2,3)(4,5)(6,7))를 병렬로 띄운 뒤 <code>:8000</code>에 디스패처를 올린다. 논문의 "4 워커, TP=2, InFaaS dispatch" 구성과 같다.</span></p>
 <div class="key"><strong><span class="en">Why this is the toggle, not just a load balancer</span><span class="ko">왜 이게 단순 LB가 아니라 토글인가</span></strong><br>
 <span class="en">Right now the policy is "pick the least-loaded worker." Phase 2 swaps that one decision for Tropical's <b>slack-guarded admission</b>: route a prefill to a dedicated prefill worker only if predicted exec + queuing &lt; TTFT slack (Path ①), or piggyback it onto a decode worker only if predicted prefill exec ≤ that worker's TPOT slack (Path ②). The plumbing — request queue, per-backend state, streaming passthrough — is already here.</span>
-<span class="ko">지금 정책은 "가장 덜 바쁜 워커 선택"이다. Phase 2는 그 한 결정을 Tropical의 <b>slack-가드 admission</b>으로 교체한다: 예측 exec + 큐잉 &lt; TTFT slack이면 전용 prefill 워커로(Path ①), 또는 예측 prefill exec ≤ 그 워커의 TPOT slack이면 decode 워커에 얹기(Path ②). 배관 — 요청 큐, 백엔드별 상태, 스트리밍 패스스루 — 은 이미 갖춰졌다.</span></span></div>
+<span class="ko">지금 정책은 "가장 덜 바쁜 워커 선택"이다. Phase 2는 그 한 결정을 Tropical의 <b>slack-가드 admission</b>으로 바꾼다. 예측 exec + 큐잉 &lt; TTFT slack이면 전용 prefill 워커로 보내고(Path ①), 예측 prefill exec ≤ 그 워커의 TPOT slack이면 decode 워커에 얹는다(Path ②). 요청 큐, 백엔드별 상태, 스트리밍 패스스루 같은 배관은 이미 갖춰졌다.</span></div>
 <p><span class="en">Routing validated: 200 then 500-request replays spread evenly across the 4 workers (e.g. 598 / 651 / 620 / 631 at 40 rps), with the in-flight counters returning cleanly to zero.</span>
-<span class="ko">라우팅 검증: 200·500 요청 리플레이가 4 워커에 고르게 분산(예: 40 rps에서 598 / 651 / 620 / 631), in-flight 카운터는 0으로 깔끔히 회수.</span></p>
+<span class="ko">라우팅도 검증했다. 200·500 요청 리플레이가 4 워커에 고르게 나뉘었고(예: 40 rps에서 598 / 651 / 620 / 631), in-flight 카운터는 깔끔하게 0으로 돌아왔다.</span></p>
 
 <h2><span class="pchip">2</span><span class="en">Scale-out sweep — 8 to 40 rps</span><span class="ko">스케일아웃 스윕 — 8~40 rps</span></h2>
 <p><span class="en">Same 200→<b>500</b>-request ShareGPT workload, swept at <b>8 · 16 · 24 · 32 · 40 rps</b> (per-worker 2–10, matching the Phase-0 single-instance per-worker load), through the dispatcher. <code>colocated</code> (eager) vs <code>chunked</code>. SLO = 5× light-load (8 rps) p50, same as before.</span>
-<span class="ko">동일한 200→<b>500</b> 요청 ShareGPT 워크로드를 디스패처 통해 <b>8·16·24·32·40 rps</b>(per-worker 2–10, Phase 0 단일 인스턴스의 per-worker 부하와 매칭)로 스윕. <code>colocated</code>(eager) vs <code>chunked</code>. SLO = 경부하(8 rps) p50의 5배, 이전과 동일.</span></p>
+<span class="ko">같은 200→<b>500</b> 요청 ShareGPT 워크로드를 디스패처에 <b>8·16·24·32·40 rps</b>로 흘렸다(per-worker 2–10, Phase 0 단일 인스턴스의 per-worker 부하와 맞춤). <code>colocated</code>(eager)와 <code>chunked</code>를 비교하고, SLO는 이전처럼 경부하(8 rps) p50의 5배로 잡았다.</span></p>
 
 <svg class="fig" viewBox="0 0 820 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="On the 4-worker pool, TTFT p90 stays ~150ms up to 16 rps then explodes to ~8.8s at 24 and ~12.5s at 40 rps, crossing the 251ms SLO; TPOT p90 stays flat near 17ms (well under its 74ms SLO) at every rate. Log-scale y-axis.">
   <text x="20" y="22" font-size="12" font-weight="700" fill="#1f1e1b">colocated pool: TTFT p90 explodes, TPOT p90 flatlines (log scale)</text>
@@ -99,7 +99,7 @@
   <text x="470" y="146" font-size="10.5" fill="#27500a">4.4× under its 74ms SLO.</text>
   <text x="470" y="168" font-size="10" fill="#6b6a63">chunked is within noise of this.</text>
 </svg>
-<p class="cap"><span class="en">colocated pool (chunked is near-identical). Generated by <code>analyze_slo.py</code> over <code>results_pool/</code>.</span><span class="ko">colocated 풀(chunked도 거의 동일). <code>results_pool/</code>에 <code>analyze_slo.py</code>로 산출.</span></p>
+<p class="cap"><span class="en">colocated pool (chunked is near-identical). Generated by <code>analyze_slo.py</code> over <code>results_pool/</code>.</span><span class="ko">colocated 풀이며 chunked도 거의 같다. <code>results_pool/</code>을 <code>analyze_slo.py</code>로 집계했다.</span></p>
 
 <table>
   <tr><th><span class="en">system</span><span class="ko">시스템</span></th><th class="num">rate</th><th class="num">/wkr</th><th class="num">TTFT p50</th><th class="num">TTFT p90</th><th class="num">TPOT p90</th><th class="num">TTFT%</th><th class="num">TPOT%</th><th class="num">SLO%</th></tr>
@@ -114,28 +114,28 @@
   <tr><td>chunked</td><td class="num">32</td><td class="num">8</td><td class="num">64</td><td class="num">11582</td><td class="num">16.7</td><td class="num">60</td><td class="num">100</td><td class="num">60.2</td></tr>
   <tr><td>chunked</td><td class="num">40</td><td class="num">10</td><td class="num">105</td><td class="num">11805</td><td class="num">16.5</td><td class="num">54</td><td class="num">100</td><td class="num">53.6</td></tr>
 </table>
-<p class="cap"><span class="en">All latencies in ms. Both systems hold ≥90% to 16 rps, then collapse at 24. TPOT p90 flat ~16–18ms throughout (SLO 72–74ms).</span><span class="ko">레이턴시 ms. 두 시스템 모두 16 rps까지 ≥90% 유지 후 24에서 붕괴. TPOT p90은 내내 ~16–18ms 평탄(SLO 72–74ms).</span></p>
+<p class="cap"><span class="en">All latencies in ms. Both systems hold ≥90% to 16 rps, then collapse at 24. TPOT p90 flat ~16–18ms throughout (SLO 72–74ms).</span><span class="ko">레이턴시 단위는 ms다. 두 시스템 모두 16 rps까지 ≥90%를 지키다 24에서 무너진다. TPOT p90은 내내 ~16–18ms로 평탄하다(SLO 72–74ms).</span></p>
 
-<h2><span class="pchip">3</span><span class="en">Verdict — and why this is exactly Tropical's target</span><span class="ko">결론 — 그리고 왜 이게 정확히 Tropical의 표적인가</span></h2>
+<h2><span class="pchip">3</span><span class="en">Verdict — and why this is exactly Tropical's target</span><span class="ko">결론: 이 상황이 바로 Tropical의 표적이다</span></h2>
 
-<div class="key"><strong><span class="en">The picture didn't change — it sharpened</span><span class="ko">그림은 안 바뀌었다 — 더 또렷해졌다</span></strong><br>
+<div class="key"><strong><span class="en">The picture didn't change — it sharpened</span><span class="ko">그림은 그대로, 더 또렷해졌다</span></strong><br>
 <span class="en">At 4× scale, <b>TPOT is still rock-flat at 100% (p90 ~17ms, 4.4× under SLO)</b> while <b>TTFT p90 explodes 144ms → 8.8s → 12.5s</b> past 16 rps. chunked ≈ colocated (within noise). So across single-instance <i>and</i> 4-worker scale-out, this 7B / ShareGPT / MI250 regime is <b>purely queuing/TTFT-bound</b>; the paper's interference/TPOT regime needs its specific conditions (InternLM-20B, 200K context, the Mooncake long-context trace, larger sustained decode batches) that we don't reach here.</span>
-<span class="ko">4× 규모에서도 <b>TPOT는 여전히 100%로 완전 평탄(p90 ~17ms, SLO의 4.4× 아래)</b>, 반면 <b>TTFT p90은 16 rps 넘어 144ms → 8.8초 → 12.5초로 폭발</b>. chunked ≈ colocated(노이즈 수준). 즉 단일 인스턴스<i>와</i> 4-워커 스케일아웃 둘 다, 이 7B / ShareGPT / MI250 체제는 <b>순수 큐잉/TTFT-bound</b>; 논문의 간섭/TPOT 체제는 그 특유의 조건(InternLM-20B, 200K 컨텍스트, Mooncake 롱컨텍스트 트레이스, 더 큰 지속 decode 배치)이 있어야 하고 여기선 안 닿는다.</span></div>
+<span class="ko">4× 규모에서도 <b>TPOT는 100% 달성으로 평탄하다(p90 ~17ms, SLO의 4.4× 아래)</b>. 반면 <b>TTFT p90은 16 rps를 넘자 144ms → 8.8초 → 12.5초로 폭발한다</b>. chunked ≈ colocated이고 차이는 노이즈 수준이다. 단일 인스턴스<i>와</i> 4-워커 스케일아웃 모두에서 이 7B / ShareGPT / MI250 체제는 <b>순수 큐잉/TTFT-bound</b>다. 논문의 간섭/TPOT 체제는 InternLM-20B, 200K 컨텍스트, Mooncake 롱컨텍스트 트레이스, 더 큰 지속 decode 배치 같은 조건이 필요하고, 여기선 거기까지 가지 않는다.</span></div>
 
 <p><span class="en">Far from a dead end, this is the <b>strongest possible motivation for the Tropical toggle</b>. Read the two failure signals together:</span>
-<span class="ko">막다른 길이 아니라, 이건 <b>Tropical 토글의 가장 강력한 동기</b>다. 두 실패 신호를 같이 읽으면:</span></p>
+<span class="ko">이건 막다른 길이 아니라 <b>Tropical 토글을 만들 가장 강력한 이유</b>다. 두 실패 신호를 같이 보자.</span></p>
 <ul>
-  <li><span class="en"><b>Decode is starving for work</b> — 4.4× TPOT slack sitting idle.</span><span class="ko"><b>decode는 일이 없어 놀고 있다</b> — TPOT slack 4.4×가 유휴.</span></li>
-  <li><span class="en"><b>Prefill is drowning</b> — the queue blows TTFT to 8–12s.</span><span class="ko"><b>prefill은 익사 중</b> — 큐가 TTFT를 8–12초로.</span></li>
+  <li><span class="en"><b>Decode is starving for work</b> — 4.4× TPOT slack sitting idle.</span><span class="ko"><b>decode는 일이 없어 놀고 있다.</b> TPOT slack 4.4×가 그대로 남는다.</span></li>
+  <li><span class="en"><b>Prefill is drowning</b> — the queue blows TTFT to 8–12s.</span><span class="ko"><b>prefill은 밀려서 허덕인다.</b> 큐 때문에 TTFT가 8–12초까지 늘어난다.</span></li>
 </ul>
 <p><span class="en">That is precisely the imbalance Tropical's <b>Path ②</b> exists to fix: <i>spend the idle decode TPOT-slack on the prefill backlog</i> — piggyback prefills onto the decode workers instead of letting them queue. A plain load balancer can't (it only moves whole requests between workers, all of which share the same queue problem); the slack-guarded toggle can. Our baselines didn't just measure the systems — they identified the operating point where the toggle should win.</span>
-<span class="ko">그게 바로 Tropical <b>Path ②</b>가 고치려는 불균형이다: <i>놀고 있는 decode TPOT-slack을 prefill 적체에 쓴다</i> — prefill을 줄 세우는 대신 decode 워커에 얹어 태운다. 단순 LB는 못 한다(요청 통째로 워커 간 이동만 하고, 워커들은 같은 큐 문제를 공유); slack-가드 토글은 할 수 있다. 우리 베이스라인은 시스템을 측정만 한 게 아니라, <b>토글이 이겨야 할 동작점</b>을 짚어냈다.</span></p>
+<span class="ko">이 불균형이 바로 Tropical <b>Path ②</b>가 고치려는 문제다. <i>놀고 있는 decode TPOT-slack을 prefill 적체에 쓴다.</i> prefill을 줄 세우는 대신 decode 워커에 얹는 것이다. 단순 LB는 이걸 못 한다. 요청을 통째로 워커 사이에 옮길 뿐이고, 워커들은 모두 같은 큐 문제를 안고 있다. slack-가드 토글은 할 수 있다. 결국 베이스라인은 시스템을 재기만 한 게 아니라 <b>토글이 이겨야 할 동작점</b>을 찾아냈다.</span></p>
 
-<h3><span class="en">Next — the toggle (Phase 2)</span><span class="ko">다음 — 토글 (Phase 2)</span></h3>
+<h3><span class="en">Next — the toggle (Phase 2)</span><span class="ko">다음: 토글 (Phase 2)</span></h3>
 <ol>
-  <li><span class="en">Replace the dispatcher's pick-min policy with slack-guarded admission: per-request TTFT-slack + per-worker TPOT-slack, fed by an offline prefill-time profiler.</span><span class="ko">디스패처의 pick-min 정책을 slack-가드 admission으로 교체: 요청별 TTFT-slack + 워커별 TPOT-slack, 오프라인 prefill-시간 프로파일러로 공급.</span></li>
-  <li><span class="en">Path ② first (piggyback prefills onto decode workers via chunked prefill) — the data says this is where the win is. Path ① (dedicated prefill worker + KV transfer) stays ROCm-gated.</span><span class="ko">Path ② 먼저(chunked prefill로 decode 워커에 prefill 얹기) — 데이터가 여기 이득이 있다고 말한다. Path ①(전용 prefill 워커 + KV 전송)은 ROCm 제약 유지.</span></li>
-  <li><span class="en">Re-run this exact sweep with the toggle on; the metric to move is TTFT attainment at 24–40 rps while TPOT stays ≥ its SLO.</span><span class="ko">토글 켜고 바로 이 스윕 재실행; 움직일 지표는 24–40 rps의 TTFT 달성률(TPOT는 SLO 이상 유지).</span></li>
+  <li><span class="en">Replace the dispatcher's pick-min policy with slack-guarded admission: per-request TTFT-slack + per-worker TPOT-slack, fed by an offline prefill-time profiler.</span><span class="ko">디스패처의 pick-min 정책을 slack-가드 admission으로 바꾼다. 요청별 TTFT-slack과 워커별 TPOT-slack을 쓰고, 값은 오프라인 prefill-시간 프로파일러가 공급한다.</span></li>
+  <li><span class="en">Path ② first (piggyback prefills onto decode workers via chunked prefill) — the data says this is where the win is. Path ① (dedicated prefill worker + KV transfer) stays ROCm-gated.</span><span class="ko">Path ②(chunked prefill로 decode 워커에 prefill 얹기)부터 한다. 데이터상 이득이 여기 있다. Path ①(전용 prefill 워커 + KV 전송)은 ROCm 제약이 그대로 남는다.</span></li>
+  <li><span class="en">Re-run this exact sweep with the toggle on; the metric to move is TTFT attainment at 24–40 rps while TPOT stays ≥ its SLO.</span><span class="ko">토글을 켜고 이 스윕을 그대로 다시 돌린다. 끌어올릴 지표는 24–40 rps의 TTFT 달성률이고, TPOT는 SLO 이상을 유지해야 한다.</span></li>
 </ol>
 
 <footer><span class="en">Tropical reimpl · Phase 0.5 · 2026-06-26 · mi250-052 · harness ~/tropical-bench · prev: <a href="tropical-phase0-baseline-bench.html">Phase 0</a> · paper note: <a href="../study/tropical-slo-aware-multiplexing.html">study/tropical-slo-aware-multiplexing</a></span><span class="ko">Tropical 재구현 · Phase 0.5 · 2026-06-26 · mi250-052 · 하네스 ~/tropical-bench · 이전: <a href="tropical-phase0-baseline-bench.html">Phase 0</a> · 논문 노트: <a href="../study/tropical-slo-aware-multiplexing.html">study/tropical-slo-aware-multiplexing</a></span></footer>

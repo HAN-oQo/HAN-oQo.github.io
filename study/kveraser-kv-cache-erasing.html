@@ -80,8 +80,8 @@
     <span class="ko">KVEraser — Steering KV Cache for Efficient Localized Context Erasing · 논문 정리</span>
   </h1>
   <p class="lede">
-    <span class="en">"KVEraser: Learning to Steer KV Cache for Efficient Localized Context Erasing" — Li et al., ICML 2026 Workshop (Oral). You prefilled a 32K-token context, discovered one span must be erased. Full recomputation costs 17.6× the original prefill. KVEraser — a learned steering module — does it in +24% instead, by replacing only the contaminated KV interval without touching the rest of the cache.</span>
-    <span class="ko">"KVEraser: Learning to Steer KV Cache for Efficient Localized Context Erasing" — Li 외, ICML 2026 Workshop (Oral). 32K 토큰을 prefill한 뒤 특정 구간을 삭제해야 한다는 걸 뒤늦게 알았다. 전체 재계산은 원래 prefill의 17.6배 비용. KVEraser — 학습된 스티어링 모듈 — 는 캐시의 나머지를 건드리지 않고 오염된 KV 구간만 교체하여 +24%에 처리한다.</span>
+    <span class="en">Li et al., ICML 2026 Workshop (Oral). After prefilling 32K tokens, erasing one span by full recomputation costs 17.6× the original prefill. KVEraser replaces only the erased KV interval with learned states and does it for +24%.</span>
+    <span class="ko">Li 외, ICML 2026 Workshop (Oral). 32K 토큰을 prefill한 뒤 한 구간을 지우려면 전체 재계산에 원래 prefill의 17.6배가 든다. KVEraser는 지운 구간의 KV만 학습된 상태로 바꿔 +24%로 처리한다.</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://arxiv.org/abs/2606.17034">arXiv:2606.17034</a></span>
@@ -96,45 +96,45 @@
 <nav class="toc">
   <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
   <ol>
-    <li><a href="#s1"><span class="en">Problem — erasing a span post-prefill has global KV fallout</span><span class="ko">문제 정의 — prefill 이후의 삭제는 KV 전체에 파급된다</span></a></li>
-    <li><a href="#s2"><span class="en">Method — surrogate cache via learned steering states</span><span class="ko">해결 방법 — 학습된 스티어링 상태로 대리 캐시 구성</span></a></li>
-    <li><a href="#s3"><span class="en">Implementation — Qwen3-8B eraser, two-stage training</span><span class="ko">구현 방법 — Qwen3-8B eraser, 2단계 학습</span></a></li>
-    <li><a href="#s4"><span class="en">Results — 17.6× → +24% latency; EM 0.879 across 1K–32K</span><span class="ko">결과 — 17.6× → +24% 레이턴시; 1K–32K 전 구간 EM 0.879</span></a></li>
-    <li><a href="#s5"><span class="en">Discussion — what KV-space steering unlocks</span><span class="ko">시사점 — KV 공간 스티어링이 여는 가능성</span></a></li>
+    <li><a href="#s1"><span class="en">Problem — erasing a span post-prefill has global KV fallout</span><span class="ko">문제 정의: prefill 이후의 삭제는 KV 전체에 번진다</span></a></li>
+    <li><a href="#s2"><span class="en">Method — surrogate cache via learned steering states</span><span class="ko">해결 방법: 학습된 스티어링 상태로 대리 캐시 만들기</span></a></li>
+    <li><a href="#s3"><span class="en">Implementation — Qwen3-8B eraser, two-stage training</span><span class="ko">구현: Qwen3-8B eraser, 2단계 학습</span></a></li>
+    <li><a href="#s4"><span class="en">Results — 17.6× → +24% latency; EM 0.879 across 1K–32K</span><span class="ko">결과: 레이턴시 17.6× → +24%, 1K–32K 전 구간 EM 0.879</span></a></li>
+    <li><a href="#s5"><span class="en">Discussion — what KV-space steering unlocks</span><span class="ko">시사점: KV 공간 스티어링이 여는 가능성</span></a></li>
   </ol>
 </nav>
 
 <div class="callout c-blue">
   <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
-  <span class="en">Deleting a token span from a prefilled KV cache silently poisons every suffix token's cached state; KVEraser trains a second Qwen3-8B to produce a <b>surrogate block</b> that replaces only the deleted interval — no suffix recomputation — cutting latency from <b>17.6×</b> to <b>+24%</b> at 32K context while maintaining EM accuracy of <b>0.879</b>.</span>
-  <span class="ko">prefill된 KV 캐시에서 토큰 구간을 삭제하면 이후 모든 suffix 토큰의 캐시 상태가 조용히 오염된다. KVEraser는 두 번째 Qwen3-8B를 학습시켜 삭제된 구간만 교체하는 <b>대리 블록</b>을 생성하고 suffix 재계산을 건너뛴다 — 32K 컨텍스트에서 레이턴시를 <b>17.6×</b>에서 <b>+24%</b>로 줄이면서 EM 정확도 <b>0.879</b>를 유지한다.</span>
+  <span class="en">Erasing a span from a prefilled KV cache leaves every suffix token's state contaminated. KVEraser trains a second Qwen3-8B to emit a <b>surrogate block</b> for the deleted interval only, skipping suffix recomputation: <b>17.6×</b> → <b>+24%</b> latency at 32K with EM <b>0.879</b>.</span>
+  <span class="ko">prefill된 KV 캐시에서 한 구간을 지워도 뒤쪽 suffix 토큰의 캐시는 이미 오염돼 있다. KVEraser는 두 번째 Qwen3-8B를 학습시켜 지운 구간 자리에만 <b>대리 블록</b>을 넣고 suffix 재계산을 건너뛴다. 32K에서 레이턴시는 <b>17.6×</b>에서 <b>+24%</b>로 줄고 EM은 <b>0.879</b>다.</span>
 </div>
 
 <!-- Glossary -->
 <div class="grid3">
   <div class="mini">
     <h4><span class="en">KV Cache</span><span class="ko">KV 캐시</span></h4>
-    <p><span class="en">Transformer attention caches each token's key and value vectors layer-by-layer during prefill so decoding never re-computes them. Editing a token retroactively requires touching the cache.</span><span class="ko">트랜스포머 어텐션이 prefill 중 토큰별 key·value 벡터를 레이어마다 저장해 디코딩 시 재계산을 피하는 장치. 토큰을 소급 수정하려면 이 캐시를 건드려야 한다.</span></p>
+    <p><span class="en">Per-layer key/value vectors stored during prefill so decoding does not recompute them.</span><span class="ko">prefill 때 레이어마다 저장해 두는 토큰별 key·value 벡터다. 디코딩은 이걸 재사용한다.</span></p>
   </div>
   <div class="mini">
     <h4><span class="en">KV Contamination</span><span class="ko">KV 오염</span></h4>
-    <p><span class="en">When suffix token <em>j</em> attends to erased span <em>e</em> during prefill, its cached K/V vectors carry <em>e</em>'s signal. Simply deleting <em>e</em>'s KV rows leaves those suffix states biased — the model still "remembers" <em>e</em> through them.</span><span class="ko">suffix 토큰 <em>j</em>가 prefill 중 삭제 대상 span <em>e</em>를 어텐션했으면, <em>j</em>의 K/V 벡터에 <em>e</em>의 신호가 담겨 있다. <em>e</em>의 KV 행을 삭제해도 suffix 상태에 편향이 남는다.</span></p>
+    <p><span class="en">Suffix token <em>j</em> attended to erased span <em>e</em>, so its K/V still carry <em>e</em>'s signal after <em>e</em>'s rows are deleted.</span><span class="ko">suffix 토큰 <em>j</em>가 span <em>e</em>를 어텐션했기 때문에 <em>e</em>의 KV 행을 지워도 <em>j</em>의 K/V에 <em>e</em>의 신호가 남는다.</span></p>
   </div>
   <div class="mini">
     <h4><span class="en">RoPE</span><span class="ko">RoPE</span></h4>
-    <p><span class="en">Rotary Position Embedding encodes relative position directly into attention scores by rotating Q/K vectors. Removing tokens and re-indexing the remaining sequence destroys all cached relative-position encodings — a full suffix recompute is needed.</span><span class="ko">Rotary Position Embedding은 Q/K 벡터를 회전시켜 상대 위치를 어텐션 스코어에 직접 인코딩한다. 토큰을 제거하고 나머지를 재번호 매기면 기존 캐시의 모든 상대 위치 인코딩이 깨진다 — suffix 전체 재계산이 필요해진다.</span></p>
+    <p><span class="en">Rotary Position Embedding rotates Q/K to encode position, so re-indexing after removal breaks cached suffix vectors.</span><span class="ko">Rotary Position Embedding은 Q/K를 회전시켜 위치를 넣는다. 토큰을 빼고 번호를 다시 매기면 캐시된 suffix 벡터가 틀어진다.</span></p>
   </div>
   <div class="mini">
     <h4><span class="en">Surrogate Cache</span><span class="ko">대리 캐시</span></h4>
-    <p><span class="en">KVEraser's output: KV̂ = prefix KV (unchanged) ⊕ steering states (learned) ⊕ suffix KV (reused as-is). The steering states fill the deleted-span slot and compensate for contamination without touching suffix KV at all.</span><span class="ko">KVEraser의 출력물: KV̂ = 접두사 KV(불변) ⊕ 스티어링 상태(학습) ⊕ 접미사 KV(그대로 재사용). 스티어링 상태가 삭제 구간 슬롯을 채워 suffix KV를 전혀 건드리지 않고 오염을 보정한다.</span></p>
+    <p><span class="en">KV̂ = prefix KV (unchanged) ⊕ steering states (learned) ⊕ suffix KV (reused as-is).</span><span class="ko">KV̂ = prefix KV(그대로) ⊕ 스티어링 상태(학습) ⊕ suffix KV(그대로 재사용). KVEraser의 출력이다.</span></p>
   </div>
   <div class="mini">
     <h4><span class="en">NIAH Benchmark</span><span class="ko">NIAH 벤치마크</span></h4>
-    <p><span class="en">Needle-In-A-Haystack: two needles with the same key but different values. The earlier needle is erased; the model must retrieve the later (retained) one. Tests whether erasing actually suppresses the unwanted memory.</span><span class="ko">같은 키·다른 값을 가진 두 개의 needle. 앞 needle을 삭제하고 뒤(유지) needle을 정확히 검색해야 한다. 삭제가 실제로 기억을 억제하는지 테스트한다.</span></p>
+    <p><span class="en">Needle-In-A-Haystack: two needles share a key; the earlier is erased and the model must retrieve the later one.</span><span class="ko">Needle-In-A-Haystack. 키가 같은 needle 두 개 중 앞의 것을 지우고 뒤의 것을 찾아야 한다.</span></p>
   </div>
   <div class="mini">
     <h4><span class="en">Eraser E<sub>φ</sub></span><span class="ko">Eraser E<sub>φ</sub></span></h4>
-    <p><span class="en">A full Qwen3-8B backbone (LM head removed) trained end-to-end to predict steering states. It sees prefix + erased span tokens and produces the substitute KV block. The generator θ (also Qwen3-8B) is frozen throughout training.</span><span class="ko">LM head가 제거된 전체 Qwen3-8B 백본으로, 스티어링 상태를 예측하도록 end-to-end 학습된다. 접두사 + 삭제 구간 토큰을 입력받아 대체 KV 블록을 생성한다. 생성기 θ(마찬가지로 Qwen3-8B)는 학습 내내 동결된다.</span></p>
+    <p><span class="en">Qwen3-8B without LM head that maps prefix + erased span to steering states; generator θ (Qwen3-8B) stays frozen.</span><span class="ko">LM head를 뗀 Qwen3-8B로, prefix와 지울 구간을 받아 스티어링 상태를 낸다. 생성기 θ(Qwen3-8B)는 동결한다.</span></p>
   </div>
 </div>
 
@@ -142,29 +142,43 @@
 <section id="s1">
 <h2><span class="num">1</span>
   <span class="en">Problem — erasing a span post-prefill has global KV fallout</span>
-  <span class="ko">문제 정의 — prefill 이후의 삭제는 KV 전체에 파급된다</span>
+  <span class="ko">문제 정의: prefill 이후의 삭제는 KV 전체에 번진다</span>
 </h2>
 
-<h3><span class="en">When would you need to erase after prefill?</span><span class="ko">언제 prefill 이후에 삭제가 필요한가?</span></h3>
+<h3><span class="en">When would you need to erase after prefill?</span><span class="ko">prefill 뒤에 지워야 하는 경우</span></h3>
 <p>
-  <span class="en">Modern LLM pipelines prefill entire retrieved documents before a query is even formed. This creates several practical situations where a span must be removed <em>after</em> prefill has already run: a RAG system that discovers mid-stream that one of its retrieved passages is outdated; a multi-turn chat where user data must be wiped on request (GDPR/right-to-be-forgotten); a shared KV prefix cache across multiple users where a stale fact injected by one session must be cleaned before another session uses the same prefix.</span>
-  <span class="ko">현대 LLM 파이프라인은 쿼리가 만들어지기 전에 전체 검색 문서를 prefill한다. 이는 prefill 이후에 구간을 삭제해야 하는 실제 상황을 만든다: 검색된 문서 중 하나가 outdated임을 중간에 발견한 RAG 시스템; GDPR/삭제권 요청에 따라 사용자 데이터를 지워야 하는 멀티턴 채팅; 여러 사용자가 공유하는 KV prefix 캐시에서 한 세션이 주입한 잘못된 사실을 다른 세션이 사용하기 전에 제거해야 하는 경우.</span>
+  <span class="en">Pipelines often prefill retrieved documents before the query exists, so a span sometimes has to go <em>after</em> prefill:</span>
+  <span class="ko">요즘 파이프라인은 쿼리가 오기 전에 검색 문서를 미리 prefill한다. 그래서 prefill <em>뒤에</em> 구간을 지워야 할 때가 생긴다.</span>
 </p>
+<ul class="en">
+  <li>A RAG passage turns out to be outdated mid-stream.</li>
+  <li>User data must be wiped on request (GDPR/right-to-be-forgotten).</li>
+  <li>A stale fact one session put into a shared KV prefix cache must be cleaned before another session reuses it.</li>
+</ul>
+<ul class="ko">
+  <li>검색한 RAG 문서 하나가 낡은 정보로 밝혀진다.</li>
+  <li>GDPR/삭제권 요청으로 사용자 데이터를 지워야 한다.</li>
+  <li>공유 KV prefix 캐시에 한 세션이 넣은 잘못된 사실을 다른 세션이 쓰기 전에 치워야 한다.</li>
+</ul>
 
 <blockquote class="q">
   <p>"a RAG system may prefill retrieved passages before discovering an out-of-date fact"</p>
   <cite>— §1 · <a href="https://arxiv.org/html/2606.17034#S1">원문 보기 (§1)</a></cite>
 </blockquote>
 
-<h3><span class="en">Why the naive fix — delete and shift — breaks</span><span class="ko">단순한 해결책 — 삭제 후 이동 — 이 왜 깨지는가</span></h3>
+<h3><span class="en">Why the naive fix — delete and shift — breaks</span><span class="ko">"지우고 당기기"가 실패하는 이유</span></h3>
 <p>
-  <span class="en">The intuitive approach is to delete the offending tokens from the KV cache and slide the remaining entries together. This fails on two counts. First, <strong>RoPE invariance</strong>: rotary position embeddings encode each token's position relative to all others by rotating its K/Q vectors. After removing tokens, the remaining suffix tokens are now at shifted absolute positions. Their cached K/Q vectors still encode the old relative positions — any subsequent attention calculation sees wrong distances. There is no way to patch cached vectors in-place; you must recompute from scratch.</span>
-  <span class="ko">직관적인 방법은 문제가 되는 토큰을 KV 캐시에서 삭제하고 나머지를 당기는 것이다. 이는 두 가지 이유로 실패한다. 첫째, <strong>RoPE 불변성</strong>: rotary position embedding은 K/Q 벡터를 회전시켜 각 토큰의 상대 위치를 인코딩한다. 토큰을 제거하면 남은 suffix 토큰들이 이제 다른 절대 위치에 놓인다. 캐시된 K/Q 벡터는 여전히 이전 상대 위치를 인코딩한다 — 이후 어텐션 계산이 잘못된 거리를 보게 된다. 캐시된 벡터를 제자리에서 수정할 방법이 없다; 처음부터 재계산해야 한다.</span>
+  <span class="en">Deleting the tokens from the KV cache and sliding the rest together fails for two reasons:</span>
+  <span class="ko">문제 토큰을 KV 캐시에서 지우고 나머지를 당기는 방법은 두 가지 이유로 실패한다.</span>
 </p>
-<p>
-  <span class="en">Second, even if positions were not an issue, <strong>KV contamination</strong> would remain. During prefill, every suffix token attended to the erased span. Its cached key and value vectors already "absorbed" information from <em>e</em>. Deleting <em>e</em>'s KV rows does nothing to undo that signal from the suffix.</span>
-  <span class="ko">둘째, 위치가 문제가 아니더라도 <strong>KV 오염</strong>이 남는다. prefill 중 모든 suffix 토큰이 삭제 구간에 어텐션했다. 그것의 cached key·value 벡터는 이미 <em>e</em>로부터의 정보를 "흡수"했다. <em>e</em>의 KV 행을 삭제해도 suffix에서 그 신호를 되돌리지 못한다.</span>
-</p>
+<ol class="en">
+  <li><strong>RoPE invariance.</strong> Suffix tokens move to new positions, but their cached K/Q still encode the old ones, so attention sees wrong distances. Cached vectors cannot be patched in place.</li>
+  <li><strong>KV contamination.</strong> Every suffix token attended to <em>e</em> during prefill and already "absorbed" its signal. Deleting <em>e</em>'s rows does not undo that.</li>
+</ol>
+<ol class="ko">
+  <li><strong>RoPE 불변성.</strong> suffix 토큰의 위치는 바뀌었는데 캐시된 K/Q는 옛 위치를 담고 있어 어텐션이 거리를 잘못 본다. 캐시된 벡터를 그 자리에서 고칠 방법은 없다.</li>
+  <li><strong>KV 오염.</strong> 위치 문제가 없어도 suffix 토큰은 prefill 때 <em>e</em>를 어텐션하며 그 정보를 "흡수"했다. <em>e</em>의 KV 행을 지워도 이 신호는 남는다.</li>
+</ol>
 
 <blockquote class="q">
   <p>"the KV cache of the first m−1 tokens remains valid after deleting e, whereas the cache of the remaining T−n tokens is contaminated by the erased span."</p>
@@ -176,10 +190,10 @@
   <cite>— §3 Related Work · <a href="https://arxiv.org/html/2606.17034#S3">원문 보기 (§3)</a></cite>
 </blockquote>
 
-<h3><span class="en">The standard cure — and its cost</span><span class="ko">표준 처방 — 그리고 그 비용</span></h3>
+<h3><span class="en">The standard cure — and its cost</span><span class="ko">표준 처방과 그 비용</span></h3>
 <p>
-  <span class="en">The reliable baseline is to simply re-run prefill over <em>p</em> + <em>s</em> (prefix + suffix, with <em>e</em> removed). This produces exact KV states, avoids contamination, and handles RoPE correctly. But its cost scales with suffix length |s|, not erased span length |e|. In a 32K-token context where |e| = 512 tokens, you pay for 31K tokens of recomputation — a 17.6× overhead over the original prefill.</span>
-  <span class="ko">신뢰할 수 있는 기준선은 단순히 <em>p</em> + <em>s</em>(<em>e</em>를 제거한 접두사 + 접미사)에 대해 prefill을 다시 실행하는 것이다. 이는 정확한 KV 상태를 생성하고, 오염을 피하며, RoPE를 올바르게 처리한다. 그러나 그 비용은 삭제 구간 길이 |e|가 아니라 suffix 길이 |s|에 따라 확장된다. |e| = 512 토큰인 32K 토큰 컨텍스트에서는 31K 토큰의 재계산 비용을 치른다 — 원래 prefill의 17.6× 오버헤드.</span>
+  <span class="en">The reliable baseline re-runs prefill over <em>p</em> + <em>s</em> (<em>e</em> removed). The KV is exact, but cost scales with suffix length |s|, not |e|. At 32K with |e| = 512, you recompute 31K tokens, a 17.6× overhead.</span>
+  <span class="ko">확실한 기준선은 <em>e</em>를 뺀 <em>p</em> + <em>s</em>로 prefill을 다시 돌리는 것이다. KV는 정확하지만 비용이 |e|가 아니라 suffix 길이 |s|에 비례한다. 32K 컨텍스트에서 |e| = 512면 31K 토큰을 다시 계산하고, 원래 prefill의 17.6× 오버헤드가 든다.</span>
 </p>
 
 <blockquote class="q">
@@ -188,8 +202,8 @@
 </blockquote>
 
 <p>
-  <span class="en">The paper's central question is whether this suffix-length dependence can be broken:</span>
-  <span class="ko">논문의 핵심 질문은 이 suffix-길이 의존성을 깰 수 있는가이다:</span>
+  <span class="en">The paper asks whether this suffix-length dependence can be broken.</span>
+  <span class="ko">논문은 이 suffix 길이 의존성을 끊을 수 있는지 묻는다.</span>
 </p>
 
 <blockquote class="q">
@@ -198,8 +212,8 @@
 </blockquote>
 
 <p>
-  <span class="en">Prior work on context editing (GRACE, MEMIT, InContext editing) operates at decode time — instructing the model to ignore something during generation. This does not rewrite cached states; it only adds a competing signal.</span>
-  <span class="ko">문맥 편집에 관한 이전 연구들(GRACE, MEMIT, InContext editing)은 디코딩 시점에 작동한다 — 생성 중 무언가를 무시하라고 모델에 지시한다. 이는 캐시된 상태를 다시 쓰지 않는다; 경쟁 신호를 추가할 뿐이다.</span>
+  <span class="en">Prior context editing (GRACE, MEMIT, InContext editing) works at decode time. It adds a competing signal but does not rewrite cached states.</span>
+  <span class="ko">기존 문맥 편집 연구(GRACE, MEMIT, InContext editing)는 디코딩 시점에 동작한다. 경쟁 신호를 더할 뿐 캐시된 상태를 다시 쓰지는 않는다.</span>
 </p>
 
 <blockquote class="q">
@@ -234,14 +248,14 @@
   <line x1="360" y1="100" x2="378" y2="100" stroke="#c2c0b6" stroke-width="1.5"/>
   <line x1="540" y1="100" x2="558" y2="100" stroke="#c2c0b6" stroke-width="1.5"/>
 </svg>
-<p class="figcap"><span class="en">Input sequence structure. Even after deleting e, suffix KV states remain contaminated because they attended to e during prefill. (Paper §2)</span><span class="ko">입력 시퀀스 구조. e를 삭제한 후에도 suffix KV 상태는 prefill 중 e에 어텐션했기 때문에 오염 상태로 남는다. (논문 §2)</span></p>
+<p class="figcap"><span class="en">Fig. 1 · Input structure and KV contamination. (Paper §2)</span><span class="ko">그림 1 · 입력 구조와 KV 오염. (논문 §2)</span></p>
 </section>
 
 <!-- Section 2: Method -->
 <section id="s2">
 <h2><span class="num">2</span>
   <span class="en">Method — surrogate cache via learned steering states</span>
-  <span class="ko">해결 방법 — 학습된 스티어링 상태로 대리 캐시 구성</span>
+  <span class="ko">해결 방법: 학습된 스티어링 상태로 대리 캐시 만들기</span>
 </h2>
 
 <blockquote class="q">
@@ -249,10 +263,10 @@
   <cite>— §4 · <a href="https://arxiv.org/html/2606.17034#S4">원문 보기 (§4)</a></cite>
 </blockquote>
 
-<h3><span class="en">Key insight: don't reconstruct — substitute</span><span class="ko">핵심 통찰: 재구성하지 말고 대체하라</span></h3>
+<h3><span class="en">Key insight: don't reconstruct — substitute</span><span class="ko">핵심 아이디어: 재구성 대신 대체</span></h3>
 <p>
-  <span class="en">Instead of trying to reconstruct the exact KV cache that would result from running prefill on <em>p</em> + <em>s</em> (which requires full suffix recomputation), KVEraser asks: can we build a <em>surrogate</em> cache that produces correct answers without touching the suffix KV at all? The answer is yes — but only if the replacement for the deleted interval compensates for the contamination that <em>e</em> introduced into suffix tokens.</span>
-  <span class="ko"><em>p</em> + <em>s</em>에 대한 prefill 실행 결과로 나올 정확한 KV 캐시를 재구성하려는 대신(전체 suffix 재계산 필요), KVEraser는 묻는다: suffix KV를 전혀 건드리지 않고도 올바른 답을 생성하는 <em>대리</em> 캐시를 만들 수 있을까? 답은 예 — 하지만 삭제된 구간의 교체물이 <em>e</em>가 suffix 토큰에 도입한 오염을 보정해야 한다.</span>
+  <span class="en">Rather than reconstruct the exact cache of <em>p</em> + <em>s</em>, KVEraser builds a <em>surrogate</em> cache that leaves suffix KV untouched. This works only if the block placed in the deleted interval compensates for the contamination <em>e</em> left in the suffix.</span>
+  <span class="ko">KVEraser는 <em>p</em> + <em>s</em>의 정확한 캐시를 다시 만드는 대신 suffix KV는 그대로 둔 <em>대리</em> 캐시를 만든다. 단, 지운 구간 자리에 넣는 블록이 <em>e</em>가 suffix에 남긴 오염을 상쇄해야 한다.</span>
 </p>
 
 <blockquote class="q">
@@ -263,21 +277,21 @@
 <h3><span class="en">The surrogate cache formula</span><span class="ko">대리 캐시 공식</span></h3>
 <p>
   <span class="en">Given a sequence x = (x<sub>1:m-1</sub>, x<sub>m:n</sub>, x<sub>n+1:T</sub>) where x<sub>m:n</sub> = e is the erased span, the surrogate cache is:</span>
-  <span class="ko">x<sub>m:n</sub> = e인 시퀀스 x = (x<sub>1:m-1</sub>, x<sub>m:n</sub>, x<sub>n+1:T</sub>)가 주어지면, 대리 캐시는:</span>
+  <span class="ko">시퀀스 x = (x<sub>1:m-1</sub>, x<sub>m:n</sub>, x<sub>n+1:T</sub>)에서 x<sub>m:n</sub> = e가 지울 구간일 때 대리 캐시는 다음과 같다.</span>
 </p>
 <pre>KV̂(x; m, n)  =  KV₁:m₋₁(x)  ⊕  KVˢᵗᵉᵉʳ(x; m, n)  ⊕  KVₙ₊₁:T(x)
                  ───────────     ──────────────────     ──────────────
                  prefix KV        steering states         suffix KV
                  (unchanged)       (learned by Eφ)       (reused as-is)</pre>
 <p>
-  <span class="en">The <strong>steering states</strong> KV<sup>steer</sup> are the sole learnable component. They must "undo" the contamination in the reused suffix KV by occupying the deleted-span positions. The generator model θ (Qwen3-8B, frozen) then runs decoding over this surrogate cache as if it were a real prefill output.</span>
-  <span class="ko"><strong>스티어링 상태</strong> KV<sup>steer</sup>가 유일한 학습 가능 구성요소다. 삭제된 구간 위치를 차지함으로써 재사용된 suffix KV의 오염을 "되돌려야" 한다. 생성기 모델 θ(Qwen3-8B, 동결)는 이 대리 캐시를 마치 실제 prefill 출력인 것처럼 디코딩한다.</span>
+  <span class="en">The <strong>steering states</strong> KV<sup>steer</sup> are the only learned part. Sitting in the deleted-span slots, they "undo" contamination in the reused suffix KV. The frozen generator θ (Qwen3-8B) decodes over this cache as if it were real prefill output.</span>
+  <span class="ko">학습되는 부분은 <strong>스티어링 상태</strong> KV<sup>steer</sup> 하나다. 지운 구간 자리에 들어가 재사용한 suffix KV의 오염을 "되돌린다". 동결된 생성기 θ(Qwen3-8B)는 이 캐시를 실제 prefill 결과처럼 보고 디코딩한다.</span>
 </p>
 
-<h3><span class="en">What the eraser sees — and what it does not</span><span class="ko">eraser가 보는 것 — 그리고 보지 않는 것</span></h3>
+<h3><span class="en">What the eraser sees — and what it does not</span><span class="ko">eraser가 보는 것과 보지 않는 것</span></h3>
 <p>
-  <span class="en">The eraser E<sub>φ</sub> receives only the prefix tokens and the erased span tokens as input. Critically, it does <em>not</em> see the downstream query u.</span>
-  <span class="ko">Eraser E<sub>φ</sub>는 접두사 토큰과 삭제 구간 토큰만 입력으로 받는다. 결정적으로, 하위 쿼리 u는 <em>보지 않는다</em>.</span>
+  <span class="en">The eraser E<sub>φ</sub> sees only the prefix and erased-span tokens, <em>not</em> the downstream query u.</span>
+  <span class="ko">Eraser E<sub>φ</sub>의 입력은 prefix 토큰과 지울 구간 토큰뿐이다. 이후에 올 쿼리 u는 <em>보지 않는다</em>.</span>
 </p>
 
 <blockquote class="q">
@@ -286,14 +300,14 @@
 </blockquote>
 
 <p>
-  <span class="en">This is an important design choice: the eraser must learn to produce steering states that are useful for <em>any</em> downstream query — not just the one it trained on. This forces the eraser to truly compensate for contamination rather than predict specific answers.</span>
-  <span class="ko">이것은 중요한 설계 선택이다: eraser는 훈련한 것뿐만 아니라 <em>어떤</em> 하위 쿼리에도 유용한 스티어링 상태를 생성하는 법을 배워야 한다. 이는 eraser가 특정 답변을 예측하는 것이 아니라 진정으로 오염을 보정하도록 강제한다.</span>
+  <span class="en">So the steering states must work for <em>any</em> query, which forces the eraser to compensate for contamination instead of predicting specific answers.</span>
+  <span class="ko">그래서 스티어링 상태는 <em>어떤</em> 쿼리에도 통해야 한다. eraser는 특정 답을 맞히는 대신 오염 자체를 보정하도록 학습된다.</span>
 </p>
 
-<h3><span class="en">Complexity: swapping suffix-length for span-length</span><span class="ko">복잡도: suffix 길이를 span 길이로 교체하기</span></h3>
+<h3><span class="en">Complexity: swapping suffix-length for span-length</span><span class="ko">복잡도: suffix 길이 대신 span 길이</span></h3>
 <p>
-  <span class="en">The eraser runs over prefix + erased span = (m-1) + |e| tokens. The suffix KV is reused without any compute. Total cost: O(|e|(|p| + |e|)). Compare to full recomputation: O(|s|(|p| + |s|)). At 32K context with a 512-token erased span in a 2K prefix, this yields ~17.6× speedup.</span>
-  <span class="ko">Eraser는 접두사 + 삭제 구간 = (m-1) + |e| 토큰에 대해 실행된다. Suffix KV는 계산 없이 재사용된다. 총 비용: O(|e|(|p| + |e|)). 전체 재계산과 비교: O(|s|(|p| + |s|)). 2K 접두사에서 512 토큰 삭제 구간이 있는 32K 컨텍스트에서 ~17.6배 속도 향상.</span>
+  <span class="en">The eraser runs over (m-1) + |e| tokens and reuses suffix KV for free: O(|e|(|p| + |e|)) versus O(|s|(|p| + |s|)) for full recomputation. At 32K with a 512-token span after a 2K prefix, that is ~17.6× faster.</span>
+  <span class="ko">Eraser는 prefix와 지울 구간, 즉 (m-1) + |e| 토큰만 처리하고 suffix KV는 계산 없이 재사용한다. 비용은 O(|e|(|p| + |e|))로, 전체 재계산의 O(|s|(|p| + |s|))보다 작다. 2K prefix 뒤에 512 토큰 구간이 있는 32K 컨텍스트라면 약 17.6배 빠르다.</span>
 </p>
 
 <blockquote class="q">
@@ -333,26 +347,26 @@
   <text x="500" y="157" font-size="12" text-anchor="middle" fill="#6b4a06">suffix KV</text>
   <text x="500" y="171" font-size="12" text-anchor="middle" fill="#6b4a06">(reused as-is — no recompute)</text>
 </svg>
-<p class="figcap"><span class="en">KVEraser replaces the erased span's KV with learned steering states; suffix KV is reused without any recomputation. (Paper §4.1, Fig. 2)</span><span class="ko">KVEraser는 삭제된 구간의 KV를 학습된 스티어링 상태로 교체한다; suffix KV는 재계산 없이 그대로 재사용된다. (논문 §4.1, Fig. 2)</span></p>
+<p class="figcap"><span class="en">Fig. 2 · Surrogate cache assembly. (Paper §4.1, Fig. 2)</span><span class="ko">그림 2 · 대리 캐시 조립. (논문 §4.1, Fig. 2)</span></p>
 </section>
 
 <!-- Section 3: Implementation -->
 <section id="s3">
 <h2><span class="num">3</span>
   <span class="en">Implementation — Qwen3-8B eraser, two-stage training</span>
-  <span class="ko">구현 방법 — Qwen3-8B eraser, 2단계 학습</span>
+  <span class="ko">구현: Qwen3-8B eraser, 2단계 학습</span>
 </h2>
 
 <h3><span class="en">Eraser architecture</span><span class="ko">Eraser 아키텍처</span></h3>
 <p>
-  <span class="en">The eraser E<sub>φ</sub> is a full Qwen3-8B backbone with the language model head removed. Its output is projected to produce K/V tensors matching the generator's KV dimensions (32 layers × 2 × seq_len × hidden). The generator θ is also Qwen3-8B and is <strong>frozen</strong> throughout all training. Using the same model family for both eraser and generator means the steering states live in a compatible representation space.</span>
-  <span class="ko">Eraser E<sub>φ</sub>는 언어 모델 헤드가 제거된 전체 Qwen3-8B 백본이다. 출력은 생성기의 KV 차원(32 레이어 × 2 × seq_len × hidden)에 맞는 K/V 텐서를 생성하도록 투영된다. 생성기 θ도 Qwen3-8B이며 모든 학습 과정에서 <strong>동결</strong>된다. 두 eraser와 생성기 모두에 동일한 모델 패밀리를 사용한다는 것은 스티어링 상태가 호환 가능한 표현 공간에 있다는 의미다.</span>
+  <span class="en">E<sub>φ</sub> is a full Qwen3-8B backbone without the LM head, projected to K/V tensors of the generator's shape (32 layers × 2 × seq_len × hidden). The generator θ is also Qwen3-8B and stays <strong>frozen</strong>, so the steering states live in a compatible representation space.</span>
+  <span class="ko">E<sub>φ</sub>는 LM head를 뗀 Qwen3-8B 백본이고, 출력을 생성기 KV 모양(32 레이어 × 2 × seq_len × hidden)의 K/V 텐서로 투영한다. 생성기 θ도 Qwen3-8B이고 학습 내내 <strong>동결</strong>한다. 같은 모델 패밀리라서 스티어링 상태가 생성기와 맞는 표현 공간에 놓인다.</span>
 </p>
 
 <h3><span class="en">Training objective</span><span class="ko">학습 목표</span></h3>
 <p>
-  <span class="en">Training uses <strong>teacher-forced cross-entropy</strong> on answer tokens. Given a (context, erased span, answer) triple, the eraser produces steering states, the surrogate cache is assembled, and the generator computes the loss on the reference answer tokens. No special contrastive or reinforcement objective — standard next-token prediction over the answer, with the eraser as the only learnable component.</span>
-  <span class="ko">학습은 답변 토큰에 대한 <strong>teacher-forced cross-entropy</strong>를 사용한다. (컨텍스트, 삭제 구간, 답변) 트리플이 주어지면 eraser가 스티어링 상태를 생성하고, 대리 캐시가 조립되며, 생성기가 참조 답변 토큰에 대한 손실을 계산한다. 특수한 대조 학습이나 강화 학습 목표 없이 — 답변에 대한 표준 다음 토큰 예측이며, eraser만 학습 가능한 구성요소다.</span>
+  <span class="en">Loss is <strong>teacher-forced cross-entropy</strong> on answer tokens. For each (context, erased span, answer) triple, the eraser emits steering states, the surrogate cache is assembled, and the generator scores the reference answer. No contrastive or RL objective; only the eraser is trained.</span>
+  <span class="ko">손실은 답변 토큰에 대한 <strong>teacher-forced cross-entropy</strong>다. (컨텍스트, 지울 구간, 답변) 묶음마다 eraser가 스티어링 상태를 만들고, 대리 캐시를 조립한 뒤 생성기가 정답 토큰의 손실을 계산한다. 대조 학습이나 강화 학습 목표는 없고 eraser만 학습한다.</span>
 </p>
 
 <h3><span class="en">Two-stage training pipeline</span><span class="ko">2단계 학습 파이프라인</span></h3>
@@ -388,10 +402,10 @@
   </tbody>
 </table>
 
-<h3><span class="en">Ablation: what does the eraser see?</span><span class="ko">ablation: eraser는 무엇을 보는가?</span></h3>
+<h3><span class="en">Ablation: what does the eraser see?</span><span class="ko">ablation: eraser 입력을 바꾸면</span></h3>
 <p>
-  <span class="en">The default configuration feeds the eraser the <strong>prefix KV + erased span tokens</strong> (no query, no suffix). The ablation study explores four variants to understand which parts matter:</span>
-  <span class="ko">기본 설정은 <strong>접두사 KV + 삭제 구간 토큰</strong>을 eraser에 공급한다(쿼리 없음, suffix 없음). Ablation 연구는 어떤 부분이 중요한지 이해하기 위해 네 가지 변형을 탐색한다:</span>
+  <span class="en">The default feeds <strong>prefix KV + erased span tokens</strong> (no query, no suffix). The ablation compares four variants.</span>
+  <span class="ko">기본 설정은 eraser에 <strong>prefix KV + 지울 구간 토큰</strong>만 넣는다(쿼리, suffix 없음). ablation은 네 가지 변형을 비교한다.</span>
 </p>
 <table>
   <thead><tr><th><span class="en">Variant</span><span class="ko">변형</span></th><th><span class="en">Input to eraser</span><span class="ko">eraser 입력</span></th><th>Avg EM</th></tr></thead>
@@ -403,8 +417,8 @@
   </tbody>
 </table>
 <p>
-  <span class="en">Counterintuitively, providing the query (query-conditioned) or the suffix KV (suffix-conditioned) both <em>hurt</em> performance. Adding query tokens may bias the eraser toward the specific test question. Adding suffix KV introduces more complex conditioning that overloads the eraser. The minimal input — prefix context + span to erase — is optimal.</span>
-  <span class="ko">직관에 반하게, 쿼리(쿼리 조건부) 또는 suffix KV(suffix 조건부)를 제공하면 둘 다 성능이 <em>떨어진다</em>. 쿼리 토큰을 추가하면 eraser가 특정 테스트 질문에 편향될 수 있다. suffix KV를 추가하면 eraser에 과부하를 주는 더 복잡한 조건화가 도입된다. 최소 입력 — 접두사 컨텍스트 + 삭제할 span — 이 최적이다.</span>
+  <span class="en">Adding the query or the suffix KV both <em>hurt</em>. The query may bias the eraser toward one question, and suffix KV overloads it with more complex conditioning. The minimal input is best.</span>
+  <span class="ko">쿼리나 suffix KV를 더 넣으면 오히려 성능이 <em>떨어진다</em>. 쿼리는 eraser를 특정 질문 쪽으로 치우치게 하고, suffix KV는 조건이 복잡해져 부담이 된다. 가장 적은 입력이 가장 좋다.</span>
 </p>
 
 <!-- SVG: ablation bar chart -->
@@ -435,14 +449,14 @@
   <!-- baseline -->
   <line x1="80" y1="145" x2="520" y2="145" stroke="#c2c0b6" stroke-width="1"/>
 </svg>
-<p class="figcap"><span class="en">Ablation: average EM scores by eraser input. Default (prefix KV + erased span, no query, no suffix) is best. (Paper §5.5, Table 2)</span><span class="ko">Ablation: eraser 입력별 평균 EM 점수. 기본값(접두사 KV + 삭제 구간, 쿼리/suffix 없음)이 최선. (논문 §5.5, Table 2)</span></p>
+<p class="figcap"><span class="en">Fig. 3 · Average EM by eraser input. (Paper §5.5, Table 2)</span><span class="ko">그림 3 · eraser 입력별 평균 EM. (논문 §5.5, Table 2)</span></p>
 </section>
 
 <!-- Section 4: Results -->
 <section id="s4">
 <h2><span class="num">4</span>
   <span class="en">Results — 17.6× → +24% latency; EM 0.879 across 1K–32K</span>
-  <span class="ko">결과 — 17.6× → +24% 레이턴시; 1K–32K 전 구간 EM 0.879</span>
+  <span class="ko">결과: 레이턴시 17.6× → +24%, 1K–32K 전 구간 EM 0.879</span>
 </h2>
 
 <h3><span class="en">Accuracy: KVEraser vs baselines</span><span class="ko">정확도: KVEraser vs 기준선</span></h3>
@@ -463,20 +477,20 @@
   </tbody>
 </table>
 
-<h3><span class="en">Reliability across context lengths</span><span class="ko">컨텍스트 길이 전반에 걸친 신뢰성</span></h3>
+<h3><span class="en">Reliability across context lengths</span><span class="ko">컨텍스트 길이가 늘어도 안정적이다</span></h3>
 <blockquote class="q">
   <p>"Among approximate methods, KVEraser is the only one that is reliable across the full 1K–32K range."</p>
   <cite>— §5.4 · <a href="https://arxiv.org/html/2606.17034#S5.SS4">원문 보기 (§5.4)</a></cite>
 </blockquote>
 <p>
-  <span class="en">Other approximate methods (delete-and-shift, InContext) degrade significantly at longer contexts where contamination is more diffuse. KVEraser maintains EM ~0.879 because the steering states are trained to compensate regardless of context length — the eraser always sees the same-length span (not the growing suffix).</span>
-  <span class="ko">다른 근사 방법들(삭제-이동, InContext)은 오염이 더 분산되는 긴 컨텍스트에서 크게 성능이 저하된다. KVEraser는 스티어링 상태가 컨텍스트 길이와 관계없이 보정하도록 훈련되기 때문에 EM ~0.879를 유지한다 — eraser는 항상 같은 길이의 span을 본다(증가하는 suffix가 아니라).</span>
+  <span class="en">Delete-and-shift and InContext degrade at long contexts where contamination is more diffuse. KVEraser holds EM ~0.879 because the eraser always sees the same-length span, not the growing suffix.</span>
+  <span class="ko">지우고 당기기와 InContext는 오염이 넓게 퍼지는 긴 컨텍스트에서 크게 무너진다. KVEraser는 EM ~0.879를 유지한다. eraser가 보는 것은 늘어나는 suffix가 아니라 길이가 같은 span이기 때문이다.</span>
 </p>
 
-<h3><span class="en">Latency scaling</span><span class="ko">레이턴시 확장</span></h3>
+<h3><span class="en">Latency scaling</span><span class="ko">레이턴시: 길수록 유리하다</span></h3>
 <p>
-  <span class="en">At short contexts (1K–4K), KVEraser's eraser itself is the bottleneck — it runs forward pass over prefix + span. Full recompute is cheaper here. But at 8K+ context, full recompute scales with suffix length while KVEraser's cost stays fixed at prefix + span. The crossover point is around 4K–8K tokens.</span>
-  <span class="ko">짧은 컨텍스트(1K–4K)에서는 KVEraser의 eraser 자체가 병목이다 — 접두사 + span에 대한 순전파를 실행한다. 전체 재계산이 여기서 더 저렴하다. 그러나 8K+ 컨텍스트에서는 전체 재계산이 suffix 길이에 따라 확장되고 KVEraser의 비용은 접두사 + span에 고정된다. 교차점은 약 4K–8K 토큰 부근이다.</span>
+  <span class="en">At 1K–4K the eraser's own forward pass dominates and full recompute is cheaper. From 8K+, recompute grows with suffix length while KVEraser stays fixed at prefix + span. The crossover is around 4K–8K tokens.</span>
+  <span class="ko">1K–4K처럼 짧을 때는 eraser의 순전파가 병목이라 전체 재계산이 더 싸다. 8K+부터는 재계산 비용이 suffix 길이를 따라 커지고 KVEraser는 prefix + span 비용에 머문다. 교차점은 4K–8K 토큰 부근이다.</span>
 </p>
 
 <!-- SVG: latency scaling line chart -->
@@ -521,20 +535,32 @@
   <text x="480" y="200" font-size="10" text-anchor="middle" fill="#6f2a12">17.6×</text>
   <text x="480" y="212" font-size="10" text-anchor="middle" fill="#27500a">+24%</text>
 </svg>
-<p class="figcap"><span class="en">Latency overhead relative to original prefill. Full recompute grows linearly with suffix length; KVEraser plateaus near +24% since eraser cost depends only on span length. (Paper §5.4, Fig. 4)</span><span class="ko">원래 prefill 대비 레이턴시 오버헤드. 전체 재계산은 suffix 길이에 따라 선형으로 증가; KVEraser는 eraser 비용이 span 길이에만 의존하기 때문에 +24% 근처에서 평탄해진다. (논문 §5.4, Fig. 4)</span></p>
+<p class="figcap"><span class="en">Fig. 4 · Latency overhead vs. context length, relative to original prefill. (Paper §5.4, Fig. 4)</span><span class="ko">그림 4 · 컨텍스트 길이별 레이턴시 오버헤드(원래 prefill 대비). (논문 §5.4, Fig. 4)</span></p>
 
 <h3><span class="en">Limitations and threats to validity</span><span class="ko">한계와 타당성 위협</span></h3>
 <p>
-  <span class="en">The paper acknowledges several important limitations: (1) KVEraser is evaluated only on Qwen3-8B — generalization to other model families (Llama, Mistral, etc.) is unverified; (2) only single-span erasing is tested; multi-span or overlapping erases are not addressed; (3) the NIAH and QA benchmarks test specific retrieval scenarios — how well erasing generalizes to open-ended generation is unknown; (4) the 8B-parameter eraser adds significant memory and compute overhead compared to lighter alternatives.</span>
-  <span class="ko">논문은 몇 가지 중요한 한계를 인정한다: (1) KVEraser는 Qwen3-8B에서만 평가됨 — 다른 모델 패밀리(Llama, Mistral 등)로의 일반화는 미검증; (2) 단일 span 삭제만 테스트됨; 다중 span 또는 겹치는 삭제는 다루지 않음; (3) NIAH 및 QA 벤치마크는 특정 검색 시나리오를 테스트함 — 오픈엔드 생성으로의 일반화는 알 수 없음; (4) 8B 파라미터 eraser는 가벼운 대안에 비해 상당한 메모리 및 계산 오버헤드를 추가함.</span>
+  <span class="en">Limitations:</span>
+  <span class="ko">한계는 다음과 같다.</span>
 </p>
+<ol class="en">
+  <li>Evaluated only on Qwen3-8B. Other families (Llama, Mistral, etc.) are unverified.</li>
+  <li>Only single-span erasing. Multi-span or overlapping erases are not tested.</li>
+  <li>NIAH and QA test specific retrieval cases. Open-ended generation is unknown.</li>
+  <li>The 8B-parameter eraser adds sizable memory and compute.</li>
+</ol>
+<ol class="ko">
+  <li>Qwen3-8B에서만 평가했다. 다른 모델 패밀리(Llama, Mistral 등)는 검증하지 않았다.</li>
+  <li>단일 span 삭제만 실험했다. 여러 구간이나 겹치는 삭제는 다루지 않는다.</li>
+  <li>NIAH와 QA는 특정 검색 상황만 본다. 자유 생성에서도 통하는지는 모른다.</li>
+  <li>8B 파라미터 eraser는 메모리와 계산 부담이 크다.</li>
+</ol>
 </section>
 
 <!-- Section 5: Discussion -->
 <section id="s5">
 <h2><span class="num">5</span>
   <span class="en">Discussion — what KV-space steering unlocks</span>
-  <span class="ko">시사점 — KV 공간 스티어링이 여는 가능성</span>
+  <span class="ko">시사점: KV 공간 스티어링이 여는 가능성</span>
 </h2>
 
 <blockquote class="q">
@@ -544,31 +570,41 @@
 
 <h3><span class="en">The paper's conclusions</span><span class="ko">논문의 결론</span></h3>
 <p>
-  <span class="en">KVEraser's core thesis is confirmed: a learned steering module can replace erased-span KV vectors and produce accurate responses without touching suffix KV. The 17.6× → +24% latency gap at 32K context is the headline result. The two-stage training pipeline (generic Wikipedia pre-training → task fine-tuning) is effective and the whole eraser trains in under a day on 2×A100 80GB.</span>
-  <span class="ko">KVEraser의 핵심 테제가 확인된다: 학습된 스티어링 모듈이 삭제 구간 KV 벡터를 교체하고 suffix KV를 건드리지 않고 정확한 응답을 생성할 수 있다. 32K 컨텍스트에서 17.6× → +24%의 레이턴시 차이가 핵심 결과다. 2단계 학습 파이프라인(일반 Wikipedia 사전학습 → 태스크 파인튜닝)이 효과적이며 전체 eraser가 2×A100 80GB에서 하루 이내에 학습된다.</span>
+  <span class="en">A learned steering module can replace erased-span KV and answer correctly without touching suffix KV. The headline is 17.6× → +24% at 32K. Two-stage training (Wikipedia pre-training → task fine-tuning) takes under a day on 2×A100 80GB.</span>
+  <span class="ko">학습된 스티어링 모듈이 지운 구간의 KV를 대신하고, suffix KV를 건드리지 않고도 정확히 답할 수 있다. 대표 결과는 32K에서 17.6× → +24%다. 2단계 학습(Wikipedia 사전학습 → 태스크 파인튜닝)은 2×A100 80GB에서 하루 안에 끝난다.</span>
 </p>
 
 <h3><span class="en">Authors' stated future directions</span><span class="ko">저자들이 밝힌 향후 방향</span></h3>
 <p>
-  <span class="en">The paper's conclusion section mentions three directions for follow-up work: (1) <strong>multi-span erasing</strong> — handling multiple non-contiguous deleted spans simultaneously; (2) <strong>cross-architecture generalization</strong> — training erasers for model families other than Qwen3; (3) <strong>privacy-sensitive applications</strong> — using KVEraser to comply with right-to-be-forgotten requests in shared KV prefix caches, where recomputation costs would be prohibitive at scale.</span>
-  <span class="ko">논문 결론 섹션은 후속 연구를 위한 세 가지 방향을 언급한다: (1) <strong>다중 span 삭제</strong> — 여러 비연속 삭제 span을 동시에 처리; (2) <strong>크로스 아키텍처 일반화</strong> — Qwen3 이외의 모델 패밀리를 위한 eraser 학습; (3) <strong>개인정보 보호 민감 애플리케이션</strong> — 대규모에서 재계산 비용이 금지적인 공유 KV prefix 캐시에서 잊혀질 권리 요청을 준수하기 위한 KVEraser 사용.</span>
+  <span class="en">Three directions:</span>
+  <span class="ko">후속 과제는 세 가지다.</span>
 </p>
+<ol class="en">
+  <li><strong>Multi-span erasing:</strong> several non-contiguous spans at once.</li>
+  <li><strong>Cross-architecture generalization:</strong> erasers for families other than Qwen3.</li>
+  <li><strong>Privacy-sensitive applications:</strong> right-to-be-forgotten requests in shared KV prefix caches, where recomputation at scale is prohibitive.</li>
+</ol>
+<ol class="ko">
+  <li><strong>다중 span 삭제:</strong> 떨어진 여러 구간을 한 번에 지운다.</li>
+  <li><strong>크로스 아키텍처 일반화:</strong> Qwen3 외 모델 패밀리용 eraser를 학습한다.</li>
+  <li><strong>개인정보 보호 응용:</strong> 공유 KV prefix 캐시에서 잊힐 권리 요청을 처리한다. 대규모에서는 재계산 비용을 감당하기 어렵다.</li>
+</ol>
 
 <h3><span class="en">No public repository (as of 2026-06-18)</span><span class="ko">공개 저장소 없음 (2026-06-18 기준)</span></h3>
 <p>
-  <span class="en">The paper does not link a GitHub repository and no official implementation could be found on Papers With Code or the authors' GitHub pages as of the date of this note. The paper was posted on 2026-06-15 (5 days before this note), so a code release may follow.</span>
-  <span class="ko">논문은 GitHub 저장소를 연결하지 않으며, 이 노트 작성일 기준으로 Papers With Code 또는 저자들의 GitHub 페이지에서 공식 구현을 찾을 수 없었다. 논문은 2026-06-15(이 노트 5일 전)에 게시되었으므로 코드 릴리스가 이어질 수 있다.</span>
+  <span class="en">No GitHub link in the paper, and no official code on Papers With Code or the authors' GitHub as of this note. The paper went up on 2026-06-15 (5 days earlier), so code may follow.</span>
+  <span class="ko">논문에 GitHub 링크가 없고, 작성일 기준 Papers With Code나 저자 GitHub에서도 공식 구현을 찾지 못했다. 논문이 2026-06-15(이 노트 5일 전)에 올라왔으니 코드가 나중에 나올 수 있다.</span>
 </p>
 
 <div class="callout c-purple">
-  <span class="tag"><span class="en">Editor's note — not the paper's claim</span><span class="ko">편집자 주 — 논문의 주장 아님</span></span>
+  <span class="tag"><span class="en">Editor's note — not the paper's claim</span><span class="ko">편집자 주: 논문의 주장 아님</span></span>
   <span class="en">
-    <b>Why this matters for production serving:</b> KV prefix caching is already deployed in vLLM's <code class="inl">enable_prefix_caching</code> and SGLang's RadixAttention. The current bottleneck for sharing cached prefixes across sessions is <em>staleness</em> — once any span in the shared prefix needs updating, the entire downstream cache is invalidated. KVEraser offers a path toward surgical prefix repair: fix only the affected slot, keep the rest, avoid cascading invalidation. At 32K context, the 17.6× recompute vs +24% steering difference maps to roughly a 14× reduction in per-eviction compute on long shared prefixes — material at the latency budgets inference providers care about.<br><br>
-    <b>The catch for now:</b> The eraser is 8B parameters — same size as the generator. Deploying a parallel 8B model just for KV steering is viable for high-throughput shared-prefix workloads but overkill for single-user sessions. Whether a distilled or LoRA-based eraser can match the full-backbone EM of 0.879 is the interesting engineering question.
+    <b>Why this matters for production serving:</b> KV prefix caching already ships in vLLM's <code class="inl">enable_prefix_caching</code> and SGLang's RadixAttention. The obstacle to sharing prefixes across sessions is <em>staleness</em>: one changed span invalidates everything downstream. KVEraser points to surgical repair of only the affected slot. At 32K, 17.6× recompute vs +24% steering is roughly a 14× cut in per-eviction compute.<br><br>
+    <b>The catch for now:</b> The eraser is 8B, the same size as the generator. A second 8B model pays off for high-throughput shared-prefix workloads but is overkill for single-user sessions. Whether a distilled or LoRA-based eraser can match EM 0.879 is the open question.
   </span>
   <span class="ko">
-    <b>프로덕션 서빙에서 이것이 중요한 이유:</b> KV prefix 캐싱은 이미 vLLM의 <code class="inl">enable_prefix_caching</code>과 SGLang의 RadixAttention에 배포되어 있다. 세션 간 캐시 prefix 공유의 현재 병목은 <em>오래된 데이터</em>다 — 공유 prefix의 어떤 span이라도 업데이트가 필요하면 전체 하위 캐시가 무효화된다. KVEraser는 정밀한 prefix 수리로 가는 경로를 제공한다: 영향받은 슬롯만 수정하고 나머지는 유지하며 연쇄 무효화를 피한다. 32K 컨텍스트에서 17.6× 재계산 vs +24% 스티어링 차이는 긴 공유 prefix에서 무효화당 계산을 약 14배 줄이는 것에 해당한다 — 추론 공급자가 신경 쓰는 레이턴시 예산에서 의미 있는 수치다.<br><br>
-    <b>당장의 함정:</b> Eraser는 8B 파라미터 — 생성기와 같은 크기다. KV 스티어링만을 위한 병렬 8B 모델 배포는 고처리량 공유-prefix 워크로드에서는 실행 가능하지만 단일 사용자 세션에는 과도하다. 증류되거나 LoRA 기반의 eraser가 전체 백본의 EM 0.879를 맞출 수 있는지가 흥미로운 엔지니어링 질문이다.
+    <b>프로덕션 서빙에서의 의미:</b> KV prefix 캐싱은 이미 vLLM의 <code class="inl">enable_prefix_caching</code>과 SGLang의 RadixAttention에 들어가 있다. 세션 간 prefix 공유의 걸림돌은 <em>낡은 데이터</em>다. 공유 prefix의 한 span만 바뀌어도 그 뒤 캐시가 전부 무효가 된다. KVEraser는 해당 슬롯만 고치고 나머지는 살리는 길을 보여 준다. 32K에서 17.6× 재계산과 +24% 스티어링의 차이는 무효화 한 번당 계산을 약 14배 줄이는 셈이다.<br><br>
+    <b>당장의 걸림돌:</b> Eraser가 생성기와 같은 8B 파라미터다. 처리량이 큰 공유 prefix 워크로드라면 8B 모델을 하나 더 띄울 만하지만 단일 사용자 세션에는 과하다. 증류나 LoRA 기반 eraser가 EM 0.879를 따라잡을 수 있는지가 남은 질문이다.
   </span>
 </div>
 

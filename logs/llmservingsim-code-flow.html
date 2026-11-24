@@ -50,38 +50,38 @@
 
 <p class="crumb"><a href="../"><span class="en">← Home</span><span class="ko">← 홈</span></a> · <a href="./"><span class="en">Logs</span><span class="ko">로그</span></a> · <a href="llmservingsim-qwen3-runbook.html"><span class="en">Qwen3 runbook</span><span class="ko">Qwen3 런북</span></a> · <a href="llmservingsim-profiling-guide.html"><span class="en">Profiling guide</span><span class="ko">프로파일링 가이드</span></a></p>
 
-<h1><span class="en">LLMServingSim — Single-request code flow analysis</span><span class="ko">LLMServingSim — 단일 요청 코드 흐름 분석</span></h1>
-<p class="sub"><span class="en">Written: 2026-06-10 · Target: <a href="https://github.com/casys-kaist/LLMServingSim">casys-kaist/LLMServingSim</a> @ <code>8b5b943a3a37</code> · Scenario: <strong>Qwen3-32B single node + single instance + TP=2 + 1 request</strong>. Trace how a single JSONL line goes in and comes out as a single row in the outputs CSV, following along with actual file:line citations.</span><span class="ko">작성일: 2026-06-10 · 대상: <a href="https://github.com/casys-kaist/LLMServingSim">casys-kaist/LLMServingSim</a> @ <code>8b5b943a3a37</code> · 시나리오: <strong>Qwen3-32B 단일 노드 + 단일 인스턴스 + TP=2 + 1개 요청</strong>. JSONL 한 줄이 어떻게 들어가서 outputs CSV 한 줄로 나오는지, 실제 file:line 인용으로 따라가기.</span></p>
+<h1><span class="en">LLMServingSim — Single-request code flow analysis</span><span class="ko">LLMServingSim: 단일 요청 코드 흐름 분석</span></h1>
+<p class="sub"><span class="en">Written: 2026-06-10 · Target: <a href="https://github.com/casys-kaist/LLMServingSim">casys-kaist/LLMServingSim</a> @ <code>8b5b943a3a37</code> · Scenario: <strong>Qwen3-32B single node + single instance + TP=2 + 1 request</strong>. Trace how a single JSONL line goes in and comes out as a single row in the outputs CSV, following along with actual file:line citations.</span><span class="ko">작성일: 2026-06-10 · 대상: <a href="https://github.com/casys-kaist/LLMServingSim">casys-kaist/LLMServingSim</a> @ <code>8b5b943a3a37</code> · 시나리오: <strong>Qwen3-32B 단일 노드 + 단일 인스턴스 + TP=2 + 1개 요청</strong>. JSONL 한 줄이 outputs CSV 한 줄로 나오기까지를 실제 file:line 인용으로 따라간다.</span></p>
 
 <div class="card toc">
 <strong><span class="en">Table of contents</span><span class="ko">목차</span></strong>
 <ol>
   <li><a href="#why"><span class="en">Why follow a single scenario</span><span class="ko">왜 한 시나리오로 따라가나</span></a></li>
   <li><a href="#map"><span class="en">Code map (at a glance)</span><span class="ko">코드 지도 (한 눈에)</span></a></li>
-  <li><a href="#s1"><span class="en">① <code>python -m serving</code> — argparse + config load</span><span class="ko">① <code>python -m serving</code> — argparse + 설정 로드</span></a></li>
-  <li><a href="#s2"><span class="en">② Cluster config parsing — JSON → NPU mapping</span><span class="ko">② Cluster config 파싱 — JSON → NPU mapping</span></a></li>
-  <li><a href="#s3"><span class="en">③ Profile CSV load — putting the cost table in memory</span><span class="ko">③ Profile CSV 로드 — cost table 메모리에 올리기</span></a></li>
+  <li><a href="#s1"><span class="en">① <code>python -m serving</code> — argparse + config load</span><span class="ko">① <code>python -m serving</code>: argparse와 설정 로드</span></a></li>
+  <li><a href="#s2"><span class="en">② Cluster config parsing — JSON → NPU mapping</span><span class="ko">② Cluster config 파싱: JSON → NPU mapping</span></a></li>
+  <li><a href="#s3"><span class="en">③ Profile CSV load — putting the cost table in memory</span><span class="ko">③ Profile CSV 로드: cost table을 메모리에 올린다</span></a></li>
   <li><a href="#s4"><span class="en">④ Dataset + Router preparation</span><span class="ko">④ 데이터셋 + Router 준비</span></a></li>
   <li><a href="#s5"><span class="en">⑤ ASTRA-Sim subprocess launch</span><span class="ko">⑤ ASTRA-Sim subprocess 기동</span></a></li>
   <li><a href="#s6"><span class="en">⑥ Main event loop (decomposing one iteration)</span><span class="ko">⑥ 메인 이벤트 루프 (한 iteration 분해)</span></a></li>
   <li><a href="#s7"><span class="en">⑦ CSV output</span><span class="ko">⑦ CSV 출력</span></a></li>
   <li><a href="#data"><span class="en">Data class summary (Request, Batch)</span><span class="ko">데이터 클래스 요약 (Request, Batch)</span></a></li>
   <li><a href="#diagram"><span class="en">Overall flow diagram</span><span class="ko">전체 흐름 다이어그램</span></a></li>
-  <li><a href="#repro"><span class="en">Reproducing — if you want to follow along yourself</span><span class="ko">재현하기 — 직접 따라가려면</span></a></li>
+  <li><a href="#repro"><span class="en">Reproducing — if you want to follow along yourself</span><span class="ko">재현하기: 직접 따라가려면</span></a></li>
 </ol>
 </div>
 
 <h2 id="why"><span class="en">1. Why follow a single scenario</span><span class="ko">1. 왜 한 시나리오로 따라가나</span></h2>
 <div class="card">
-<p><span class="en">LLMServingSim 2.0 is about <strong>4757 LoC</strong> of code (under <code>serving/</code>). Explaining every path would be too much — PD-split, DP/EP sync, prefix sharing, MoE expert routing, the ns-3 network backend, agentic sessions, and so on are each separate threads. So it's more useful for a first-time reader to follow just <strong>the simplest, most commonly used path</strong> in depth.</span><span class="ko">LLMServingSim 2.0은 <strong>4757 LoC</strong> 정도 되는 코드 (<code>serving/</code> 하위). 모든 경로를 다 설명하기엔 분량이 너무 큼 — PD-split, DP/EP 동기화, prefix sharing, MoE expert routing, ns-3 network backend, agentic session 등은 각자 별도 줄기. 그래서 <strong>가장 단순하고 자주 쓰는 경로</strong> 하나만 깊이 따라가는 게 처음 본 사람한테 더 유용함.</span></p>
+<p><span class="en">LLMServingSim 2.0 is about <strong>4757 LoC</strong> of code (under <code>serving/</code>). Explaining every path would be too much — PD-split, DP/EP sync, prefix sharing, MoE expert routing, the ns-3 network backend, agentic sessions, and so on are each separate threads. So it's more useful for a first-time reader to follow just <strong>the simplest, most commonly used path</strong> in depth.</span><span class="ko">LLMServingSim 2.0은 <code>serving/</code> 아래 약 <strong>4757 LoC</strong>다. PD-split, DP/EP 동기화, prefix sharing, MoE expert routing, ns-3 network backend, agentic session은 각자 별도 줄기라 전부 다루기엔 많다. 그래서 <strong>가장 단순하고 자주 쓰는 경로</strong> 하나만 깊이 따라간다.</span></p>
 <p><span class="en">The chosen scenario:</span><span class="ko">선택한 시나리오:</span></p>
 <ul>
   <li><span class="en">Model: <code>Qwen/Qwen3-32B</code> (dense, no MoE branch taken)</span><span class="ko">모델: <code>Qwen/Qwen3-32B</code> (dense, MoE 분기 안 탐)</span></li>
   <li><span class="en">Topology: 1 node × 1 instance × TP=2 (the router's routing policy is trivial)</span><span class="ko">토폴로지: 1 노드 × 1 인스턴스 × TP=2 (router의 routing policy가 trivial)</span></li>
   <li><span class="en">Workload: one line of ShareGPT JSONL (short input that fits in a single prefill chunk)</span><span class="ko">워크로드: ShareGPT JSONL 1줄 (prefill 단일 청크에 들어갈 만한 짧은 input)</span></li>
-  <li><span class="en">Options: prefix cache off, chunked prefill off, PD split off, DP off — all branches false</span><span class="ko">옵션: prefix cache off, chunked prefill off, PD split off, DP off — 모든 분기 false</span></li>
+  <li><span class="en">Options: prefix cache off, chunked prefill off, PD split off, DP off — all branches false</span><span class="ko">옵션: prefix cache, chunked prefill, PD split, DP 모두 off (모든 분기 false)</span></li>
 </ul>
-<p><span class="en">Simplifying this way leaves only the core thread — <strong>"how is the cost table used to derive the time of one batch"</strong>.</span><span class="ko">이렇게 단순화하면 핵심 줄기 — <strong>"비용 표가 어떻게 쓰여서 한 batch의 시간이 나오는가"</strong> — 만 남음.</span></p>
+<p><span class="en">Simplifying this way leaves only the core thread — <strong>"how is the cost table used to derive the time of one batch"</strong>.</span><span class="ko">이렇게 줄이면 <strong>"비용 표로 한 batch의 시간을 어떻게 구하는가"</strong>라는 핵심 줄기만 남는다.</span></p>
 </div>
 
 <h2 id="map"><span class="en">2. Code map (at a glance)</span><span class="ko">2. 코드 지도 (한 눈에)</span></h2>
@@ -129,7 +129,7 @@
   schedulers[i].save_output(file)        # scheduler.py:911</code></pre>
 </div>
 
-<h2 id="s1"><span class="en">3. ① <code>python -m serving</code> — argparse + config load</span><span class="ko">3. ① <code>python -m serving</code> — argparse + 설정 로드</span></h2>
+<h2 id="s1"><span class="en">3. ① <code>python -m serving</code> — argparse + config load</span><span class="ko">3. ① <code>python -m serving</code>: argparse와 설정 로드</span></h2>
 <div class="card">
 
 <h3><span class="en">3-1. Entry point</span><span class="ko">3-1. 진입점</span></h3>
@@ -143,12 +143,12 @@
   --output outputs/qwen3_32b_single.csv \
   --log-interval 1.0</code></pre>
 
-<p><span class="en">Inside <code>__main__.py</code>'s <code>main()</code>, argparse defines (<code>__main__.py:146-229</code>):</span><span class="ko"><code>__main__.py</code> 내부 <code>main()</code>에서 argparse가 다음을 정의 (<code>__main__.py:146-229</code>):</span></p>
+<p><span class="en">Inside <code>__main__.py</code>'s <code>main()</code>, argparse defines (<code>__main__.py:146-229</code>):</span><span class="ko"><code>main()</code>의 argparse가 정의하는 주요 옵션 (<code>__main__.py:146-229</code>):</span></p>
 <ul>
-  <li><span class="en"><code>--cluster-config</code> (required) — instance/NPU topology JSON</span><span class="ko"><code>--cluster-config</code> (필수) — instance/NPU 토폴로지 JSON</span></li>
-  <li><span class="en"><code>--dtype</code> — model dtype (bfloat16, float16, fp8, etc.). Used to pick the profile variant folder</span><span class="ko"><code>--dtype</code> — model dtype (bfloat16, float16, fp8 등). profile variant 폴더 결정에 사용</span></li>
-  <li><span class="en"><code>--dataset</code> — JSONL workload path</span><span class="ko"><code>--dataset</code> — JSONL workload 경로</span></li>
-  <li><span class="en"><code>--block-size</code> — KV-cache block size (vLLM default 16)</span><span class="ko"><code>--block-size</code> — KV-cache block size (vLLM 기본 16)</span></li>
+  <li><span class="en"><code>--cluster-config</code> (required) — instance/NPU topology JSON</span><span class="ko"><code>--cluster-config</code> (필수): instance/NPU 토폴로지 JSON</span></li>
+  <li><span class="en"><code>--dtype</code> — model dtype (bfloat16, float16, fp8, etc.). Used to pick the profile variant folder</span><span class="ko"><code>--dtype</code>: model dtype (bfloat16, float16, fp8 등). profile variant 폴더를 고를 때 쓴다</span></li>
+  <li><span class="en"><code>--dataset</code> — JSONL workload path</span><span class="ko"><code>--dataset</code>: JSONL workload 경로</span></li>
+  <li><span class="en"><code>--block-size</code> — KV-cache block size (vLLM default 16)</span><span class="ko"><code>--block-size</code>: KV-cache block size (vLLM 기본 16)</span></li>
   <li><span class="en">vLLM-aliased options like <code>--enable-prefix-caching</code>, <code>--enable-chunked-prefill</code>, <code>--max-num-seqs</code>, <code>--max-num-batched-tokens</code></span><span class="ko"><code>--enable-prefix-caching</code>, <code>--enable-chunked-prefill</code>, <code>--max-num-seqs</code>, <code>--max-num-batched-tokens</code> 등 vLLM-알리아스 옵션들</span></li>
 </ul>
 
@@ -164,10 +164,10 @@ build_enable_attn_offloading = args.enable_attn_offloading or any(
 cluster = build_cluster_config(
     astra_sim, args.cluster_config, build_enable_local_offloading, build_enable_attn_offloading)</code></pre>
 
-<p><span class="en">The JSON is read twice: (1) peek at per-instance options (offloading flags, etc.) in advance and pass them to the builder, then (2) the actual builder <code>build_cluster_config()</code> does the full parse.</span><span class="ko">JSON을 두 번 읽음: (1) 인스턴스 단위 옵션 (offloading 플래그 등) 미리 봐서 빌더한테 넘기고, (2) 진짜 빌더 <code>build_cluster_config()</code>에서 본격 파싱.</span></p>
+<p><span class="en">The JSON is read twice: (1) peek at per-instance options (offloading flags, etc.) in advance and pass them to the builder, then (2) the actual builder <code>build_cluster_config()</code> does the full parse.</span><span class="ko">JSON은 두 번 읽는다. (1) 인스턴스별 옵션(offloading 플래그 등)을 먼저 훑어 빌더에 넘기고, (2) <code>build_cluster_config()</code>가 전체를 파싱한다.</span></p>
 </div>
 
-<h2 id="s2"><span class="en">4. ② Cluster config parsing — JSON → NPU mapping</span><span class="ko">4. ② Cluster config 파싱 — JSON → NPU mapping</span></h2>
+<h2 id="s2"><span class="en">4. ② Cluster config parsing — JSON → NPU mapping</span><span class="ko">4. ② Cluster config 파싱: JSON → NPU mapping</span></h2>
 <div class="card">
 
 <p class="ref"><span class="en">File: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/config_builder.py#L245"><code>serving/core/config_builder.py:245</code></a> · function <code>build_cluster_config()</code></span><span class="ko">파일: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/config_builder.py#L245"><code>serving/core/config_builder.py:245</code></a> · 함수 <code>build_cluster_config()</code></span></p>
@@ -210,15 +210,15 @@ cluster = build_cluster_config(
     ...
 }</code></pre>
 
-<p><span class="en">The key is the <strong>bidirectional integer mapping between NPU IDs and instance IDs</strong>. ASTRA-Sim emits events by NPU ID, and the simulator uses that to decide which instance's scheduler to dispatch to.</span><span class="ko">핵심은 <strong>NPU ID 정수 ↔ instance ID 정수 양방향 매핑</strong>. ASTRA-Sim은 NPU ID 단위로 이벤트를 보내고, 시뮬레이터는 그걸 받아서 어느 인스턴스의 어느 스케줄러에 dispatch할지 결정.</span></p>
+<p><span class="en">The key is the <strong>bidirectional integer mapping between NPU IDs and instance IDs</strong>. ASTRA-Sim emits events by NPU ID, and the simulator uses that to decide which instance's scheduler to dispatch to.</span><span class="ko">핵심은 <strong>NPU ID ↔ instance ID 양방향 정수 매핑</strong>이다. ASTRA-Sim이 NPU ID 단위로 이벤트를 보내면, 시뮬레이터는 이 매핑으로 어느 인스턴스의 스케줄러에 dispatch할지 정한다.</span></p>
 </div>
 
-<h2 id="s3"><span class="en">5. ③ Profile CSV load — putting the cost table in memory</span><span class="ko">5. ③ Profile CSV 로드 — cost table 메모리에 올리기</span></h2>
+<h2 id="s3"><span class="en">5. ③ Profile CSV load — putting the cost table in memory</span><span class="ko">5. ③ Profile CSV 로드: cost table을 메모리에 올린다</span></h2>
 <div class="card">
 
 <p class="ref"><span class="en">File: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/trace_generator.py"><code>serving/core/trace_generator.py</code></a> · around <code>_load_perf_db()</code> (~line 325-380)</span><span class="ko">파일: <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/trace_generator.py"><code>serving/core/trace_generator.py</code></a> · 함수 <code>_load_perf_db()</code> 주변 (~line 325-380)</span></p>
 
-<p><span class="en">This is the meat of the <strong>"cost table trick"</strong>. The first time <code>generate_trace()</code> is called (<code>trace_generator.py:1447</code>) it reads the CSV for that (HW, model, variant, TP) combination once and keeps it in memory. Subsequent calls are pure lookups.</span><span class="ko">이게 <strong>"비용 표 트릭"</strong>의 알맹이. <code>generate_trace()</code>가 첫 호출될 때 (<code>trace_generator.py:1447</code>) 그 (HW, model, variant, TP) 조합의 CSV를 한 번 읽어서 메모리에 올려둠. 이후 호출은 lookup 만.</span></p>
+<p><span class="en">This is the meat of the <strong>"cost table trick"</strong>. The first time <code>generate_trace()</code> is called (<code>trace_generator.py:1447</code>) it reads the CSV for that (HW, model, variant, TP) combination once and keeps it in memory. Subsequent calls are pure lookups.</span><span class="ko"><strong>"비용 표 트릭"</strong>의 알맹이다. <code>generate_trace()</code>(<code>trace_generator.py:1447</code>)가 처음 호출될 때 해당 (HW, model, variant, TP) 조합의 CSV를 한 번 읽어 메모리에 올리고, 이후 호출은 lookup만 한다.</span></p>
 
 <h4><span class="en">Path resolution</span><span class="ko">경로 해석</span></h4>
 <p><span class="en">Around <code>trace_generator.py:1458</code>:</span><span class="ko"><code>trace_generator.py:1458</code> 부근:</span></p>
@@ -229,7 +229,7 @@ perf_root = profiler/perf/{hardware}/{model}/{variant}/
 # 예: profiler/perf/RTXPRO6000/Qwen/Qwen3-32B/bf16/</code></pre>
 
 <h4><span class="en">Reading the 5 CSVs + meta.yaml</span><span class="ko">CSV 5종 + meta.yaml 읽기</span></h4>
-<p><span class="en"><code>_load_perf_db()</code> reads the following from that folder:</span><span class="ko"><code>_load_perf_db()</code>가 그 폴더에서 다음을 읽음:</span></p>
+<p><span class="en"><code>_load_perf_db()</code> reads the following from that folder:</span><span class="ko"><code>_load_perf_db()</code>가 그 폴더에서 읽는 파일:</span></p>
 <pre><code>profiler/perf/RTXPRO6000/Qwen/Qwen3-32B/bf16/
 ├── meta.yaml          # vllm_version, cuda_version, skew_fit 플래그
 ├── tp1/
@@ -242,11 +242,11 @@ perf_root = profiler/perf/{hardware}/{model}/{variant}/
     └── (동일 5종, TP=2 측정값)</code></pre>
 
 <h4><span class="en">In-memory representation</span><span class="ko">메모리 표현</span></h4>
-<p><span class="en">Each CSV is read as a pandas DataFrame, processed via <code>_build_1d_table()</code> / <code>_build_attention_table()</code>, and kept as an in-memory dict. The key grid is a <strong>doubling grid</strong> (16, 32, 64, 128, 256, ...), so lookups use <strong>log-space linear interpolation</strong> (<code>_linear_interpolate()</code>, <code>_lookup_1d()</code>).</span><span class="ko">각 CSV는 pandas DataFrame으로 읽고 <code>_build_1d_table()</code> / <code>_build_attention_table()</code> 으로 가공해서 in-memory dict로 둠. 키 grid는 <strong>doubling grid</strong> (16, 32, 64, 128, 256, ...) 라서 lookup 시 <strong>log-space linear interpolation</strong> 사용 (<code>_linear_interpolate()</code>, <code>_lookup_1d()</code>).</span></p>
+<p><span class="en">Each CSV is read as a pandas DataFrame, processed via <code>_build_1d_table()</code> / <code>_build_attention_table()</code>, and kept as an in-memory dict. The key grid is a <strong>doubling grid</strong> (16, 32, 64, 128, 256, ...), so lookups use <strong>log-space linear interpolation</strong> (<code>_linear_interpolate()</code>, <code>_lookup_1d()</code>).</span><span class="ko">각 CSV는 pandas DataFrame으로 읽은 뒤 <code>_build_1d_table()</code> / <code>_build_attention_table()</code>로 가공해 in-memory dict에 둔다. 키 grid가 <strong>doubling grid</strong>(16, 32, 64, 128, 256, ...)라서 lookup은 <strong>log-space linear interpolation</strong>(<code>_linear_interpolate()</code>, <code>_lookup_1d()</code>)으로 한다.</span></p>
 
-<div class="tip"><strong><span class="en">Why a doubling grid?</span><span class="ko">왜 doubling grid?</span></strong> <span class="en">Op time is roughly log-affine in token count. If you measure at 16, 32, 64, ..., values in between are within 1-3% error via interpolation. To reach the same accuracy on a linear grid (16, 17, 18, ...) you'd need about 100× more measurement points.</span><span class="ko">Op 시간이 토큰 수에 대해 대체로 log-affine. 16, 32, 64, ... 로 측정해두면 그 사이 값은 보간으로 1-3% 오차 안에 들어옴. linear grid (16, 17, 18, ...)로 똑같은 정확도 내려면 측정 점이 100배 더 필요.</span></div>
+<div class="tip"><strong><span class="en">Why a doubling grid?</span><span class="ko">왜 doubling grid?</span></strong> <span class="en">Op time is roughly log-affine in token count. If you measure at 16, 32, 64, ..., values in between are within 1-3% error via interpolation. To reach the same accuracy on a linear grid (16, 17, 18, ...) you'd need about 100× more measurement points.</span><span class="ko">Op 시간은 토큰 수에 대해 대체로 log-affine이다. 16, 32, 64, ...만 측정해도 그 사이 값은 보간으로 1-3% 오차 안에 든다. linear grid(16, 17, 18, ...)로 같은 정확도를 내려면 측정 점이 100배 더 필요하다.</span></div>
 
-<p><span class="en">The loaded perf_db is embedded into the <code>TraceCtx</code> object (<code>trace_generator.py:87</code>) and reused for all batch trace generation on that instance.</span><span class="ko">한 번 로드한 perf_db는 <code>TraceCtx</code> 객체 (<code>trace_generator.py:87</code>)에 박혀서 그 인스턴스의 모든 batch trace 생성에 재사용됨.</span></p>
+<p><span class="en">The loaded perf_db is embedded into the <code>TraceCtx</code> object (<code>trace_generator.py:87</code>) and reused for all batch trace generation on that instance.</span><span class="ko">로드한 perf_db는 <code>TraceCtx</code> 객체(<code>trace_generator.py:87</code>)에 담겨 그 인스턴스의 모든 batch trace 생성에 재사용된다.</span></p>
 </div>
 
 <h2 id="s4"><span class="en">6. ④ Dataset + Router preparation</span><span class="ko">6. ④ 데이터셋 + Router 준비</span></h2>
@@ -269,7 +269,7 @@ perf_root = profiler/perf/{hardware}/{model}/{variant}/
     kv_cache_dtype=inst_cfg["kv_cache_dtype"],
 ))</code></pre>
 
-<p><span class="en">In this scenario there is 1 instance, so the schedulers list has length 1. <code>Scheduler.__init__</code> computes the number of KV-cache blocks and initializes empty <code>request</code>/<code>inflight</code>/<code>done</code> lists.</span><span class="ko">이 시나리오는 인스턴스 1개니까 schedulers 리스트 길이가 1. <code>Scheduler.__init__</code>에서 KV cache용 블록 수 계산, 빈 <code>request</code>/<code>inflight</code>/<code>done</code> 리스트 초기화.</span></p>
+<p><span class="en">In this scenario there is 1 instance, so the schedulers list has length 1. <code>Scheduler.__init__</code> computes the number of KV-cache blocks and initializes empty <code>request</code>/<code>inflight</code>/<code>done</code> lists.</span><span class="ko">인스턴스가 1개라 schedulers 리스트 길이는 1이다. <code>Scheduler.__init__</code>은 KV cache 블록 수를 계산하고 빈 <code>request</code>/<code>inflight</code>/<code>done</code> 리스트를 만든다.</span></p>
 
 <h3><span class="en">6-2. Router creation</span><span class="ko">6-2. Router 생성</span></h3>
 <p class="ref"><span class="en">File: <code>serving/__main__.py:402</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/router.py#L8"><code>router.py:8</code></a></span><span class="ko">파일: <code>serving/__main__.py:402</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/router.py#L8"><code>router.py:8</code></a></span></p>
@@ -281,11 +281,11 @@ elif self.routing_policy == "LOAD":
     self._select_instance = self._least_load_select
 ...</code></pre>
 
-<p><span class="en">With a single instance, instance 0 is always picked regardless of policy.</span><span class="ko">인스턴스 1개면 정책 무관하게 항상 instance 0 선택.</span></p>
+<p><span class="en">With a single instance, instance 0 is always picked regardless of policy.</span><span class="ko">인스턴스가 1개면 정책과 상관없이 항상 instance 0을 고른다.</span></p>
 
 <h3><span class="en">6-3. Dataset load</span><span class="ko">6-3. 데이터셋 로드</span></h3>
 <p class="ref"><span class="en">File: <code>serving/__main__.py:410</code> → <code>router.py:103-137</code> <code>load_requests()</code></span><span class="ko">파일: <code>serving/__main__.py:410</code> → <code>router.py:103-137</code> <code>load_requests()</code></span></p>
-<p><span class="en">Each JSONL line is parsed into a dict and pushed onto <code>self._pending_requests</code> (<strong>not yet routed</strong>). Sorted by arrival_time_ns.</span><span class="ko">JSONL 한 줄 한 줄을 dict로 파싱해서 <code>self._pending_requests</code> 리스트에 쌓아둠 (<strong>아직 라우팅 안 됨</strong>). arrival_time_ns 기준 정렬.</span></p>
+<p><span class="en">Each JSONL line is parsed into a dict and pushed onto <code>self._pending_requests</code> (<strong>not yet routed</strong>). Sorted by arrival_time_ns.</span><span class="ko">JSONL 각 줄을 dict로 파싱해 arrival_time_ns 순으로 <code>self._pending_requests</code>에 쌓는다. 이 시점엔 <strong>아직 라우팅하지 않는다</strong>.</span></p>
 <pre><code># pending_requests 한 항목 예시:
 {
   "index": 0,
@@ -311,10 +311,10 @@ args = [binary,
 p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.PIPE, universal_newlines=True)</code></pre>
 
-<p><span class="en">The ASTRA-Sim binary (C++) is launched as a separate process. Communication is over stdin/stdout:</span><span class="ko">ASTRA-Sim 바이너리 (C++)를 별도 프로세스로 띄움. stdin/stdout으로 통신:</span></p>
+<p><span class="en">The ASTRA-Sim binary (C++) is launched as a separate process. Communication is over stdin/stdout:</span><span class="ko">ASTRA-Sim 바이너리(C++)를 별도 프로세스로 띄우고 stdin/stdout으로 통신한다.</span></p>
 <ul>
-  <li><span class="en"><strong>Python → C++</strong>: pushes the workload (Chakra <code>.et</code>) path as one line (or the sentinels "pass", "done", "exit")</span><span class="ko"><strong>Python → C++</strong>: workload (Chakra <code>.et</code>) 경로를 한 줄로 던짐 (혹은 "pass", "done", "exit" sentinel)</span></li>
-  <li><span class="en"><strong>C++ → Python</strong>: at the end of each iteration emits one line of the form "<code>sys[N] iteration M finished, C cycles, exposed communication X cycles.</code>", then a "<code>Waiting</code>" line signaling readiness for input</span><span class="ko"><strong>C++ → Python</strong>: 한 iteration 끝낼 때마다 "<code>sys[N] iteration M finished, C cycles, exposed communication X cycles.</code>" 형식 한 줄, 그 다음 "<code>Waiting</code>" 라인으로 입력 대기 알림</span></li>
+  <li><span class="en"><strong>Python → C++</strong>: pushes the workload (Chakra <code>.et</code>) path as one line (or the sentinels "pass", "done", "exit")</span><span class="ko"><strong>Python → C++</strong>: workload(Chakra <code>.et</code>) 경로 한 줄, 또는 "pass", "done", "exit" sentinel</span></li>
+  <li><span class="en"><strong>C++ → Python</strong>: at the end of each iteration emits one line of the form "<code>sys[N] iteration M finished, C cycles, exposed communication X cycles.</code>", then a "<code>Waiting</code>" line signaling readiness for input</span><span class="ko"><strong>C++ → Python</strong>: iteration마다 "<code>sys[N] iteration M finished, C cycles, exposed communication X cycles.</code>" 한 줄, 이어서 입력 대기를 뜻하는 "<code>Waiting</code>" 한 줄</span></li>
 </ul>
 </div>
 
@@ -323,15 +323,15 @@ p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 
 <p class="ref"><span class="en">File: <code>serving/__main__.py:482-863</code> · <code>while True:</code> loop</span><span class="ko">파일: <code>serving/__main__.py:482-863</code> · <code>while True:</code> 루프</span></p>
 
-<p><span class="en">A single request's lifecycle spans multiple iterations:</span><span class="ko">요청 1개의 lifecycle은 여러 iteration에 걸쳐 진행됨:</span></p>
+<p><span class="en">A single request's lifecycle spans multiple iterations:</span><span class="ko">요청 1개의 lifecycle은 여러 iteration에 걸친다.</span></p>
 <ul>
-  <li><span class="en"><strong>iter 1:</strong> request arrives at its arrival time → routed → scheduled as the first batch (=prefill) → trace generated → handed to ASTRA-Sim</span><span class="ko"><strong>iter 1:</strong> 요청이 arrival 시각에 도착 → 라우팅 → 첫 batch(=prefill)로 schedule → trace 생성 → ASTRA-Sim에 던짐</span></li>
-  <li><span class="en"><strong>iter 2:</strong> ASTRA-Sim signals prefill done → add_done records ttft → schedule (now decode stage) → new batch (decode 1 token)</span><span class="ko"><strong>iter 2:</strong> ASTRA-Sim이 prefill 완료 통보 → add_done에서 ttft 기록 → schedule (이제 decode 단계) → 새 batch (decode 1 token)</span></li>
+  <li><span class="en"><strong>iter 1:</strong> request arrives at its arrival time → routed → scheduled as the first batch (=prefill) → trace generated → handed to ASTRA-Sim</span><span class="ko"><strong>iter 1:</strong> arrival 시각에 도착 → 라우팅 → 첫 batch(=prefill)로 schedule → trace 생성 → ASTRA-Sim에 전달</span></li>
+  <li><span class="en"><strong>iter 2:</strong> ASTRA-Sim signals prefill done → add_done records ttft → schedule (now decode stage) → new batch (decode 1 token)</span><span class="ko"><strong>iter 2:</strong> prefill 완료 통보 → add_done에서 ttft 기록 → decode 단계 schedule → 새 batch (decode 1 token)</span></li>
   <li><span class="en"><strong>iter 3 ~ N+1:</strong> decode iterations repeat (1 token each)</span><span class="ko"><strong>iter 3 ~ N+1:</strong> decode iteration 반복 (1 token씩)</span></li>
-  <li><span class="en"><strong>iter N+2:</strong> the final add_done marks the request as finished → appended to <code>self.done</code></span><span class="ko"><strong>iter N+2:</strong> 마지막 add_done에서 요청 완료 마킹 → <code>self.done</code> 리스트에 추가</span></li>
+  <li><span class="en"><strong>iter N+2:</strong> the final add_done marks the request as finished → appended to <code>self.done</code></span><span class="ko"><strong>iter N+2:</strong> 마지막 add_done이 완료 처리 → <code>self.done</code>에 추가</span></li>
 </ul>
 
-<p><span class="en">Let's walk through the 7 steps inside one iteration.</span><span class="ko">한 iteration 내부의 7단계를 따라가자.</span></p>
+<p><span class="en">Let's walk through the 7 steps inside one iteration.</span><span class="ko">한 iteration은 아래 7단계로 이뤄진다.</span></p>
 
 <h3><span class="en">8-1. Controller reads ASTRA-Sim's wait message</span><span class="ko">8-1. Controller가 ASTRA-Sim 대기 메시지 읽기</span></h3>
 <p class="ref"><span class="en">File: <code>serving/__main__.py:484</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/controller.py#L13"><code>controller.py:13</code></a></span><span class="ko">파일: <code>serving/__main__.py:484</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/controller.py#L13"><code>controller.py:13</code></a></span></p>
@@ -342,7 +342,7 @@ p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         out.append(line)
         p.stdout.flush()
     return out</code></pre>
-<p><span class="en">Blocking read on ASTRA-Sim's stdout until a "Waiting" line appears. The preceding line carries "sys[N] iteration M finished ...".</span><span class="ko">"Waiting" 라인이 나올 때까지 ASTRA-Sim의 stdout 블로킹 read. 직전 라인에 "sys[N] iteration M finished ..." 가 와있음.</span></p>
+<p><span class="en">Blocking read on ASTRA-Sim's stdout until a "Waiting" line appears. The preceding line carries "sys[N] iteration M finished ...".</span><span class="ko">"Waiting" 라인이 나올 때까지 ASTRA-Sim의 stdout을 블로킹으로 읽는다. 그 직전 라인이 "sys[N] iteration M finished ..."다.</span></p>
 
 <h3><span class="en">8-2. Parse the output</span><span class="ko">8-2. 출력 파싱</span></h3>
 <p class="ref"><span class="en">File: <code>__main__.py:485</code> → <code>controller.py:39</code></span><span class="ko">파일: <code>__main__.py:485</code> → <code>controller.py:39</code></span></p>
@@ -356,7 +356,7 @@ p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         ...
         return {'sys': sys, 'id': id, 'cycle': cycle}
     return</code></pre>
-<p><span class="en"><code>cycle</code> is cumulative simulation time (converted to ns and assigned to <code>current</code>). Assumes 1 cycle ≈ 1 ns.</span><span class="ko"><code>cycle</code>은 누적 시뮬레이션 시간 (ns 단위로 변환되어 <code>current</code>에 할당). 1 cycle ≈ 1 ns 가정.</span></p>
+<p><span class="en"><code>cycle</code> is cumulative simulation time (converted to ns and assigned to <code>current</code>). Assumes 1 cycle ≈ 1 ns.</span><span class="ko"><code>cycle</code>은 누적 시뮬레이션 시간이고 ns로 바뀌어 <code>current</code>에 들어간다. 1 cycle ≈ 1 ns로 가정한다.</span></p>
 
 <h3><span class="en">8-3. Route newly arrived requests</span><span class="ko">8-3. 새로 도착한 요청 라우팅</span></h3>
 <p class="ref"><span class="en">File: <code>__main__.py:494</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/router.py#L189"><code>router.py:189</code></a></span><span class="ko">파일: <code>__main__.py:494</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/router.py#L189"><code>router.py:189</code></a></span></p>
@@ -376,18 +376,18 @@ p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         self._pending_idx += 1
         routed += 1
     return routed</code></pre>
-<p><span class="en">Routes all requests whose arrival is ≤ <code>current_time_ns</code> in one shot. In this scenario, just 1. Inside <code>sched.add_request()</code> a <code>Request</code> object (<code>request.py:2</code>) is created and pushed onto <code>sched.request</code>.</span><span class="ko">arrival 시각이 <code>current_time_ns</code> 이하인 모든 요청을 한 번에 라우팅. 본 시나리오는 1개. <code>sched.add_request()</code> 안에서 <code>Request</code> 객체 (<code>request.py:2</code>) 생성 후 <code>sched.request</code> 큐에 push.</span></p>
+<p><span class="en">Routes all requests whose arrival is ≤ <code>current_time_ns</code> in one shot. In this scenario, just 1. Inside <code>sched.add_request()</code> a <code>Request</code> object (<code>request.py:2</code>) is created and pushed onto <code>sched.request</code>.</span><span class="ko">arrival이 <code>current_time_ns</code> 이하인 요청을 한 번에 라우팅한다(이 시나리오는 1개). <code>sched.add_request()</code>가 <code>Request</code> 객체(<code>request.py:2</code>)를 만들어 <code>sched.request</code> 큐에 넣는다.</span></p>
 
-<h3><span class="en">8-4. <code>add_done</code> — handle previous batch completion</span><span class="ko">8-4. <code>add_done</code> — 직전 batch 완료 처리</span></h3>
+<h3><span class="en">8-4. <code>add_done</code> — handle previous batch completion</span><span class="ko">8-4. <code>add_done</code>: 직전 batch 완료 처리</span></h3>
 <p class="ref"><span class="en">File: <code>__main__.py:513</code> → <code>scheduler.py:650-801</code></span><span class="ko">파일: <code>__main__.py:513</code> → <code>scheduler.py:650-801</code></span></p>
-<p><span class="en">For the batch ASTRA-Sim just reported as finished:</span><span class="ko">방금 ASTRA-Sim이 끝냈다고 알린 batch에 대해:</span></p>
+<p><span class="en">For the batch ASTRA-Sim just reported as finished:</span><span class="ko">ASTRA-Sim이 방금 끝냈다고 알린 batch를 정산한다.</span></p>
 <ul>
-  <li><span class="en"><strong>If it was a prefill batch</strong> (<code>scheduler.py:686-741</code>): <code>req.num_computed_tokens += chunk_len</code>. If <code>num_computed_tokens >= req.input</code>, prefill is done and <code>set_ttft(current)</code> is called (<code>request.py:62</code>).</span><span class="ko"><strong>Prefill batch였으면</strong> (<code>scheduler.py:686-741</code>): <code>req.num_computed_tokens += chunk_len</code>. 만약 <code>num_computed_tokens >= req.input</code>이면 prefill 완료, <code>set_ttft(current)</code> 호출 (<code>request.py:62</code>).</span></li>
-  <li><span class="en"><strong>If it was a decode batch</strong> (<code>scheduler.py:742-783</code>): <code>req.num_computed_tokens += 1</code>. Accumulate inter-token latency via <code>add_itl(current)</code>. When <code>num_computed_tokens >= req.output</code>, call <code>add_latency()</code> + <code>self.done.append(req)</code> and free the KV-cache.</span><span class="ko"><strong>Decode batch였으면</strong> (<code>scheduler.py:742-783</code>): <code>req.num_computed_tokens += 1</code>. <code>add_itl(current)</code>로 inter-token latency 누적. <code>num_computed_tokens >= req.output</code>이면 <code>add_latency()</code> + <code>self.done.append(req)</code> 후 KV-cache free.</span></li>
+  <li><span class="en"><strong>If it was a prefill batch</strong> (<code>scheduler.py:686-741</code>): <code>req.num_computed_tokens += chunk_len</code>. If <code>num_computed_tokens >= req.input</code>, prefill is done and <code>set_ttft(current)</code> is called (<code>request.py:62</code>).</span><span class="ko"><strong>Prefill batch</strong> (<code>scheduler.py:686-741</code>): <code>req.num_computed_tokens += chunk_len</code>. <code>num_computed_tokens >= req.input</code>이면 prefill이 끝난 것이고 <code>set_ttft(current)</code>(<code>request.py:62</code>)를 부른다.</span></li>
+  <li><span class="en"><strong>If it was a decode batch</strong> (<code>scheduler.py:742-783</code>): <code>req.num_computed_tokens += 1</code>. Accumulate inter-token latency via <code>add_itl(current)</code>. When <code>num_computed_tokens >= req.output</code>, call <code>add_latency()</code> + <code>self.done.append(req)</code> and free the KV-cache.</span><span class="ko"><strong>Decode batch</strong> (<code>scheduler.py:742-783</code>): <code>req.num_computed_tokens += 1</code>. <code>add_itl(current)</code>로 inter-token latency를 쌓는다. <code>num_computed_tokens >= req.output</code>이면 <code>add_latency()</code> + <code>self.done.append(req)</code> 후 KV-cache를 해제한다.</span></li>
 </ul>
-<p><span class="en">Returns: <code>(prompt_tokens_this_step, gen_tokens_this_step, finished_requests)</code>. The main loop uses these for throughput calculations.</span><span class="ko">리턴: <code>(prompt_tokens_this_step, gen_tokens_this_step, finished_requests)</code>. 메인 루프가 throughput 계산에 사용.</span></p>
+<p><span class="en">Returns: <code>(prompt_tokens_this_step, gen_tokens_this_step, finished_requests)</code>. The main loop uses these for throughput calculations.</span><span class="ko">반환값 <code>(prompt_tokens_this_step, gen_tokens_this_step, finished_requests)</code>는 메인 루프의 throughput 계산에 쓰인다.</span></p>
 
-<h3><span class="en">8-5. <code>schedule</code> — build the next batch</span><span class="ko">8-5. <code>schedule</code> — 다음 batch 만들기</span></h3>
+<h3><span class="en">8-5. <code>schedule</code> — build the next batch</span><span class="ko">8-5. <code>schedule</code>: 다음 batch 만들기</span></h3>
 <p class="ref"><span class="en">File: <code>__main__.py:532</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/scheduler.py#L54"><code>scheduler.py:54</code></a></span><span class="ko">파일: <code>__main__.py:532</code> → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/scheduler.py#L54"><code>scheduler.py:54</code></a></span></p>
 <pre><code>def schedule(self, current, sys, batch_id=-1):
     if self.enable_prefix_caching:
@@ -395,24 +395,24 @@ p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
     else:
         return self.schedule_base(current, sys, batch_id)</code></pre>
 
-<p><span class="en">In this scenario (prefix caching off) → <code>schedule_base()</code>. Core steps (<code>scheduler.py:61-296</code>):</span><span class="ko">본 시나리오 (prefix caching off) → <code>schedule_base()</code>. 핵심 단계 (<code>scheduler.py:61-296</code>):</span></p>
+<p><span class="en">In this scenario (prefix caching off) → <code>schedule_base()</code>. Core steps (<code>scheduler.py:61-296</code>):</span><span class="ko">prefix caching이 off라 <code>schedule_base()</code>로 간다. 핵심 단계 (<code>scheduler.py:61-296</code>):</span></p>
 
 <ol>
   <li><span class="en"><strong>Arrival filter</strong> (line 73): <code>batch_req = [req for req in self.request if req.arrival <= current]</code></span><span class="ko"><strong>도착 필터링</strong> (line 73): <code>batch_req = [req for req in self.request if req.arrival <= current]</code></span></li>
-  <li><span class="en"><strong>max_num_seqs cap</strong> (line 76-78): trim so that inflight + new batch combined never exceed max_num_seqs</span><span class="ko"><strong>max_num_seqs 제한</strong> (line 76-78): inflight + 새 batch 합쳐서 max_num_seqs 초과 못 하게 자름</span></li>
-  <li><span class="en"><strong>Chunked prefill branch</strong> (line 102-106): if chunked prefill is on, decode goes first and prefill after; if off, the batch is uniformly prefill-only or decode-only</span><span class="ko"><strong>Chunked prefill 분기</strong> (line 102-106): chunked prefill on이면 decode를 먼저, prefill을 뒤로 정렬. off면 prefill만/decode만 일관 batch</span></li>
-  <li><span class="en"><strong>Token budget allocation</strong> (line 108-173): decide the per-request token allotment for this step (<code>scheduled_tokens</code> dict). Prefill chunks are sliced so <code>max_num_batched_tokens</code> is never exceeded</span><span class="ko"><strong>토큰 budget 할당</strong> (line 108-173): 각 req에 이번 step에서 줄 토큰 수 (<code>scheduled_tokens</code> dict) 결정. <code>max_num_batched_tokens</code> 초과 안 하게 prefill 청크 잘라넣음</span></li>
-  <li><span class="en"><strong>KV-cache memory check + eviction</strong> (line 174-215): compute KV bytes needed by the batch via <code>get_block_kv()</code>. If insufficient, evict some decode requests to CPU (<code>req.evict=True</code>)</span><span class="ko"><strong>KV-cache 메모리 체크 + eviction</strong> (line 174-215): <code>get_block_kv()</code>로 batch가 필요한 KV bytes 계산. 부족하면 decode req 일부를 CPU로 evict (<code>req.evict=True</code>)</span></li>
-  <li><span class="en"><strong>Batch object creation</strong> (line 245-282): fill <code>q_list</code>, <code>prefill_q_list</code>, <code>decode_k_list</code> and instantiate <code>Batch(...)</code> (<code>request.py:74</code>)</span><span class="ko"><strong>Batch 객체 생성</strong> (line 245-282): <code>q_list</code>, <code>prefill_q_list</code>, <code>decode_k_list</code> 채워서 <code>Batch(...)</code> 인스턴스화 (<code>request.py:74</code>)</span></li>
-  <li><span class="en"><strong>Return</strong>: the created <code>Batch</code> object (or <code>None</code> if none)</span><span class="ko"><strong>리턴</strong>: 생성한 <code>Batch</code> 객체 (없으면 <code>None</code>)</span></li>
+  <li><span class="en"><strong>max_num_seqs cap</strong> (line 76-78): trim so that inflight + new batch combined never exceed max_num_seqs</span><span class="ko"><strong>max_num_seqs 제한</strong> (line 76-78): inflight와 새 batch의 합이 max_num_seqs를 넘지 않게 자른다</span></li>
+  <li><span class="en"><strong>Chunked prefill branch</strong> (line 102-106): if chunked prefill is on, decode goes first and prefill after; if off, the batch is uniformly prefill-only or decode-only</span><span class="ko"><strong>Chunked prefill 분기</strong> (line 102-106): on이면 decode를 앞에, prefill을 뒤에 둔다. off면 batch는 prefill만 또는 decode만 담는다</span></li>
+  <li><span class="en"><strong>Token budget allocation</strong> (line 108-173): decide the per-request token allotment for this step (<code>scheduled_tokens</code> dict). Prefill chunks are sliced so <code>max_num_batched_tokens</code> is never exceeded</span><span class="ko"><strong>토큰 budget 할당</strong> (line 108-173): req별로 이번 step의 토큰 수(<code>scheduled_tokens</code> dict)를 정한다. <code>max_num_batched_tokens</code>를 넘지 않게 prefill 청크를 자른다</span></li>
+  <li><span class="en"><strong>KV-cache memory check + eviction</strong> (line 174-215): compute KV bytes needed by the batch via <code>get_block_kv()</code>. If insufficient, evict some decode requests to CPU (<code>req.evict=True</code>)</span><span class="ko"><strong>KV-cache 메모리 체크 + eviction</strong> (line 174-215): <code>get_block_kv()</code>로 필요한 KV bytes를 계산하고, 모자라면 decode req 일부를 CPU로 evict한다 (<code>req.evict=True</code>)</span></li>
+  <li><span class="en"><strong>Batch object creation</strong> (line 245-282): fill <code>q_list</code>, <code>prefill_q_list</code>, <code>decode_k_list</code> and instantiate <code>Batch(...)</code> (<code>request.py:74</code>)</span><span class="ko"><strong>Batch 객체 생성</strong> (line 245-282): <code>q_list</code>, <code>prefill_q_list</code>, <code>decode_k_list</code>를 채워 <code>Batch(...)</code>(<code>request.py:74</code>)를 만든다</span></li>
+  <li><span class="en"><strong>Return</strong>: the created <code>Batch</code> object (or <code>None</code> if none)</span><span class="ko"><strong>반환</strong>: 만든 <code>Batch</code> 객체 (없으면 <code>None</code>)</span></li>
 </ol>
 
-<p><span class="en">First iteration in this scenario: a prefill batch — q_list=[287], num_prefill=1, num_decode=0.</span><span class="ko">본 시나리오 첫 iteration: prefill batch — q_list=[287], num_prefill=1, num_decode=0.</span></p>
+<p><span class="en">First iteration in this scenario: a prefill batch — q_list=[287], num_prefill=1, num_decode=0.</span><span class="ko">이 시나리오의 첫 iteration은 prefill batch다 (q_list=[287], num_prefill=1, num_decode=0).</span></p>
 
-<h3><span class="en">8-6. <code>generate_trace</code> — compute batch time via cost table lookup</span><span class="ko">8-6. <code>generate_trace</code> — cost table lookup으로 batch 시간 계산</span></h3>
-<p class="ref"><span class="en">File: around <code>__main__.py:579</code> (multiple call sites depending on DP/PD branches) → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/trace_generator.py#L1447"><code>trace_generator.py:1447</code></a></span><span class="ko">파일: <code>__main__.py:579</code> 부근 (DP/PD 분기에 따라 호출 위치 여러 군데) → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/trace_generator.py#L1447"><code>trace_generator.py:1447</code></a></span></p>
+<h3><span class="en">8-6. <code>generate_trace</code> — compute batch time via cost table lookup</span><span class="ko">8-6. <code>generate_trace</code>: cost table lookup으로 batch 시간 계산</span></h3>
+<p class="ref"><span class="en">File: around <code>__main__.py:579</code> (multiple call sites depending on DP/PD branches) → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/trace_generator.py#L1447"><code>trace_generator.py:1447</code></a></span><span class="ko">파일: <code>__main__.py:579</code> 부근 (DP/PD 분기마다 호출 위치가 다름) → <a href="https://github.com/casys-kaist/LLMServingSim/blob/8b5b943a3a37/serving/core/trace_generator.py#L1447"><code>trace_generator.py:1447</code></a></span></p>
 
-<p><span class="en">This function is <strong>where the cost table trick is actually used</strong>. Batch (token counts + KV lengths) → per-layer per-op latencies → an ASCII trace file.</span><span class="ko">이 함수가 <strong>비용 표 트릭의 사용 지점</strong>. Batch (token 카운트 + KV 길이) → per-layer per-op 지연 시간 → ASCII trace 파일.</span></p>
+<p><span class="en">This function is <strong>where the cost table trick is actually used</strong>. Batch (token counts + KV lengths) → per-layer per-op latencies → an ASCII trace file.</span><span class="ko"><strong>비용 표 트릭을 실제로 쓰는 곳</strong>이다. Batch(token 수 + KV 길이) → per-layer per-op 지연 시간 → ASCII trace 파일 순으로 바뀐다.</span></p>
 
 <pre><code>generate_trace(batch, hardware, tp_size, pp_size,
                local_ep, ep_total, pd_type,
@@ -428,9 +428,9 @@ p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
   │      collectives (AllReduce for TP, AllToAll for EP)도 한 줄씩
   └─ write to inputs/trace/{hw}/{model}/instance{id}_batch{id}.txt</code></pre>
 
-<p><span class="en">The crux: <strong>"how many us does this op take for this batch"</strong> is decided by CSV lookup without spinning up a GPU. That is the cost table trick.</span><span class="ko">핵심: <strong>"이 batch에 이 op가 몇 us 걸리는지"</strong> 는 GPU 안 띄우고 CSV lookup으로 결정. 그게 cost table trick.</span></p>
+<p><span class="en">The crux: <strong>"how many us does this op take for this batch"</strong> is decided by CSV lookup without spinning up a GPU. That is the cost table trick.</span><span class="ko"><strong>"이 batch에서 이 op가 몇 us 걸리는가"</strong>를 GPU 없이 CSV lookup으로 정한다. 이것이 cost table trick이다.</span></p>
 
-<h3><span class="en">8-7. <code>generate_graph</code> + <code>write_flush</code> — hand off to ASTRA-Sim</span><span class="ko">8-7. <code>generate_graph</code> + <code>write_flush</code> — ASTRA-Sim에 던지기</span></h3>
+<h3><span class="en">8-7. <code>generate_graph</code> + <code>write_flush</code> — hand off to ASTRA-Sim</span><span class="ko">8-7. <code>generate_graph</code> + <code>write_flush</code>: ASTRA-Sim에 넘기기</span></h3>
 <p class="ref"><span class="en">File: around <code>__main__.py:592</code> → <code>graph_generator.py:9</code> + <code>controller.py:32</code></span><span class="ko">파일: <code>__main__.py:592</code> 부근 → <code>graph_generator.py:9</code> + <code>controller.py:32</code></span></p>
 <pre><code># graph_generator.py 내부:
 python -m chakra.src.converter.converter LLM \
@@ -445,7 +445,7 @@ def write_flush(self, p, input):
 # Python이 ASTRA-Sim 프로세스에 "inputs/workload/.../llm" 경로 한 줄 던짐
 # ASTRA-Sim이 그걸 받아서 시뮬레이션 1 iteration 더 돌림</code></pre>
 
-<p><span class="en">ASTRA-Sim simulates the collective comm ops (AllReduce, etc.) of the trace using its network model, computes the cycles for one iteration, then emits "Waiting" again and blocks for the next input. At that point the main loop returns to <code>read_wait</code> (cycling back to 8-1 above).</span><span class="ko">ASTRA-Sim이 trace의 collective comm 명령(AllReduce 등) 시간을 자기 네트워크 모델로 시뮬해서 한 iteration cycle을 계산하고, 끝나면 다시 "Waiting" 보내고 다음 입력을 기다림. 그 시점에 메인 루프가 <code>read_wait</code>로 돌아옴 (위 8-1로 순환).</span></p>
+<p><span class="en">ASTRA-Sim simulates the collective comm ops (AllReduce, etc.) of the trace using its network model, computes the cycles for one iteration, then emits "Waiting" again and blocks for the next input. At that point the main loop returns to <code>read_wait</code> (cycling back to 8-1 above).</span><span class="ko">ASTRA-Sim은 trace의 collective comm(AllReduce 등)을 자체 네트워크 모델로 시뮬레이션해 한 iteration의 cycle을 구한 뒤, 다시 "Waiting"을 보내고 다음 입력을 기다린다. 메인 루프는 <code>read_wait</code>(8-1)로 돌아간다.</span></p>
 </div>
 
 <h2 id="s7"><span class="en">9. ⑦ CSV output</span><span class="ko">9. ⑦ CSV 출력</span></h2>
@@ -470,18 +470,18 @@ def write_flush(self, p, input):
                 req.queuing_delay, req.ttft, req.tpot, req.itl
             ])</code></pre>
 
-<p><span class="en">Column meanings:</span><span class="ko">각 컬럼 의미:</span></p>
+<p><span class="en">Column meanings:</span><span class="ko">컬럼 의미:</span></p>
 <ul>
-  <li><span class="en"><code>arrival</code> — request arrival (ns)</span><span class="ko"><code>arrival</code> — 요청 도착 (ns)</span></li>
-  <li><span class="en"><code>end_time</code> — last token generation completed (ns)</span><span class="ko"><code>end_time</code> — 마지막 토큰 생성 완료 (ns)</span></li>
+  <li><span class="en"><code>arrival</code> — request arrival (ns)</span><span class="ko"><code>arrival</code>: 요청 도착 (ns)</span></li>
+  <li><span class="en"><code>end_time</code> — last token generation completed (ns)</span><span class="ko"><code>end_time</code>: 마지막 토큰 생성 완료 (ns)</span></li>
   <li><span class="en"><code>latency</code> = <code>end_time - arrival</code></span><span class="ko"><code>latency</code> = <code>end_time - arrival</code></span></li>
-  <li><span class="en"><code>queuing_delay</code> — time from arrival until entering the first batch</span><span class="ko"><code>queuing_delay</code> — arrival → 첫 batch에 들어간 시각</span></li>
-  <li><span class="en"><code>TTFT</code> — arrival → first token (end of prefill)</span><span class="ko"><code>TTFT</code> — arrival → 첫 토큰 시각 (prefill 끝)</span></li>
-  <li><span class="en"><code>TPOT</code> — (latency - ttft) / (output_tokens - 1), mean decode token interval</span><span class="ko"><code>TPOT</code> — (latency - ttft) / (output_tokens - 1), 평균 decode 토큰 간격</span></li>
-  <li><span class="en"><code>ITL</code> — list of inter-token latencies for each decode token (variable length)</span><span class="ko"><code>ITL</code> — 각 decode 토큰의 inter-token-latency 리스트 (가변 길이)</span></li>
+  <li><span class="en"><code>queuing_delay</code> — time from arrival until entering the first batch</span><span class="ko"><code>queuing_delay</code>: arrival → 첫 batch에 들어간 시각</span></li>
+  <li><span class="en"><code>TTFT</code> — arrival → first token (end of prefill)</span><span class="ko"><code>TTFT</code>: arrival → 첫 토큰 시각 (prefill 끝)</span></li>
+  <li><span class="en"><code>TPOT</code> — (latency - ttft) / (output_tokens - 1), mean decode token interval</span><span class="ko"><code>TPOT</code>: (latency - ttft) / (output_tokens - 1), 평균 decode 토큰 간격</span></li>
+  <li><span class="en"><code>ITL</code> — list of inter-token latencies for each decode token (variable length)</span><span class="ko"><code>ITL</code>: decode 토큰별 inter-token-latency 리스트 (가변 길이)</span></li>
 </ul>
 
-<div class="note"><strong><span class="en">Path caveat:</span><span class="ko">경로 주의:</span></strong> <span class="en">A <code>'../'</code> is prepended to the output path (<code>scheduler.py:912</code>). If you pass <code>--output outputs/foo.csv</code> inside a container, it may actually land at <code>/app/LLMServingSim/../outputs/foo.csv</code> rather than <code>/app/outputs/foo.csv</code>. For this scenario it works thanks to the working-directory layout, but be careful when scripting sweeps.</span><span class="ko">출력 경로 앞에 <code>'../'</code>가 붙음 (<code>scheduler.py:912</code>). 컨테이너에서 <code>--output outputs/foo.csv</code> 던지면 실제로는 <code>/app/outputs/foo.csv</code>가 아니라 <code>/app/LLMServingSim/../outputs/foo.csv</code>에 떨어질 수 있음. 본 시나리오에선 작업 디렉토리 구조상 잘 떨어지지만, sweep 스크립트 짤 때 주의.</span></div>
+<div class="note"><strong><span class="en">Path caveat:</span><span class="ko">경로 주의:</span></strong> <span class="en">A <code>'../'</code> is prepended to the output path (<code>scheduler.py:912</code>). If you pass <code>--output outputs/foo.csv</code> inside a container, it may actually land at <code>/app/LLMServingSim/../outputs/foo.csv</code> rather than <code>/app/outputs/foo.csv</code>. For this scenario it works thanks to the working-directory layout, but be careful when scripting sweeps.</span><span class="ko">출력 경로 앞에 <code>'../'</code>가 붙는다 (<code>scheduler.py:912</code>). 컨테이너에서 <code>--output outputs/foo.csv</code>를 주면 <code>/app/outputs/foo.csv</code>가 아니라 <code>/app/LLMServingSim/../outputs/foo.csv</code>에 생길 수 있다. 이 시나리오는 작업 디렉토리 구조 덕에 문제가 없지만 sweep 스크립트를 짤 때는 조심해야 한다.</span></div>
 </div>
 
 <h2 id="data"><span class="en">10. Data class summary</span><span class="ko">10. 데이터 클래스 요약</span></h2>
@@ -631,7 +631,7 @@ def write_flush(self, p, input):
   schedulers[0].save_output("outputs/foo.csv")  ← one row written</div>
 </div>
 
-<h2 id="repro"><span class="en">12. Reproducing — if you want to follow along yourself</span><span class="ko">12. 재현하기 — 직접 따라가려면</span></h2>
+<h2 id="repro"><span class="en">12. Reproducing — if you want to follow along yourself</span><span class="ko">12. 재현하기: 직접 따라가려면</span></h2>
 <div class="card">
 
 <h3><span class="en">12-1. Get the source</span><span class="ko">12-1. 소스 띄우기</span></h3>
@@ -643,19 +643,19 @@ code .                        # 또는 vim/cursor</code></pre>
 
 <h3><span class="en">12-2. Recommended reading order</span><span class="ko">12-2. 따라가는 순서 (추천)</span></h3>
 <ol>
-  <li><span class="en">Scroll through <code>main()</code> in <code>serving/__main__.py</code> (from line 137 to the end) — argparse → cluster load → scheduler/router creation → one full pass of the main while loop.</span><span class="ko"><code>serving/__main__.py</code>의 <code>main()</code> 함수 (line 137부터) 끝까지 스크롤 — argparse → cluster load → scheduler/router 생성 → 메인 while 루프 한 번 끝까지 본다.</span></li>
-  <li><span class="en">All of <code>serving/core/controller.py</code> (57 lines, ~5 min). The subprocess-communication pattern becomes clear.</span><span class="ko"><code>serving/core/controller.py</code> 전체 (57 lines, 5분이면 다 읽음). subprocess 통신 패턴이 명확해짐.</span></li>
-  <li><span class="en">All of <code>serving/core/request.py</code> (107 lines). Makes the data model clear.</span><span class="ko"><code>serving/core/request.py</code> 전체 (107 lines). 데이터 모델이 명확해짐.</span></li>
-  <li><span class="en"><code>load_requests</code> (line 103) and <code>route_arrived_requests</code> (line 189) in <code>serving/core/router.py</code>. Four routing policies (RR/RAND/LOAD/CUSTOM).</span><span class="ko"><code>serving/core/router.py</code>의 <code>load_requests</code> (line 103), <code>route_arrived_requests</code> (line 189). 라우팅 정책은 4종 (RR/RAND/LOAD/CUSTOM).</span></li>
-  <li><span class="en"><code>schedule_base</code> in <code>serving/core/scheduler.py</code> (line 61 through 295). The deepest function. Token budget + KV eviction + Batch construction all live here.</span><span class="ko"><code>serving/core/scheduler.py</code>의 <code>schedule_base</code> (line 61부터 295까지). 가장 깊은 함수. token budget + KV eviction + Batch 생성이 한 함수에 다 있음.</span></li>
-  <li><span class="en"><code>generate_trace</code> in <code>serving/core/trace_generator.py</code> (line 1447) → internally <code>_synthesize_trace</code> (line 1293). This is where you see perf_db lookup happen firsthand.</span><span class="ko"><code>serving/core/trace_generator.py</code>의 <code>generate_trace</code> (line 1447) → 내부 <code>_synthesize_trace</code> (line 1293). 여기서 perf_db lookup이 어떻게 일어나는지 직접 봄.</span></li>
+  <li><span class="en">Scroll through <code>main()</code> in <code>serving/__main__.py</code> (from line 137 to the end) — argparse → cluster load → scheduler/router creation → one full pass of the main while loop.</span><span class="ko"><code>serving/__main__.py</code>의 <code>main()</code>(line 137부터)을 끝까지 훑는다. argparse → cluster load → scheduler/router 생성 → 메인 while 루프 순이다.</span></li>
+  <li><span class="en">All of <code>serving/core/controller.py</code> (57 lines, ~5 min). The subprocess-communication pattern becomes clear.</span><span class="ko"><code>serving/core/controller.py</code> 전체 (57 lines, 5분이면 읽는다). subprocess 통신 패턴이 보인다.</span></li>
+  <li><span class="en">All of <code>serving/core/request.py</code> (107 lines). Makes the data model clear.</span><span class="ko"><code>serving/core/request.py</code> 전체 (107 lines). 데이터 모델이 보인다.</span></li>
+  <li><span class="en"><code>load_requests</code> (line 103) and <code>route_arrived_requests</code> (line 189) in <code>serving/core/router.py</code>. Four routing policies (RR/RAND/LOAD/CUSTOM).</span><span class="ko"><code>serving/core/router.py</code>의 <code>load_requests</code> (line 103), <code>route_arrived_requests</code> (line 189). 라우팅 정책은 RR/RAND/LOAD/CUSTOM 4종이다.</span></li>
+  <li><span class="en"><code>schedule_base</code> in <code>serving/core/scheduler.py</code> (line 61 through 295). The deepest function. Token budget + KV eviction + Batch construction all live here.</span><span class="ko"><code>serving/core/scheduler.py</code>의 <code>schedule_base</code> (line 61부터 295까지). 가장 깊은 함수로, token budget + KV eviction + Batch 생성이 모두 여기 있다.</span></li>
+  <li><span class="en"><code>generate_trace</code> in <code>serving/core/trace_generator.py</code> (line 1447) → internally <code>_synthesize_trace</code> (line 1293). This is where you see perf_db lookup happen firsthand.</span><span class="ko"><code>serving/core/trace_generator.py</code>의 <code>generate_trace</code> (line 1447) → 내부 <code>_synthesize_trace</code> (line 1293). perf_db lookup이 일어나는 곳이다.</span></li>
 </ol>
 
 <h3><span class="en">12-3. Debugging tricks</span><span class="ko">12-3. 디버깅 트릭</span></h3>
 <ul>
-  <li><span class="en"><strong>Verbose logs</strong>: the <code>--log-level DEBUG</code> option (dumps batch contents on every main-loop iteration).</span><span class="ko"><strong>로그 자세히 보기</strong>: <code>--log-level DEBUG</code> 옵션 (메인 루프 각 iteration의 batch 내용 다 찍힘).</span></li>
-  <li><span class="en"><strong>Inspect a single Batch</strong>: calling <code>Batch.log()</code> at <code>request.py:99</code> prints every field.</span><span class="ko"><strong>Batch 한 번만 보기</strong>: <code>request.py:99</code>의 <code>Batch.log()</code> 호출하면 모든 필드 출력.</span></li>
-  <li><span class="en"><strong>Peek at trace.txt</strong>: <code>inputs/trace/RTXPRO6000/Qwen/Qwen3-32B/instance0_batch0.txt</code> — human-readable ASCII. One line = one op (op name, node ID, time ns, comm bytes).</span><span class="ko"><strong>trace.txt 들여다보기</strong>: <code>inputs/trace/RTXPRO6000/Qwen/Qwen3-32B/instance0_batch0.txt</code> — 사람이 읽을 수 있는 ASCII. 한 줄 = 한 op (op명, 노드 ID, 시간 ns, comm bytes).</span></li>
+  <li><span class="en"><strong>Verbose logs</strong>: the <code>--log-level DEBUG</code> option (dumps batch contents on every main-loop iteration).</span><span class="ko"><strong>로그 자세히 보기</strong>: <code>--log-level DEBUG</code>를 주면 iteration마다 batch 내용을 찍는다.</span></li>
+  <li><span class="en"><strong>Inspect a single Batch</strong>: calling <code>Batch.log()</code> at <code>request.py:99</code> prints every field.</span><span class="ko"><strong>Batch 한 번만 보기</strong>: <code>request.py:99</code>의 <code>Batch.log()</code>를 부르면 모든 필드를 출력한다.</span></li>
+  <li><span class="en"><strong>Peek at trace.txt</strong>: <code>inputs/trace/RTXPRO6000/Qwen/Qwen3-32B/instance0_batch0.txt</code> — human-readable ASCII. One line = one op (op name, node ID, time ns, comm bytes).</span><span class="ko"><strong>trace.txt 들여다보기</strong>: <code>inputs/trace/RTXPRO6000/Qwen/Qwen3-32B/instance0_batch0.txt</code>는 사람이 읽을 수 있는 ASCII다. 한 줄이 한 op다 (op명, 노드 ID, 시간 ns, comm bytes).</span></li>
   <li><span class="en"><strong>Parse Chakra .et</strong>: <code>python -m chakra.src.viz.viz --input llm.0.et</code> (separate viz tool).</span><span class="ko"><strong>Chakra .et 파싱</strong>: <code>python -m chakra.src.viz.viz --input llm.0.et</code> (별도 viz 도구).</span></li>
 </ul>
 
@@ -673,7 +673,7 @@ code .                        # 또는 vim/cursor</code></pre>
 </div>
 
 <footer>
-<span class="en">LLMServingSim 2.0 (KAIST CASYS) · code flow analysis · written 2026-06-10. All file:line citations in this document refer to commit <a href="https://github.com/casys-kaist/LLMServingSim/tree/8b5b943a3a37"><code>8b5b943a3a37</code></a>; positions may shift on later changes. Verification against the source firsthand is recommended.</span><span class="ko">LLMServingSim 2.0 (KAIST CASYS) · 코드 흐름 분석 · 2026-06-10 작성. 본 문서의 모든 file:line 인용은 commit <a href="https://github.com/casys-kaist/LLMServingSim/tree/8b5b943a3a37"><code>8b5b943a3a37</code></a> 기준이며, 그 이후 변경 시 위치가 달라질 수 있음. 검증은 직접 소스를 보고 하길 권장.</span>
+<span class="en">LLMServingSim 2.0 (KAIST CASYS) · code flow analysis · written 2026-06-10. All file:line citations in this document refer to commit <a href="https://github.com/casys-kaist/LLMServingSim/tree/8b5b943a3a37"><code>8b5b943a3a37</code></a>; positions may shift on later changes. Verification against the source firsthand is recommended.</span><span class="ko">LLMServingSim 2.0 (KAIST CASYS) · 코드 흐름 분석 · 2026-06-10 작성. 이 문서의 file:line 인용은 모두 commit <a href="https://github.com/casys-kaist/LLMServingSim/tree/8b5b943a3a37"><code>8b5b943a3a37</code></a> 기준이며 이후 변경으로 위치가 달라질 수 있다. 소스를 직접 보고 확인하길 권한다.</span>
 </footer>
 
 </div>

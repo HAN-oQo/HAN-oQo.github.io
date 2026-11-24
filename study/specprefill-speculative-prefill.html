@@ -65,6 +65,9 @@
   ul.srcs{font-size:13px;line-height:1.5;padding-left:20px}
   ul.srcs li{margin:5px 0}
   ul.srcs a{color:var(--blue-ink);text-decoration:none;border-bottom:1px dotted var(--blue-bd);word-break:break-all}
+  .callout ul{margin:6px 0 0;padding-left:20px}
+  .callout li,section li{margin:4px 0}
+  section ul:not(.srcs),section ol{padding-left:22px}
   footer{color:var(--faint);font-size:13px;text-align:center;margin-top:40px;border-top:1px solid var(--line);padding-top:18px}
 </style>
 </head>
@@ -83,8 +86,8 @@
     <span class="ko">Speculative Prefill (SpecPrefill) — turbocharging TTFT by dropping prompt tokens</span>
   </h1>
   <p class="lede">
-    <span class="en">A paper note on <b>SpecPrefill</b> (ICML 2025). The idea in one line: a <i>cheap</i> model reads the whole prompt and guesses which tokens matter; only that small subset — <b>~10% of tokens</b> — is fed to the <i>big</i> model's prefill, cutting time-to-first-token up to <b>7.66×</b>. The non-obvious framing that makes it work: prefill is <b>compute-bound</b>, and its bottleneck is the <b>MLP</b> (and tensor-parallel all-reduce), not self-attention — so unlike sparse-attention methods, dropping <i>tokens</i> shrinks the part that actually hurts. Training-free, a pure vLLM monkey-patch.</span>
-    <span class="ko">SpecPrefill(ICML 2025) 논문 정리. 한 줄 아이디어: <i>싼</i> 모델이 프롬프트 전체를 읽고 어떤 토큰이 중요한지 추측 → 그 작은 부분집합만(<b>토큰의 ~10%</b>) <i>큰</i> 모델의 prefill에 넣어 time-to-first-token을 최대 <b>7.66×</b> 줄인다. 이걸 가능케 하는 비직관적 관점: prefill은 <b>연산 바운드</b>이고, 그 병목이 self-attention이 아니라 <b>MLP</b>(그리고 tensor-parallel all-reduce)라는 것 — 그래서 sparse-attention 기법과 달리 <i>토큰</i>을 버리면 실제로 아픈 부분이 줄어든다. 학습 불필요, 순수 vLLM monkey-patch.</span>
+    <span class="en">A paper note on <b>SpecPrefill</b> (ICML 2025): a cheap speculator picks the <b>~10%</b> of prompt tokens that matter, and the big model prefills only those, cutting TTFT up to <b>7.66×</b>. Based on the paper and its official vLLM monkey-patch code.</span>
+    <span class="ko"><b>SpecPrefill</b>(ICML 2025) 논문 정리. 싼 speculator가 프롬프트에서 중요한 토큰 <b>~10%</b>를 골라 큰 모델이 그것만 prefill하게 하고, TTFT를 최대 <b>7.66×</b> 줄인다. 논문과 공식 vLLM monkey-patch 코드를 근거로 정리했다.</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://arxiv.org/abs/2502.02789">arXiv:2502.02789</a></span>
@@ -98,10 +101,10 @@
 <nav class="toc">
   <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
   <ol>
-    <li><a href="#s1"><span class="en">1. Problem — the MLP-bound prefill wall</span><span class="ko">1. 문제 정의 — MLP 바운드 prefill 벽</span></a></li>
-    <li><a href="#s2"><span class="en">2. Method — guess the important tokens, keep only those</span><span class="ko">2. 해결 방법 — 중요한 토큰만 추측해 남긴다</span></a></li>
-    <li><a href="#s3"><span class="en">3. Implementation — the speculator &amp; the vLLM patch</span><span class="ko">3. 구현 방법 — speculator와 vLLM 패치</span></a></li>
-    <li><a href="#s4"><span class="en">4. Results — 7.66× TTFT, and where it breaks</span><span class="ko">4. 결과 — 7.66× TTFT, 그리고 깨지는 곳</span></a></li>
+    <li><a href="#s1"><span class="en">1. Problem — the MLP-bound prefill wall</span><span class="ko">1. 문제 정의: MLP 바운드 prefill 벽</span></a></li>
+    <li><a href="#s2"><span class="en">2. Method — guess the important tokens, keep only those</span><span class="ko">2. 해결 방법: 중요한 토큰만 추측해 남긴다</span></a></li>
+    <li><a href="#s3"><span class="en">3. Implementation — the speculator &amp; the vLLM patch</span><span class="ko">3. 구현 방법: speculator와 vLLM 패치</span></a></li>
+    <li><a href="#s4"><span class="en">4. Results — 7.66× TTFT, and where it breaks</span><span class="ko">4. 결과: 7.66× TTFT, 그리고 깨지는 곳</span></a></li>
     <li><a href="#s5"><span class="en">5. Discussion &amp; our take</span><span class="ko">5. 논의 &amp; 우리 관점</span></a></li>
     <li><a href="#s6"><span class="en">6. Sources</span><span class="ko">6. 출처</span></a></li>
   </ol>
@@ -109,24 +112,34 @@
 
 <div class="callout c-blue">
   <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
-  <span class="en">Prefill (turning the prompt into a KV cache) is <b>compute-bound</b>, and at large batch × short-to-medium context the dominant cost is the <b>MLP + tensor-parallel all-reduce</b>, not attention. Sparse-attention tricks don't touch that. SpecPrefill instead <b>drops tokens</b>: a small speculator (Llama-3.1-8B) does a short look-ahead, scores each prompt token by aggregated attention, keeps the top ~10% (with their <b>original position IDs</b>), and the big target model prefills only those. Fewer tokens ⇒ less attention <i>and</i> less MLP <i>and</i> less all-reduce ⇒ up to <b>7.66× TTFT</b> and <b>~7× max QPS</b> on Llama-3.1-405B-FP8, while holding &gt;95% quality on Multi-Doc QA. It's training-free and a thin vLLM monkey-patch — the catch is aggregation/counting tasks and multi-turn.</span>
-  <span class="ko">prefill(프롬프트를 KV 캐시로 만드는 것)은 <b>연산 바운드</b>이고, 큰 배치 × 짧은–중간 컨텍스트에선 지배적 비용이 attention이 아니라 <b>MLP + tensor-parallel all-reduce</b>다. sparse-attention 기법은 거길 못 건드린다. SpecPrefill은 대신 <b>토큰을 버린다</b>: 작은 speculator(Llama-3.1-8B)가 짧은 look-ahead를 하고, 각 프롬프트 토큰을 집계된 attention으로 점수 매겨, 상위 ~10%만(<b>원래 위치 ID</b>와 함께) 남기고, 큰 target 모델은 그것만 prefill한다. 토큰이 적으면 ⇒ attention <i>도</i> MLP <i>도</i> all-reduce <i>도</i> 줄어 ⇒ Llama-3.1-405B-FP8에서 최대 <b>7.66× TTFT</b>, <b>~7× max QPS</b>, Multi-Doc QA 품질 &gt;95% 유지. 학습 불필요 + 얇은 vLLM monkey-patch — 함정은 집계/카운팅 태스크와 멀티턴.</span>
+  <ul class="en">
+    <li>Prefill (turning the prompt into a KV cache) is <b>compute-bound</b>. At large batch × short-to-medium context the dominant cost is the <b>MLP + tensor-parallel all-reduce</b>, which sparse attention doesn't touch.</li>
+    <li>SpecPrefill <b>drops tokens</b>: a small speculator (Llama-3.1-8B) scores each prompt token by aggregated look-ahead attention, and the target prefills only the top ~10%, with their <b>original position IDs</b>.</li>
+    <li>Fewer tokens shrink attention, MLP and all-reduce together: up to <b>7.66× TTFT</b> and <b>~7× max QPS</b> on Llama-3.1-405B-FP8, with &gt;95% quality on Multi-Doc QA.</li>
+    <li>Training-free, a thin vLLM monkey-patch. Weak spots: aggregation/counting tasks and multi-turn.</li>
+  </ul>
+  <ul class="ko">
+    <li>prefill(프롬프트를 KV 캐시로 만드는 단계)은 <b>연산 바운드</b>다. 큰 배치 × 짧은–중간 컨텍스트에서는 attention보다 <b>MLP + tensor-parallel all-reduce</b> 비용이 크고, sparse attention은 이 부분을 줄이지 못한다.</li>
+    <li>SpecPrefill은 <b>토큰을 버린다</b>. 작은 speculator(Llama-3.1-8B)가 look-ahead attention으로 토큰마다 점수를 매기면, target은 상위 ~10%만 <b>원래 위치 ID</b>를 유지한 채 prefill한다.</li>
+    <li>토큰이 줄면 attention, MLP, all-reduce가 함께 준다. Llama-3.1-405B-FP8에서 최대 <b>7.66× TTFT</b>, <b>~7× max QPS</b>를 내고 Multi-Doc QA 품질은 &gt;95%를 유지한다.</li>
+    <li>학습이 필요 없고 얇은 vLLM monkey-patch로 붙는다. 약점은 집계/카운팅 태스크와 멀티턴이다.</li>
+  </ul>
 </div>
 
 <h3 style="margin-top:26px"><span class="en">Glossary</span><span class="ko">용어집</span></h3>
 <div class="grid3">
-  <div class="mini"><h4>TTFT</h4><p><span class="en">Time-to-first-token — how long the user waits before the first output token. Set by the <b>prefill</b> phase; under a latency SLO it caps how many requests/sec you can serve.</span><span class="ko">Time-to-first-token — 첫 출력 토큰까지 대기 시간. <b>prefill</b> 단계가 결정; 지연 SLO 하에선 초당 처리 가능 요청 수의 상한.</span></p></div>
-  <div class="mini"><h4><span class="en">prefill vs decode</span><span class="ko">prefill vs decode</span></h4><p><span class="en">Prefill = process the whole prompt in one pass (<b>compute-bound</b>). Decode = generate one token at a time (<b>memory-bandwidth-bound</b>). Most prior work speeds decode; this targets prefill.</span><span class="ko">Prefill = 프롬프트 전체를 한 번에(<b>연산 바운드</b>). Decode = 한 토큰씩 생성(<b>메모리 대역폭 바운드</b>). 기존 연구 대부분은 decode를 빠르게; 이건 prefill을 겨냥.</span></p></div>
-  <div class="mini"><h4><span class="en">the MLP bottleneck</span><span class="ko">MLP 병목</span></h4><p><span class="en">In prefill the feed-forward (MLP) blocks + the tensor-parallel all-reduce dominate compute — <i>not</i> attention. So speeding attention alone barely helps prefill.</span><span class="ko">prefill에선 feed-forward(MLP) 블록 + tensor-parallel all-reduce가 연산을 지배 — attention이 <i>아님</i>. 그래서 attention만 빠르게 해선 prefill이 거의 안 빨라짐.</span></p></div>
-  <div class="mini"><h4><span class="en">speculator (draft) model</span><span class="ko">speculator(draft) 모델</span></h4><p><span class="en">A small, cheap LLM (here Llama-3.1-8B) run <i>before</i> the big one, only to guess which prompt tokens matter. Can be the same draft model speculative <i>decoding</i> uses.</span><span class="ko">큰 모델 <i>전에</i> 돌리는 작고 싼 LLM(여기선 Llama-3.1-8B), 오직 어떤 프롬프트 토큰이 중요한지 추측용. speculative <i>decoding</i>의 draft와 공유 가능.</span></p></div>
-  <div class="mini"><h4><span class="en">token importance</span><span class="ko">토큰 중요도</span></h4><p><span class="en">A per-prompt-token score from the speculator's <b>attention</b>: how much the just-generated tokens look back at each prompt token. High score → keep.</span><span class="ko">speculator의 <b>attention</b>에서 나오는 프롬프트 토큰별 점수: 방금 생성된 토큰들이 각 프롬프트 토큰을 얼마나 되돌아보는가. 높으면 → 남김.</span></p></div>
-  <div class="mini"><h4><span class="en">keep-ratio</span><span class="ko">keep-ratio</span></h4><p><span class="en">The single knob: what fraction of prompt tokens survive (10–90%). Lower = faster TTFT, more quality risk. Fixed per task in the paper.</span><span class="ko">유일한 노브: 프롬프트 토큰 중 살아남는 비율(10–90%). 낮을수록 = 빠른 TTFT, 품질 위험 ↑. 논문에선 태스크별 고정.</span></p></div>
+  <div class="mini"><h4>TTFT</h4><p><span class="en">Time-to-first-token: the wait before the first output token. Set by <b>prefill</b>; under a latency SLO it caps requests/sec.</span><span class="ko">Time-to-first-token. 첫 출력 토큰까지 기다리는 시간으로, <b>prefill</b>이 결정하고 지연 SLO 아래서는 초당 처리량의 상한이 된다.</span></p></div>
+  <div class="mini"><h4><span class="en">prefill vs decode</span><span class="ko">prefill vs decode</span></h4><p><span class="en">Prefill processes the whole prompt in one pass (<b>compute-bound</b>); decode emits one token at a time (<b>memory-bandwidth-bound</b>).</span><span class="ko">Prefill은 프롬프트 전체를 한 번에 처리하고(<b>연산 바운드</b>), decode는 한 토큰씩 생성한다(<b>메모리 대역폭 바운드</b>).</span></p></div>
+  <div class="mini"><h4><span class="en">the MLP bottleneck</span><span class="ko">MLP 병목</span></h4><p><span class="en">In prefill, MLP blocks + the tensor-parallel all-reduce dominate compute, <i>not</i> attention.</span><span class="ko">prefill 연산은 attention이 <i>아니라</i> MLP 블록과 tensor-parallel all-reduce가 지배한다.</span></p></div>
+  <div class="mini"><h4><span class="en">speculator (draft) model</span><span class="ko">speculator(draft) 모델</span></h4><p><span class="en">A small LLM (here Llama-3.1-8B) run <i>before</i> the target only to guess which tokens matter; can share the speculative-<i>decoding</i> draft.</span><span class="ko">target보다 <i>먼저</i> 돌려 중요한 토큰만 추측하는 작은 LLM(여기선 Llama-3.1-8B). speculative <i>decoding</i>의 draft와 공유할 수 있다.</span></p></div>
+  <div class="mini"><h4><span class="en">token importance</span><span class="ko">토큰 중요도</span></h4><p><span class="en">Per-token score from the speculator's <b>attention</b>: how much the look-ahead tokens attend to each prompt token.</span><span class="ko">speculator의 <b>attention</b>으로 매긴 토큰별 점수. look-ahead 토큰들이 각 프롬프트 토큰을 얼마나 보는지를 잰다.</span></p></div>
+  <div class="mini"><h4><span class="en">keep-ratio</span><span class="ko">keep-ratio</span></h4><p><span class="en">The single knob: the fraction of prompt tokens kept (10–90%), fixed per task in the paper.</span><span class="ko">프롬프트 토큰을 몇 % 남길지 정하는 유일한 노브(10–90%). 논문에선 태스크별로 고정한다.</span></p></div>
 </div>
 
 <section id="s1">
-<h2><span class="num">1</span><span class="en">Problem — the MLP-bound prefill wall</span><span class="ko">문제 정의 — MLP 바운드 prefill 벽</span></h2>
-<p><span class="en">TTFT matters twice over: it's what the user feels as responsiveness, and under a latency SLO it sets the maximum request rate a cluster can sustain. TTFT is decided by <b>prefill</b> — and prefill is a different beast from decode. Decode is memory-bandwidth-bound (the target of KV-eviction, KV-compression, speculative <i>decoding</i>). Prefill is <b>compute-bound</b>, and the paper's sharp, non-obvious observation is <i>which</i> compute dominates:</span>
-<span class="ko">TTFT는 두 겹으로 중요하다: 사용자가 느끼는 반응성이자, 지연 SLO 하에서 클러스터가 감당하는 최대 요청률을 정한다. TTFT는 <b>prefill</b>이 결정하고 — prefill은 decode와 전혀 다른 짐승이다. Decode는 메모리 대역폭 바운드(KV 축출·KV 압축·speculative <i>decoding</i>의 표적). Prefill은 <b>연산 바운드</b>이고, 논문의 날카롭고 비직관적인 관찰은 <i>어떤</i> 연산이 지배하느냐다:</span></p>
+<h2><span class="num">1</span><span class="en">Problem — the MLP-bound prefill wall</span><span class="ko">문제 정의: MLP 바운드 prefill 벽</span></h2>
+<p><span class="en">TTFT is what users feel as responsiveness, and under a latency SLO it sets the max request rate a cluster can sustain. It is decided by <b>prefill</b>. Decode is memory-bandwidth-bound (the target of KV eviction, KV compression, speculative <i>decoding</i>). Prefill is <b>compute-bound</b>, and the paper's key observation is <i>which</i> compute dominates.</span>
+<span class="ko">TTFT는 사용자가 느끼는 반응성이고, 지연 SLO 아래서는 클러스터가 감당할 최대 요청률을 정한다. TTFT를 결정하는 것은 <b>prefill</b>이다. Decode는 메모리 대역폭 바운드라 KV 축출, KV 압축, speculative <i>decoding</i>이 겨냥해 왔다. Prefill은 <b>연산 바운드</b>이고, 논문의 관찰은 그중 <i>어떤</i> 연산이 지배하느냐에 있다.</span></p>
 
 <blockquote class="q">
   <p>"boosting TTFT is notoriously challenging since it is compute-bounded and the performance bottleneck shifts from the self-attention to the MLP part."</p>
@@ -137,8 +150,8 @@
   <cite>— §2.3 · <a href="https://arxiv.org/html/2502.02789v2#S2.SS3">원문 보기 (§2.3)</a></cite>
 </blockquote>
 
-<p><span class="en">This reframes the whole problem. A long line of work speeds up <b>attention</b> at prefill — FlashAttention, LongFormer, MInference, FlexPrefill. But if the MLP (and the tensor-parallel all-reduce that shuttles activations between GPUs) is what clogs the pipe, faster attention barely moves TTFT in the common regime — <b>large batch × short-to-medium context</b>:</span>
-<span class="ko">이게 문제 전체를 재구성한다. 긴 연구 계보가 prefill의 <b>attention</b>을 빠르게 한다 — FlashAttention, LongFormer, MInference, FlexPrefill. 하지만 MLP(그리고 GPU 간 활성을 나르는 tensor-parallel all-reduce)가 파이프를 막는 것이면, attention을 빠르게 해도 흔한 구간 — <b>큰 배치 × 짧은–중간 컨텍스트</b> — 에선 TTFT가 거의 안 움직인다:</span></p>
+<p><span class="en">Prior work (FlashAttention, LongFormer, MInference, FlexPrefill) speeds up prefill <b>attention</b>. But if the MLP and the tensor-parallel all-reduce that shuttles activations between GPUs are the bottleneck, faster attention barely moves TTFT in the common regime of <b>large batch × short-to-medium context</b>.</span>
+<span class="ko">FlashAttention, LongFormer, MInference, FlexPrefill 같은 기존 연구는 prefill의 <b>attention</b>을 빠르게 했다. 하지만 MLP와 GPU 사이에서 활성값을 나르는 tensor-parallel all-reduce가 병목이라면, 흔한 구간인 <b>큰 배치 × 짧은–중간 컨텍스트</b>에서는 attention만 빨라져도 TTFT가 거의 줄지 않는다.</span></p>
 <blockquote class="q">
   <p>"there is still a huge traffic of large-batch short to medium context queries where it is the MLP part that clogs the whole system."</p>
   <cite>— §1 · <a href="https://arxiv.org/html/2502.02789v2#S1">원문 보기 (§1)</a></cite>
@@ -164,16 +177,16 @@
   <text x="196" y="161" class="k" fill="var(--coral-ink)">← keep ~10% of tokens → ALL three shrink together</text>
   <text x="20" y="196" class="k">Dropping tokens cuts attention AND MLP AND the all-reduce at once — that's why it moves TTFT where attention-only methods can't.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 1 — The reframing. At large batch and modest context, MLP + all-reduce dominate prefill compute; sparse-attention methods only trim the attention slice, so TTFT barely moves. SpecPrefill drops prompt tokens, which shrinks attention, MLP, and all-reduce together. Original diagram; premise per §1–§2.3.</span><span class="ko">그림 1 — 재구성. 큰 배치·중간 컨텍스트에선 MLP + all-reduce가 prefill 연산을 지배; sparse-attention은 attention 조각만 깎아 TTFT가 거의 안 움직인다. SpecPrefill은 프롬프트 토큰을 버려 attention·MLP·all-reduce를 함께 줄인다. 직접 작성한 다이어그램; 전제 출처 §1–§2.3.</span></p>
+<p class="figcap"><span class="en">Fig 1 · Where prefill compute goes, and what each method trims. Original diagram; premise per §1–§2.3.</span><span class="ko">그림 1 · prefill 연산의 구성과 각 기법이 줄이는 부분. 직접 그림, 전제 출처 §1–§2.3.</span></p>
 
-<p><span class="en">That single move — cut <i>tokens</i>, not just attention — is also what separates SpecPrefill from its closest peers. Prompt-compression (LLMLingua) and RAG work at the text level and lose information; token-dropping methods like GemFilter need an extra pass through middle layers, SwiftKV needs fine-tuning (and reaches only ~50% TTFT cut vs SpecPrefill's ~87%), and KV-Prediction needs learned auxiliary modules. SpecPrefill is training-free and composable with quantization, KV eviction, and speculative decoding.</span>
-<span class="ko">그 한 수 — attention이 아니라 <i>토큰</i>을 자른다 — 가 SpecPrefill을 가장 가까운 경쟁자들과도 가른다. 프롬프트 압축(LLMLingua)·RAG는 텍스트 레벨이라 정보를 잃고; GemFilter는 중간 레이어를 한 번 더 통과해야 하고, SwiftKV는 파인튜닝이 필요하며(TTFT 절감 ~50%, SpecPrefill은 ~87%), KV-Prediction은 학습된 보조 모듈이 필요하다. SpecPrefill은 학습 불필요이고 양자화·KV 축출·speculative decoding과 조합 가능하다.</span></p>
+<p><span class="en">Cutting <i>tokens</i> also separates SpecPrefill from its peers. LLMLingua (prompt compression) and RAG work at the text level and lose information; GemFilter needs an extra pass through middle layers; SwiftKV needs fine-tuning and cuts TTFT only ~50% (vs SpecPrefill's ~87%); KV-Prediction needs learned auxiliary modules. SpecPrefill is training-free and composes with quantization, KV eviction, and speculative decoding.</span>
+<span class="ko">attention이 아니라 <i>토큰</i>을 자른다는 선택은 가까운 기법들과의 차이이기도 하다. LLMLingua(프롬프트 압축)와 RAG는 텍스트 단계에서 줄이므로 정보를 잃는다. GemFilter는 중간 레이어를 한 번 더 거쳐야 하고, SwiftKV는 파인튜닝이 필요하며 TTFT 절감도 ~50%에 그친다(SpecPrefill은 ~87%). KV-Prediction은 학습된 보조 모듈이 필요하다. SpecPrefill은 학습 없이 쓰고 양자화, KV 축출, speculative decoding과 조합할 수 있다.</span></p>
 </section>
 
 <section id="s2">
-<h2><span class="num">2</span><span class="en">Method — guess the important tokens, keep only those</span><span class="ko">해결 방법 — 중요한 토큰만 추측해 남긴다</span></h2>
-<p><span class="en">The whole pipeline is: a cheap <b>speculator</b> reads the full prompt and assigns each token an importance score from its own attention; the top ~10% survive (carrying their <b>original positions</b>); the big <b>target</b> model prefills only that short subset. Four ingredients make the scoring reliable.</span>
-<span class="ko">전체 파이프라인: 싼 <b>speculator</b>가 프롬프트 전체를 읽고 자기 attention에서 각 토큰에 중요도 점수를 매김; 상위 ~10%가 살아남고(<b>원래 위치</b>를 지닌 채); 큰 <b>target</b> 모델은 그 짧은 부분집합만 prefill한다. 점수를 믿을 만하게 하는 네 재료.</span></p>
+<h2><span class="num">2</span><span class="en">Method — guess the important tokens, keep only those</span><span class="ko">해결 방법: 중요한 토큰만 추측해 남긴다</span></h2>
+<p><span class="en">A cheap <b>speculator</b> reads the full prompt and scores each token from its own attention; the top ~10% survive with their <b>original positions</b>, and the big <b>target</b> prefills only that subset. Four ingredients make the scoring reliable.</span>
+<span class="ko">싼 <b>speculator</b>가 프롬프트 전체를 읽고 자기 attention으로 토큰마다 중요도를 매긴다. 상위 ~10%만 <b>원래 위치</b>를 지닌 채 살아남고, 큰 <b>target</b> 모델은 이 짧은 부분집합만 prefill한다. 점수를 믿을 만하게 만드는 장치는 네 가지다.</span></p>
 
 <svg class="fig" viewBox="0 0 760 250" role="img" aria-label="Pipeline: speculator scores each prompt token, keeps the high-scoring ones, the target model prefills only those">
   <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.tok{font:600 10px "SF Mono",Menlo,monospace}.keep{fill:var(--green-bg);stroke:var(--green-bd)}.drop{fill:var(--gray-bg);stroke:var(--gray-bd)}.bar{fill:var(--blue-bd)}.barhi{fill:var(--coral-ink)}.a{stroke:var(--muted);stroke-width:1.3;fill:none;marker-end:url(#a2)}</style>
@@ -206,19 +219,19 @@
   <text x="20" y="222" class="k">The speculator is cheap (8B), the target is huge (70B/405B) — so paying for a small extra forward to shrink the big model's prefill is a win.</text>
   <text x="20" y="240" class="k">"Importance" is illustrative here; the real score is the speculator's aggregated attention (next).</text>
 </svg>
-<p class="figcap"><span class="en">Fig 2 — SpecPrefill in one picture. The speculator scores every prompt token; only the salient ones survive and are prefilled by the target model, each keeping its original position id. Content words score high, stop-words low. Original diagram; scheme per §3.1.</span><span class="ko">그림 2 — 한 그림으로 본 SpecPrefill. speculator가 모든 프롬프트 토큰을 점수화; 핵심만 살아남아 target이 prefill하고, 각자 원래 위치 id를 유지. 내용어는 높게, 불용어는 낮게. 직접 작성한 다이어그램; 구도 출처 §3.1.</span></p>
+<p class="figcap"><span class="en">Fig 2 · The SpecPrefill pipeline. Original diagram; scheme per §3.1.</span><span class="ko">그림 2 · SpecPrefill 파이프라인. 직접 그림, 구도 출처 §3.1.</span></p>
 
-<h3><span class="en">① Look-ahead — don't trust just the last token</span><span class="ko">① Look-ahead — 마지막 토큰만 믿지 마라</span></h3>
-<p><span class="en">Attention has known biases (an <b>attention sink</b> on the first token, a <b>proximity bias</b> toward nearby tokens). Using only the last prompt token's attention to score importance inherits those biases. Fix: let the speculator generate a few tokens and use <i>their</i> attention — the tokens the model actually chose to produce vote on what was important.</span>
-<span class="ko">attention엔 알려진 편향이 있다(첫 토큰에 쏠리는 <b>attention sink</b>, 가까운 토큰에 쏠리는 <b>proximity bias</b>). 중요도 점수에 마지막 프롬프트 토큰의 attention만 쓰면 그 편향을 물려받는다. 해법: speculator가 몇 토큰을 생성하게 하고 <i>그것들의</i> attention을 쓴다 — 모델이 실제로 낸 토큰이 무엇이 중요했는지 투표한다.</span></p>
+<h3><span class="en">① Look-ahead — don't trust just the last token</span><span class="ko">① Look-ahead: 마지막 토큰만 믿지 않는다</span></h3>
+<p><span class="en">Attention has known biases: an <b>attention sink</b> on the first token and a <b>proximity bias</b> toward nearby tokens. Scoring with only the last prompt token's attention inherits them. Instead the speculator generates a few tokens and <i>their</i> attention is used, so the tokens the model actually produced vote on what mattered.</span>
+<span class="ko">attention에는 첫 토큰에 쏠리는 <b>attention sink</b>와 가까운 토큰에 쏠리는 <b>proximity bias</b>가 있다. 마지막 프롬프트 토큰의 attention만 쓰면 이 편향을 그대로 물려받는다. 그래서 speculator가 몇 토큰을 더 생성하게 하고 <i>그 토큰들의</i> attention을 쓴다. 모델이 실제로 낸 토큰이 무엇이 중요했는지 투표하는 셈이다.</span></p>
 <blockquote class="q">
   <p>"Instead of relying on the attention score of the last token alone, we further decode the speculator by N steps and obtain the attention information from the new N tokens."</p>
   <cite>— §3.2.1 · <a href="https://arxiv.org/html/2502.02789v2#S3.SS2.SSS1">원문 보기 (§3.2.1)</a></cite>
 </blockquote>
 
-<h3><span class="en">② Aggregated attention → one score per token</span><span class="ko">② 집계된 attention → 토큰당 점수 하나</span></h3>
+<h3><span class="en">② Aggregated attention → one score per token</span><span class="ko">② attention 집계: 토큰당 점수 하나</span></h3>
 <p><span class="en">Each of the <code class="inl">N</code> look-ahead tokens produces an attention distribution over the prompt, across every layer <code class="inl">L</code> and head <code class="inl">H</code>. The per-token attention weight is <code class="inl">a<sub>ij</sub> = softmax(Q<sub>M+j</sub>·Kᵀ)<sub>i</sub></code> — how much look-ahead token <code class="inl">M+j</code> attends to prompt token <code class="inl">i</code>. To collapse that <code class="inl">[N,L,S,H]</code> tensor into one score per position, the paper takes the <b>max over heads and layers</b> (so a token counts if <i>any</i> head finds it salient) and the <b>mean over the N look-ahead steps</b> (so no single generated token dominates):</span>
-<span class="ko"><code class="inl">N</code>개 look-ahead 토큰 각각이 모든 레이어 <code class="inl">L</code>·헤드 <code class="inl">H</code>에 걸쳐 프롬프트에 대한 attention 분포를 낸다. 토큰별 가중치는 <code class="inl">a<sub>ij</sub> = softmax(Q<sub>M+j</sub>·Kᵀ)<sub>i</sub></code> — look-ahead 토큰 <code class="inl">M+j</code>가 프롬프트 토큰 <code class="inl">i</code>를 얼마나 보는가. 그 <code class="inl">[N,L,S,H]</code> 텐서를 위치당 점수 하나로 접기 위해, 논문은 <b>헤드·레이어에 대해 max</b>(어떤 헤드라도 중요하다 하면 셈)와 <b>N개 look-ahead 스텝에 대해 mean</b>(한 생성 토큰이 지배 못 하게)을 취한다:</span></p>
+<span class="ko">look-ahead 토큰 <code class="inl">N</code>개는 모든 레이어 <code class="inl">L</code>와 헤드 <code class="inl">H</code>에서 프롬프트에 대한 attention 분포를 낸다. 가중치 <code class="inl">a<sub>ij</sub> = softmax(Q<sub>M+j</sub>·Kᵀ)<sub>i</sub></code>는 look-ahead 토큰 <code class="inl">M+j</code>가 프롬프트 토큰 <code class="inl">i</code>를 얼마나 보는지를 뜻한다. 이 <code class="inl">[N,L,S,H]</code> 텐서를 위치당 점수 하나로 접을 때 논문은 <b>헤드·레이어 축으로 max</b>를 취해 어느 헤드든 중요하다고 본 토큰을 살리고, <b>N개 look-ahead 스텝 축으로 mean</b>을 취해 생성 토큰 하나가 결과를 좌우하지 않게 한다.</span></p>
 <blockquote class="q">
   <p>"we take the maximum over H and L dimension to make salient tokens stand out, and average over N to account for fair token contribution."</p>
   <cite>— §3.2.2 · <a href="https://arxiv.org/html/2502.02789v2#S3.SS2.SSS2">원문 보기 (§3.2.2)</a></cite>
@@ -243,15 +256,15 @@
   <text x="455" y="104" class="k">= this token's importance</text>
   <text x="20" y="186" class="k">Each little grid is (layers × heads) of attention for that token; MAX keeps it if any head cared, MEAN over the N steps is a fair vote. Repeat for every prompt token → a score vector of length S.</text>
 </svg>
-<p class="figcap"><span class="en">Fig 3 — Max-mean aggregation. For each prompt token, take the max attention across all layers×heads (surface any salient signal), then the mean across the N look-ahead steps (fair vote), giving one importance score per position. Original diagram; per §3.2.2.</span><span class="ko">그림 3 — max-mean 집계. 프롬프트 토큰마다 전 레이어×헤드에서 attention max(어떤 신호든 살림), 그다음 N개 look-ahead 스텝에 대해 mean(공정 투표) → 위치당 중요도 점수 하나. 직접 작성한 다이어그램; 출처 §3.2.2.</span></p>
+<p class="figcap"><span class="en">Fig 3 · Max-mean aggregation per prompt token. Original diagram; per §3.2.2.</span><span class="ko">그림 3 · 프롬프트 토큰별 max-mean 집계. 직접 그림, 출처 §3.2.2.</span></p>
 
-<h3><span class="en">③ Chunk-select + pooling — denoise</span><span class="ko">③ Chunk 선택 + pooling — 노이즈 제거</span></h3>
-<p><span class="en">Single-token attention is noisy, and keeping scattered lone tokens breaks local coherence. So the scores are 1D-average-pooled to smooth, the context is chopped into contiguous <b>chunks</b>, each chunk's scores are averaged, and the <b>Top-K chunks</b> (K set by the keep-ratio) are kept — so you retain coherent spans, not confetti.</span>
-<span class="ko">단일 토큰 attention은 노이즈가 많고, 흩어진 외톨이 토큰을 남기면 국소 일관성이 깨진다. 그래서 점수를 1D 평균 풀링으로 부드럽게 하고, 컨텍스트를 연속된 <b>chunk</b>로 자르고, 각 chunk 점수를 평균해, <b>Top-K chunk</b>(K는 keep-ratio가 결정)를 남긴다 — 색종이가 아니라 일관된 구간을 유지.</span></p>
+<h3><span class="en">③ Chunk-select + pooling — denoise</span><span class="ko">③ Chunk 선택 + pooling으로 노이즈 제거</span></h3>
+<p><span class="en">Single-token attention is noisy, and scattered lone tokens break local coherence. So scores are 1D-average-pooled, the context is split into contiguous <b>chunks</b>, each chunk's scores are averaged, and the <b>Top-K chunks</b> (K set by the keep-ratio) are kept: coherent spans, not confetti.</span>
+<span class="ko">단일 토큰 attention은 노이즈가 많고, 흩어진 토큰만 남기면 국소 문맥이 끊긴다. 그래서 점수를 1D 평균 풀링으로 다듬고, 컨텍스트를 연속된 <b>chunk</b>로 나눠 chunk별 평균을 낸 뒤 <b>Top-K chunk</b>를 남긴다(K는 keep-ratio가 정한다). 흩어진 조각이 아니라 이어진 구간이 남는다.</span></p>
 
-<h3><span class="en">④ Position restoration — keep the true positions</span><span class="ko">④ 위치 복원 — 진짜 위치를 유지</span></h3>
-<p><span class="en">This is the subtle, load-bearing detail. The kept tokens are no longer contiguous — but they must carry their <b>original position IDs</b>, or RoPE would think a token that was 100 places away is now adjacent, wrecking retrieval and counting. The surviving tokens keep positions like <code class="inl">[0,1,3,6,7]</code>, and the tokens generated afterward are numbered from the <i>original</i> context length, not the shrunken one:</span>
-<span class="ko">이게 미묘하지만 핵심인 디테일. 남은 토큰은 더 이상 연속이 아니다 — 하지만 <b>원래 위치 ID</b>를 지녀야 한다. 아니면 RoPE가 100칸 떨어져 있던 토큰을 인접했다고 여겨 retrieval·카운팅을 망친다. 살아남은 토큰은 <code class="inl">[0,1,3,6,7]</code> 같은 위치를 유지하고, 이후 생성 토큰은 줄어든 길이가 아니라 <i>원래</i> 컨텍스트 길이부터 번호가 매겨진다:</span></p>
+<h3><span class="en">④ Position restoration — keep the true positions</span><span class="ko">④ 위치 복원: 원래 위치를 유지</span></h3>
+<p><span class="en">The subtle, load-bearing detail. Kept tokens are no longer contiguous, but they must carry their <b>original position IDs</b>, or RoPE would treat a token 100 places away as adjacent, breaking retrieval and counting. Survivors keep positions like <code class="inl">[0,1,3,6,7]</code>, and generated tokens are numbered from the <i>original</i> context length, not the shrunken one.</span>
+<span class="ko">작지만 결과를 좌우하는 디테일이다. 남은 토큰은 더 이상 연속이 아니지만 <b>원래 위치 ID</b>를 지녀야 한다. 그렇지 않으면 RoPE가 100칸 떨어진 토큰을 바로 옆으로 착각해 retrieval과 카운팅이 망가진다. 살아남은 토큰은 <code class="inl">[0,1,3,6,7]</code> 같은 위치를 유지하고, 이후 생성 토큰 번호는 줄어든 길이가 아니라 <i>원래</i> 컨텍스트 길이에서 이어진다.</span></p>
 <blockquote class="q">
   <p>"we send a potentially non-continuously increasing position ids which are obtained from tokens' positions in the original context."</p>
   <cite>— §3.2.4 · <a href="https://arxiv.org/html/2502.02789v2#S3.SS2.SSS4">원문 보기 (§3.2.4)</a></cite>
@@ -281,15 +294,15 @@
     <text x="15" y="14" text-anchor="middle" fill="var(--coral-ink)">0</text><text x="49" y="14" text-anchor="middle" fill="var(--coral-ink)">1</text><text x="83" y="14" text-anchor="middle" fill="var(--coral-ink)">2</text><text x="117" y="14" text-anchor="middle" fill="var(--coral-ink)">3</text><text x="151" y="14" text-anchor="middle" fill="var(--coral-ink)">4</text>
   </g>
 </svg>
-<p class="figcap"><span class="en">Fig 4 — Position restoration. Kept tokens carry their original, non-contiguous position ids (0,1,3,6,7), and decode tokens continue from the original length (10,11,12). Renumbering them 0–4 would make RoPE misjudge distances. Original diagram; per §3.2.4.</span><span class="ko">그림 4 — 위치 복원. 남은 토큰은 원래의 비연속 위치 id(0,1,3,6,7)를 지니고, decode 토큰은 원래 길이부터 이어진다(10,11,12). 0–4로 다시 매기면 RoPE가 거리를 오판한다. 직접 작성한 다이어그램; 출처 §3.2.4.</span></p>
+<p class="figcap"><span class="en">Fig 4 · Position restoration: kept ids (0,1,3,6,7), decode continues at 10,11,12, vs naive 0–4. Original diagram; per §3.2.4.</span><span class="ko">그림 4 · 위치 복원: 남은 id(0,1,3,6,7), decode는 10,11,12부터, 단순 재번호(0–4)와 비교. 직접 그림, 출처 §3.2.4.</span></p>
 </section>
 
 <section id="s3">
-<h2><span class="num">3</span><span class="en">Implementation — the speculator &amp; the vLLM patch</span><span class="ko">구현 방법 — speculator와 vLLM 패치</span></h2>
+<h2><span class="num">3</span><span class="en">Implementation — the speculator &amp; the vLLM patch</span><span class="ko">구현 방법: speculator와 vLLM 패치</span></h2>
 <table>
 <thead><tr><th><span class="en">knob</span><span class="ko">항목</span></th><th><span class="en">value</span><span class="ko">값</span></th></tr></thead>
 <tbody>
-<tr><td><span class="en">speculator (draft)</span><span class="ko">speculator(draft)</span></td><td>Llama-3.1-8B-Instruct (BF16) <span class="muted"><span class="en">— repo example also uses 1B/3B</span><span class="ko">— repo 예시는 1B/3B도</span></span></td></tr>
+<tr><td><span class="en">speculator (draft)</span><span class="ko">speculator(draft)</span></td><td>Llama-3.1-8B-Instruct (BF16) <span class="muted"><span class="en">— repo example also uses 1B/3B</span><span class="ko">· repo 예시는 1B/3B도 사용</span></span></td></tr>
 <tr><td><span class="en">target</span><span class="ko">target</span></td><td>Llama-3.1-70B-Instruct (BF16) · Llama-3.1-405B-Instruct-<b>FP8</b></td></tr>
 <tr><td>keep-ratio</td><td>10 / 30 / 50 / 70 / 90 % <span class="muted">(<span class="en">fixed per task</span><span class="ko">태스크별 고정</span></span>)</td></tr>
 <tr><td>look-ahead N</td><td>8 <span class="muted">(<span class="en">gains saturate by ~16</span><span class="ko">~16이면 이득 포화</span></span>)</td></tr>
@@ -304,7 +317,7 @@
 
 <h3><span class="en">Repo &amp; usage</span><span class="ko">repo &amp; 사용법</span></h3>
 <p><span class="en">The <a class="src" href="https://github.com/Jingyu6/speculative_prefill">official repo</a> (MIT, pinned here to <code class="inl">c1d6bd3</code>) is a pure-Python <b>monkey-patch over vLLM V0</b> — no CUDA kernels, no fork. You call <code class="inl">enable_prefill_spec(...)</code> <i>before importing vLLM</i>, and everything else is normal vLLM:</span>
-<span class="ko"><a class="src" href="https://github.com/Jingyu6/speculative_prefill">공식 repo</a>(MIT, 여기선 <code class="inl">c1d6bd3</code> 고정)는 순수 파이썬 <b>vLLM V0 위 monkey-patch</b> — CUDA 커널도, fork도 없다. <code class="inl">enable_prefill_spec(...)</code>을 <i>vLLM import 전에</i> 부르면 나머지는 평범한 vLLM:</span></p>
+<span class="ko"><a class="src" href="https://github.com/Jingyu6/speculative_prefill">공식 repo</a>(MIT, 여기선 <code class="inl">c1d6bd3</code> 고정)는 순수 파이썬으로 된 <b>vLLM V0 monkey-patch</b>다. CUDA 커널도 fork도 없다. <i>vLLM import 전에</i> <code class="inl">enable_prefill_spec(...)</code>을 부르면 나머지는 평범한 vLLM 사용법과 같다.</span></p>
 <pre><code># pip install git+https://github.com/Jingyu6/speculative_prefill
 from speculative_prefill import enable_prefill_spec
 enable_prefill_spec(                                   # MUST run before importing vllm
@@ -319,7 +332,7 @@ llm = LLM('meta-llama/Meta-Llama-3.1-70B-Instruct',   # the big target
 
 <h3><span class="en">Code flow (pinned to c1d6bd3)</span><span class="ko">코드 흐름 (c1d6bd3 고정)</span></h3>
 <p><span class="en">The patch installs a custom worker that runs the speculator first, then prefills the base model on the pruned request:</span>
-<span class="ko">패치는 speculator를 먼저 돌린 뒤 잘린 요청으로 base 모델을 prefill하는 커스텀 워커를 설치한다:</span></p>
+<span class="ko">패치는 커스텀 워커를 설치한다. 이 워커는 speculator를 먼저 돌리고, 잘린 요청으로 base 모델을 prefill한다.</span></p>
 <pre><code># worker/spec_prefill_worker.py:150  — speculate first, then base prefill
 if has_prefill:
     execute_model_req = self.spec_model_worker.speculate(execute_model_req)
@@ -338,17 +351,17 @@ topk = math.ceil(seq_len * percentage);  _, indices = torch.topk(sample_ti, k=to
 new_seq_data = AugmentedSequenceData.from_seqs_and_pos_ids(
     prompt_token_ids=torch.LongTensor(prompt_token_ids)[cur_indices],
     position_ids=cur_indices.tolist())   # true positions preserved</code></pre>
-<p><span class="en">Two honest caveats from the code: the importance is aggregated over <b>all</b> draft layers and heads (a max over the flattened layer×head axis, then mean over look-ahead) — not one hand-picked head; and the whole thing is <b>Llama-only</b> (asserted at load) on <b>vLLM V0</b> (<code class="inl">vllm==0.6.3.post1</code>), requiring <code class="inl">enforce_eager=True</code> and <code class="inl">enable_chunked_prefill=False</code>, with no LoRA / beam / multi-step. Porting to current vLLM (V1) is an open TODO in the README.</span>
-<span class="ko">코드에서 온 정직한 주의 둘: 중요도는 <b>전</b> draft 레이어·헤드에 걸쳐 집계(펼친 layer×head 축에 대해 max, 그다음 look-ahead에 대해 mean) — 손으로 고른 한 헤드가 아니다; 그리고 전부 <b>Llama 전용</b>(로드 시 assert), <b>vLLM V0</b>(<code class="inl">vllm==0.6.3.post1</code>)에서, <code class="inl">enforce_eager=True</code>·<code class="inl">enable_chunked_prefill=False</code>가 필요하고 LoRA/beam/multi-step 불가. 현행 vLLM(V1) 이식은 README의 열린 TODO.</span></p>
+<p><span class="en">Two caveats from the code. First, importance is aggregated over <b>all</b> draft layers and heads (max over the flattened layer×head axis, then mean over look-ahead), not one hand-picked head. Second, it is <b>Llama-only</b> (asserted at load) on <b>vLLM V0</b> (<code class="inl">vllm==0.6.3.post1</code>), requires <code class="inl">enforce_eager=True</code> and <code class="inl">enable_chunked_prefill=False</code>, and has no LoRA / beam / multi-step. Porting to current vLLM (V1) is an open TODO in the README.</span>
+<span class="ko">코드에서 확인한 주의점은 두 가지다. 첫째, 중요도는 손으로 고른 한 헤드가 아니라 <b>모든</b> draft 레이어·헤드에서 집계한다(펼친 layer×head 축으로 max, 이어서 look-ahead로 mean). 둘째, <b>Llama 전용</b>(로드 시 assert)이고 <b>vLLM V0</b>(<code class="inl">vllm==0.6.3.post1</code>)에서만 돈다. <code class="inl">enforce_eager=True</code>와 <code class="inl">enable_chunked_prefill=False</code>가 필요하고 LoRA, beam, multi-step은 지원하지 않는다. 현행 vLLM(V1) 이식은 README에 TODO로 남아 있다.</span></p>
 <ul class="srcs">
 <li><a href="https://github.com/Jingyu6/speculative_prefill/blob/c1d6bd323efd1dc11a2ba85bc49f52879db43c7b/speculative_prefill/vllm_patch/__init__.py#L43-L58">enable_prefill_spec</a> · <a href="https://github.com/Jingyu6/speculative_prefill/blob/c1d6bd323efd1dc11a2ba85bc49f52879db43c7b/speculative_prefill/vllm_patch/worker/spec_prefill_worker.py#L150-L161">speculate→base</a> · <a href="https://github.com/Jingyu6/speculative_prefill/blob/c1d6bd323efd1dc11a2ba85bc49f52879db43c7b/speculative_prefill/vllm_patch/worker/look_ahead_spec_worker.py#L401-L413">attention scores</a> · <a href="https://github.com/Jingyu6/speculative_prefill/blob/c1d6bd323efd1dc11a2ba85bc49f52879db43c7b/speculative_prefill/vllm_patch/worker/look_ahead_spec_worker.py#L342-L367">importance</a> · <a href="https://github.com/Jingyu6/speculative_prefill/blob/c1d6bd323efd1dc11a2ba85bc49f52879db43c7b/speculative_prefill/vllm_patch/worker/look_ahead_spec_worker.py#L286-L295">position restore</a></li>
 </ul>
 </section>
 
 <section id="s4">
-<h2><span class="num">4</span><span class="en">Results — 7.66× TTFT, and where it breaks</span><span class="ko">결과 — 7.66× TTFT, 그리고 깨지는 곳</span></h2>
-<p><span class="en">The headline: on <b>Llama-3.1-405B-Instruct-FP8</b> at a <b>10% keep-ratio</b>, SpecPrefill reaches <b>up to 7.66× TTFT</b> and serves <b>~7× the maximum end-to-end QPS</b> while holding <b>&gt;95% accuracy</b> on Multi-Doc QA. Against MInference (a sparse-attention baseline) on 70B, it's ~2.5–6.5× TTFT at ~99.5% of the quality. The speedup is not uniform — it grows with the <b>batch × sequence product</b> and with the <b>target model's size</b> (the bigger the target, the more the 8B speculator's overhead disappears), and is strongest at <b>large batch + short-to-medium prompts</b>. The QPS gain follows directly from TTFT:</span>
-<span class="ko">핵심: <b>Llama-3.1-405B-Instruct-FP8</b>에서 <b>10% keep-ratio</b>로 SpecPrefill은 <b>최대 7.66× TTFT</b>에 도달하고 <b>최대 end-to-end QPS를 ~7×</b> 내면서 Multi-Doc QA 정확도 <b>&gt;95%</b>를 유지한다. 70B에서 MInference(sparse-attention 베이스라인) 대비 품질 ~99.5%에 TTFT ~2.5–6.5×. 속도 향상은 균일하지 않다 — <b>배치 × 시퀀스 곱</b>과 <b>target 모델 크기</b>에 따라 커지고(target이 클수록 8B speculator 오버헤드가 사라짐), <b>큰 배치 + 짧은–중간 프롬프트</b>에서 가장 강하다. QPS 이득은 TTFT에서 바로 따라온다:</span></p>
+<h2><span class="num">4</span><span class="en">Results — 7.66× TTFT, and where it breaks</span><span class="ko">결과: 7.66× TTFT, 그리고 깨지는 곳</span></h2>
+<p><span class="en">On <b>Llama-3.1-405B-Instruct-FP8</b> at a <b>10% keep-ratio</b>, SpecPrefill reaches <b>up to 7.66× TTFT</b> and serves <b>~7× the maximum end-to-end QPS</b> while holding <b>&gt;95% accuracy</b> on Multi-Doc QA. Against MInference (a sparse-attention baseline) on 70B it is ~2.5–6.5× TTFT at ~99.5% of the quality. The speedup grows with the <b>batch × sequence product</b> and the <b>target model's size</b> (the 8B speculator's overhead fades), so it is strongest at <b>large batch + short-to-medium prompts</b>. The QPS gain follows directly from TTFT.</span>
+<span class="ko"><b>Llama-3.1-405B-Instruct-FP8</b>에서 <b>10% keep-ratio</b>로 <b>최대 7.66× TTFT</b>, <b>최대 end-to-end QPS ~7×</b>를 내면서 Multi-Doc QA 정확도 <b>&gt;95%</b>를 지킨다. 70B에서 MInference(sparse-attention 베이스라인)와 비교하면 품질 ~99.5%에 TTFT ~2.5–6.5×다. 속도 향상은 <b>배치 × 시퀀스 곱</b>과 <b>target 모델 크기</b>가 클수록 커지고(8B speculator 오버헤드가 상대적으로 묻힌다), <b>큰 배치 + 짧은–중간 프롬프트</b>에서 가장 크다. QPS 이득은 TTFT 단축에서 그대로 나온다.</span></p>
 
 <svg class="fig" viewBox="0 0 760 210" role="img" aria-label="TTFT speedup up to 7.66x, and a quality strip: holds on retrieval/QA/few-shot, breaks on aggregation/counting">
   <style>.t{font:600 12px -apple-system,sans-serif;fill:var(--ink)}.k{font:10px -apple-system,sans-serif;fill:var(--muted)}.dense{fill:var(--gray-bd)}.spec{fill:var(--green-bd)}.n{font:600 11px -apple-system,sans-serif;fill:#fff}.ok{fill:var(--green-ink)}.no{fill:var(--coral-ink)}.mid{fill:var(--amber-ink)}</style>
@@ -363,24 +376,47 @@ new_seq_data = AugmentedSequenceData.from_seqs_and_pos_ids(
   <text x="20" y="170" class="ok">✓ retrieval</text><text x="120" y="170" class="ok">✓ multi-hop</text><text x="230" y="170" class="ok">✓ single/multi-doc QA</text><text x="410" y="170" class="ok">✓ few-shot</text>
   <text x="20" y="192" class="mid">~ summarization (degrades)</text><text x="230" y="192" class="no">✗ aggregation / counting (word-frequency) — needs most tokens</text>
 </svg>
-<p class="figcap"><span class="en">Fig 5 — Speed vs quality. Up to 7.66× TTFT / ~7× QPS at 10% keep; quality is near-lossless on retrieval, QA, and few-shot, but degrades on summarization and fails on aggregation/counting tasks that genuinely need every token. Numbers are the paper's (efficiency high-confidence; exact quality decimals read the source tables).</span><span class="ko">그림 5 — 속도 vs 품질. 10% keep에서 최대 7.66× TTFT / ~7× QPS; 품질은 retrieval·QA·few-shot에서 거의 무손실이지만 summarization에서 저하되고, 모든 토큰이 필요한 집계/카운팅 태스크에선 실패. 수치는 논문 것(효율은 신뢰 높음; 정확한 품질 소수점은 원문 표 참고).</span></p>
+<p class="figcap"><span class="en">Fig 5 · Speed vs quality at 10% keep. Numbers from the paper (exact quality decimals: see source tables).</span><span class="ko">그림 5 · 10% keep에서의 속도와 품질. 수치는 논문 기준(품질 소수점은 원문 표 참고).</span></p>
 
 <blockquote class="q">
   <p>"SpecPrefill preserves the quality despite only using one tenth of the tokens except for aggregation tasks."</p>
   <cite>— §4.5 (RULER) · <a href="https://arxiv.org/html/2502.02789v2#S4.SS5">원문 보기 (§4.5)</a></cite>
 </blockquote>
-<p><span class="en"><b>Threats / limitations</b> the authors flag: because tokens are dropped, there are no full-vocabulary logits for the input, so evaluation is generative-only; <b>multi-turn</b> conversation can fail without recomputing the dropped context; there's no principled importance metric beyond the speculator's attention; and the keep-ratio is a <b>fixed</b> percentage, not adapted per prompt.</span>
-<span class="ko">저자들이 밝힌 <b>위협/한계</b>: 토큰을 버리므로 입력 전체 vocab logits이 없어 평가가 생성형에 국한; 버린 컨텍스트를 재계산하지 않으면 <b>멀티턴</b> 대화가 실패할 수 있음; speculator attention을 넘는 원리적 중요도 지표가 없음; keep-ratio가 프롬프트별 적응이 아니라 <b>고정</b> 비율.</span></p>
+<p><b><span class="en">Threats / limitations the authors flag</span><span class="ko">저자들이 밝힌 위협/한계</span></b></p>
+<ul class="en">
+  <li>Tokens are dropped, so there are no full-vocabulary logits for the input and evaluation is generative-only.</li>
+  <li><b>Multi-turn</b> conversation can fail without recomputing the dropped context.</li>
+  <li>There is no principled importance metric beyond the speculator's attention.</li>
+  <li>The keep-ratio is a <b>fixed</b> percentage, not adapted per prompt.</li>
+</ul>
+<ul class="ko">
+  <li>토큰을 버리므로 입력 전체의 vocab logits가 없어 생성형 평가만 가능하다.</li>
+  <li>버린 컨텍스트를 다시 계산하지 않으면 <b>멀티턴</b> 대화가 실패할 수 있다.</li>
+  <li>speculator attention 말고는 원리적인 중요도 지표가 없다.</li>
+  <li>keep-ratio가 프롬프트별로 적응하지 않는 <b>고정</b> 비율이다.</li>
+</ul>
+
 </section>
 
 <section id="s5">
 <h2><span class="num">5</span><span class="en">Discussion &amp; our take</span><span class="ko">논의 &amp; 우리 관점</span></h2>
 <p><span class="en">The paper's own conclusion: prefill is compute-/MLP-bound, and dropping prompt tokens with a cheap speculator cuts TTFT enough for ~7× max QPS plus memory savings — training-free and composable with quantization, KV eviction, and speculative decoding. Because a speculative-<i>decoding</i> draft already does a full context pass, the authors argue SpecPrefill points toward a single "small-model-assisted" inference pipeline. Stated future work: decouple the speculation from the main forward at the <b>scheduler</b> level, make the keep-ratio <b>adaptive</b> to each prompt's compressibility, and rewrite queries for the information-dense aggregation tasks that currently break.</span>
-<span class="ko">논문 결론: prefill은 연산/MLP 바운드이고, 싼 speculator로 프롬프트 토큰을 버리면 TTFT가 충분히 줄어 ~7× max QPS + 메모리 절감 — 학습 불필요, 양자화·KV 축출·speculative decoding과 조합 가능. speculative <i>decoding</i>의 draft가 이미 전체 컨텍스트를 한 번 도니, 저자들은 SpecPrefill이 단일 "소형 모델 보조" 추론 파이프라인을 가리킨다고 본다. 밝힌 후속 과제: speculation을 <b>스케줄러</b> 레벨에서 메인 forward와 분리, keep-ratio를 프롬프트 압축성에 <b>적응</b>, 현재 깨지는 정보 밀집 집계 태스크용 쿼리 재작성.</span></p>
+<span class="ko">논문의 결론은 이렇다. prefill은 연산/MLP 바운드이고, 싼 speculator로 프롬프트 토큰을 버리면 TTFT가 줄어 ~7× max QPS와 메모리 절감을 얻는다. 학습이 필요 없고 양자화, KV 축출, speculative decoding과 조합된다. speculative <i>decoding</i>의 draft가 이미 전체 컨텍스트를 한 번 읽으므로, 저자들은 하나의 "소형 모델 보조" 추론 파이프라인으로 갈 수 있다고 본다. 후속 과제로는 speculation을 <b>스케줄러</b> 레벨에서 메인 forward와 분리하기, keep-ratio를 프롬프트 압축성에 맞춰 <b>적응</b>시키기, 지금 깨지는 정보 밀집 집계 태스크를 위한 쿼리 재작성을 꼽았다.</span></p>
 <div class="callout c-purple">
 <p><b><span class="en">Editor's note — our take (not the paper's claim)</span><span class="ko">편집자 주 — 우리 관점 (논문의 주장 아님)</span></b></p>
-<p><span class="en">The durable idea here isn't the 7.66× — it's the <b>reframing</b>: at production batch sizes, prefill is bottlenecked by the MLP + all-reduce, so the lever is <i>fewer tokens</i>, not faster attention. That reorients where to look. For a heimdall/MI250 stack, two honesty checks before believing the number: (1) it's a <b>Llama-only vLLM-V0 monkey-patch</b> today — the mechanism is portable but this code is not production-ready for us, and the V1 port is unstarted; (2) the win is conditional — <b>fixed</b> keep-ratio plus failure on aggregation/counting and multi-turn means it is not a drop-in for arbitrary traffic; it needs per-workload tuning and a guard for the task types it breaks. It's also worth separating from <b>prefix caching</b>: if a long prefix is already cached (our usual lever, and the CMX/KV-tiering direction), prefill is already skipped — SpecPrefill targets the different case of a <i>long, uncached, single-shot</i> prompt where you must prefill but not all of it matters. The two compose.</span>
-<span class="ko">여기서 오래 남을 아이디어는 7.66×가 아니라 <b>재구성</b>이다: 프로덕션 배치 크기에선 prefill 병목이 MLP + all-reduce라, 레버는 빠른 attention이 아니라 <i>적은 토큰</i>이다. 어디를 봐야 하는지를 바꾼다. heimdall/MI250 스택엔 숫자를 믿기 전 정직성 점검 둘: (1) 지금은 <b>Llama 전용 vLLM-V0 monkey-patch</b> — 메커니즘은 이식 가능하나 이 코드는 우리에게 프로덕션 준비가 아니고 V1 이식은 미착수; (2) 이득은 조건부 — <b>고정</b> keep-ratio + 집계/카운팅·멀티턴 실패는 임의 트래픽에 drop-in이 아님을 뜻하고, 워크로드별 튜닝과 깨지는 태스크 가드가 필요. <b>prefix 캐싱</b>과도 구분해야 한다: 긴 prefix가 이미 캐시돼 있으면(우리 통상 레버이자 CMX/KV-tiering 방향) prefill은 이미 생략됨 — SpecPrefill은 <i>길고·캐시 안 됐고·단발</i>인 프롬프트에서 prefill은 해야 하는데 전부가 중요하진 않은 다른 경우를 겨냥. 둘은 조합된다.</span></p>
+<ol class="en">
+  <li>The durable idea is the <b>reframing</b>, not the 7.66×: at production batch sizes prefill is bottlenecked by the MLP + all-reduce, so the lever is <i>fewer tokens</i>, not faster attention.</li>
+  <li>For a heimdall/MI250 stack, today's code is a <b>Llama-only vLLM-V0 monkey-patch</b>. The mechanism is portable, but this code is not production-ready for us and the V1 port is unstarted.</li>
+  <li>The win is conditional: a <b>fixed</b> keep-ratio plus failures on aggregation/counting and multi-turn mean it is not a drop-in for arbitrary traffic. It needs per-workload tuning and a guard for those task types.</li>
+  <li>It is distinct from <b>prefix caching</b> (our usual lever, and the CMX/KV-tiering direction), which skips prefill for an already cached prefix. SpecPrefill targets <i>long, uncached, single-shot</i> prompts. The two compose.</li>
+</ol>
+<ol class="ko">
+  <li>오래 남을 아이디어는 7.66×가 아니라 <b>재구성</b>이다. 프로덕션 배치 크기에서 prefill 병목은 MLP + all-reduce이므로 빠른 attention보다 <i>적은 토큰</i>이 레버다.</li>
+  <li>heimdall/MI250 스택 입장에서 지금 코드는 <b>Llama 전용 vLLM-V0 monkey-patch</b>다. 메커니즘은 옮길 수 있지만 이 코드를 그대로 프로덕션에 쓰기는 어렵고, V1 이식도 시작되지 않았다.</li>
+  <li>이득은 조건부다. keep-ratio가 <b>고정</b>이고 집계/카운팅과 멀티턴에서 실패하므로 임의 트래픽에 바로 넣을 수 없다. 워크로드별 튜닝과 취약 태스크용 가드가 필요하다.</li>
+  <li><b>prefix 캐싱</b>과는 다른 문제를 푼다. 우리 통상 레버이자 CMX/KV-tiering 방향인 prefix 캐싱은 이미 캐시된 prefix의 prefill을 건너뛴다. SpecPrefill은 <i>길고 캐시되지 않은 단발</i> 프롬프트를 겨냥하므로 둘은 함께 쓸 수 있다.</li>
+</ol>
+
 </div>
 </section>
 
@@ -395,7 +431,7 @@ new_seq_data = AugmentedSequenceData.from_seqs_and_pos_ids(
 </section>
 
 <footer class="foot">
-<p><span class="en">Paper note on SpecPrefill (arXiv:2502.02789, ICML 2025). Diagrams are original; verbatim quotes carry arXiv anchors; code permalinks pinned to c1d6bd3. Efficiency figures are the paper's headline numbers; exact quality decimals should be read off the source tables.</span><span class="ko">SpecPrefill(arXiv:2502.02789, ICML 2025) 논문 정리. 다이어그램은 직접 작성; verbatim 인용은 arXiv 앵커 포함; 코드 permalink는 c1d6bd3 고정. 효율 수치는 논문 대표값; 정확한 품질 소수점은 원문 표 참고.</span></p>
+<p><span class="en">Paper note on SpecPrefill (arXiv:2502.02789, ICML 2025). Diagrams are original; verbatim quotes carry arXiv anchors; code permalinks pinned to c1d6bd3. Efficiency figures are the paper's headline numbers; exact quality decimals should be read off the source tables.</span><span class="ko">SpecPrefill(arXiv:2502.02789, ICML 2025) 논문 정리. 다이어그램은 직접 그렸고 verbatim 인용에는 arXiv 앵커를 달았다. 코드 permalink는 c1d6bd3에 고정했다. 효율 수치는 논문 대표값이며 품질 소수점은 원문 표를 참고한다.</span></p>
 <p class="post-meta"><time datetime="2026-08-25">2026-08-25</time></p>
 </footer>
 </div>

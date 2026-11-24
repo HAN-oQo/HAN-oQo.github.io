@@ -84,8 +84,8 @@
     <span class="ko">Software Aging in GPU-Based LLM Serving — 논문 정리</span>
   </h1>
   <p class="lede">
-    <span class="en">"Characterizing Software Aging in GPU-Based LLM Serving Systems" — Cotroneo &amp; Cukic. They left vLLM, Triton-wrapped vLLM, and a plain PyTorch server running for 36 hours each. Every single one slowly leaked memory — and the dashboards showed nothing.</span>
-    <span class="ko">"Characterizing Software Aging in GPU-Based LLM Serving Systems" — Cotroneo &amp; Cukic. vLLM, Triton으로 감싼 vLLM, 순정 PyTorch 서버를 각각 36시간씩 켜놓고 지켜봤더니, 전부 조금씩 메모리가 새고 있었다 — 그런데 대시보드에는 아무것도 안 보였다.</span>
+    <span class="en">"Characterizing Software Aging in GPU-Based LLM Serving Systems" (Cotroneo &amp; Cukic). vLLM, Triton-wrapped vLLM, and a plain PyTorch server each ran for 36 hours. All of them slowly leaked memory, and the dashboards showed nothing.</span>
+    <span class="ko">"Characterizing Software Aging in GPU-Based LLM Serving Systems" (Cotroneo &amp; Cukic). vLLM, Triton으로 감싼 vLLM, 순정 PyTorch 서버를 36시간씩 돌렸더니 전부 메모리가 조금씩 샜다. 대시보드에는 아무것도 보이지 않았다.</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://arxiv.org/abs/2606.11916">arXiv:2606.11916</a></span>
@@ -99,55 +99,55 @@
 <nav class="toc">
   <h4><span class="en">Contents</span><span class="ko">목차</span></h4>
   <ol>
-    <li><a href="#s1"><span class="en">Problem — nobody has watched these engines age</span><span class="ko">문제 정의 — 아무도 이 엔진들이 "늙는지" 지켜본 적이 없다</span></a></li>
-    <li><a href="#s2"><span class="en">Method — 6 deployments × 36 hours, watched from every angle</span><span class="ko">해결 방법 — 6개 배포 × 36시간, 사방에서 관측</span></a></li>
-    <li><a href="#s3"><span class="en">Results — everything leaks; the ranking is upside-down</span><span class="ko">결과 — 전부 샌다, 그런데 순위가 뒤집혀 있다</span></a></li>
-    <li><a href="#s4"><span class="en">Takeaways — what this means for serving operators (and us)</span><span class="ko">시사점 — 서빙 운영자(그리고 우리)에게 의미하는 것</span></a></li>
+    <li><a href="#s1"><span class="en">Problem: nobody has watched these engines age</span><span class="ko">문제 정의: 이 엔진들이 늙는지 본 사람이 없다</span></a></li>
+    <li><a href="#s2"><span class="en">Method: 6 deployments × 36 hours, watched from every angle</span><span class="ko">해결 방법: 6개 배포 × 36시간 관측</span></a></li>
+    <li><a href="#s3"><span class="en">Results: everything leaks, and the ranking is upside-down</span><span class="ko">결과: 전부 새고, 순위는 뒤집혀 있다</span></a></li>
+    <li><a href="#s4"><span class="en">Takeaways for serving operators (and us)</span><span class="ko">시사점: 서빙 운영자와 우리에게</span></a></li>
   </ol>
 </nav>
 
 <div class="callout c-blue">
   <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
-  <span class="en">Six LLM serving setups, 36 hours each, identical traffic. <b>All six slowly leak memory inside the serving process.</b> The leak is invisible in latency/throughput, it's <b>not</b> caused by the model or the GPU — and depending on how you package the engine, the leak rate differs by <b>~100×</b> (best: vLLM V1 standalone, worst: Triton wrapping the old V0 engine).</span>
-  <span class="ko">LLM 서빙 구성 6개를 동일한 트래픽으로 36시간씩 돌렸다. <b>여섯 개 전부, 서빙 프로세스 안에서 메모리가 조금씩 샌다.</b> 이 누수는 레이턴시/스루풋에는 안 보이고, 모델이나 GPU 탓도 <b>아니며</b> — 엔진을 어떻게 포장했느냐에 따라 누수 속도가 <b>약 100배</b>까지 갈린다 (최선: vLLM V1 단독, 최악: 구형 V0 엔진을 Triton으로 감싼 조합).</span>
+  <span class="en">Six serving setups, 36 hours each. <b>All six slowly leak memory inside the serving process</b>, invisibly to latency/throughput and <b>not</b> because of the model or GPU. Packaging changes the leak rate by <b>~100×</b> (best: vLLM V1 standalone, worst: Triton wrapping the old V0 engine).</span>
+  <span class="ko">서빙 구성 6개를 36시간씩 돌렸다. <b>여섯 개 모두 서빙 프로세스 안에서 메모리가 조금씩 샌다.</b> 레이턴시와 스루풋에는 드러나지 않고, 모델이나 GPU 탓도 <b>아니다</b>. 엔진을 어떻게 포장하느냐에 따라 누수 속도가 <b>약 100배</b> 갈린다(최선은 vLLM V1 단독, 최악은 구형 V0를 Triton으로 감싼 조합).</span>
 </div>
 
 <div class="grid3">
   <div class="mini">
     <h4><span class="en">📖 Software aging?</span><span class="ko">📖 소프트웨어 에이징?</span></h4>
-    <p><span class="en">A long-running program slowly getting worse — leaked memory piles up, performance drifts. A restart resets it; that's why the field's classic cure is called "rejuvenation" (= planned restarts).</span><span class="ko">오래 켜둔 프로그램이 서서히 나빠지는 현상. 누수된 메모리가 쌓이고 성능이 슬금슬금 밀린다. 재시작하면 리셋된다 — 그래서 이 분야의 고전적 처방 이름이 "회춘(rejuvenation)", 즉 계획된 재시작이다.</span></p>
+    <p><span class="en">A long-running program slowly getting worse. A restart resets it, hence the classic cure "rejuvenation" (planned restarts).</span><span class="ko">오래 켜 둔 프로그램이 서서히 나빠지는 현상이다. 재시작하면 풀리므로 고전적 처방을 "회춘(rejuvenation)", 즉 계획된 재시작이라 부른다.</span></p>
   </div>
   <div class="mini">
     <h4>📖 USS · RSS · VMS</h4>
-    <p><span class="en">Three ways to count a process's memory. <b>USS</b> = pages only this process uses (the most honest leak signal). <b>RSS</b> = everything physically in RAM, shared libs included. <b>VMS</b> = address space merely <i>reserved</i>, not necessarily used.</span><span class="ko">프로세스 메모리를 세는 세 가지 방법. <b>USS</b> = 이 프로세스만 쓰는 메모리(누수 측정에 가장 정직한 지표). <b>RSS</b> = 공유 라이브러리까지 포함해 실제 RAM에 올라간 전부. <b>VMS</b> = 실제 사용이 아니라 "찜"만 해둔 주소 공간.</span></p>
+    <p><span class="en"><b>USS</b>: pages only this process uses (the most honest leak signal). <b>RSS</b>: all of it in RAM, shared libs included. <b>VMS</b>: address space merely <i>reserved</i>.</span><span class="ko"><b>USS</b>는 이 프로세스만 쓰는 메모리로, 누수를 가장 정직하게 보여 준다. <b>RSS</b>는 공유 라이브러리까지 포함한 RAM 점유, <b>VMS</b>는 예약만 해 둔 주소 공간이다.</span></p>
   </div>
   <div class="mini">
     <h4><span class="en">📖 Open-loop Poisson load</span><span class="ko">📖 Open-loop Poisson 부하</span></h4>
-    <p><span class="en">A traffic generator that keeps firing requests at random intervals <i>whether or not the server keeps up</i> — like real users, who don't politely wait for your server to catch its breath.</span><span class="ko">서버가 버거워하든 말든 무작위 간격으로 요청을 계속 쏘는 부하 방식. 서버 숨 고를 때까지 기다려주지 않는 실제 사용자 트래픽과 비슷하다.</span></p>
+    <p><span class="en">Requests fire at random intervals <i>whether or not the server keeps up</i>, like real users.</span><span class="ko">서버가 따라오든 말든 무작위 간격으로 요청을 보내는 방식이다. 실제 사용자 트래픽과 닮았다.</span></p>
   </div>
   <div class="mini">
     <h4>📖 vLLM V0 / V1</h4>
-    <p><span class="en">Two generations of vLLM's internal engine. Same paged-attention algorithm, same API. V0 = older synchronous design; V1 = newer async redesign (today's default).</span><span class="ko">vLLM 내부 엔진의 두 세대. paged attention 알고리즘도 API도 같다. V0 = 구형 동기식 설계, V1 = 비동기로 재설계한 신형(현재 기본값).</span></p>
+    <p><span class="en">Two generations of vLLM's engine with the same algorithm and API. V0 is synchronous; V1 is the async redesign (today's default).</span><span class="ko">알고리즘과 API가 같은 vLLM 엔진 두 세대다. V0는 동기식, V1은 비동기로 다시 짠 현재 기본값이다.</span></p>
   </div>
   <div class="mini">
     <h4><span class="en">📖 "Triton-wrapped"</span><span class="ko">📖 "Triton 래핑"</span></h4>
-    <p><span class="en">NVIDIA Triton runs vLLM as a child process and adds production extras on top: request queue, dynamic batcher, OpenAI-compatible API.</span><span class="ko">NVIDIA Triton이 vLLM을 자식 프로세스로 띄우고 그 위에 요청 큐, dynamic batcher, OpenAI 호환 API 같은 프로덕션 기능을 얹는 구조.</span></p>
+    <p><span class="en">NVIDIA Triton runs vLLM as a child process and adds a request queue, dynamic batcher and OpenAI-compatible API.</span><span class="ko">NVIDIA Triton이 vLLM을 자식 프로세스로 띄우고 요청 큐, dynamic batcher, OpenAI 호환 API를 얹은 구성이다.</span></p>
   </div>
   <div class="mini">
     <h4><span class="en">📖 How big is "+157 KB/h"?</span><span class="ko">📖 "+157 KB/h"는 얼마나 큰가?</span></h4>
-    <p><span class="en">The worst leak found ≈ 110 MB per month. Not an outage tomorrow. The point is that it exists at all, that it's invisible, and that deployments differ ~100×.</span><span class="ko">발견된 최악의 누수도 한 달에 약 110 MB. 내일 장애 날 수준은 아니다. 핵심은 "샌다는 사실 자체", "안 보인다는 것", 그리고 "배포마다 100배 차이"다.</span></p>
+    <p><span class="en">About 110 MB per month, the worst case found. Not an outage tomorrow; what matters is that it is invisible and varies ~100×.</span><span class="ko">발견된 최악의 경우로 한 달에 약 110 MB다. 당장 장애가 날 양은 아니고, 보이지 않는다는 점과 배포마다 100배 차이 난다는 점이 중요하다.</span></p>
   </div>
 </div>
 
 <!-- ============ 0. ORIENTATION ============ -->
 <section id="s0">
   <h2>🗺️
-    <span class="en">Before we start — what exactly leaks, and why would it ever hurt?</span>
-    <span class="ko">시작 전에 — 정확히 뭐가 새고, 그게 왜 문제가 되나?</span>
+    <span class="en">Before we start: what leaks, and why would it hurt?</span>
+    <span class="ko">시작 전에: 무엇이 새고, 왜 문제인가</span>
   </h2>
 
-  <p class="en">"Memory leak in LLM serving" sounds like a GPU problem. It isn't — and getting this picture right makes the whole paper click. When you run <code class="inl">vllm serve</code>, what actually starts is <b>a Python process on the Linux host</b>. The model weights and the KV-cache live in GPU VRAM, but the process that drives the GPU lives in ordinary host RAM (the CPU side):</p>
-  <p class="ko">"LLM 서빙에서 메모리 누수"라고 하면 GPU 문제처럼 들리지만, 아닙니다 — 그리고 이 그림 하나만 제대로 잡으면 논문 전체가 술술 읽힙니다. <code class="inl">vllm serve</code>를 실행하면 실제로 뜨는 것은 <b>리눅스 호스트 위의 Python 프로세스 하나</b>입니다. 모델 가중치와 KV-cache는 GPU VRAM에 있지만, 그 GPU를 부리는 프로세스 자체는 호스트의 일반 RAM(CPU 쪽)에서 삽니다:</p>
+  <p class="en">"Memory leak in LLM serving" sounds like a GPU problem, but it isn't. <code class="inl">vllm serve</code> starts <b>a Python process on the Linux host</b>. Weights and KV-cache live in GPU VRAM, while the process driving the GPU lives in ordinary host RAM.</p>
+  <p class="ko">"LLM 서빙의 메모리 누수"는 GPU 문제처럼 들리지만 그렇지 않다. <code class="inl">vllm serve</code>를 실행하면 <b>리눅스 호스트에 Python 프로세스 하나</b>가 뜬다. 가중치와 KV-cache는 GPU VRAM에 있고, GPU를 부리는 프로세스는 호스트의 일반 RAM에 있다.</p>
 
   <svg class="fig" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="One server machine: the vLLM Python process in host RAM (which leaks) drives the GPU whose VRAM holds model weights and KV-cache (which stays flat)">
     <defs>
@@ -188,40 +188,52 @@
     <text x="450" y="272" text-anchor="middle" font-size="11" fill="#6b6a63">"Process memory leak" = the blue box (Python process in host RAM) slowly swelling. The GPU is fine.</text>
     <text x="450" y="292" text-anchor="middle" font-size="10" fill="#8a8f98">CPU usage is flat too (§IV-C) — not compute slowing down, but the RAM the process holds growing</text>
   </svg>
-  <p class="figcap"><span class="en">Where the leak actually lives. The paper's USS metric measures the blue box; the green box stayed flat in every run.</span><span class="ko">누수가 실제로 사는 곳. 논문의 USS 지표가 재는 건 파란 상자이고, 초록 상자는 모든 런에서 평탄했다.</span></p>
+  <p class="figcap"><span class="en">Figure 1 · Where the leak lives (USS = blue box). Drawn by us from §IV-C·E.</span><span class="ko">그림 1 · 누수가 사는 곳(USS = 파란 상자). §IV-C·E 근거, 직접 그림.</span></p>
 
   <h3><span class="en">Which part of the blue box leaks?</span>
-      <span class="ko">파란 상자 안에서도 "어떤 부분"이 새나?</span></h3>
-  <p class="en">The paper's detective logic: all three deployments run the <b>same model and the same inference math</b> (same CUDA kernels). If the inference path were leaking, all three would leak at a similar rate. Instead they differ ~100× — so the leak must live in the <b>wrapping</b>: the scheduler and request-lifecycle code (why old V0 leaks 7–27× more than V1), the queue/batcher/frontend layers Triton adds (why wrapping amplifies both engines), and the CUDA runtime's host-side bookkeeping (why the PyTorch runs kept <i>reserving</i> address space). Which exact data structure? Unknown — that needs heap profiling, which the paper leaves as future work.</p>
-  <p class="ko">논문의 추리는 이렇습니다: 세 배포는 <b>같은 모델, 같은 추론 연산</b>(같은 CUDA 커널)을 돌립니다. 추론 경로가 새는 거라면 셋의 누수 속도가 비슷해야 하는데, 실제로는 ~100배 차이가 났죠. 그러니 누수는 <b>포장</b>에 사는 겁니다 — 스케줄러와 요청 수명주기 코드(구형 V0가 V1보다 7~27배 더 새는 이유), Triton이 얹는 큐/배처/프론트엔드 계층(래핑이 두 엔진 모두를 증폭시키는 이유), CUDA 런타임의 호스트 쪽 장부(PyTorch 런들이 주소 공간을 계속 <i>예약</i>만 하던 이유). 정확히 어느 자료구조인지는? 미상 — 힙 프로파일링이 필요하고, 논문은 그걸 후속 과제로 남겼습니다.</p>
+      <span class="ko">파란 상자의 어느 부분이 새나?</span></h3>
+  <p class="en">All three deployments run the <b>same model and the same inference math</b>, yet their leak rates differ ~100×. So the leak lives in the <b>wrapping</b>:</p>
+  <p class="ko">세 배포는 <b>같은 모델과 같은 추론 연산</b>을 돌리는데 누수 속도는 ~100배 차이 난다. 그러니 누수는 <b>포장</b> 쪽에 있다.</p>
+  <ul class="en">
+    <li>Scheduler and request-lifecycle code (why old V0 leaks 7–27× more than V1).</li>
+    <li>The queue/batcher/frontend layers Triton adds (why wrapping amplifies both engines).</li>
+    <li>The CUDA runtime's host-side bookkeeping (why the PyTorch runs kept <i>reserving</i> address space).</li>
+  </ul>
+  <ul class="ko">
+    <li>스케줄러와 요청 수명주기 코드. 구형 V0가 V1보다 7~27배 더 새는 이유다.</li>
+    <li>Triton이 얹는 큐·배처·프론트엔드 계층. 래핑이 두 엔진을 모두 증폭하는 이유다.</li>
+    <li>CUDA 런타임의 호스트 쪽 장부. PyTorch 런이 주소 공간을 계속 <i>예약</i>한 이유다.</li>
+  </ul>
+  <p class="en">The exact data structure is unknown; that needs heap profiling, left as future work.</p>
+  <p class="ko">정확히 어느 자료구조인지는 힙 프로파일링이 필요해 후속 과제로 남았다.</p>
   <div class="callout c-teal">
     <span class="tag"><span class="en">analogy</span><span class="ko">비유</span></span>
-    <span class="en">The kitchen (GPU) is spotless and cooking at full speed. But the front counter (host process) keeps a receipt from time to time and never throws it away. Service speed doesn't change one bit — until the day the counter is buried.</span>
-    <span class="ko">주방(GPU)은 깨끗하고 풀스피드로 요리 중입니다. 그런데 카운터(호스트 프로세스)에 영수증이 가끔 한 장씩 쌓이고, 아무도 버리지 않아요. 손님 응대 속도는 조금도 안 변합니다 — 카운터가 파묻히는 날까지는.</span>
+    <span class="en">The kitchen (GPU) cooks at full speed, but the front counter (host process) keeps a receipt now and then and never throws it away. Service speed doesn't change until the counter is buried.</span>
+    <span class="ko">주방(GPU)은 풀스피드로 요리하는데, 카운터(호스트 프로세스)에는 영수증이 가끔 한 장씩 쌓이고 아무도 버리지 않는다. 카운터가 파묻히는 날까지 응대 속도는 그대로다.</span>
   </div>
 
-  <h3><span class="en">And how does host RAM ever hurt LLM inference performance?</span>
-      <span class="ko">호스트 RAM이 대체 어떻게 LLM 추론 성능을 해치나?</span></h3>
-  <p class="en">Within the 36-hour runs: <b>it didn't, at all</b> — latency and throughput stayed flat (§IV-B). That's exactly the danger. A leak like this doesn't degrade performance gradually; it ends in a <b>cliff</b>:</p>
-  <p class="ko">36시간 실험 안에서는: <b>전혀 안 해쳤습니다</b> — 레이턴시와 스루풋이 끝까지 평탄했어요(§IV-B). 그런데 바로 그게 위험한 지점입니다. 이런 누수는 성능을 서서히 깎는 게 아니라 <b>절벽</b>으로 끝납니다:</p>
+  <h3><span class="en">How does host RAM ever hurt inference performance?</span>
+      <span class="ko">호스트 RAM이 어떻게 추론 성능을 해치나</span></h3>
+  <p class="en">Within the 36-hour runs it <b>didn't</b>: latency and throughput stayed flat (§IV-B). That is the danger. Such a leak ends in a <b>cliff</b>:</p>
+  <p class="ko">36시간 실험에서는 <b>해치지 않았다</b>. 레이턴시와 스루풋이 끝까지 평탄했다(§IV-B). 바로 그 점이 위험하다. 이런 누수는 서서히 나빠지지 않고 <b>절벽</b>으로 끝난다.</p>
   <div class="grid3">
     <div class="mini">
-      <h4><span class="en">① RAM fills up → swapping</span><span class="ko">① RAM이 차면 → 스왑</span></h4>
-      <p><span class="en">The OS starts paging the Python orchestrator to disk. The GPU is fine, but the conductor stutters — batching slows, tail latency explodes.</span><span class="ko">OS가 파이썬 오케스트레이터를 디스크로 내리기 시작. GPU는 멀쩡한데 지휘자가 버벅임 — 배칭이 늦어지고 tail latency가 폭발.</span></p>
+      <h4><span class="en">① RAM fills up → swapping</span><span class="ko">① RAM이 차면 스왑</span></h4>
+      <p><span class="en">The OS pages the Python orchestrator to disk; batching slows and tail latency explodes.</span><span class="ko">OS가 Python 오케스트레이터를 디스크로 내리면서 배칭이 늦어지고 tail latency가 치솟는다.</span></p>
     </div>
     <div class="mini">
-      <h4><span class="en">② Or: OOM kill → outage</span><span class="ko">② 또는: OOM kill → 장애</span></h4>
-      <p><span class="en">The kernel kills the serving process. Restart = minutes of model reloading, and every KV-cache on the GPU evaporates.</span><span class="ko">커널이 서빙 프로세스를 죽임. 재시작 = 수 분짜리 모델 재로딩, GPU에 쌓아둔 KV-cache 전부 증발.</span></p>
+      <h4><span class="en">② Or: OOM kill → outage</span><span class="ko">② 또는 OOM kill로 장애</span></h4>
+      <p><span class="en">Restart means minutes of model reloading, and every KV-cache on the GPU is lost.</span><span class="ko">재시작하면 모델을 수 분간 다시 올려야 하고 GPU의 KV-cache가 모두 사라진다.</span></p>
     </div>
     <div class="mini">
-      <h4><span class="en">③ In k8s: OOMKilled loop</span><span class="ko">③ k8s라면: OOMKilled 반복</span></h4>
-      <p><span class="en">With a container memory limit, a leaking process eventually hits it → restart → leak again → restart. Availability blips and cold starts on a schedule you didn't choose.</span><span class="ko">컨테이너 메모리 리밋이 있으면 새는 프로세스는 언젠가 리밋에 닿음 → 재시작 → 또 샘 → 또 재시작. 내가 정하지 않은 주기로 가용성 구멍과 콜드 스타트 발생.</span></p>
+      <h4><span class="en">③ In k8s: OOMKilled loop</span><span class="ko">③ k8s라면 OOMKilled 반복</span></h4>
+      <p><span class="en">The process hits its memory limit, restarts, leaks again: cold starts on a schedule you didn't choose.</span><span class="ko">메모리 리밋에 닿아 재시작하고 다시 새기를 반복한다. 원치 않는 주기로 콜드 스타트가 생긴다.</span></p>
     </div>
   </div>
   <div class="callout c-coral">
     <span class="tag"><span class="en">the shape of the risk</span><span class="ko">위험의 모양</span></span>
-    <span class="en">Not "slowly getting worse" but <b>fine → fine → fine → bang</b> — and the dashboard (latency, throughput, errors) shows nothing until just before the bang. That's why the paper's bottom line is "monitor the process memory itself". To be fair on magnitude: the measured rates (worst ≈ 110 MB/month) buy you months of headroom — the one genuinely scary pattern is E2's staircase (§3.5), because nobody knows when it jumps or by how much.</span>
-    <span class="ko">"서서히 나빠짐"이 아니라 <b>멀쩡 → 멀쩡 → 멀쩡 → 쾅</b>입니다 — 그리고 대시보드(레이턴시·스루풋·에러율)에는 쾅 직전까지 아무것도 안 보입니다. 논문의 결론이 "프로세스 메모리 자체를 모니터링하라"인 이유죠. 규모는 공정하게 말하면: 측정된 속도(최악 ≈ 월 110 MB)면 몇 달은 여유가 있습니다 — 진짜 무서운 건 언제 얼마나 점프할지 모르는 E2의 계단 패턴(§3.5) 하나입니다.</span>
+    <span class="en"><b>Fine → fine → fine → bang</b>, with nothing on the dashboard until just before the bang. Hence the paper's advice to monitor process memory itself. On magnitude: the worst rate (≈ 110 MB/month) leaves months of headroom; the genuinely scary pattern is E2's staircase (§3.5), whose jumps are unpredictable.</span>
+    <span class="ko"><b>멀쩡 → 멀쩡 → 멀쩡 → 쾅</b>이고, 대시보드에는 쾅 직전까지 아무것도 안 보인다. 그래서 프로세스 메모리를 직접 봐야 한다. 최악(≈ 월 110 MB)이라도 몇 달은 버티고, 진짜 위험은 언제 뛸지 모르는 E2의 계단 패턴(§3.5)이다.</span>
   </div>
 </section>
 
@@ -232,25 +244,25 @@
     <span class="ko">문제 정의</span>
   </h2>
 
-  <h3><span class="en">1.1 — We benchmark for minutes, then run for months</span>
-      <span class="ko">1.1 — 벤치마크는 몇 분, 실제 운영은 몇 달</span></h3>
-  <p class="en">vLLM and Triton sit on expensive GPUs and stay up for weeks or months. But almost every number we have about them comes from short benchmarks — peak throughput, p99 latency, measured over minutes. Nobody has really asked: <b>what happens to these processes after hour 30?</b></p>
-  <p class="ko">vLLM과 Triton은 비싼 GPU 위에서 몇 주, 몇 달씩 떠 있습니다. 그런데 우리가 아는 수치는 거의 전부 짧은 벤치마크 — 몇 분짜리 측정에서 나온 피크 스루풋, p99 레이턴시입니다. 정작 <b>"이 프로세스, 30시간째에는 어떤 상태일까?"</b>를 물어본 사람이 없었습니다.</p>
+  <h3><span class="en">1.1 We benchmark for minutes, then run for months</span>
+      <span class="ko">1.1 벤치마크는 몇 분, 운영은 몇 달</span></h3>
+  <p class="en">vLLM and Triton stay up for weeks or months, yet almost every number about them (peak throughput, p99 latency) comes from minute-long benchmarks. Nobody asked: <b>what happens after hour 30?</b></p>
+  <p class="ko">vLLM과 Triton은 몇 주에서 몇 달씩 떠 있지만, 피크 스루풋이나 p99 레이턴시 같은 수치는 거의 다 몇 분짜리 벤치마크에서 나온다. <b>30시간째의 상태</b>를 물어본 사람은 없었다.</p>
   <blockquote class="q">
     <p>"Yet the literature on these engines focuses almost entirely on peak metrics measured in minutes. What happens to them over longer windows is mostly unknown."</p>
     <cite>— §I, ¶1 · <a href="https://arxiv.org/html/2606.11916v1#S1">원문 보기 (arXiv HTML §I)</a></cite>
   </blockquote>
-  <p class="en">Funny thing is, there's a whole research field for exactly this question. "Software aging and rejuvenation" (SAR) has spent ~30 years measuring how long-running software slowly rots — in databases, hypervisors, operating systems, blockchains. They just never got around to LLM serving:</p>
-  <p class="ko">재미있는 건, 정확히 이 질문을 다루는 연구 분야가 이미 있다는 점입니다. "소프트웨어 에이징·회춘(SAR)" 분야는 약 30년간 DB, 하이퍼바이저, OS, 블록체인에서 장기 실행 소프트웨어가 서서히 상하는 과정을 측정해 왔습니다. 다만 LLM 서빙까지는 아직 손이 닿지 않았을 뿐:</p>
+  <p class="en">A field for exactly this question exists. "Software aging and rejuvenation" (SAR) has studied rotting long-running software for ~30 years (databases, hypervisors, OSes, blockchains), but never LLM serving:</p>
+  <p class="ko">이 질문을 다루는 분야는 이미 있다. "소프트웨어 에이징·회춘(SAR)"은 약 30년간 DB, 하이퍼바이저, OS, 블록체인의 노화를 측정해 왔지만 LLM 서빙은 다루지 않았다.</p>
   <blockquote class="q">
     <p>"The SAR community has not yet engaged with LLM serving on the GPU."</p>
     <cite>— §I, ¶2 · <a href="https://arxiv.org/html/2606.11916v1#S1">원문 보기 (§I)</a></cite>
   </blockquote>
 
-  <h3><span class="en">1.2 — Why can't we just reuse the old aging playbook?</span>
-      <span class="ko">1.2 — 기존 에이징 연구 방법을 그대로 쓰면 안 되나?</span></h3>
-  <p class="en">Because LLM serving violates every assumption the old studies were built on:</p>
-  <p class="ko">안 됩니다. LLM 서빙은 기존 연구가 깔고 있던 가정을 전부 깨기 때문입니다:</p>
+  <h3><span class="en">1.2 Why not reuse the old aging playbook?</span>
+      <span class="ko">1.2 기존 에이징 연구 방법은 왜 안 통하나</span></h3>
+  <p class="en">LLM serving breaks every assumption the old studies relied on:</p>
+  <p class="ko">LLM 서빙이 기존 연구의 가정을 모두 깨기 때문이다.</p>
   <blockquote class="q">
     <p>"Traditional aging studies target CPU-bound systems with mature allocators and workloads of regular cost. LLM serving on the GPU breaks all three assumptions."</p>
     <cite>— §I, ¶3 · <a href="https://arxiv.org/html/2606.11916v1#S1">원문 보기 (§I)</a></cite>
@@ -262,49 +274,49 @@
     </tr>
     <tr>
       <td><span class="en">One program, one place (CPU)</span><span class="ko">프로그램은 한 곳(CPU)에서 돈다</span></td>
-      <td><span class="en">Two coupled worlds: a Python layer on the CPU orchestrating a CUDA kernel on the GPU — state lives on <b>both</b> sides, so a leak can hide on either (§I ¶3)</span><span class="ko">결합된 두 세계: CPU의 Python 계층이 GPU의 CUDA 커널을 지휘. 상태가 <b>양쪽 모두</b>에 있어서 누수도 양쪽 어디에든 숨을 수 있다 (§I ¶3)</span></td>
+      <td><span class="en">A Python layer on the CPU drives CUDA kernels on the GPU; state lives on <b>both</b> sides, so a leak can hide on either (§I ¶3)</span><span class="ko">CPU의 Python 계층이 GPU의 CUDA 커널을 지휘한다. 상태가 <b>양쪽</b>에 있어 누수도 어디에든 숨는다 (§I ¶3)</span></td>
     </tr>
     <tr>
-      <td><span class="en">Requests cost about the same</span><span class="ko">요청 비용이 비슷비슷하다</span></td>
-      <td><span class="en">One request might be 100 tokens, the next 7000 — cost varies by orders of magnitude (§I ¶3)</span><span class="ko">어떤 요청은 100토큰, 다음 요청은 7000토큰 — 비용이 자릿수 단위로 출렁인다 (§I ¶3)</span></td>
+      <td><span class="en">Requests cost about the same</span><span class="ko">요청 비용이 비슷하다</span></td>
+      <td><span class="en">100 tokens, then 7000: cost varies by orders of magnitude (§I ¶3)</span><span class="ko">100토큰 다음에 7000토큰이 온다. 비용이 자릿수 단위로 출렁인다 (§I ¶3)</span></td>
     </tr>
     <tr>
       <td><span class="en">Decades-old, battle-tested code</span><span class="ko">수십 년 검증된 코드</span></td>
-      <td><span class="en">Young engines full of brand-new tricks — paged KV-cache, continuous batching, async schedulers — none of which existed in previously studied systems (§I ¶3)</span><span class="ko">paged KV-cache, continuous batching, 비동기 스케줄러 등 갓 나온 기법으로 가득한 어린 코드베이스 — 기존 연구 대상엔 없던 것들 (§I ¶3)</span></td>
+      <td><span class="en">Young engines with paged KV-cache, continuous batching and async schedulers, absent from prior studied systems (§I ¶3)</span><span class="ko">paged KV-cache, continuous batching, 비동기 스케줄러를 갖춘 젊은 코드베이스다. 기존 연구 대상에는 없던 기법이다 (§I ¶3)</span></td>
     </tr>
   </table>
 
-  <h3><span class="en">1.3 — Meet the three contestants (§II-A)</span>
-      <span class="ko">1.3 — 세 명의 선수 소개 (§II-A)</span></h3>
-  <p class="en">Quick background. A serving engine loads the model onto the GPU once, then generates answers token by token. Each in-flight request drags along a <b>KV-cache</b> — hundreds of MB of GPU memory that keeps growing while the request lives (§II-A ¶1). So the whole game is GPU memory management, and modern engines play it with <b>continuous batching</b> (many requests share each forward pass) and <b>paged attention</b> (KV-cache in small fixed blocks, like OS virtual-memory paging). vLLM is the reference implementation of that idea.</p>
-  <p class="ko">짧은 배경 설명. 서빙 엔진은 모델을 GPU에 한 번 올려놓고, 토큰을 하나씩 생성해 응답합니다. 진행 중인 요청마다 <b>KV-cache</b>를 끌고 다니는데, 이건 요청이 살아있는 동안 계속 자라는 수백 MB짜리 GPU 메모리입니다(§II-A ¶1). 그래서 승부처는 GPU 메모리 관리이고, 현대 엔진들은 <b>continuous batching</b>(여러 요청이 한 forward pass를 나눠 씀)과 <b>paged attention</b>(KV-cache를 OS의 가상 메모리 페이징처럼 작은 고정 블록으로 관리)으로 싸웁니다. 이 아이디어의 원조 구현이 vLLM입니다.</p>
-  <p class="en">The paper lines up three deployments that all run the <i>same model</i> but package it very differently:</p>
-  <p class="ko">논문은 <i>같은 모델</i>을 전혀 다르게 포장한 세 배포를 출전시킵니다:</p>
+  <h3><span class="en">1.3 The three contestants (§II-A)</span>
+      <span class="ko">1.3 세 선수 (§II-A)</span></h3>
+  <p class="en">A serving engine loads the model once and generates token by token. Each in-flight request carries a <b>KV-cache</b>, hundreds of MB of GPU memory that grows while the request lives (§II-A ¶1). Modern engines manage it with <b>continuous batching</b> (requests share each forward pass) and <b>paged attention</b> (KV-cache in small fixed blocks); vLLM is the reference implementation.</p>
+  <p class="ko">서빙 엔진은 모델을 한 번 올리고 토큰을 하나씩 생성한다. 요청마다 <b>KV-cache</b>가 붙는데, 요청이 살아 있는 동안 자라는 수백 MB짜리 GPU 메모리다(§II-A ¶1). 현대 엔진은 이를 <b>continuous batching</b>(여러 요청이 forward pass를 공유)과 <b>paged attention</b>(KV-cache를 작은 고정 블록으로 관리)으로 다루고, 그 대표 구현이 vLLM이다.</p>
+  <p class="en">The paper packages the <i>same model</i> three ways:</p>
+  <p class="ko">논문은 <i>같은 모델</i>을 세 가지로 포장한다.</p>
   <div class="grid3">
     <div class="mini">
       <h4>🏎️ vLLM standalone</h4>
-      <p><span class="en">The optimized engine, served bare: paged attention + its own minimal HTTP server. Runs the new V1 engine.</span><span class="ko">최적화 엔진을 날것으로: paged attention + 자체 미니멀 HTTP 서버. 신형 V1 엔진으로 구동.</span></p>
+      <p><span class="en">The bare engine with its own minimal HTTP server, on the new V1 engine.</span><span class="ko">자체 미니멀 HTTP 서버만 붙인 엔진 그대로다. 신형 V1으로 돈다.</span></p>
     </div>
     <div class="mini">
       <h4>🏭 Triton + vLLM</h4>
-      <p><span class="en">The "enterprise packaging": Triton runs vLLM as a subprocess and adds queue/batcher/OpenAI API. NVIDIA's patched build inside runs the <b>old V0</b> engine.</span><span class="ko">"엔터프라이즈 포장": Triton이 vLLM을 서브프로세스로 돌리며 큐/배처/OpenAI API를 얹음. 내장된 NVIDIA 패치판은 <b>구형 V0</b> 엔진.</span></p>
+      <p><span class="en">"Enterprise packaging" with queue/batcher/OpenAI API; NVIDIA's patched build runs the <b>old V0</b> engine.</span><span class="ko">큐·배처·OpenAI API를 얹은 "엔터프라이즈 포장"이다. 내장된 NVIDIA 패치판은 <b>구형 V0</b>다.</span></p>
     </div>
     <div class="mini">
       <h4>🧪 Naive PyTorch + HF</h4>
-      <p><span class="en">The "weekend project": transformers + FastAPI, one request at a time. No batching, no paged attention, no custom memory manager.</span><span class="ko">"주말 토이 프로젝트": transformers + FastAPI, 요청을 한 번에 하나씩. 배칭도 paged attention도 커스텀 메모리 관리자도 없음.</span></p>
+      <p><span class="en">transformers + FastAPI, one request at a time, with no batching or paged attention.</span><span class="ko">transformers + FastAPI로 요청을 하나씩 처리한다. 배칭도 paged attention도 없다.</span></p>
     </div>
   </div>
-  <p class="en">One open question hangs over the vLLM pair — V0 and V1 share the algorithm and the API, but differ in how requests are scheduled and how per-request resources are grabbed and released. Does that choice matter for reliability?</p>
-  <p class="ko">vLLM 두 세대에는 미해결 질문이 하나 걸려 있습니다 — V0와 V1은 알고리즘도 API도 같지만, 요청을 스케줄링하는 방식과 요청별 자원을 잡았다 놓는 방식이 다릅니다. 이 선택이 신뢰성에 영향을 줄까?</p>
+  <p class="en">V0 and V1 share algorithm and API but differ in scheduling and in how per-request resources are acquired and released. Does that matter for reliability?</p>
+  <p class="ko">V0와 V1은 알고리즘과 API가 같지만 스케줄링 방식과 요청별 자원을 잡고 놓는 방식이 다르다. 이 차이가 신뢰성에 영향을 줄까?</p>
   <blockquote class="q">
     <p>"Whether this choice has reliability consequences over long-running operation is, to our knowledge, an open question."</p>
     <cite>— §II-A, ¶3 · <a href="https://arxiv.org/html/2606.11916v1#S2.SS1">원문 보기 (§II-A)</a></cite>
   </blockquote>
 
-  <h3><span class="en">1.4 — Hasn't anyone studied AI systems aging? (§II-B)</span>
-      <span class="ko">1.4 — AI 시스템 에이징 연구는 정말 없었나? (§II-B)</span></h3>
-  <p class="en">A few recent works come close, but each one misses the target — they're either not LLM serving, or CPU-only:</p>
-  <p class="ko">비슷한 최근 연구가 몇 개 있긴 한데, 하나같이 과녁을 비껴갑니다 — LLM 서빙이 아니거나, CPU에서만 본 연구들입니다:</p>
+  <h3><span class="en">1.4 Hasn't anyone studied AI systems aging? (§II-B)</span>
+      <span class="ko">1.4 AI 시스템 에이징 연구는 없었나 (§II-B)</span></h3>
+  <p class="en">A few recent works come close, but none is LLM serving on the GPU:</p>
+  <p class="ko">비슷한 연구는 있지만 GPU 위의 LLM 서빙을 본 것은 없다.</p>
   <table>
     <tr>
       <th><span class="en">Prior work</span><span class="ko">선행 연구</span></th>
@@ -319,7 +331,7 @@
     <tr>
       <td>Santos et al. [16]</td>
       <td><span class="en">Memory aging during LLM inference</span><span class="ko">LLM 추론 중 메모리 에이징</span></td>
-      <td><span class="en">CPU only — no GPU</span><span class="ko">CPU 한정 — GPU 없음</span></td>
+      <td><span class="en">CPU only, no GPU</span><span class="ko">CPU 한정, GPU 없음</span></td>
     </tr>
     <tr>
       <td>Santos, Andrade &amp; Natella [15]</td>
@@ -336,8 +348,8 @@
     <p>"None of these works addresses the GPU-resident, framework-mediated workload profile of modern LLM serving engines."</p>
     <cite>— §II-B, ¶2 · <a href="https://arxiv.org/html/2606.11916v1#S2.SS2">원문 보기 (§II-B)</a></cite>
   </blockquote>
-  <p class="en">There's also a nice contrast with the systems community (the vLLM/PagedAttention world): they treat memory problems as something to <b>design away</b>; this paper treats them as something to <b>watch accumulate</b>:</p>
-  <p class="ko">시스템즈 커뮤니티(vLLM/PagedAttention 진영)와의 대비도 흥미롭습니다: 그쪽은 메모리 문제를 <b>설계로 없애버릴</b> 대상으로 보고, 이 논문은 <b>쌓이는 걸 지켜볼</b> 대상으로 봅니다:</p>
+  <p class="en">The systems community (vLLM/PagedAttention) <b>designs away</b> memory problems; this paper <b>watches them accumulate</b>:</p>
+  <p class="ko">시스템즈 커뮤니티(vLLM/PagedAttention)는 메모리 문제를 <b>설계로 없애려</b> 하고, 이 논문은 <b>쌓이는 과정을 관찰</b>한다.</p>
   <blockquote class="q">
     <p>"PagedAttention and a family of memory management strategies treat fragmentation and KV-cache pressure as architectural problems to be eliminated by design, not as time-accumulating signatures to be detected through long-window analysis."</p>
     <cite>— §II-B, ¶3 · <a href="https://arxiv.org/html/2606.11916v1#S2.SS2">원문 보기 (§II-B)</a></cite>
@@ -345,7 +357,7 @@
   <div class="callout c-amber">
     <span class="tag"><span class="en">the claim staked</span><span class="ko">논문이 선점하는 자리</span></span>
     <span class="en">"this paper is the first to apply software aging methodology to GPU-based LLM serving engines with multi-engine comparison, autocorrelation-aware trend detection, and false-discovery-rate-corrected multiple-testing control." (§II-B ¶4)</span>
-    <span class="ko">"GPU 기반 LLM 서빙 엔진에 — 다중 엔진 비교, 자기상관을 감안한 추세 탐지, 오탐(FDR) 통제까지 갖춰서 — 소프트웨어 에이징 방법론을 적용한 첫 논문" (§II-B ¶4)</span>
+    <span class="ko">다중 엔진 비교, 자기상관을 감안한 추세 탐지, 오탐(FDR) 통제를 갖춰 GPU 기반 LLM 서빙 엔진에 소프트웨어 에이징 방법론을 적용한 첫 논문이라고 주장한다 (§II-B ¶4).</span>
   </div>
 </section>
 
@@ -356,15 +368,15 @@
     <span class="ko">해결 방법</span>
   </h2>
 
-  <p class="en">The experiment design answers four needs the authors set up front: realistic configurations, enough monitoring to <i>locate</i> any aging, statistics that won't lie on this kind of data, and full reproducibility.</p>
-  <p class="ko">실험 설계는 저자들이 처음에 못 박은 네 가지 요구를 따라갑니다: 현실적인 구성, 에이징이 있다면 <i>어디인지 짚어낼</i> 만큼의 모니터링, 이런 데이터에서 거짓말하지 않는 통계, 그리고 끝까지 재현 가능할 것.</p>
+  <p class="en">The design follows four stated goals: realistic configurations, enough monitoring to <i>locate</i> aging, statistics robust to this data, and reproducibility.</p>
+  <p class="ko">설계는 네 가지 목표를 따른다. 현실적인 구성, 에이징 위치를 <i>짚어낼</i> 만큼의 모니터링, 이 데이터에 맞는 통계, 재현 가능성이다.</p>
   <blockquote class="q">
     <p>"the campaign must compare practical deployment configurations under a controlled but realistic workload; monitor enough of the system to localize aging if present; use a statistical pipeline robust to the autocorrelation of monitoring traces; and remain reproducible end to end."</p>
     <cite>— §III, ¶1 · <a href="https://arxiv.org/html/2606.11916v1#S3">원문 보기 (§III)</a></cite>
   </blockquote>
 
-  <h3><span class="en">2.1 — The setup at a glance</span>
-      <span class="ko">2.1 — 실험 구도 한 장</span></h3>
+  <h3><span class="en">2.1 The setup at a glance</span>
+      <span class="ko">2.1 실험 구도</span></h3>
 
   <svg class="fig" viewBox="0 0 880 330" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Experiment layout: one host, three GPUs, three engines, four monitoring streams feeding one statistical pipeline">
     <defs>
@@ -425,49 +437,57 @@
     <text x="415" y="295" text-anchor="middle" font-size="11" fill="#6b6a63">Same model · same traffic · same host — only the "wrapping (orchestration layer)" differs = the aging surface</text>
     <text x="415" y="315" text-anchor="middle" font-size="11" fill="#8a8f98">+ 3 ablation runs (E3b low load, A1 V0 alone, A2 Triton+V1) → 6 runs × 36 h = 216 hours total</text>
   </svg>
-  <p class="figcap"><span class="en">Layout of the primary comparison (paper Fig. 1 redrawn). Three engines run at the same time on one host, one GPU each.</span><span class="ko">본 비교 실험의 구도 (논문 Fig. 1 재구성). 세 엔진이 한 호스트에서 GPU 하나씩 차지하고 동시에 돈다.</span></p>
+  <p class="figcap"><span class="en">Figure 2 · Primary comparison layout. Redrawn from paper Fig. 1.</span><span class="ko">그림 2 · 본 비교 실험 구도. 논문 Fig. 1 재구성.</span></p>
 
-  <p class="en">Why run them <i>together</i> on one host? Because that's what real fleets look like — and the authors say so explicitly:</p>
-  <p class="ko">왜 셋을 한 호스트에서 <i>같이</i> 돌렸을까요? 실제 운영 환경이 그렇게 생겼기 때문입니다. 저자들도 명시합니다:</p>
+  <p class="en">The three run <i>together</i> on one host because real fleets do:</p>
+  <p class="ko">셋을 한 호스트에서 <i>같이</i> 돌린 이유는 실제 운영 환경이 그렇기 때문이다.</p>
   <blockquote class="q">
     <p>"This reproduces a realistic multi-tenant deployment, where several engines are co-located on one machine rather than measured in isolation."</p>
     <cite>— §I, ¶4 · <a href="https://arxiv.org/html/2606.11916v1#S1">원문 보기 (§I)</a></cite>
   </blockquote>
 
-  <h3><span class="en">2.2 — The traffic: hard but fair</span>
-      <span class="ko">2.2 — 트래픽: 혹독하되 공정하게</span></h3>
-  <p class="en">Each engine gets its own open-loop Poisson client. Prompts are built from 3000 arXiv abstracts, stretched to random lengths between 256 and 7500 tokens (median 1500); outputs run up to 1500 tokens (median 200); 70% of requests stream. The clever part is <b>calibration</b>: before the real run, they crank the request rate up until throughput stops growing — that point is the engine's own speed limit ("ceiling") — and then run the 36-hour experiment at <b>85% of each engine's ceiling</b>. So the slow naive server isn't unfairly crushed, and the fast engines aren't coasting: everyone works equally hard <i>relative to their own ability</i>.</p>
-  <p class="ko">엔진마다 전용 open-loop Poisson 클라이언트가 붙습니다. 프롬프트는 arXiv 초록 3000개를 이어붙여 256~7500토큰(중앙값 1500) 사이 무작위 길이로 만들고, 출력은 최대 1500토큰(중앙값 200), 요청의 70%는 스트리밍입니다. 영리한 부분은 <b>캘리브레이션</b>입니다: 본 실험 전에 요청 속도를 처리량이 더 안 늘 때까지 끌어올려 그 엔진 고유의 한계 속도("천장")를 찾고, 36시간 본 실험은 <b>각자 천장의 85%</b>로 돌립니다. 느린 순정 서버가 억울하게 깔리지도, 빠른 엔진이 놀지도 않게 — <i>각자의 능력 대비</i> 똑같이 힘들게 만드는 거죠.</p>
+  <h3><span class="en">2.2 The traffic: hard but fair</span>
+      <span class="ko">2.2 트래픽: 혹독하되 공정하게</span></h3>
+  <ul class="en">
+    <li>One open-loop Poisson client per engine.</li>
+    <li>Prompts from 3000 arXiv abstracts, 256–7500 tokens (median 1500); outputs up to 1500 tokens (median 200); 70% streamed.</li>
+    <li><b>Calibration</b>: raise the rate until throughput stops growing (the engine's "ceiling"), then run 36 hours at <b>85% of each engine's ceiling</b>, so every engine works equally hard <i>relative to its own ability</i>.</li>
+  </ul>
+  <ul class="ko">
+    <li>엔진마다 open-loop Poisson 클라이언트가 하나씩 붙는다.</li>
+    <li>프롬프트는 arXiv 초록 3000개로 만든 256~7500토큰(중앙값 1500), 출력은 최대 1500토큰(중앙값 200), 요청의 70%는 스트리밍이다.</li>
+    <li><b>캘리브레이션</b>: 처리량이 더 늘지 않을 때까지 요청률을 올려 엔진의 "천장"을 찾고, 36시간 본 실험은 <b>각자 천장의 85%</b>로 돌린다. 모든 엔진이 <i>자기 능력 대비</i> 똑같이 힘들게 일한다.</li>
+  </ul>
   <blockquote class="q">
     <p>"We use the ceiling rather than the highest rate at which the client does not yet drop, because the ceiling is a property of the engine itself, while the no-drop rate is partly an artefact of the client-side concurrency cap."</p>
     <cite>— §III, "Workload and stress regime" · <a href="https://arxiv.org/html/2606.11916v1#S3">원문 보기 (§III)</a></cite>
   </blockquote>
 
-  <h3><span class="en">2.3 — Six runs: 3 main + 3 detective runs (Table I)</span>
-      <span class="ko">2.3 — 6개 런: 본 비교 3개 + 탐정용 3개 (Table I)</span></h3>
-  <p class="en">Comparing E1/E2/E3 alone has a flaw the authors call out themselves: those three differ in <i>several ways at once</i> (engine generation, hosting, load level), so if they age differently you can't tell <b>which difference did it</b>. Hence three extra runs, each isolating one variable:</p>
-  <p class="ko">E1/E2/E3만 비교하면 함정이 있습니다. 저자들 스스로 짚듯, 이 셋은 <i>여러 가지가 동시에</i> 다릅니다(엔진 세대, 호스팅, 부하 수준). 그러니 결과가 달라도 <b>어떤 차이 때문인지</b> 알 수 없죠. 그래서 변수를 하나씩만 분리하는 추가 런 3개를 더합니다:</p>
+  <h3><span class="en">2.3 Six runs: 3 main + 3 detective runs (Table I)</span>
+      <span class="ko">2.3 6개 런: 본 비교 3개 + 원인 분리용 3개 (Table I)</span></h3>
+  <p class="en">E1/E2/E3 differ in <i>several ways at once</i> (engine generation, hosting, load), so you can't tell <b>which difference</b> causes aging. Three extra runs each isolate one variable:</p>
+  <p class="ko">E1/E2/E3는 엔진 세대, 호스팅, 부하가 <i>동시에</i> 달라서 <b>어느 차이가 원인인지</b> 알 수 없다. 그래서 변수 하나씩만 바꾼 런 3개를 더했다.</p>
   <table>
     <tr><th>ID</th><th><span class="en">Engine</span><span class="ko">엔진</span></th><th><span class="en">Hosting</span><span class="ko">호스팅</span></th><th>vLLM ver.</th><th>RPS</th><th><span class="en">Question it answers</span><span class="ko">이 런이 답하는 질문</span></th></tr>
     <tr><td><b>E1</b></td><td>vLLM V1</td><td>standalone</td><td>0.21.0</td><td>2.55</td><td rowspan="3"><span class="en">Main comparison: do real deployments age?</span><span class="ko">본 비교: 실제 배포들이 늙는가?</span></td></tr>
     <tr><td><b>E2</b></td><td>vLLM V0</td><td>Triton 25.09</td><td>0.10.1.1+nv</td><td>2.17</td></tr>
     <tr><td><b>E3</b></td><td>PyTorch+HF</td><td>FastAPI</td><td>n/a</td><td>0.17</td></tr>
     <tr><td><b>E3b</b></td><td>PyTorch+HF</td><td>FastAPI</td><td>n/a</td><td>0.05</td><td><span class="en">Is the leak just a high-load symptom?</span><span class="ko">누수가 그냥 고부하 증상인가?</span></td></tr>
-    <tr><td><b>A1</b></td><td>vLLM V0</td><td>standalone</td><td>0.7.3</td><td>0.80</td><td rowspan="2"><span class="en">Engine generation vs. hosting — which one drives the leak? (completes a 2×2 grid)</span><span class="ko">엔진 세대냐 호스팅이냐 — 누수의 주범은? (2×2 그리드 완성)</span></td></tr>
+    <tr><td><b>A1</b></td><td>vLLM V0</td><td>standalone</td><td>0.7.3</td><td>0.80</td><td rowspan="2"><span class="en">Engine generation vs. hosting — which one drives the leak? (completes a 2×2 grid)</span><span class="ko">엔진 세대와 호스팅 중 누수의 주범은? (2×2 그리드 완성)</span></td></tr>
     <tr><td><b>A2</b></td><td>vLLM V1</td><td>Triton 25.09</td><td>0.10.1.1+nv</td><td>1.75</td></tr>
   </table>
   <p class="muted"><span class="en">Reconstructed from Table I (§III). All runs: Qwen2.5-7B-Instruct (bf16) on NVIDIA L40S 46 GB. 6 × 36 h = 216 hours total.</span><span class="ko">Table I (§III) 재구성. 전 런 공통: Qwen2.5-7B-Instruct (bf16), NVIDIA L40S 46 GB. 6런 × 36시간 = 총 216시간.</span></p>
 
-  <h3><span class="en">2.4 — The statistics: why so much machinery for "is the line going up?"</span>
-      <span class="ko">2.4 — 통계: "선이 우상향인가?" 하나 보는데 왜 이리 거창한가</span></h3>
-  <p class="en">Here's the trap. A process's memory reading at 12:00:05 is nearly identical to its reading at 12:00:00 — monitoring samples are <b>not independent data points</b>, they're near-copies of each other (the paper measures correlation ρ ≈ 0.99). Naive statistics counts every sample as fresh evidence, so it becomes wildly overconfident:</p>
-  <p class="ko">함정은 이렇습니다. 12:00:05의 메모리 값은 12:00:00의 값과 거의 같습니다 — 모니터링 샘플은 <b>독립적인 데이터가 아니라</b> 서로의 복사본에 가깝습니다(논문 측정으로 상관 ρ ≈ 0.99). 순진한 통계는 샘플 하나하나를 새 증거로 세기 때문에 터무니없이 과신하게 됩니다:</p>
+  <h3><span class="en">2.4 The statistics: why so much machinery for "is the line going up?"</span>
+      <span class="ko">2.4 통계: 우상향 하나 보는 데 왜 이렇게 거창한가</span></h3>
+  <p class="en">Memory at 12:00:05 is nearly identical to memory at 12:00:00, so samples are <b>not independent</b> (ρ ≈ 0.99). Naive statistics counts each as fresh evidence and becomes overconfident:</p>
+  <p class="ko">12:00:05의 메모리 값은 12:00:00과 거의 같아서 샘플이 <b>독립이 아니다</b>(ρ ≈ 0.99). 순진한 통계는 샘플마다 새 증거로 세므로 결과를 과신하게 된다.</p>
   <blockquote class="q">
     <p>"the resident memory of a process at time t is almost identical to its value at t−1, and naive tests that treat samples as independent produce drastically deflated p-values."</p>
     <cite>— §III, "Statistical Analysis" · <a href="https://arxiv.org/html/2606.11916v1#S3">원문 보기 (§III)</a></cite>
   </blockquote>
-  <p class="en">So the paper makes every candidate trend pass through a funnel of three filters:</p>
-  <p class="ko">그래서 논문은 모든 추세 후보를 3중 필터 깔때기에 통과시킵니다:</p>
+  <p class="en">So every candidate trend passes three filters:</p>
+  <p class="ko">그래서 모든 추세 후보는 세 겹의 필터를 거친다.</p>
 
   <svg class="fig" viewBox="0 0 880 250" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Statistical decision funnel: ~200 time series pass two tests that must both agree, then FDR correction, leaving only real trends">
     <defs>
@@ -501,10 +521,10 @@
     <text x="758" y="146" text-anchor="middle" font-size="10.5" fill="#3f1f72">→ filters out that false-positive share</text>
     <text x="440" y="242" text-anchor="middle" font-size="11" font-weight="700" fill="#27500a">→ Only survivors count as a "statistically significant aging trend"</text>
   </svg>
-  <p class="figcap"><span class="en">The decision funnel (§III, "Statistical Analysis"). A trend must convince two different tests <i>and</i> survive multiple-testing correction.</span><span class="ko">판정 깔때기 (§III "Statistical Analysis"). 추세는 서로 다른 두 검정을 <i>모두</i> 설득하고, 다중검정 보정까지 살아남아야 한다.</span></p>
+  <p class="figcap"><span class="en">Figure 3 · The decision funnel. Drawn by us from §III, "Statistical Analysis".</span><span class="ko">그림 3 · 판정 깔때기. §III "Statistical Analysis" 근거, 직접 그림.</span></p>
 
-  <p class="en">Two more honesty devices worth noting: the list of indicators was frozen <i>before</i> looking at any long-run data (so they can't cherry-pick), and always-increasing counters like "total I/O bytes" were converted to per-second rates — otherwise they'd register as "aging" trivially, by construction.</p>
-  <p class="ko">정직 장치가 두 개 더 있습니다: 지표 목록은 장기 데이터를 보기 <i>전에</i> 고정했고(입맛대로 고르기 차단), "누적 I/O 바이트"처럼 원래 늘기만 하는 카운터는 초당 비율로 바꿨습니다 — 안 그러면 구조적으로 무조건 "에이징"으로 잡히니까요.</p>
+  <p class="en">Two more safeguards: the indicator list was frozen <i>before</i> seeing long-run data (no cherry-picking), and monotonic counters like "total I/O bytes" were converted to per-second rates so they don't count as "aging" by construction.</p>
+  <p class="ko">안전장치가 두 개 더 있다. 지표 목록은 장기 데이터를 보기 <i>전에</i> 고정해 골라 쓰기를 막았다. "누적 I/O 바이트"처럼 늘기만 하는 카운터는 초당 비율로 바꿔 구조적으로 에이징이 잡히는 일을 막았다.</p>
 </section>
 
 <!-- ============ 3. RESULTS ============ -->
@@ -516,14 +536,14 @@
 
   <div class="callout c-blue">
     <span class="tag"><span class="en">the story in four beats (§IV intro)</span><span class="ko">네 박자로 전개되는 이야기 (§IV 도입)</span></span>
-    <span class="en">① From the outside: nothing wrong. ② Inside the process: <b>everyone</b> is leaking — and the "best-engineered" ranking is upside-down. ③ Lower the load: the leak doesn't go away (it gets <i>worse</i>). ④ The 2×2 grid: the leak is decided by the <b>combination</b> of engine generation and packaging — ~100× spread.</span>
-    <span class="ko">① 밖에서 보면: 아무 문제 없음. ② 프로세스 안을 보면: <b>전원</b> 누수 중 — 게다가 "잘 만든 순서"가 뒤집혀 있음. ③ 부하를 낮추면: 누수가 안 사라지고 오히려 <i>심해짐</i>. ④ 2×2 그리드: 누수는 엔진 세대와 포장의 <b>조합</b>이 결정 — 약 100배 차이.</span>
+    <span class="en">① From outside: nothing wrong. ② Inside the process: <b>everyone</b> leaks, and the "best-engineered" ranking is upside-down. ③ Lower load makes the leak <i>worse</i>. ④ The 2×2 grid: the <b>combination</b> of engine generation and packaging decides it, with a ~100× spread.</span>
+    <span class="ko">① 밖에서 보면 문제가 없다. ② 프로세스 안에서는 <b>전부</b> 새고, "잘 만든 순서"가 뒤집혀 있다. ③ 부하를 낮추면 누수가 오히려 <i>심해진다</i>. ④ 2×2 그리드로 보면 엔진 세대와 포장의 <b>조합</b>이 누수를 정하며, 차이는 약 100배다.</span>
   </div>
 
-  <h3><span class="en">3.1 — Sanity check first: was the stress real? (§IV-A)</span>
-      <span class="ko">3.1 — 먼저 검증: 스트레스는 진짜였나? (§IV-A)</span></h3>
-  <p class="en">Before trusting any trend, the authors confirm the 36-hour grind actually happened as designed — target rates held within 0.4%, between 6k and 329k requests served per run, and no run ever crashed or restarted:</p>
-  <p class="ko">추세를 믿기 전에, 저자들은 36시간의 혹사가 설계대로 굴러갔는지부터 확인합니다 — 목표 요청률 0.4% 이내 추종, 런당 6천~32.9만 개 요청 처리, 어떤 런도 죽거나 재시작하지 않음:</p>
+  <h3><span class="en">3.1 Sanity check: was the stress real? (§IV-A)</span>
+      <span class="ko">3.1 먼저 검증: 부하는 제대로 걸렸나 (§IV-A)</span></h3>
+  <p class="en">Target rates held within 0.4%, each run served 6k to 329k requests, and no run crashed or restarted:</p>
+  <p class="ko">목표 요청률은 0.4% 이내로 유지됐고, 런마다 6천~32.9만 개 요청을 처리했으며, 죽거나 재시작한 런은 없었다.</p>
   <table>
     <tr><th>ID</th><th>Config</th><th>Req</th><th>Drop%</th><th>p50 (s)</th><th>p99 (s)</th><th>tok/s</th></tr>
     <tr><td>E1</td><td>vLLM V1 std</td><td>329k</td><td>0.01</td><td>7.93</td><td>51.92</td><td>686</td></tr>
@@ -533,25 +553,25 @@
     <tr><td>A1</td><td>vLLM V0 std</td><td>103k</td><td>0.00</td><td>5.17</td><td>34.27</td><td>211</td></tr>
     <tr><td>A2</td><td>Triton+V1</td><td>227k</td><td>0.00</td><td>6.32</td><td>42.82</td><td>n/a</td></tr>
   </table>
-  <p class="muted"><span class="en">Reconstructed from Table III (§IV-A). E3's 15.6% drops are by design (it runs saturated). Triton's OpenAI client path doesn't report token counts → tok/s n/a.</span><span class="ko">Table III (§IV-A) 재구성. E3의 드롭 15.6%는 의도된 것(포화 상태로 돌림). Triton의 OpenAI 클라이언트 경로는 토큰 수를 안 알려줘서 tok/s가 n/a.</span></p>
+  <p class="muted"><span class="en">Reconstructed from Table III (§IV-A). E3's 15.6% drops are by design (it runs saturated). Triton's OpenAI client path doesn't report token counts → tok/s n/a.</span><span class="ko">Table III (§IV-A) 재구성. E3의 드롭 15.6%는 포화 상태로 돌린 결과다. Triton의 OpenAI 클라이언트 경로는 토큰 수를 주지 않아 tok/s가 n/a다.</span></p>
   <blockquote class="q">
     <p>"The six runs together deliver 216 hours of continuous operation under load, so the trends that follow can be read as aging under genuine stress, not drift in an idle system."</p>
     <cite>— §IV-A · <a href="https://arxiv.org/html/2606.11916v1#S4.SS1">원문 보기 (§IV-A)</a></cite>
   </blockquote>
 
-  <h3><span class="en">3.2 — From the operator's chair: nothing to see (§IV-B)</span>
-      <span class="ko">3.2 — 운영자 의자에서 보면: 아무 일도 없다 (§IV-B)</span></h3>
-  <p class="en">Latency (p50/p95/p99), time-to-first-token, throughput, error rate — over 36 hours, essentially <b>flat everywhere</b>. The only statistically significant wiggles are on E1 and they're tiny (p50 creeping up ~5 ms per hour ≈ 2% over the whole run) — and E1's throughput actually <i>improved</i>, which is the opposite of aging. Even E3's constant 15.6% drop rate is a fixed capacity ceiling, not a worsening one.</p>
-  <p class="ko">레이턴시(p50/p95/p99), 첫 토큰까지 시간(TTFT), 처리량, 에러율 — 36시간 내내 사실상 <b>전부 평평</b>합니다. 통계적으로 유의한 움직임은 E1에서만 나오는데 너무 작고(p50이 시간당 ~5ms씩, 36시간 합쳐 기준치의 ~2%), 심지어 E1의 처리량은 오히려 <i>좋아졌습니다</i> — 에이징과 반대 방향이죠. E3의 15.6% 드롭률도 점점 나빠지는 게 아니라 고정된 용량 천장입니다.</p>
+  <h3><span class="en">3.2 From the operator's chair: nothing to see (§IV-B)</span>
+      <span class="ko">3.2 운영자 화면에서는 아무 일도 없다 (§IV-B)</span></h3>
+  <p class="en">Latency (p50/p95/p99), TTFT, throughput and error rate stay essentially <b>flat</b> for 36 hours. The only significant drift is tiny, on E1 (p50 up ~5 ms per hour ≈ 2% over the run), and E1's throughput even <i>improved</i>. E3's constant 15.6% drop rate is a fixed capacity ceiling, not a worsening one.</p>
+  <p class="ko">레이턴시(p50/p95/p99), TTFT, 처리량, 에러율이 36시간 내내 사실상 <b>평평</b>하다. 유의한 변화는 E1의 아주 작은 상승뿐이고(p50이 시간당 ~5ms, 런 전체로 ~2%), E1 처리량은 오히려 <i>좋아졌다</i>. E3의 15.6% 드롭률도 악화가 아니라 고정된 용량 한계다.</p>
   <blockquote class="q">
     <p>"for all practical purposes, none of the engines degrades visibly to a production operator over 36 hours of sustained high load. As the next section shows, this stability is only skin-deep: once we look inside the engine process, a different picture emerges."</p>
     <cite>— §IV-B · <a href="https://arxiv.org/html/2606.11916v1#S4.SS2">원문 보기 (§IV-B)</a></cite>
   </blockquote>
 
-  <h3><span class="en">3.3 — Inside the process: everyone leaks, and the ranking is upside-down (§IV-C)</span>
-      <span class="ko">3.3 — 프로세스 안: 전원 누수 중, 그리고 순위가 뒤집혀 있다 (§IV-C)</span></h3>
-  <p class="en">Now the USS trace (the "memory only this process owns" metric). After all three statistical filters, <b>every primary deployment shows a real, steady leak</b>. Intuition says the hand-rolled FastAPI server should leak most and the polished engines least. The data says otherwise:</p>
-  <p class="ko">이제 USS(이 프로세스만의 메모리) 그래프를 봅니다. 3중 통계 필터를 다 통과하고도 <b>본 비교 세 배포 전부에서 진짜 누수가 확인</b>됩니다. 직관적으로는 손으로 짠 FastAPI 서버가 제일 많이 새고, 잘 다듬어진 엔진들이 제일 적게 새야 할 것 같죠. 데이터는 다르게 말합니다:</p>
+  <h3><span class="en">3.3 Inside the process: everyone leaks, and the ranking is upside-down (§IV-C)</span>
+      <span class="ko">3.3 프로세스 안: 전부 새고, 순위는 뒤집혀 있다 (§IV-C)</span></h3>
+  <p class="en">On USS, <b>every primary deployment shows a real, steady leak</b> after all three filters. Intuition says the hand-rolled FastAPI server should leak most. It doesn't:</p>
+  <p class="ko">USS를 보면 세 필터를 모두 통과한 <b>진짜 누수가 본 비교 세 배포 모두에서</b> 나온다. 직관으로는 손으로 짠 FastAPI 서버가 가장 많이 샐 것 같지만 그렇지 않다.</p>
 
   <svg class="fig" viewBox="0 0 880 220" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="USS leak rates: vLLM standalone +1.8 KB/h, naive PyTorch +31 KB/h, Triton+V0 +157 KB/h. Bar lengths on log scale.">
     <text x="20" y="24" font-size="12" font-weight="700" fill="#1f1e1b">Process-private memory (USS) leak rate — KB/hour</text>
@@ -572,37 +592,37 @@
     <text x="660" y="166" font-size="11.5" font-weight="700" fill="#6f2a12">+157 KB/h</text>
     <text x="20" y="204" font-size="10.5" fill="#6f2a12">└ ≈ 110 MB in 30 days · "production-grade wrapping" is worst — and the only staircase growth (§3.5)</text>
   </svg>
-  <p class="figcap"><span class="en">Theil-Sen USS slopes with 95% CIs: E1 [0.7, 23.8], E3 [21, 88], E2 [33, 228] KB/h — reconstructed from Table IV (§IV-C).</span><span class="ko">Theil-Sen USS 기울기와 95% 신뢰구간: E1 [0.7, 23.8], E3 [21, 88], E2 [33, 228] KB/h — Table IV (§IV-C) 재구성.</span></p>
+  <p class="figcap"><span class="en">Figure 4 · Theil-Sen USS slopes, 95% CIs: E1 [0.7, 23.8], E3 [21, 88], E2 [33, 228] KB/h. Reconstructed from Table IV (§IV-C).</span><span class="ko">그림 4 · Theil-Sen USS 기울기, 95% 신뢰구간: E1 [0.7, 23.8], E3 [21, 88], E2 [33, 228] KB/h. Table IV (§IV-C) 재구성.</span></p>
 
   <blockquote class="q">
     <p>"The naive PyTorch baseline, the textbook example of what production teams avoid, is not the cleanest: it sits in the middle at +31 KB/h. The cleanest is vLLM standalone (E1) at +1.8 KB/h, an engine built specifically to optimize serving. The heaviest is Triton-wrapped vLLM (E2) at +157 KB/h."</p>
     <cite>— §IV-C, ¶2 ("the order is the surprise of the campaign") · <a href="https://arxiv.org/html/2606.11916v1#S4.SS3">원문 보기 (§IV-C)</a></cite>
   </blockquote>
 
-  <p class="en">And this upside-down ranking is itself the biggest clue. All three run <b>the same model, the same math</b>. If the model/inference path were leaking, all three would leak at similar rates. They differ by ~100× — so the leak must live in the <b>wrapping</b>: the Python runtime, the server framework, the orchestration around the model.</p>
-  <p class="ko">이 뒤집힌 순위 자체가 가장 큰 단서입니다. 셋은 <b>같은 모델, 같은 연산</b>을 돌립니다. 모델/추론 경로가 새는 거라면 셋의 누수율이 비슷해야 합니다. 그런데 약 100배 차이가 난다 — 즉 누수는 <b>포장</b>에 사는 겁니다: Python 런타임, 서버 프레임워크, 모델을 둘러싼 오케스트레이션 말이죠.</p>
+  <p class="en">This ranking is the clue behind "the leak lives in the <b>wrapping</b>" (see the start of this note):</p>
+  <p class="ko">이 순위가 앞에서 본 "누수는 <b>포장</b>에 있다"는 결론의 근거다.</p>
   <blockquote class="q">
     <p>"If the leak originated from the inference path, we would expect similar leak rates across all deployments. Instead, the observed rates differ by nearly two orders of magnitude. This strongly suggests that the source of the leak lies in the serving infrastructure rather than in the model execution itself."</p>
     <cite>— §IV-C, ¶3 · <a href="https://arxiv.org/html/2606.11916v1#S4.SS3">원문 보기 (§IV-C)</a></cite>
   </blockquote>
-  <p class="en">Everything else stays quiet: CPU, threads, file descriptors, context switches, I/O — flat. GPU VRAM too, in every deployment, which surprised even the authors (they expected the allocator to fragment under wildly varying request sizes). At this timescale, <b>aging here = a host-side memory story</b>, full stop.</p>
-  <p class="ko">나머지는 전부 조용합니다: CPU, 스레드, 파일 디스크립터, 컨텍스트 스위치, I/O — 평평. GPU VRAM도 모든 배포에서 평평한데, 이건 저자들도 놀란 부분입니다(요청 크기가 널뛰니 할당기 단편화를 예상했거든요). 이 시간 척도에서 <b>에이징은 호스트 쪽 메모리 이야기</b>, 그게 전부입니다.</p>
+  <p class="en">CPU, threads, file descriptors, context switches and I/O are flat. So is GPU VRAM in every deployment, which surprised the authors (they expected allocator fragmentation). At this timescale, <b>aging is a host-side memory story</b>.</p>
+  <p class="ko">CPU, 스레드, 파일 디스크립터, 컨텍스트 스위치, I/O는 평평하다. GPU VRAM도 모든 배포에서 평평했는데, 할당기 단편화를 예상한 저자들에게는 의외였다. 이 시간 척도에서 <b>에이징은 호스트 쪽 메모리 문제</b>다.</p>
 
-  <h3><span class="en">3.4 — Plot twist: lower the load, leak gets worse (§IV-D)</span>
-      <span class="ko">3.4 — 반전: 부하를 낮췄더니 누수가 더 심해진다 (§IV-D)</span></h3>
-  <p class="en">Maybe the naive server only leaks because it's drowning at 100% capacity? They rerun it at a stroll — 0.05 RPS, no drops at all. The leak doesn't just survive; it <b>triples</b>: +31 → <b>+103 KB/h</b>. Counter-intuitive, but it pins down the mechanism — the leak tracks <b>wall-clock time, not request count</b>:</p>
-  <p class="ko">순정 서버가 새는 건 용량 100%로 허덕여서 아닐까? 그래서 산책 수준 — 0.05 RPS, 드롭 0% — 으로 다시 돌립니다. 그런데 누수는 사라지기는커녕 <b>3배가 됩니다</b>: +31 → <b>+103 KB/h</b>. 직관에 어긋나지만, 덕분에 메커니즘이 못 박힙니다 — 누수는 <b>요청 개수가 아니라 흐른 시간</b>을 따라갑니다:</p>
+  <h3><span class="en">3.4 Plot twist: lower the load, the leak gets worse (§IV-D)</span>
+      <span class="ko">3.4 반전: 부하를 낮췄더니 누수가 더 심해진다 (§IV-D)</span></h3>
+  <p class="en">Is the naive server leaking only because it runs at 100% capacity? Rerun at 0.05 RPS with no drops, the leak <b>triples</b>: +31 → <b>+103 KB/h</b>. It tracks <b>wall-clock time, not request count</b>:</p>
+  <p class="ko">순정 서버는 용량 100%로 허덕여서 새는 걸까? 0.05 RPS, 드롭 0%로 다시 돌리자 누수가 <b>3배</b>가 됐다(+31 → <b>+103 KB/h</b>). 누수는 <b>요청 수가 아니라 흐른 시간</b>을 따라간다.</p>
   <blockquote class="q">
     <p>"This result indicates that the leak is not caused by queueing effects or saturation-related behavior. Instead, it appears to be intrinsic to the runtime environment. The higher leak rate at lower load also suggests that memory growth is driven primarily by elapsed time rather than by the number of processed requests."</p>
     <cite>— §IV-D · <a href="https://arxiv.org/html/2606.11916v1#S4.SS4">원문 보기 (§IV-D)</a></cite>
   </blockquote>
-  <p class="en">Side observation in the PyTorch runs: <b>reserved</b> address space (VMS) balloons ~127 MB/h (≈7.5 GB over the run) while actually-used memory grows only ~20 MB total, and thread/FD counts stay flat. Translation: nothing is "leaking objects" in the classic sense — something (consistent with the CUDA caching allocator's host-side bookkeeping) keeps <i>reserving</i> address space it never gives back. Whether that ever turns into real memory pressure is left open.</p>
-  <p class="ko">PyTorch 런들의 곁다리 관찰: "찜"해 둔 주소 공간(VMS)은 시간당 ~127 MB(런 전체로 ≈7.5 GB)씩 부푸는데, 실제 사용 메모리는 총 ~20 MB만 늘고 스레드/FD 수는 평평합니다. 풀이하면: 고전적 의미의 "객체 누수"가 아니라, 무언가가(CUDA 캐싱 할당기의 호스트 측 관리와 부합) 주소 공간을 계속 <i>예약만 하고 반납하지 않는</i> 겁니다. 이게 언젠가 실제 메모리 압박으로 바뀌는지는 미해결로 남습니다.</p>
+  <p class="en">In the PyTorch runs, <b>reserved</b> address space (VMS) grows ~127 MB/h (≈7.5 GB per run) while used memory grows only ~20 MB in total, with thread/FD counts flat. That is not a classic object leak: something (consistent with the CUDA caching allocator's host-side bookkeeping) keeps <i>reserving</i> address space it never returns. Whether it becomes real memory pressure is open.</p>
+  <p class="ko">PyTorch 런에서는 <b>예약</b> 주소 공간(VMS)이 시간당 ~127 MB(런 전체 ≈7.5 GB)씩 커지는데, 실제 사용 메모리는 총 ~20 MB만 늘었다. 객체 누수라기보다 CUDA 캐싱 할당기의 호스트 쪽 관리처럼 주소 공간을 <i>예약하고 반납하지 않는</i> 현상이다. 실제 메모리 압박으로 이어질지는 미해결이다.</p>
 
-  <h3><span class="en">3.5 — The 2×2 grid: who's the culprit? Both, together (§IV-E)</span>
-      <span class="ko">3.5 — 2×2 그리드: 범인은 누구? 정답은 "조합" (§IV-E)</span></h3>
-  <p class="en">E1 vs E2 differ in two ways at once (V1 vs V0, bare vs Triton). The two ablation runs fill in the missing corners, giving a full 2×2 grid — engine generation × packaging:</p>
-  <p class="ko">E1과 E2는 두 가지가 동시에 다릅니다(V1 vs V0, 단독 vs Triton). ablation 런 두 개가 빈 모서리를 채워서 엔진 세대 × 포장의 2×2 그리드가 완성됩니다:</p>
+  <h3><span class="en">3.5 The 2×2 grid: the culprit is the combination (§IV-E)</span>
+      <span class="ko">3.5 2×2 그리드: 범인은 조합이다 (§IV-E)</span></h3>
+  <p class="en">E1 and E2 differ twice (V1 vs V0, bare vs Triton). Two ablation runs fill the missing corners of an engine generation × packaging grid:</p>
+  <p class="ko">E1과 E2는 두 가지가 다르다(V1 vs V0, 단독 vs Triton). ablation 런 두 개가 빈칸을 채워 엔진 세대 × 포장 2×2 그리드를 완성한다.</p>
 
   <svg class="fig" viewBox="0 0 880 320" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="2 by 2 grid of leak rates, and smooth versus staircase growth curves. Triton wrapping V0 is the worst cell and the only staircase pattern.">
     <defs>
@@ -641,48 +661,48 @@
     <polyline points="545,268 610,268 610,254 675,254 675,240 745,240 745,222 835,222" fill="none" stroke="#ef9f86" stroke-width="2.2"/>
     <text x="545" y="280" font-size="9.5" fill="#8a8f98">Quiet for a while → jumps of several MB, never freed (RSS·VMS jump together, ρ≈0.83)</text>
   </svg>
-  <p class="figcap"><span class="en">Left: the factorial grid (Table V, §IV-E). Right: growth shape sketches based on Fig. 2 and the increment analysis in §IV-E.</span><span class="ko">왼쪽: 요인설계 그리드 (Table V, §IV-E). 오른쪽: Fig. 2와 §IV-E의 증분 분석을 바탕으로 한 증가 모양 스케치.</span></p>
+  <p class="figcap"><span class="en">Figure 5 · Left: factorial grid (Table V, §IV-E). Right: growth shapes sketched from Fig. 2 and §IV-E.</span><span class="ko">그림 5 · 왼쪽: 요인설계 그리드(Table V, §IV-E). 오른쪽: Fig. 2와 §IV-E 기반 증가 모양 스케치.</span></p>
 
-  <p class="en">Read the grid: the old V0 engine leaks more than V1 in <i>both</i> rows (≈7× bare, ≈27× under Triton), and Triton amplifies <i>both</i> engines — but the combination Triton×V0 explodes. One nuance: E1 actually climbs for the first few hours then settles, while A1 keeps creeping — so E1's <i>cumulative</i> growth isn't the smallest even though its steady-state rate is (§IV-E ¶3).</p>
-  <p class="ko">그리드를 읽어보면: 구형 V0는 <i>두 행 모두에서</i> V1보다 많이 새고(단독 ≈7배, Triton 아래 ≈27배), Triton은 <i>두 엔진 모두</i>를 증폭시키는데 — Triton×V0 조합에서 폭발합니다. 뉘앙스 하나: E1은 처음 몇 시간 오르다가 안정되는 반면 A1은 계속 기어오릅니다. 그래서 E1의 정상 상태 누수율이 최저인데도 <i>누적</i> 증가량은 최소가 아닙니다 (§IV-E ¶3).</p>
-  <p class="en">The staircase on the right is the scariest part. E2 doesn't drift — it sits still, then jumps several MB at once, and never gives the memory back (biggest 1% of jumps ≈ 1.8 MB; RSS and VMS jump together with correlation ρ ≈ 0.83, vs &lt; 0.35 everywhere else):</p>
-  <p class="ko">오른쪽 계단이 제일 섬뜩한 부분입니다. E2는 드리프트가 아니라 — 가만히 있다가 한 번에 수 MB씩 점프하고, 그 메모리를 절대 반납하지 않습니다(점프 상위 1%가 ≈1.8 MB, RSS와 VMS가 상관 ρ≈0.83으로 동반 점프, 다른 구성은 &lt;0.35):</p>
+  <p class="en">V0 leaks more than V1 in <i>both</i> rows (≈7× bare, ≈27× under Triton), Triton amplifies <i>both</i> engines, and Triton×V0 explodes. Nuance: E1 climbs for a few hours then settles while A1 keeps creeping, so E1's <i>cumulative</i> growth isn't the smallest even though its steady-state rate is (§IV-E ¶3).</p>
+  <p class="ko">V0는 <i>두 행 모두</i>에서 V1보다 많이 새고(단독 ≈7배, Triton 아래 ≈27배), Triton은 <i>두 엔진 모두</i>를 키우며, Triton×V0 조합에서 폭발한다. 단, E1은 처음 몇 시간 오르다 안정되고 A1은 계속 오른다. 그래서 E1의 정상 상태 누수율은 최저지만 <i>누적</i> 증가량은 최소가 아니다(§IV-E ¶3).</p>
+  <p class="en">The staircase is the scariest part. E2 sits still, then jumps several MB at once and never gives it back (top 1% of jumps ≈ 1.8 MB; RSS and VMS jump together at ρ ≈ 0.83, vs &lt; 0.35 elsewhere):</p>
+  <p class="ko">가장 섬뜩한 것은 계단이다. E2는 가만히 있다가 한 번에 수 MB씩 뛰고 그 메모리를 반납하지 않는다(점프 상위 1%가 ≈1.8 MB, RSS와 VMS가 ρ≈0.83으로 같이 뛰며 다른 구성은 &lt;0.35).</p>
   <blockquote class="q">
     <p>"Its memory footprint remains stable for extended periods and then increases through discrete jumps of several megabytes. […] One plausible explanation is that the engine periodically maps new memory regions from the operating system and retains them over time. […] this behavior is the strongest clue emerging from the experimental campaign and the most plausible candidate for unbounded growth over multi-day timescales."</p>
     <cite>— §IV-E, ¶4–5 (확정하려면 힙 프로파일링이 필요 — 이 논문 범위 밖) · <a href="https://arxiv.org/html/2606.11916v1#S4.SS5">원문 보기 (§IV-E)</a></cite>
   </blockquote>
-  <p class="en">GPU side: still nothing — "Once the model is loaded, VRAM occupancy remains essentially stable" (§IV-E ¶6). One honest caveat from the authors: the four grid cells run three different vLLM versions (0.7.3 / 0.10.1.1 / 0.21.0), because newer releases removed the V0 switch. So "V0 vs V1" is partly tangled with "old version vs new version" — the gaps are too big to be just that, but a clean attribution is open (§IV-E ¶7).</p>
-  <p class="ko">GPU 쪽은 여전히 잠잠합니다 — "모델이 올라가고 나면 VRAM 점유는 사실상 안정적" (§IV-E ¶6). 저자들의 정직한 단서 하나: 그리드 4칸이 서로 다른 vLLM 버전 3개(0.7.3 / 0.10.1.1 / 0.21.0)로 돌았습니다. 최신 릴리스에서 V0 선택 스위치가 사라졌기 때문인데, 그래서 "V0 vs V1" 효과에 "구버전 vs 신버전" 효과가 일부 섞여 있습니다 — 차이가 너무 커서 버전 탓만은 아니겠지만, 깔끔한 귀속은 미해결입니다 (§IV-E ¶7).</p>
+  <p class="en">GPU side: "Once the model is loaded, VRAM occupancy remains essentially stable" (§IV-E ¶6). Caveat: the four cells use three vLLM versions (0.7.3 / 0.10.1.1 / 0.21.0) because newer releases dropped the V0 switch, so "V0 vs V1" is partly tangled with version. The gaps are too big to be only that, but clean attribution is open (§IV-E ¶7).</p>
+  <p class="ko">GPU 쪽은 "모델이 올라가면 VRAM 점유가 사실상 안정적"이다(§IV-E ¶6). 단서가 하나 있다. 최신 릴리스에서 V0 스위치가 사라져 그리드 4칸이 vLLM 버전 3개(0.7.3 / 0.10.1.1 / 0.21.0)로 돌았고, "V0 vs V1"에 버전 차이가 일부 섞여 있다. 차이가 커서 버전 탓만은 아니겠지만 깔끔한 귀속은 미해결이다(§IV-E ¶7).</p>
 
-  <h3><span class="en">3.6 — How far do these numbers reach? (§V)</span>
-      <span class="ko">3.6 — 이 숫자들, 어디까지 믿어도 되나? (§V)</span></h3>
-  <p class="en">The authors list their own limits, roughly by severity. Short version: trust the <i>existence</i> of aging and the <i>ordering</i> of deployments; treat the exact KB/h numbers as single-run estimates.</p>
-  <p class="ko">저자들이 스스로 한계를 심각한 순서대로 나열합니다. 요약하면: 에이징의 <i>존재</i>와 배포 간 <i>순서</i>는 믿어도 되고, 정확한 KB/h 숫자는 한 번 측정한 추정치로 받아들이라는 것.</p>
+  <h3><span class="en">3.6 How far do these numbers reach? (§V)</span>
+      <span class="ko">3.6 이 숫자는 어디까지 믿을 수 있나 (§V)</span></h3>
+  <p class="en">Trust the <i>existence</i> of aging and the <i>ordering</i> of deployments; treat exact KB/h numbers as single-run estimates. The authors' limits, roughly by severity:</p>
+  <p class="ko">에이징의 <i>존재</i>와 배포 간 <i>순서</i>는 믿어도 되고, KB/h 값은 한 번 측정한 추정치로 봐야 한다. 저자들이 밝힌 한계를 심각한 순으로 정리하면 다음과 같다.</p>
   <table>
     <tr><th><span class="en">Limit</span><span class="ko">한계</span></th><th><span class="en">Plain reading</span><span class="ko">쉽게 읽으면</span></th></tr>
     <tr>
       <td><span class="en">Single run per config</span><span class="ko">구성당 1회 실행</span></td>
-      <td><span class="en">No repeats → "the strongest part of our findings is the existence of aging and the relative ordering of the deployments". Replication (n ≥ 3) is their stated next step.</span><span class="ko">반복이 없다 → "가장 견고한 결과는 에이징의 존재와 배포 간 상대 순서". n ≥ 3 반복이 1순위 후속 과제.</span></td>
+      <td><span class="en">No repeats → "the strongest part of our findings is the existence of aging and the relative ordering of the deployments". Replication (n ≥ 3) is their stated next step.</span><span class="ko">반복이 없다. 가장 견고한 결과는 에이징의 존재와 배포 간 상대 순서다. n ≥ 3 반복이 첫 후속 과제다.</span></td>
     </tr>
     <tr>
       <td><span class="en">Version tangle in the 2×2</span><span class="ko">2×2의 버전 뒤엉킴</span></td>
-      <td><span class="en">3 vLLM versions across 4 cells (see §3.5) — engine-generation effect partly mixed with version effect.</span><span class="ko">4칸에 vLLM 버전 3개(§3.5 참고) — 엔진 세대 효과에 버전 효과가 일부 섞임.</span></td>
+      <td><span class="en">3 vLLM versions across 4 cells (see §3.5) — engine-generation effect partly mixed with version effect.</span><span class="ko">4칸에 vLLM 버전 3개(§3.5). 엔진 세대 효과에 버전 효과가 일부 섞인다.</span></td>
     </tr>
     <tr>
       <td><span class="en">Shared host</span><span class="ko">호스트 공유</span></td>
-      <td><span class="en">The three engines compete for CPU/RAM/I/O; measured rates include that contention. The authors treat it as part of the (realistic) environment, not noise.</span><span class="ko">세 엔진이 CPU/RAM/I/O를 경합 — 측정된 누수율에 그 경합이 포함됨. 저자들은 이를 노이즈가 아니라 (현실적인) 환경의 일부로 간주.</span></td>
+      <td><span class="en">The three engines compete for CPU/RAM/I/O; measured rates include that contention. The authors treat it as part of the (realistic) environment, not noise.</span><span class="ko">세 엔진이 CPU/RAM/I/O를 두고 경합하며, 누수율에 그 영향이 들어 있다. 저자들은 이를 노이즈가 아닌 현실적 환경의 일부로 본다.</span></td>
     </tr>
     <tr>
       <td><span class="en">Synthetic, steady traffic</span><span class="ko">합성·정상 트래픽</span></td>
-      <td><span class="en">No bursts, no repeated prefixes like production traffic — some aging mechanisms might only wake up (or calm down) under real traces.</span><span class="ko">실서비스 같은 버스트나 반복 프리픽스 없음 — 어떤 에이징 메커니즘은 실트래픽에서만 깨어나거나(혹은 잠잠해질) 수 있음.</span></td>
+      <td><span class="en">No bursts, no repeated prefixes like production traffic — some aging mechanisms might only wake up (or calm down) under real traces.</span><span class="ko">실서비스의 버스트나 반복 프리픽스가 없다. 일부 메커니즘은 실트래픽에서만 깨어나거나 잠잠해질 수 있다.</span></td>
     </tr>
     <tr>
       <td><span class="en">One GPU, one model</span><span class="ko">GPU 1종, 모델 1종</span></td>
-      <td><span class="en">L40S + Qwen2.5-7B only. Qualitative story expected to carry over; "the quantitative results, however, will need to be re-measured."</span><span class="ko">L40S + Qwen2.5-7B뿐. 정성적 결론은 이전될 것으로 기대하지만 "정량 수치는 재측정이 필요".</span></td>
+      <td><span class="en">L40S + Qwen2.5-7B only. Qualitative story expected to carry over; "the quantitative results, however, will need to be re-measured."</span><span class="ko">L40S + Qwen2.5-7B뿐이다. 정성적 결론은 유지될 것으로 보지만 정량 수치는 다시 재야 한다.</span></td>
     </tr>
   </table>
   <p class="en">They're upfront about this from page one: "the scope is narrow by design, the method is not. The narrow part is mainly time: each configuration runs for 36 hours, and effects that build up more slowly may not show yet." (§I ¶7)</p>
-  <p class="ko">이건 1페이지부터 솔직하게 깔고 갑니다: "범위는 의도적으로 좁지만, 방법은 좁지 않다. 좁은 건 주로 시간이다: 구성당 36시간이라, 더 천천히 쌓이는 효과는 아직 안 보일 수 있다." (§I ¶7)</p>
+  <p class="ko">저자들은 서론에서부터 이를 밝힌다. 범위는 일부러 좁혔지만 방법은 좁지 않고, 좁은 것은 주로 시간이다. 구성당 36시간이라 더 천천히 쌓이는 효과는 아직 보이지 않을 수 있다 (§I ¶7).</p>
 </section>
 
 <!-- ============ 4. TAKEAWAYS ============ -->
@@ -692,49 +712,59 @@
     <span class="ko">시사점</span>
   </h2>
 
-  <h3><span class="en">4.1 — The paper's three findings (§VI)</span>
-      <span class="ko">4.1 — 논문의 세 가지 결론 (§VI)</span></h3>
+  <h3><span class="en">4.1 The paper's three findings (§VI)</span>
+      <span class="ko">4.1 논문의 세 가지 결론 (§VI)</span></h3>
   <ul class="en">
     <li><b>GPU LLM serving ages.</b> "Every deployment exhibits a small but statistically significant process-private memory leak over a 36-hour window."</li>
     <li><b>The model isn't the leaker — the packaging is.</b> "Deployments running the same model and serving the same workload can differ by nearly two orders of magnitude in leak rate."</li>
     <li><b>Leaks have different personalities.</b> Most drift smoothly; "Triton+V0 shows a distinctive step-wise pattern in RSS and VMS, suggesting a different underlying mechanism."</li>
   </ul>
   <ul class="ko">
-    <li><b>GPU LLM 서빙도 늙는다.</b> "모든 배포가 36시간 윈도우에서 작지만 통계적으로 유의한 프로세스 전용 메모리 누수를 보인다."</li>
-    <li><b>새는 건 모델이 아니라 포장이다.</b> "같은 모델, 같은 워크로드를 서빙해도 배포에 따라 누수율이 거의 100배 갈린다."</li>
-    <li><b>누수에도 성격이 있다.</b> 대부분은 매끄럽게 드리프트하지만, "Triton+V0만 RSS·VMS의 계단식 패턴 — 다른 기저 메커니즘을 시사."</li>
+    <li><b>GPU LLM 서빙도 늙는다.</b> 모든 배포가 36시간 동안 작지만 통계적으로 유의한 프로세스 전용 메모리 누수를 보였다.</li>
+    <li><b>새는 것은 모델이 아니라 포장이다.</b> 같은 모델과 워크로드라도 배포에 따라 누수율이 거의 100배 갈린다.</li>
+    <li><b>누수에도 성격이 있다.</b> 대부분은 매끄럽게 늘지만 Triton+V0만 RSS·VMS가 계단식으로 뛰어, 다른 메커니즘을 시사한다.</li>
   </ul>
 
-  <h3><span class="en">4.2 — For operators: your dashboard is blind to this</span>
-      <span class="ko">4.2 — 운영자에게: 당신의 대시보드는 이걸 못 본다</span></h3>
-  <p class="en">The most actionable sentence in the paper — none of this showed up in latency, throughput, or error rate. If your alerting is built entirely on those, this whole class of degradation is invisible until it isn't:</p>
-  <p class="ko">이 논문에서 가장 실용적인 문장 — 이 모든 것이 레이턴시, 스루풋, 에러율에는 전혀 나타나지 않았습니다. 알림 체계가 그 셋 위에만 서 있다면, 이런 부류의 열화는 터지기 전까지 보이지 않습니다:</p>
+  <h3><span class="en">4.2 For operators: your dashboard is blind to this</span>
+      <span class="ko">4.2 운영자에게: 대시보드는 이것을 못 본다</span></h3>
+  <p class="en">None of this showed up in latency, throughput, or error rate. Alerting built only on those misses this whole class of degradation:</p>
+  <p class="ko">이 중 어느 것도 레이턴시, 스루풋, 에러율에 나타나지 않았다. 알림이 이 셋에만 의존하면 이런 열화는 터지기 전까지 보이지 않는다.</p>
   <blockquote class="q">
     <p>"Notably, none of these effects is visible through client-side metrics over the timescale of our experiments. For practitioners, the results highlight that monitoring LLM serving systems cannot rely solely on latency, throughput, or error rates. Memory-related aging may remain invisible to users while steadily accumulating inside the serving stack. More generally, deployment choices have reliability implications that are not captured by short-term performance benchmarks."</p>
     <cite>— §VI · <a href="https://arxiv.org/html/2606.11916v1#S6">원문 보기 (§VI)</a></cite>
   </blockquote>
 
-  <h3><span class="en">4.3 — What the authors want to do next (§VI)</span>
-      <span class="ko">4.3 — 저자들이 다음에 하고 싶은 것 (§VI)</span></h3>
+  <h3><span class="en">4.3 What the authors want to do next (§VI)</span>
+      <span class="ko">4.3 저자들의 후속 과제 (§VI)</span></h3>
   <ul class="en">
     <li>Repeat runs (quantify run-to-run noise); other GPUs and bigger models.</li>
-    <li>Longer windows — catch effects that need more than 36 h to show.</li>
+    <li>Longer windows, for effects that need more than 36 h to show.</li>
     <li><b>Heap-profile the V0 engine</b> to find where the staircase jumps come from.</li>
     <li>Check whether specific request patterns can trigger or accelerate the leaks.</li>
   </ul>
   <ul class="ko">
-    <li>반복 실험 (런 간 노이즈 정량화); 다른 GPU와 더 큰 모델.</li>
-    <li>더 긴 관측 윈도우 — 36시간으로는 안 보이는 효과 잡기.</li>
-    <li><b>V0 엔진 힙 프로파일링</b> — 계단식 점프의 출처 찾기.</li>
-    <li>특정 요청 패턴이 누수를 촉발/가속하는지 확인.</li>
+    <li>반복 실험으로 런 간 노이즈를 정량화하고, 다른 GPU와 더 큰 모델로 넓힌다.</li>
+    <li>36시간으로는 안 보이는 효과를 잡도록 관측 기간을 늘린다.</li>
+    <li><b>V0 엔진을 힙 프로파일링</b>해 계단식 점프의 출처를 찾는다.</li>
+    <li>특정 요청 패턴이 누수를 촉발하거나 가속하는지 확인한다.</li>
   </ul>
 
-  <h3><span class="en">4.4 — Our read (not the paper's claims)</span>
-      <span class="ko">4.4 — 우리 관점의 해석 (논문의 주장 아님)</span></h3>
+  <h3><span class="en">4.4 Our read (not the paper's claims)</span>
+      <span class="ko">4.4 우리 관점 (논문의 주장 아님)</span></h3>
   <div class="callout c-purple">
-    <span class="tag"><span class="en">editor's note — implications for our own serving work</span><span class="ko">편집자 주 — 우리 서빙 작업에 주는 함의</span></span>
-    <span class="en">① Add <b>per-process USS</b> (one psutil call) to long-running vLLM benchmarks and PD-disaggregation experiments — this paper proves client-side metrics miss the whole category. ② Any layer you wrap around vLLM (Triton, gateways, sidecars) becomes part of the aging surface — measure it, don't vouch for it. ③ The KB/h magnitudes are harmless on monthly timescales; the thing worth an alert is the <b>E2-style staircase</b> (RSS+VMS jumping together), the one candidate for unbounded growth. ④ Multi-component setups like P/D disaggregation multiply the number of independently-aging runtimes — "the deployment is the aging surface" bites hardest exactly there.</span>
-    <span class="ko">① 우리 장기 vLLM 벤치마크나 PD 분리 실험의 모니터링에 <b>프로세스별 USS</b>(psutil 한 줄)를 추가할 것 — 클라이언트 측 지표가 이 범주를 통째로 놓친다는 게 이 논문의 증명이다. ② vLLM을 감싸는 모든 계층(Triton, 게이트웨이, 사이드카)은 에이징 표면의 일부가 된다 — 보증하지 말고 측정할 것. ③ KB/h 수준의 절대량은 월 단위로는 무해하다; 알림을 걸 가치가 있는 건 <b>E2식 계단 패턴</b>(RSS+VMS 동반 점프) — 무한 증가의 유일한 후보다. ④ P/D 분리 같은 멀티 컴포넌트 구성은 따로따로 늙는 런타임 수를 늘린다 — "배포 전체가 에이징 표면"이라는 결론이 가장 아프게 적용되는 지점.</span>
+    <span class="tag"><span class="en">editor's note: implications for our serving work</span><span class="ko">편집자 주: 우리 서빙 작업에 주는 함의</span></span>
+    <ol class="en">
+      <li>Add <b>per-process USS</b> (one psutil call) to long-running vLLM benchmarks and PD-disaggregation experiments; client-side metrics miss this category entirely.</li>
+      <li>Any layer wrapped around vLLM (Triton, gateways, sidecars) is part of the aging surface. Measure it.</li>
+      <li>KB/h magnitudes are harmless monthly; alert on the <b>E2-style staircase</b> (RSS+VMS jumping together), the one candidate for unbounded growth.</li>
+      <li>P/D disaggregation multiplies independently aging runtimes, so "the deployment is the aging surface" bites hardest there.</li>
+    </ol>
+    <ol class="ko">
+      <li>장기 vLLM 벤치마크와 PD 분리 실험에 <b>프로세스별 USS</b>(psutil 한 줄)를 추가한다. 클라이언트 지표는 이 범주를 통째로 놓친다.</li>
+      <li>vLLM을 감싸는 계층(Triton, 게이트웨이, 사이드카)은 모두 에이징 표면이 된다. 믿지 말고 측정한다.</li>
+      <li>KB/h 규모는 월 단위로 무해하다. 알림을 걸 대상은 무한 증가의 유일한 후보인 <b>E2식 계단 패턴</b>(RSS+VMS 동반 점프)이다.</li>
+      <li>P/D 분리는 따로 늙는 런타임 수를 늘리므로, "배포 전체가 에이징 표면"이라는 결론이 가장 크게 적용된다.</li>
+    </ol>
   </div>
 </section>
 

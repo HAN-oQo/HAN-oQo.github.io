@@ -33,6 +33,9 @@
   h3{font-size:16.5px;margin:24px 0 6px;font-weight:600}
   h4{font-size:14.5px;margin:16px 0 4px;font-weight:600;color:var(--ink)}
   p{margin:10px 0}
+  .para{margin:10px 0}
+  .callout ul,.callout ol,.para ul,.para ol{margin:6px 0;padding-left:22px}
+  .callout li,.para li{margin:3px 0}
   .muted{color:var(--muted)}
   pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;
     font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;margin:12px 0}
@@ -89,11 +92,11 @@
 <header class="hero">
   <h1>
     <span class="en">From nano-vLLM to ATOM — how 1,385 lines became 426,000</span>
-    <span class="ko">nano-vLLM에서 ATOM까지 — 1,385줄이 42만 줄이 되기까지</span>
+    <span class="ko">nano-vLLM에서 ATOM까지: 1,385줄이 42만 줄이 되기까지</span>
   </h1>
   <p class="lede">
-    <span class="en">ATOM's README credits <b>nano-vllm</b> as its origin in one sentence and says nothing more. This note takes that sentence seriously: it reads all 1,385 lines of nano-vLLM to establish what the starting point actually was and what it had already thrown away, measures exactly what AMD added on top, then walks the ATOM subsystems my earlier deep dive deliberately left out — ATOMesh, the vLLM/SGLang plugin bridges, diffusion — and ends on the weaknesses that follow from all of it.</span>
-    <span class="ko">ATOM README는 <b>nano-vllm</b>을 출발점으로 한 문장으로 밝히고 더는 말하지 않는다. 이 노트는 그 한 문장을 진지하게 받아들인다. nano-vLLM 1,385줄을 전부 읽어 출발점이 실제로 무엇이었고 이미 무엇을 버린 상태였는지 확인하고, AMD가 그 위에 정확히 무엇을 얹었는지 재고, 앞선 딥다이브에서 일부러 뺐던 ATOM 서브시스템들 — ATOMesh, vLLM·SGLang 플러그인 브리지, diffusion — 을 훑은 뒤, 거기서 따라 나오는 약점으로 마무리한다.</span>
+    <span class="en">ATOM's README names <b>nano-vllm</b> as its origin in one sentence. This note reads all 1,385 lines of nano-vLLM, measures what AMD added on top, and covers the ATOM parts my earlier deep dive skipped, ending with the weaknesses.</span>
+    <span class="ko">ATOM README는 출발점이 <b>nano-vllm</b>이라고 한 문장만 적는다. 이 노트는 nano-vLLM 1,385줄을 전부 읽고 AMD가 그 위에 무엇을 얹었는지 잰 뒤, 앞선 딥다이브에서 뺀 ATOM 구성 요소와 약점을 정리한다.</span>
   </p>
   <div class="meta">
     <span class="badge"><a href="https://github.com/GeeeekExplorer/nano-vllm/tree/bb823b3e06983d71485a8e1f23715ebd87d98ef8">nano-vllm @ bb823b3</a></span>
@@ -116,7 +119,7 @@
     <li><a href="#s2"><span class="en">2. What nano-vLLM threw away — and what that costs</span><span class="ko">2. nano-vLLM이 걷어낸 것, 그리고 그 대가</span></a></li>
     <li><a href="#s3"><span class="en">3. The benchmark that made its reputation</span><span class="ko">3. 명성을 만든 벤치마크</span></a></li>
     <li><a href="#s4"><span class="en">4. nano-vLLM → ATOM: what was grown, what was built new</span><span class="ko">4. nano-vLLM → ATOM: 키운 것과 새로 지은 것</span></a></li>
-    <li><a href="#s5"><span class="en">5. ATOM's other halves — ATOMesh, the plugin bridges, diffusion</span><span class="ko">5. ATOM의 나머지 절반 — ATOMesh·플러그인 브리지·diffusion</span></a></li>
+    <li><a href="#s5"><span class="en">5. ATOM's other halves — ATOMesh, the plugin bridges, diffusion</span><span class="ko">5. ATOM의 나머지 절반: ATOMesh·플러그인 브리지·diffusion</span></a></li>
     <li><a href="#s6"><span class="en">6. ATOM's weaknesses</span><span class="ko">6. ATOM의 약점</span></a></li>
     <li><a href="#s7"><span class="en">7. Sources</span><span class="ko">7. 출처</span></a></li>
   </ol>
@@ -124,14 +127,24 @@
 
 <div class="callout c-blue">
   <span class="tag"><span class="en">one-line summary</span><span class="ko">한 줄 요약</span></span>
-  <span class="en">nano-vLLM is not a small vLLM — it is <b>the shape of vLLM with everything hard removed</b>: one model, no quantization, no MoE, no server, no speculative decoding, temperature-only sampling with greedy <i>explicitly forbidden</i>, and tensor parallelism over a single hardcoded 1 MB shared-memory buffer. That is exactly why it is readable, and exactly why its "comparable to vLLM" benchmark holds only in the corner it was measured in. ATOM kept the skeleton — the class names, the global forward context, the xxhash block manager, the linear-layer hierarchy are all still recognisable — and then added back everything nano-vLLM had removed, mostly <b>by re-importing it from vLLM</b>. The result is 308× the code, and a project whose hardest problems are no longer engine problems at all.</span>
-    <span class="ko">nano-vLLM은 작은 vLLM이 아니다. <b>어려운 걸 전부 걷어낸 vLLM의 형태</b>다 — 모델 1개, quantization 없음, MoE 없음, 서버 없음, speculative decoding 없음, temperature 샘플링만 되고 greedy는 <i>명시적으로 금지</i>, tensor parallel은 하드코딩된 1 MB 공유메모리 버퍼 하나로. 읽을 수 있는 이유가 정확히 그것이고, "vLLM에 준한다"는 벤치마크가 측정된 구석에서만 성립하는 이유도 정확히 그것이다. ATOM은 뼈대를 유지했고 — 클래스 이름, 전역 forward context, xxhash block manager, linear 레이어 계층이 지금도 알아볼 수 있게 남아 있다 — 그 위에 nano-vLLM이 걷어낸 것을 전부 되돌려 놓았다. 대부분 <b>vLLM에서 다시 가져오는 방식으로</b>. 결과는 308배의 코드, 그리고 가장 어려운 문제가 더는 엔진 문제가 아닌 프로젝트다.</span>
+  <ul class="en">
+    <li>nano-vLLM is <b>the shape of vLLM with everything hard removed</b>: one model, no quantization, MoE, server or speculative decoding, temperature-only sampling with greedy <i>explicitly forbidden</i>, and TP over one hardcoded 1 MB shared-memory buffer.</li>
+    <li>That is why it is readable, and why its "comparable to vLLM" benchmark holds only in the corner it was measured in.</li>
+    <li>ATOM kept the skeleton (class names, global forward context, xxhash block manager, linear-layer hierarchy) and added back what was removed, mostly <b>by re-importing it from vLLM</b>.</li>
+    <li>The result is 308× the code, and the hardest problems are no longer engine problems.</li>
+  </ul>
+  <ul class="ko">
+    <li>nano-vLLM은 <b>어려운 부분을 전부 걷어낸 vLLM의 형태</b>다. 모델 1개, quantization·MoE·서버·speculative decoding 없음, temperature 샘플링만 되고 greedy는 <i>명시적으로 금지</i>, tensor parallel은 하드코딩된 1 MB 공유메모리 버퍼 하나로 돈다.</li>
+    <li>그래서 읽기 쉽고, "vLLM에 준한다"는 벤치마크도 측정한 조건에서만 성립한다.</li>
+    <li>ATOM은 뼈대(클래스 이름, 전역 forward context, xxhash block manager, linear 레이어 계층)를 유지하고 걷어낸 기능을 되살렸다. 대부분 <b>vLLM에서 다시 가져왔다</b>.</li>
+    <li>코드는 308배가 됐고, 가장 어려운 문제는 이제 엔진 바깥에 있다.</li>
+  </ul>
 </div>
 
 <div class="grid3">
-  <div class="mini"><h4><span class="en">the numbers</span><span class="ko">숫자</span></h4><p><span class="en">nano-vLLM: <b>1,385</b> lines, 19 files, 1 model. ATOM: <b>426,357</b> lines, 1,114 files, 26 models. ATOM's <code>scheduler.py</code> alone is 2.3× the whole of nano-vLLM.</span><span class="ko">nano-vLLM: <b>1,385</b>줄, 19파일, 모델 1개. ATOM: <b>426,357</b>줄, 1,114파일, 모델 26개. ATOM <code>scheduler.py</code> 하나가 nano-vLLM 전체의 2.3배.</span></p></div>
-  <div class="mini"><h4><span class="en">global forward context</span><span class="ko">전역 forward context</span></h4><p><span class="en">Both engines pass attention metadata through a module-level global rather than function arguments — nano-vLLM's <code>utils/context.py</code> (27 lines) is the direct ancestor of ATOM's <code>ForwardContext</code> (981).</span><span class="ko">두 엔진 모두 attention 메타데이터를 함수 인자가 아니라 모듈 레벨 전역으로 넘긴다. nano-vLLM <code>utils/context.py</code>(27줄)가 ATOM <code>ForwardContext</code>(981줄)의 직계 조상.</span></p></div>
-  <div class="mini"><h4><span class="en">chunked prefill</span><span class="ko">chunked prefill</span></h4><p><span class="en">Splitting one long prompt's prefill across several steps so it doesn't monopolise a batch. nano-vLLM added it only recently and only for the first sequence in a batch.</span><span class="ko">긴 프롬프트의 prefill을 여러 스텝에 나눠 배치를 독점하지 않게 하는 기법. nano-vLLM은 최근에야, 그것도 배치의 첫 시퀀스에만 적용했다.</span></p></div>
+  <div class="mini"><h4><span class="en">the numbers</span><span class="ko">숫자</span></h4><p><span class="en">nano-vLLM <b>1,385</b> lines / 19 files / 1 model vs ATOM <b>426,357</b> / 1,114 / 26. ATOM's <code>scheduler.py</code> alone is 2.3× all of nano-vLLM.</span><span class="ko">nano-vLLM <b>1,385</b>줄·19파일·모델 1개, ATOM <b>426,357</b>줄·1,114파일·모델 26개. ATOM <code>scheduler.py</code> 하나가 nano-vLLM 전체의 2.3배다.</span></p></div>
+  <div class="mini"><h4><span class="en">global forward context</span><span class="ko">전역 forward context</span></h4><p><span class="en">Attention metadata passed via a module-level global, not arguments. nano-vLLM's <code>utils/context.py</code> (27 lines) is the ancestor of ATOM's <code>ForwardContext</code> (981).</span><span class="ko">attention 메타데이터를 인자 대신 모듈 전역으로 넘긴다. nano-vLLM <code>utils/context.py</code>(27줄)가 ATOM <code>ForwardContext</code>(981줄)의 조상이다.</span></p></div>
+  <div class="mini"><h4><span class="en">chunked prefill</span><span class="ko">chunked prefill</span></h4><p><span class="en">Splitting a long prompt's prefill across steps. nano-vLLM added it recently, for the first sequence in a batch only.</span><span class="ko">긴 prefill을 여러 스텝에 나눈다. nano-vLLM은 최근에야 배치의 첫 시퀀스에만 넣었다.</span></p></div>
 </div>
 
 <section id="s1">
@@ -139,7 +152,7 @@
 
 <p>
   <span class="en">This is a codebase you can read in full, so here it is in full. Every Python file, with its line count, at commit <code class="inl">bb823b3</code>:</span>
-  <span class="ko">전부 읽을 수 있는 코드베이스라 전부 싣는다. 커밋 <code class="inl">bb823b3</code> 기준, 모든 Python 파일과 줄 수:</span>
+  <span class="ko">전부 읽을 수 있는 크기라 전부 싣는다. 커밋 <code class="inl">bb823b3</code> 기준 모든 Python 파일과 줄 수다.</span>
 </p>
 
 <pre>nanovllm/
@@ -168,23 +181,23 @@
     └── loader.py               28    safetensors 로더
                               ─────
                                1385</pre>
-<p class="figcap"><span class="en">Counted directly from a clone at </span><span class="ko">직접 클론해 계수: </span><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/tree/bb823b3e06983d71485a8e1f23715ebd87d98ef8">bb823b3</a><span class="en">. The README claims "~1,200 lines"; it has drifted up ~15% and is still honest.</span><span class="ko">. README는 "~1,200줄"이라 하는데, 15%쯤 늘었을 뿐 여전히 정직한 수치다.</span></p>
+<p class="figcap"><span class="en">Counted from a clone at </span><span class="ko">직접 클론해 계수, </span><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/tree/bb823b3e06983d71485a8e1f23715ebd87d98ef8">bb823b3</a><span class="en">. README says "~1,200 lines" (~15% drift).</span><span class="ko">. README의 "~1,200줄"보다 15%쯤 늘었다.</span></p>
 
 <p>
-  <span class="en">The public API is <code class="inl">llm.py</code>, and it is five lines: <code class="inl">class LLM(LLMEngine): pass</code>. There is no server, no router, no async layer. You call <code class="inl">LLM.generate(prompts, sampling_params)</code>, it blocks, and you get a list back.</span>
-  <span class="ko">공개 API는 <code class="inl">llm.py</code>이고 다섯 줄이다 — <code class="inl">class LLM(LLMEngine): pass</code>. 서버도, 라우터도, 비동기 계층도 없다. <code class="inl">LLM.generate(prompts, sampling_params)</code>를 부르면 블로킹되고, 리스트를 돌려받는다.</span>
+  <span class="en">The public API, <code class="inl">llm.py</code>, is five lines: <code class="inl">class LLM(LLMEngine): pass</code>. No server, router or async layer. <code class="inl">LLM.generate(prompts, sampling_params)</code> blocks and returns a list.</span>
+  <span class="ko">공개 API인 <code class="inl">llm.py</code>는 <code class="inl">class LLM(LLMEngine): pass</code> 다섯 줄이다. 서버·라우터·비동기 계층은 없다. <code class="inl">LLM.generate(prompts, sampling_params)</code>를 부르면 블로킹된 뒤 리스트를 돌려준다.</span>
 </p>
 
 <h3><span class="en">The three ideas it does keep</span><span class="ko">그래도 지킨 세 가지 아이디어</span></h3>
 
 <p>
-  <span class="en">What survives the minimisation is precisely vLLM's load-bearing ideas — which is why it is a useful teaching artifact and why AMD could build on it.</span>
-  <span class="ko">최소화에서 살아남은 것이 정확히 vLLM의 핵심 아이디어들이다. 그래서 교육 자료로 쓸모가 있고, AMD가 그 위에 지을 수 있었던 것이다.</span>
+  <span class="en">What survives is vLLM's load-bearing ideas, which is why AMD could build on it.</span>
+  <span class="ko">남은 것은 vLLM의 핵심 아이디어다. 그래서 AMD가 그 위에 지을 수 있었다.</span>
 </p>
 
 <p>
-  <span class="en"><b>1. Paged KV cache with hash-based prefix sharing.</b> <code class="inl">BlockManager</code> hands out fixed blocks, ref-counts them, and hashes block contents with xxhash64 chained through the previous block's hash — so identical prompt prefixes map to identical hashes and share physical blocks:</span>
-  <span class="ko"><b>1. 해시 기반 prefix 공유가 되는 paged KV cache.</b> <code class="inl">BlockManager</code>는 고정 크기 블록을 나눠 주고 ref-count를 세며, 블록 내용을 이전 블록 해시와 연쇄해 xxhash64로 해싱한다. 그래서 프롬프트 prefix가 같으면 해시가 같고, 물리 블록을 공유한다:</span>
+  <span class="en"><b>1. Paged KV cache with hash-based prefix sharing.</b> <code class="inl">BlockManager</code> ref-counts fixed blocks and hashes each block with xxhash64 chained through the previous hash, so identical prefixes share physical blocks.</span>
+  <span class="ko"><b>1. 해시 기반 prefix 공유 paged KV cache.</b> <code class="inl">BlockManager</code>는 고정 블록의 ref-count를 세고, 블록마다 이전 해시를 이어 xxhash64로 해싱한다. prefix가 같으면 물리 블록을 공유한다.</span>
 </p>
 
 <pre>@classmethod
@@ -194,16 +207,16 @@ def compute_hash(cls, token_ids: list[int], prefix: int = -1):
         h.update(prefix.to_bytes(8, "little"))     # 이전 블록 해시를 체인
     h.update(np.array(token_ids).tobytes())
     return h.intdigest()</pre>
-<p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/nanovllm/engine/block_manager.py#L35-L41">block_manager.py#L35-L41</a><span class="en"> — ATOM's <code>BlockManager</code> (1,698 lines) still uses xxhash64 the same way.</span><span class="ko"> — ATOM <code>BlockManager</code>(1,698줄)도 여전히 같은 방식으로 xxhash64를 쓴다.</span></p>
+<p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/nanovllm/engine/block_manager.py#L35-L41">block_manager.py#L35-L41</a><span class="en"> · ATOM's <code>BlockManager</code> (1,698 lines) still hashes this way.</span><span class="ko"> · ATOM <code>BlockManager</code>(1,698줄)도 같은 방식이다.</span></p>
 
 <p>
-  <span class="en"><b>2. Prefill-first continuous batching with preemption.</b> <code class="inl">Scheduler.schedule()</code> fills a prefill batch while it fits under <code class="inl">max_num_seqs</code> and <code class="inl">max_num_batched_tokens</code>, returns immediately if it scheduled any, and otherwise batches decode. When decode runs out of blocks it evicts the <i>last</i> running sequence back to the front of the waiting queue. Ninety-two lines, and it is recognisably the same policy as ATOM's 3,146-line version.</span>
-  <span class="ko"><b>2. preemption이 있는 prefill 우선 continuous batching.</b> <code class="inl">Scheduler.schedule()</code>은 <code class="inl">max_num_seqs</code>·<code class="inl">max_num_batched_tokens</code> 안에서 prefill 배치를 채우고, 하나라도 잡았으면 즉시 반환하며, 아니면 decode를 묶는다. decode에서 블록이 모자라면 <i>마지막</i> running 시퀀스를 쫓아내 대기 큐 맨 앞에 넣는다. 92줄이고, ATOM의 3,146줄 버전과 같은 정책임을 알아볼 수 있다.</span>
+  <span class="en"><b>2. Prefill-first continuous batching with preemption.</b> <code class="inl">Scheduler.schedule()</code> fills prefill under <code class="inl">max_num_seqs</code> and <code class="inl">max_num_batched_tokens</code> and returns if it got any; otherwise it batches decode. Out of blocks, it evicts the <i>last</i> running sequence to the front of the queue. 92 lines, same policy as ATOM's 3,146.</span>
+  <span class="ko"><b>2. preemption 있는 prefill 우선 continuous batching.</b> <code class="inl">Scheduler.schedule()</code>은 <code class="inl">max_num_seqs</code>·<code class="inl">max_num_batched_tokens</code> 안에서 prefill을 채우고, 하나라도 잡으면 바로 반환한다. 없으면 decode를 묶는다. 블록이 모자라면 <i>마지막</i> running 시퀀스를 대기 큐 맨 앞으로 돌려보낸다. 92줄이지만 ATOM의 3,146줄 버전과 정책이 같다.</span>
 </p>
 
 <p>
-  <span class="en"><b>3. A module-level global for attention metadata.</b> This is the design decision that propagated furthest. Attention layers do not receive their metadata as arguments; they call <code class="inl">get_context()</code>:</span>
-  <span class="ko"><b>3. attention 메타데이터용 모듈 레벨 전역.</b> 가장 멀리까지 전파된 설계 결정이다. attention 레이어는 메타데이터를 인자로 받지 않고 <code class="inl">get_context()</code>를 부른다:</span>
+  <span class="en"><b>3. A module-level global for attention metadata.</b> The decision that travelled furthest. Attention layers call <code class="inl">get_context()</code> instead of taking arguments.</span>
+  <span class="ko"><b>3. attention 메타데이터용 모듈 전역.</b> 가장 멀리 전파된 설계다. attention 레이어는 인자 대신 <code class="inl">get_context()</code>를 부른다.</span>
 </p>
 
 <pre>@dataclass(slots=True)
@@ -218,18 +231,18 @@ class Context:
     block_tables: torch.Tensor | None = None
 
 _CONTEXT = Context()</pre>
-<p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/nanovllm/utils/context.py#L5-L16">utils/context.py#L5-L16</a><span class="en"> — 27 lines, 8 fields. ATOM's <code>ForwardContext</code> is 981 lines and carries DP metadata, spec-decode metadata and per-layer KV tensors on top of these.</span><span class="ko"> — 27줄, 필드 8개. ATOM <code>ForwardContext</code>는 981줄이고 여기에 DP 메타데이터, spec-decode 메타데이터, 레이어별 KV 텐서까지 얹는다.</span></p>
+<p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/nanovllm/utils/context.py#L5-L16">utils/context.py#L5-L16</a><span class="en"> · 27 lines, 8 fields. ATOM's <code>ForwardContext</code> (981 lines) adds DP, spec-decode and per-layer KV state.</span><span class="ko"> · 27줄, 필드 8개. ATOM <code>ForwardContext</code>(981줄)는 DP·spec-decode 메타데이터와 레이어별 KV 텐서를 더한다.</span></p>
 
 <p>
-  <span class="en">The reason for the global is the same in both: it keeps the compiled/captured forward's signature stable, so a CUDA graph can be replayed with tensors written in place. nano-vLLM captures the <b>whole model</b> in one graph, which it can afford because it has exactly one attention implementation with fixed-shape inputs. ATOM cannot — it has MHA, MLA, GDN, DSA and V4-compressor backends whose metadata differs — which is why ATOM had to invent <i>piecewise</i> capture and mark attention opaque to Dynamo. <b>Same idea, and the complexity delta is entirely a consequence of supporting more than one model.</b></span>
-  <span class="ko">전역을 쓰는 이유는 양쪽이 같다. 컴파일·캡처된 forward의 시그니처를 고정시켜, 텐서를 제자리에 써 넣고 CUDA graph를 재생할 수 있게 하는 것. nano-vLLM은 <b>모델 전체</b>를 그래프 하나에 캡처하는데, attention 구현이 정확히 하나이고 입력 shape가 고정이라 그럴 여유가 있다. ATOM은 못 한다 — MHA·MLA·GDN·DSA·V4 compressor 백엔드마다 메타데이터가 다르다 — 그래서 <i>piecewise</i> 캡처를 만들고 attention을 Dynamo에 불투명하게 표시해야 했다. <b>같은 아이디어이고, 복잡도 차이는 전적으로 모델을 하나보다 많이 지원한 결과다.</b></span>
+  <span class="en">Why a global: it keeps the captured forward's signature stable, so a CUDA graph can replay with tensors written in place. nano-vLLM captures the <b>whole model</b> in one graph because it has one attention implementation. ATOM's MHA, MLA, GDN, DSA and V4-compressor backends differ in metadata, so it needed <i>piecewise</i> capture with attention opaque to Dynamo. <b>Same idea; the extra complexity comes from supporting more than one model.</b></span>
+  <span class="ko">전역을 쓰는 이유는 둘 다 같다. 캡처된 forward의 시그니처가 고정되니 텐서만 제자리에 써 넣고 CUDA graph를 재생할 수 있다. nano-vLLM은 attention 구현이 하나라 <b>모델 전체</b>를 그래프 하나에 담는다. ATOM은 MHA·MLA·GDN·DSA·V4 compressor 백엔드마다 메타데이터가 달라서 <i>piecewise</i> 캡처를 만들고 attention을 Dynamo에서 불투명하게 처리했다. <b>아이디어는 같고, 복잡도 차이는 모델을 여러 개 지원한 대가다.</b></span>
 </p>
 
 <h3><span class="en">Tensor parallelism over a 1 MB shared-memory buffer</span><span class="ko">1 MB 공유메모리 버퍼로 구현한 tensor parallel</span></h3>
 
 <p>
-  <span class="en">This is the single most illuminating piece of code in the project, because it shows exactly where "minimal" stops being a virtue. Rank 0 runs in-process; ranks 1..N-1 are spawned processes sitting in a <code class="inl">loop()</code>. They communicate by <b>pickling a method name and arguments into a shared-memory buffer</b> and flipping a <code class="inl">multiprocessing.Event</code>:</span>
-  <span class="ko">이 프로젝트에서 가장 많은 걸 보여주는 코드다. "최소주의"가 어디서부터 미덕이기를 그만두는지 정확히 드러내기 때문이다. rank 0은 인프로세스로 돌고, rank 1..N-1은 <code class="inl">loop()</code>에 앉아 있는 spawn된 프로세스다. 이들은 <b>메서드 이름과 인자를 공유메모리 버퍼에 pickle해 넣고</b> <code class="inl">multiprocessing.Event</code>를 뒤집어 통신한다:</span>
+  <span class="en">This code shows where "minimal" stops being a virtue. Rank 0 runs in-process; ranks 1..N-1 are spawned processes in a <code class="inl">loop()</code>. They communicate by <b>pickling a method name and arguments into shared memory</b> and setting a <code class="inl">multiprocessing.Event</code>.</span>
+  <span class="ko">"최소주의"가 미덕이기를 멈추는 지점이 이 코드에서 보인다. rank 0은 같은 프로세스에서, rank 1..N-1은 spawn된 프로세스의 <code class="inl">loop()</code>에서 돈다. <b>메서드 이름과 인자를 pickle해 공유메모리에 쓰고</b> <code class="inl">multiprocessing.Event</code>를 켜서 통신한다.</span>
 </p>
 
 <pre>self.shm = SharedMemory(name="nanovllm", create=True, size=2**20)   # 1 MB, 이름 하드코딩
@@ -245,13 +258,23 @@ def write_shm(self, method_name, *args):
 
 <div class="callout c-coral">
   <span class="tag"><span class="en">three hardcoded values, three hard limits</span><span class="ko">하드코딩 셋, 한계 셋</span></span>
-  <span class="en"><code class="inl">SharedMemory(name="nanovllm")</code> — the name is a constant, so <b>you cannot run two nano-vLLM instances on one machine</b>; the second one collides on the segment. <code class="inl">dist.init_process_group("nccl", "tcp://localhost:2333")</code> — <b>localhost and port 2333 are literals</b>, so it is single-node only and, again, two instances collide. And the buffer is <code class="inl">2**20</code> bytes, so a scheduled batch whose pickled sequences exceed 1 MB silently corrupts. None of these matter for a teaching repo. All three are disqualifying for a service.</span>
-  <span class="ko"><code class="inl">SharedMemory(name="nanovllm")</code> — 이름이 상수라 <b>한 머신에서 nano-vLLM 인스턴스를 둘 띄울 수 없다</b>. 두 번째가 세그먼트에서 충돌한다. <code class="inl">dist.init_process_group("nccl", "tcp://localhost:2333")</code> — <b>localhost와 포트 2333이 리터럴</b>이라 단일 노드 전용이고, 역시 인스턴스 둘이 충돌한다. 버퍼는 <code class="inl">2**20</code> 바이트라, pickle된 시퀀스가 1 MB를 넘는 배치는 조용히 깨진다. 학습용 레포에선 아무 문제도 아니다. 서비스에선 셋 다 실격 사유다.</span>
+  <ol class="en">
+    <li><code class="inl">SharedMemory(name="nanovllm")</code>: a constant name, so <b>two instances cannot share a machine</b>.</li>
+    <li><code class="inl">dist.init_process_group("nccl", "tcp://localhost:2333")</code>: <b>literal localhost and port 2333</b>, so single-node only, and instances collide again.</li>
+    <li>A <code class="inl">2**20</code>-byte buffer: a batch whose pickled sequences exceed 1 MB silently corrupts.</li>
+  </ol>
+  <span class="en">Harmless in a teaching repo, disqualifying for a service.</span>
+  <ol class="ko">
+    <li><code class="inl">SharedMemory(name="nanovllm")</code>: 이름이 상수라 <b>한 머신에 인스턴스를 둘 띄울 수 없다</b>.</li>
+    <li><code class="inl">dist.init_process_group("nccl", "tcp://localhost:2333")</code>: <b>localhost와 포트 2333이 리터럴</b>이라 단일 노드 전용이고, 여기서도 인스턴스끼리 충돌한다.</li>
+    <li>버퍼가 <code class="inl">2**20</code> 바이트라 pickle된 시퀀스가 1 MB를 넘으면 배치가 조용히 깨진다.</li>
+  </ol>
+  <span class="ko">학습용 레포에선 문제없지만 서비스라면 셋 다 실격이다.</span>
 </div>
 
 <p>
-  <span class="en">ATOM's answer to the same problem is <code class="inl">CoreManager</code> + <code class="inl">EngineCore</code> over ZMQ <code class="inl">ROUTER</code>/<code class="inl">DEALER</code> and <code class="inl">PUSH</code>/<code class="inl">PULL</code> sockets with configurable addresses, DP load-balancing strategies, and a separate <code class="inl">DisaggCoreManager</code> for prefill/decode separation — <b>1,697 lines where nano-vLLM has about 40</b>. That is not gold-plating; it is the actual cost of the constraints above going away.</span>
-  <span class="ko">같은 문제에 대한 ATOM의 답은 주소를 설정할 수 있는 ZMQ <code class="inl">ROUTER</code>/<code class="inl">DEALER</code>·<code class="inl">PUSH</code>/<code class="inl">PULL</code> 위의 <code class="inl">CoreManager</code>+<code class="inl">EngineCore</code>, DP 로드밸런싱 전략, 그리고 prefill/decode 분리를 위한 별도 <code class="inl">DisaggCoreManager</code>다 — <b>nano-vLLM이 약 40줄인 자리에 1,697줄</b>. 과잉이 아니라, 위 제약들이 사라지는 데 드는 실제 비용이다.</span>
+  <span class="en">ATOM replaces this with <code class="inl">CoreManager</code> + <code class="inl">EngineCore</code> over configurable ZMQ <code class="inl">ROUTER</code>/<code class="inl">DEALER</code> and <code class="inl">PUSH</code>/<code class="inl">PULL</code> sockets, DP load balancing, and a <code class="inl">DisaggCoreManager</code> for P/D: <b>1,697 lines where nano-vLLM has about 40</b>. That is the real cost of removing the limits above.</span>
+  <span class="ko">ATOM은 이 자리에 주소를 설정할 수 있는 ZMQ <code class="inl">ROUTER</code>/<code class="inl">DEALER</code>·<code class="inl">PUSH</code>/<code class="inl">PULL</code> 위의 <code class="inl">CoreManager</code>+<code class="inl">EngineCore</code>, DP 로드밸런싱, P/D 분리용 <code class="inl">DisaggCoreManager</code>를 뒀다. <b>nano-vLLM의 약 40줄이 1,697줄이 됐다</b>. 위 제약을 없애는 실제 비용이다.</span>
 </p>
 </section>
 
@@ -260,7 +283,7 @@ def write_shm(self, method_name, *args):
 
 <p>
   <span class="en">Everything below returned zero hits on a full-tree grep of the source. These are not weak implementations; they are absences.</span>
-  <span class="ko">아래는 전부 소스 전체 grep 결과가 0이었다. 구현이 부실한 게 아니라 아예 없는 것들이다.</span>
+  <span class="ko">아래 항목은 소스 전체를 grep해도 0건이다. 부실한 게 아니라 아예 없다.</span>
 </p>
 
 <table>
@@ -269,19 +292,19 @@ def write_shm(self, method_name, *args):
     <th><span class="en">What it costs you</span><span class="ko">그 대가</span></th>
   </tr></thead>
   <tbody>
-    <tr><td><b>MoE / expert routing</b></td><td><span class="en">DeepSeek, Mixtral, Qwen3-MoE, GLM-MoE, GPT-OSS — every sparse model — cannot run at all. This is most of the frontier.</span><span class="ko">DeepSeek, Mixtral, Qwen3-MoE, GLM-MoE, GPT-OSS 등 sparse 모델 전부 실행 불가. 지금 프론티어의 대부분이다.</span></td></tr>
-    <tr><td><b>Quantization</b> (FP8/INT8/AWQ/MXFP4)</td><td><span class="en">BF16 weights only. A 70B model needs ~140 GB; you cannot fit large models on the hardware you have.</span><span class="ko">BF16 가중치만. 70B 모델이면 ~140 GB가 필요하다. 가진 하드웨어에 큰 모델을 못 올린다.</span></td></tr>
-    <tr><td><b>Any server</b> (no FastAPI/uvicorn)</td><td><span class="en">Offline batch only. No <code>/v1/chat/completions</code>, no streaming, no concurrent clients, no request cancellation.</span><span class="ko">오프라인 배치 전용. <code>/v1/chat/completions</code>도, 스트리밍도, 동시 클라이언트도, 요청 취소도 없다.</span></td></tr>
-    <tr><td><b>Speculative decoding</b></td><td><span class="en">No MTP/EAGLE draft path — gives up the standard 1.5–3× decode-latency lever.</span><span class="ko">MTP·EAGLE draft 경로 없음 — decode 지연을 1.5~3배 줄이는 표준 레버를 포기.</span></td></tr>
-    <tr><td><b>P/D disaggregation, LoRA, pipeline parallel</b></td><td><span class="en">TP only, max 8, single node (see the hardcoded <code>localhost:2333</code>).</span><span class="ko">TP만, 최대 8, 단일 노드(하드코딩된 <code>localhost:2333</code> 참조).</span></td></tr>
-    <tr><td><b>Sampling beyond temperature</b></td><td><span class="en">No top-p, no top-k, no stop strings, no repetition penalty, no seed. And greedy decoding is <i>explicitly rejected</i>.</span><span class="ko">top-p도, top-k도, stop string도, repetition penalty도, seed도 없다. 그리고 greedy 디코딩은 <i>명시적으로 거부</i>된다.</span></td></tr>
-    <tr><td><b>Models other than Qwen3</b></td><td><span class="en">One file, <code>models/qwen3.py</code>. Adding Llama means writing it yourself.</span><span class="ko">파일 하나, <code>models/qwen3.py</code>. Llama를 쓰려면 직접 짜야 한다.</span></td></tr>
+    <tr><td><b>MoE / expert routing</b></td><td><span class="en">DeepSeek, Mixtral, Qwen3-MoE, GLM-MoE, GPT-OSS — every sparse model — cannot run at all. This is most of the frontier.</span><span class="ko">DeepSeek, Mixtral, Qwen3-MoE, GLM-MoE, GPT-OSS 같은 sparse 모델은 못 돌린다. 프론티어 대부분이다.</span></td></tr>
+    <tr><td><b>Quantization</b> (FP8/INT8/AWQ/MXFP4)</td><td><span class="en">BF16 weights only. A 70B model needs ~140 GB; you cannot fit large models on the hardware you have.</span><span class="ko">BF16 가중치만 된다. 70B 모델이면 ~140 GB라 큰 모델을 올리기 어렵다.</span></td></tr>
+    <tr><td><b>Any server</b> (no FastAPI/uvicorn)</td><td><span class="en">Offline batch only. No <code>/v1/chat/completions</code>, no streaming, no concurrent clients, no request cancellation.</span><span class="ko">오프라인 배치 전용이다. <code>/v1/chat/completions</code>·스트리밍·동시 클라이언트·요청 취소가 없다.</span></td></tr>
+    <tr><td><b>Speculative decoding</b></td><td><span class="en">No MTP/EAGLE draft path, so no standard 1.5–3× decode-latency lever.</span><span class="ko">MTP·EAGLE draft 경로가 없어 decode 지연을 1.5~3배 줄이는 표준 수단을 못 쓴다.</span></td></tr>
+    <tr><td><b>P/D disaggregation, LoRA, pipeline parallel</b></td><td><span class="en">TP only, max 8, single node (see the hardcoded <code>localhost:2333</code>).</span><span class="ko">TP만 되고 최대 8, 단일 노드다(하드코딩된 <code>localhost:2333</code>).</span></td></tr>
+    <tr><td><b>Sampling beyond temperature</b></td><td><span class="en">No top-p, no top-k, no stop strings, no repetition penalty, no seed. And greedy decoding is <i>explicitly rejected</i>.</span><span class="ko">top-p·top-k·stop string·repetition penalty·seed가 없다. greedy 디코딩은 <i>명시적으로 거부</i>한다.</span></td></tr>
+    <tr><td><b>Models other than Qwen3</b></td><td><span class="en">One file, <code>models/qwen3.py</code>. Adding Llama means writing it yourself.</span><span class="ko"><code>models/qwen3.py</code> 파일 하나뿐이다. Llama는 직접 짜야 한다.</span></td></tr>
   </tbody>
 </table>
 
 <p>
-  <span class="en">That sampling row deserves its own look, because it is a two-line design decision with real consequences:</span>
-  <span class="ko">샘플링 항목은 따로 볼 만하다. 두 줄짜리 설계 결정인데 결과가 실질적이기 때문이다:</span>
+  <span class="en">The sampling row is a two-line decision with real consequences.</span>
+  <span class="ko">샘플링 항목은 두 줄짜리 결정이지만 파장이 크다.</span>
 </p>
 
 <pre>@dataclass(slots=True)
@@ -295,8 +318,8 @@ class SamplingParams:
 <p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/nanovllm/sampling_params.py#L4-L11">sampling_params.py#L4-L11</a></p>
 
 <p>
-  <span class="en">The reason is in the sampler: it is Gumbel-max, which divides logits by the temperature, so <code class="inl">temperature=0</code> would divide by zero. A production engine special-cases greedy; nano-vLLM asserts instead. The knock-on effect is that <b>you cannot get deterministic output</b>, which rules out most evaluation and regression testing:</span>
-  <span class="ko">이유는 sampler에 있다. Gumbel-max 방식이라 logits를 temperature로 나누는데, <code class="inl">temperature=0</code>이면 0으로 나누게 된다. 프로덕션 엔진은 greedy를 특수 처리하지만 nano-vLLM은 assert를 건다. 파급 효과는 <b>결정론적 출력을 얻을 수 없다</b>는 것이고, 이는 대부분의 평가와 회귀 테스트를 불가능하게 만든다:</span>
+  <span class="en">The Gumbel-max sampler divides logits by temperature, so <code class="inl">temperature=0</code> would divide by zero. Production engines special-case greedy; nano-vLLM asserts. So <b>you cannot get deterministic output</b>, which rules out most evaluation and regression testing.</span>
+  <span class="ko">Gumbel-max sampler가 logits를 temperature로 나누므로 <code class="inl">temperature=0</code>이면 0으로 나누게 된다. 프로덕션 엔진은 greedy를 따로 처리하지만 nano-vLLM은 assert로 막는다. 결국 <b>결정론적 출력을 얻을 수 없어</b> 평가와 회귀 테스트 대부분이 불가능하다.</span>
 </p>
 
 <pre>@torch.compile
@@ -304,12 +327,12 @@ def forward(self, logits, temperatures):
     logits = logits.float().div_(temperatures.unsqueeze(dim=1))
     probs = torch.softmax(logits, dim=-1)
     return probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-10)).argmax(dim=-1)</pre>
-<p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/nanovllm/layers/sampler.py#L5-L12">sampler.py — 12 lines total</a><span class="en">. ATOM's <code>sampler.py</code> + <code>rejection_sampler.py</code> replace this with AITER kernels and a rejection sampler for speculative decoding.</span><span class="ko">. ATOM은 이 자리를 AITER 커널 기반 <code>sampler.py</code>와 speculative decoding용 <code>rejection_sampler.py</code>로 대체한다.</span></p>
+<p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/nanovllm/layers/sampler.py#L5-L12">sampler.py — 12 lines total</a><span class="en">. ATOM's <code>sampler.py</code> + <code>rejection_sampler.py</code> replace this with AITER kernels and a rejection sampler for speculative decoding.</span><span class="ko">. ATOM은 AITER 커널 기반 <code>sampler.py</code>와 speculative decoding용 <code>rejection_sampler.py</code>로 대체했다.</span></p>
 
 <div class="callout c-teal">
   <span class="tag"><span class="en">the one that mattered most to AMD</span><span class="ko">AMD에게 가장 중요했던 항목</span></span>
-  <span class="en">Look at what nano-vLLM's attention actually calls: <code class="inl">flash_attn_varlen_func</code> and <code class="inl">flash_attn_with_kvcache</code>, imported from the <code class="inl">flash_attn</code> package — a <b>CUDA</b> library. The entire compute layer of nano-vLLM is NVIDIA-bound. For AMD, porting was never a matter of tuning: <b>this layer had to be replaced wholesale</b>, and that replacement is exactly what <code class="inl">atom/model_ops/</code> is — 106 files binding every operation to AITER instead. The 75-line <code>attention.py</code> becomes 18,821 lines.</span>
-  <span class="ko">nano-vLLM의 attention이 실제로 무엇을 부르는지 보자 — <code class="inl">flash_attn</code> 패키지에서 가져온 <code class="inl">flash_attn_varlen_func</code>와 <code class="inl">flash_attn_with_kvcache</code>. <b>CUDA</b> 라이브러리다. nano-vLLM의 연산 계층 전체가 NVIDIA에 묶여 있다. AMD 입장에서 이식은 튜닝의 문제가 아니었다. <b>이 계층을 통째로 갈아야 했고</b>, 그 대체물이 바로 <code class="inl">atom/model_ops/</code>다 — 모든 연산을 AITER에 묶는 106개 파일. 75줄짜리 <code>attention.py</code>가 18,821줄이 된다.</span>
+  <span class="en">nano-vLLM's attention calls <code class="inl">flash_attn_varlen_func</code> and <code class="inl">flash_attn_with_kvcache</code> from <code class="inl">flash_attn</code>, a <b>CUDA</b> library. Its whole compute layer is NVIDIA-bound, so AMD <b>had to replace it wholesale</b>: that is <code class="inl">atom/model_ops/</code>, 106 files binding every op to AITER. The 75-line <code>attention.py</code> becomes 18,821 lines.</span>
+  <span class="ko">nano-vLLM의 attention은 <code class="inl">flash_attn</code> 패키지의 <code class="inl">flash_attn_varlen_func</code>와 <code class="inl">flash_attn_with_kvcache</code>를 부른다. <b>CUDA</b> 라이브러리다. 연산 계층 전체가 NVIDIA에 묶여 있어서 AMD는 튜닝이 아니라 <b>통째 교체</b>를 해야 했다. 그 결과가 모든 연산을 AITER에 연결하는 <code class="inl">atom/model_ops/</code> 106개 파일이다. 75줄짜리 <code>attention.py</code>가 18,821줄이 됐다.</span>
 </div>
 </section>
 
@@ -317,8 +340,8 @@ def forward(self, logits, temperatures):
 <h2><span class="num">3</span><span class="en">The benchmark that made its reputation</span><span class="ko">명성을 만든 벤치마크</span></h2>
 
 <p>
-  <span class="en">nano-vLLM's README claims "Comparable inference speeds to vLLM" and backs it with one table: vLLM 1,361.84 tok/s vs Nano-vLLM 1,434.13 tok/s — a 5.3% win. That number gets repeated a lot, so it is worth reading the benchmark that produced it. It is 32 lines.</span>
-  <span class="ko">nano-vLLM README는 "Comparable inference speeds to vLLM"을 주장하고 표 하나로 뒷받침한다 — vLLM 1,361.84 tok/s 대 Nano-vLLM 1,434.13 tok/s, 5.3% 우세. 이 수치가 많이 인용되니 그것을 만든 벤치마크를 읽어볼 만하다. 32줄이다.</span>
+  <span class="en">The README claims "Comparable inference speeds to vLLM" with one table: vLLM 1,361.84 tok/s vs Nano-vLLM 1,434.13 tok/s, a 5.3% win. The benchmark behind it is 32 lines.</span>
+  <span class="ko">README는 "Comparable inference speeds to vLLM"이라며 표 하나를 든다. vLLM 1,361.84 tok/s, Nano-vLLM 1,434.13 tok/s로 5.3% 앞선다. 이 수치를 만든 벤치마크는 32줄이다.</span>
 </p>
 
 <pre>num_seqs = 256;  max_input_len = 1024;  max_ouput_len = 1024
@@ -329,23 +352,29 @@ prompt_token_ids = [[randint(0, 10000) for _ in range(randint(100, max_input_len
                     for _ in range(num_seqs)]
 sampling_params  = [SamplingParams(temperature=0.6, ignore_eos=True,
                                    max_tokens=randint(100, max_ouput_len)) ...]</pre>
-<p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/bench.py#L10-L18">bench.py#L10-L18</a><span class="en"> — hardware, per the README: RTX 4070 Laptop, 8 GB.</span><span class="ko"> — 하드웨어는 README 기준 RTX 4070 Laptop, 8 GB.</span></p>
+<p class="figcap"><a class="src" href="https://github.com/GeeeekExplorer/nano-vllm/blob/bb823b3e06983d71485a8e1f23715ebd87d98ef8/bench.py#L10-L18">bench.py#L10-L18</a><span class="en"> · hardware per README: RTX 4070 Laptop, 8 GB.</span><span class="ko"> · 하드웨어는 README 기준 RTX 4070 Laptop, 8 GB.</span></p>
 
 <p>
-  <span class="en">Three things about this configuration matter, and none of them are dishonest — the same script runs both engines, and the author left the vLLM lines in as comments so anyone can reproduce it. But the conditions decide the result:</span>
-  <span class="ko">이 구성에서 짚을 게 셋 있고, 어느 것도 부정직하지 않다. 같은 스크립트로 두 엔진을 돌리고, 저자가 vLLM용 줄을 주석으로 남겨 놔 누구나 재현할 수 있다. 다만 조건이 결과를 결정한다:</span>
+  <span class="en">Nothing here is dishonest: one script runs both engines and the vLLM lines are left as comments for reproduction. But three conditions decide the result.</span>
+  <span class="ko">부정직한 구석은 없다. 한 스크립트로 두 엔진을 돌리고 vLLM용 줄도 주석으로 남겨 재현할 수 있다. 다만 결과는 다음 세 조건이 정한다.</span>
 </p>
 
 <div class="grid3">
-  <div class="mini"><h4><span class="en">Qwen3-0.6B on a laptop GPU</span><span class="ko">노트북 GPU의 Qwen3-0.6B</span></h4><p><span class="en">At 0.6B the per-step GPU work is tiny, so <b>Python and framework overhead dominate</b>. This is the regime where a thin engine wins by construction and where vLLM's abstractions are pure cost.</span><span class="ko">0.6B에선 스텝당 GPU 연산이 아주 작아 <b>Python·프레임워크 오버헤드가 지배</b>한다. 얇은 엔진이 구조적으로 이기는 구간이고, vLLM의 추상화가 순수 비용으로만 보이는 구간이다.</span></p></div>
-  <div class="mini"><h4><span class="en">random token IDs</span><span class="ko">무작위 토큰 ID</span></h4><p><span class="en"><code>randint(0, 10000)</code> means prompts share no prefixes, so <b>prefix caching — an advertised feature — gets essentially zero hits</b>. The benchmark does not exercise one of the three things the README sells.</span><span class="ko"><code>randint(0, 10000)</code>이라 프롬프트끼리 prefix가 겹치지 않는다. 즉 <b>prefix caching — 광고된 기능 — 히트가 사실상 0</b>이다. README가 내세우는 셋 중 하나를 벤치마크가 건드리지 않는다.</span></p></div>
-  <div class="mini"><h4><span class="en">single GPU, offline batch</span><span class="ko">단일 GPU, 오프라인 배치</span></h4><p><span class="en">No TP, no server, no streaming, no arrival-rate variance, <code>ignore_eos=True</code> so every sequence runs to its full length. All the machinery vLLM carries for none of these is dead weight here.</span><span class="ko">TP도, 서버도, 스트리밍도, 도착률 변동도 없고, <code>ignore_eos=True</code>라 모든 시퀀스가 끝까지 간다. vLLM이 이런 것들 때문에 지고 있는 기계장치가 여기선 전부 죽은 무게다.</span></p></div>
+  <div class="mini"><h4><span class="en">Qwen3-0.6B on a laptop GPU</span><span class="ko">노트북 GPU의 Qwen3-0.6B</span></h4><p><span class="en">Per-step GPU work is tiny, so <b>Python and framework overhead dominate</b>. A thin engine wins here by construction.</span><span class="ko">스텝당 GPU 연산이 작아 <b>Python·프레임워크 오버헤드가 지배</b>한다. 얇은 엔진이 당연히 이기는 구간이다.</span></p></div>
+  <div class="mini"><h4><span class="en">random token IDs</span><span class="ko">무작위 토큰 ID</span></h4><p><span class="en"><code>randint(0, 10000)</code> prompts share no prefixes, so <b>the advertised prefix caching gets essentially zero hits</b>.</span><span class="ko"><code>randint(0, 10000)</code>이라 prefix가 겹치지 않는다. README가 내세운 <b>prefix caching은 히트가 사실상 0</b>이다.</span></p></div>
+  <div class="mini"><h4><span class="en">single GPU, offline batch</span><span class="ko">단일 GPU, 오프라인 배치</span></h4><p><span class="en">No TP, server, streaming or arrival variance; <code>ignore_eos=True</code> runs every sequence to full length. vLLM's machinery for these is dead weight here.</span><span class="ko">TP·서버·스트리밍·도착률 변동이 없고 <code>ignore_eos=True</code>라 모든 시퀀스가 끝까지 간다. 이런 상황을 위한 vLLM의 장치는 여기서 짐일 뿐이다.</span></p></div>
 </div>
 
 <div class="callout c-purple">
-  <span class="tag"><span class="en">editor's note — my reading, not the author's claim</span><span class="ko">편집자 주 — 저자의 주장이 아닌 내 해석</span></span>
-  <span class="en">The result is real and reproducible. What it does <b>not</b> support is the inference people draw from it — that vLLM carries 5% of avoidable fat. vLLM's overhead exists to buy MoE, quantization, multi-node, LoRA, structured output, streaming, cancellation and a hundred model architectures. Measured where none of those are needed, that overhead can only look like waste.<br><br>The honest way to state nano-vLLM's weakness is therefore not "it is 5% faster in a narrow case". It is: <b>one step outside the measured configuration, it does not run slower — it does not run.</b> Put a 671B MoE in FP8 on 8 GPUs and nano-vLLM has no MoE, no quantization, and no multi-node transport. That is not a performance gap; it is a capability gap, and it is the entire gap AMD had to close to get from nano-vLLM to ATOM.</span>
-  <span class="ko">결과 자체는 실재하고 재현 가능하다. 다만 그것이 뒷받침하지 <b>않는</b> 것은 사람들이 거기서 끌어내는 추론 — vLLM이 없앨 수 있는 군살을 5% 지고 있다는 것 — 이다. vLLM의 오버헤드는 MoE, quantization, 멀티노드, LoRA, structured output, 스트리밍, 취소, 그리고 수백 개 모델 아키텍처를 사기 위해 존재한다. 그중 아무것도 필요 없는 곳에서 재면 그 오버헤드는 낭비로만 보일 수밖에 없다.<br><br>그래서 nano-vLLM의 약점을 정직하게 말하면 "좁은 조건에서 5% 빠르다"가 아니다. <b>측정된 구성 밖으로 한 발만 나가면 느려지는 게 아니라 아예 안 돈다</b>가 맞다. 671B MoE를 FP8로 8-GPU에 올려 보면 nano-vLLM엔 MoE도, quantization도, 멀티노드 전송도 없다. 성능 격차가 아니라 능력 격차이고, AMD가 nano-vLLM에서 ATOM으로 가며 메워야 했던 격차가 통째로 그것이다.</span>
+  <span class="tag"><span class="en">editor's note — my reading, not the author's claim</span><span class="ko">편집자 주: 저자의 주장이 아닌 내 해석</span></span>
+  <ol class="en">
+    <li>The result is real and reproducible. It does <b>not</b> show that vLLM carries 5% of avoidable fat: that overhead buys MoE, quantization, multi-node, LoRA, structured output, streaming, cancellation and a hundred architectures.</li>
+    <li><b>One step outside the measured setup, nano-vLLM does not run slower; it does not run.</b> A 671B MoE in FP8 on 8 GPUs needs MoE, quantization and multi-node transport. That capability gap is what AMD had to close to get to ATOM.</li>
+  </ol>
+  <ol class="ko">
+    <li>결과는 실재하고 재현된다. 하지만 vLLM에 5%의 군살이 있다는 근거는 <b>아니다</b>. 그 오버헤드는 MoE, quantization, 멀티노드, LoRA, structured output, 스트리밍, 취소, 수백 개 아키텍처를 위한 비용이다.</li>
+    <li><b>측정 조건 밖으로 한 발만 나가면 nano-vLLM은 느려지는 게 아니라 아예 돌지 않는다.</b> 671B MoE를 FP8로 8-GPU에 올리려면 MoE·quantization·멀티노드 전송이 필요하다. AMD가 ATOM으로 가며 메운 것이 바로 이 능력 격차다.</li>
+  </ol>
 </div>
 </section>
 
@@ -353,8 +382,8 @@ sampling_params  = [SamplingParams(temperature=0.6, ignore_eos=True,
 <h2><span class="num">4</span><span class="en">nano-vLLM → ATOM: what was grown, what was built new</span><span class="ko">nano-vLLM → ATOM: 키운 것과 새로 지은 것</span></h2>
 
 <p>
-  <span class="en">The additions split cleanly in two. Some concepts kept their name and role and simply got much bigger. Others had no counterpart at all.</span>
-  <span class="ko">추가된 것은 깔끔하게 둘로 갈린다. 이름과 역할을 유지한 채 훨씬 커진 것들, 그리고 대응물이 아예 없던 것들.</span>
+  <span class="en">The additions split in two: concepts that kept their name and grew, and ones with no counterpart.</span>
+  <span class="ko">추가분은 둘로 나뉜다. 이름과 역할은 그대로 두고 커진 것, 그리고 대응물이 없던 것이다.</span>
 </p>
 
 <h3><span class="en">A. Same name, same job, 4× to 250× the code</span><span class="ko">A. 같은 이름·같은 역할, 4배에서 250배</span></h3>
@@ -375,11 +404,11 @@ sampling_params  = [SamplingParams(temperature=0.6, ignore_eos=True,
 </table>
 
 <p>
-  <span class="en">The lineage is visible to the naked eye in <code class="inl">linear.py</code>. nano-vLLM defines <code class="inl">LinearBase</code> → <code class="inl">ReplicatedLinear</code> / <code class="inl">ColumnParallelLinear</code> (→ <code class="inl">MergedColumnParallelLinear</code>, <code class="inl">QKVParallelLinear</code>) / <code class="inl">RowParallelLinear</code>. ATOM defines <b>exactly the same hierarchy, with the same names</b>. What changed is the body of <code class="inl">forward()</code>: nano-vLLM calls <code class="inl">F.linear</code>, ATOM dispatches across <code class="inl">tgemm.mm</code>, <code class="inl">gemm_a8w8</code>, <code class="inl">gemm_a8w8_bpreshuffle</code>, <code class="inl">gemm_a8w8_blockscale_bpreshuffle</code> and <code class="inl">gemm_a4w4</code> depending on the quantization type.</span>
-  <span class="ko">계보는 <code class="inl">linear.py</code>에서 육안으로 보인다. nano-vLLM은 <code class="inl">LinearBase</code> → <code class="inl">ReplicatedLinear</code> / <code class="inl">ColumnParallelLinear</code>(→ <code class="inl">MergedColumnParallelLinear</code>, <code class="inl">QKVParallelLinear</code>) / <code class="inl">RowParallelLinear</code>를 정의한다. ATOM은 <b>똑같은 이름의 똑같은 계층</b>을 정의한다. 바뀐 건 <code class="inl">forward()</code>의 몸통이다. nano-vLLM은 <code class="inl">F.linear</code>를 부르고, ATOM은 quantization 타입에 따라 <code class="inl">tgemm.mm</code>·<code class="inl">gemm_a8w8</code>·<code class="inl">gemm_a8w8_bpreshuffle</code>·<code class="inl">gemm_a8w8_blockscale_bpreshuffle</code>·<code class="inl">gemm_a4w4</code>로 갈라진다.</span>
+  <span class="en">The lineage is plain in <code class="inl">linear.py</code>: both define <code class="inl">LinearBase</code> → <code class="inl">ReplicatedLinear</code> / <code class="inl">ColumnParallelLinear</code> (→ <code class="inl">MergedColumnParallelLinear</code>, <code class="inl">QKVParallelLinear</code>) / <code class="inl">RowParallelLinear</code>, <b>same hierarchy, same names</b>. Only <code class="inl">forward()</code> changed: nano-vLLM calls <code class="inl">F.linear</code>; ATOM dispatches to <code class="inl">tgemm.mm</code>, <code class="inl">gemm_a8w8</code>, <code class="inl">gemm_a8w8_bpreshuffle</code>, <code class="inl">gemm_a8w8_blockscale_bpreshuffle</code> or <code class="inl">gemm_a4w4</code> by quantization type.</span>
+  <span class="ko">계보는 <code class="inl">linear.py</code>에서 바로 보인다. 둘 다 <code class="inl">LinearBase</code> → <code class="inl">ReplicatedLinear</code> / <code class="inl">ColumnParallelLinear</code>(→ <code class="inl">MergedColumnParallelLinear</code>, <code class="inl">QKVParallelLinear</code>) / <code class="inl">RowParallelLinear</code>로, <b>이름까지 같은 계층</b>이다. 바뀐 건 <code class="inl">forward()</code>뿐이다. nano-vLLM은 <code class="inl">F.linear</code>를 부르고, ATOM은 quantization 타입에 따라 <code class="inl">tgemm.mm</code>·<code class="inl">gemm_a8w8</code>·<code class="inl">gemm_a8w8_bpreshuffle</code>·<code class="inl">gemm_a8w8_blockscale_bpreshuffle</code>·<code class="inl">gemm_a4w4</code> 중 하나를 고른다.</span>
 </p>
 
-<h3><span class="en">B. No counterpart at all — built from nothing</span><span class="ko">B. 대응물이 아예 없던 것 — 맨바닥에서</span></h3>
+<h3><span class="en">B. No counterpart at all — built from nothing</span><span class="ko">B. 대응물이 없던 것: 새로 지음</span></h3>
 
 <table>
   <thead><tr><th><span class="en">Subsystem</span><span class="ko">서브시스템</span></th><th><span class="en">Files</span><span class="ko">파일</span></th><th><span class="en">Lines</span><span class="ko">줄</span></th></tr></thead>
@@ -404,24 +433,24 @@ sampling_params  = [SamplingParams(temperature=0.6, ignore_eos=True,
 
 <div class="callout c-amber">
   <span class="tag"><span class="en">the part that complicates the story</span><span class="ko">이야기를 복잡하게 만드는 대목</span></span>
-  <span class="en">Most of column B did <b>not</b> come from AMD inventing it. It came from <b>vLLM</b>, re-imported. ATOM's model files carry <code class="inl">Adapted from https://github.com/vllm-project/vllm/...</code> headers (<code>llama.py</code>, <code>qwen3.py</code>, <code>gpt_oss.py</code>, <code>mimo_v2.py</code>, <code>fused_moe_triton.py</code>); <code class="inl">model_loader/weight_utils.py</code> is adapted from <code class="inl">ROCm/vllm</code>; <code class="inl">WeightsMapper</code> is from vLLM; parts of <code class="inl">utils/__init__.py</code> are from SGLang; <code class="inl">fla_ops</code> from flash-linear-attention; <code class="inl">causal_conv1d</code> from Dao-AILab; the benchmark harness from <code>kimbochen/bench_serving</code>.<br><br>So the accurate sentence is not "nano-vLLM plus AMD kernels". It is: <b>nano-vLLM's skeleton, re-fleshed largely from vLLM, with a genuinely new AITER binding layer underneath and a genuinely new Rust gateway alongside.</b> The parts that are unambiguously AMD's own work are <code class="inl">model_ops/</code> (the kernel bindings), ATOMesh, and the plugin bridges.</span>
-  <span class="ko">B열의 대부분은 AMD가 발명한 게 <b>아니다</b>. <b>vLLM</b>에서 다시 가져온 것이다. ATOM 모델 파일들엔 <code class="inl">Adapted from https://github.com/vllm-project/vllm/...</code> 헤더가 붙어 있고(<code>llama.py</code>, <code>qwen3.py</code>, <code>gpt_oss.py</code>, <code>mimo_v2.py</code>, <code>fused_moe_triton.py</code>), <code class="inl">model_loader/weight_utils.py</code>는 <code class="inl">ROCm/vllm</code>에서, <code class="inl">WeightsMapper</code>는 vLLM에서, <code class="inl">utils/__init__.py</code> 일부는 SGLang에서, <code class="inl">fla_ops</code>는 flash-linear-attention에서, <code class="inl">causal_conv1d</code>는 Dao-AILab에서, 벤치마크 하네스는 <code>kimbochen/bench_serving</code>에서 왔다.<br><br>그래서 정확한 문장은 "nano-vLLM + AMD 커널"이 아니다. <b>nano-vLLM의 뼈대에, 살은 대부분 vLLM에서 다시 붙이고, 그 아래에 진짜 새로 지은 AITER 바인딩 계층을, 옆에 진짜 새로 지은 Rust 게이트웨이를 둔 것</b>이다. 명백히 AMD 자체 작업인 부분은 <code class="inl">model_ops/</code>(커널 바인딩), ATOMesh, 그리고 플러그인 브리지다.</span>
+  <span class="en">Most of column B was <b>not</b> invented by AMD; it was re-imported, mostly from <b>vLLM</b>. Model files carry <code class="inl">Adapted from https://github.com/vllm-project/vllm/...</code> headers (<code>llama.py</code>, <code>qwen3.py</code>, <code>gpt_oss.py</code>, <code>mimo_v2.py</code>, <code>fused_moe_triton.py</code>). <code class="inl">model_loader/weight_utils.py</code> comes from <code class="inl">ROCm/vllm</code>, <code class="inl">WeightsMapper</code> from vLLM, parts of <code class="inl">utils/__init__.py</code> from SGLang, <code class="inl">fla_ops</code> from flash-linear-attention, <code class="inl">causal_conv1d</code> from Dao-AILab, the benchmark harness from <code>kimbochen/bench_serving</code>.<br><br>So ATOM is <b>nano-vLLM's skeleton, re-fleshed largely from vLLM, with a new AITER binding layer underneath and a new Rust gateway alongside.</b> AMD's own work is <code class="inl">model_ops/</code> (kernel bindings), ATOMesh, and the plugin bridges.</span>
+  <span class="ko">B열 대부분은 AMD가 발명한 게 <b>아니다</b>. 주로 <b>vLLM</b>에서 다시 가져왔다. 모델 파일(<code>llama.py</code>, <code>qwen3.py</code>, <code>gpt_oss.py</code>, <code>mimo_v2.py</code>, <code>fused_moe_triton.py</code>)에는 <code class="inl">Adapted from https://github.com/vllm-project/vllm/...</code> 헤더가 붙어 있다. <code class="inl">model_loader/weight_utils.py</code>는 <code class="inl">ROCm/vllm</code>, <code class="inl">WeightsMapper</code>는 vLLM, <code class="inl">utils/__init__.py</code> 일부는 SGLang, <code class="inl">fla_ops</code>는 flash-linear-attention, <code class="inl">causal_conv1d</code>는 Dao-AILab, 벤치마크 하네스는 <code>kimbochen/bench_serving</code>에서 왔다.<br><br>정확히 말하면 ATOM은 <b>nano-vLLM 뼈대에 살은 주로 vLLM에서 붙이고, 아래에 새 AITER 바인딩 계층을, 옆에 새 Rust 게이트웨이를 둔 것</b>이다. AMD 자체 작업은 <code class="inl">model_ops/</code>(커널 바인딩), ATOMesh, 플러그인 브리지다.</span>
 </div>
 </section>
 
 <section id="s5">
-<h2><span class="num">5</span><span class="en">ATOM's other halves — ATOMesh, the plugin bridges, diffusion</span><span class="ko">ATOM의 나머지 절반 — ATOMesh·플러그인 브리지·diffusion</span></h2>
+<h2><span class="num">5</span><span class="en">ATOM's other halves — ATOMesh, the plugin bridges, diffusion</span><span class="ko">ATOM의 나머지 절반: ATOMesh·플러그인 브리지·diffusion</span></h2>
 
 <p>
-  <span class="en">My earlier <a class="src" href="atom-rocm-inference-engine.html">ATOM deep dive</a> scoped itself to the core inference engine — 310 of 1,114 files. That left out <b>108,000 lines</b>, which is more code than the part I analysed. Here is what is in there.</span>
-  <span class="ko">앞선 <a class="src" href="atom-rocm-inference-engine.html">ATOM 딥다이브</a>는 코어 추론 엔진으로 범위를 좁혔다 — 1,114개 중 310개 파일. 그래서 <b>10만 8천 줄</b>이 빠졌는데, 분석한 부분보다 코드가 많다. 거기 뭐가 있는지 보자.</span>
+  <span class="en">The earlier <a class="src" href="atom-rocm-inference-engine.html">ATOM deep dive</a> covered only the core engine, 310 of 1,114 files. That left out <b>108,000 lines</b>, more than the part analysed.</span>
+  <span class="ko">앞선 <a class="src" href="atom-rocm-inference-engine.html">ATOM 딥다이브</a>는 코어 엔진(1,114개 중 310개 파일)만 다뤘다. 빠진 <b>10만 8천 줄</b>이 분석한 부분보다 많다.</span>
 </p>
 
-<h3><span class="en">ATOMesh — a routing gateway, inherited from SGLang's</span><span class="ko">ATOMesh — SGLang에서 물려받은 라우팅 게이트웨이</span></h3>
+<h3><span class="en">ATOMesh — a routing gateway, inherited from SGLang's</span><span class="ko">ATOMesh: SGLang에서 물려받은 라우팅 게이트웨이</span></h3>
 
 <p>
-  <span class="en">I had assumed from the ROCm blog title ("ATOMesh: Unlocking AMD Hardware for Scalable LLM Serving") that this was a distributed execution layer for ATOM. It is not. Its own README opens:</span>
-  <span class="ko">ROCm 블로그 제목("ATOMesh: Unlocking AMD Hardware for Scalable LLM Serving")만 보고 ATOM용 분산 실행 계층이라 짐작했었다. 아니다. 자체 README 첫 문장은 이렇다:</span>
+  <span class="en">The ROCm blog title ("ATOMesh: Unlocking AMD Hardware for Scalable LLM Serving") suggests a distributed execution layer for ATOM. It is not. Its README opens:</span>
+  <span class="ko">ROCm 블로그 제목("ATOMesh: Unlocking AMD Hardware for Scalable LLM Serving")만 보면 ATOM용 분산 실행 계층 같다. 그렇지 않다. README 첫 문장은 이렇다.</span>
 </p>
 
 <blockquote class="q">
@@ -430,8 +459,8 @@ sampling_params  = [SamplingParams(temperature=0.6, ignore_eos=True,
 </blockquote>
 
 <p>
-  <span class="en">So it sits <i>above</i> engines, not inside them — the same role as llm-d's inference scheduler or SGLang's router. And that comparison to SGLang's router is not a coincidence. <code class="inl">atom/mesh/NOTICE</code> says so outright:</span>
-  <span class="ko">즉 엔진 <i>위에</i> 앉는다. llm-d의 inference scheduler나 SGLang router와 같은 역할이다. 그리고 SGLang router와의 비교는 우연이 아니다. <code class="inl">atom/mesh/NOTICE</code>가 직접 말한다:</span>
+  <span class="en">It sits <i>above</i> engines, like llm-d's inference scheduler or SGLang's router. The SGLang resemblance is no coincidence, as <code class="inl">atom/mesh/NOTICE</code> says:</span>
+  <span class="ko">엔진 <i>위에</i> 놓이는 계층으로, llm-d의 inference scheduler나 SGLang router와 역할이 같다. SGLang router와 닮은 건 우연이 아니다. <code class="inl">atom/mesh/NOTICE</code>에 이렇게 적혀 있다.</span>
 </p>
 
 <blockquote class="q">
@@ -440,14 +469,14 @@ sampling_params  = [SamplingParams(temperature=0.6, ignore_eos=True,
 </blockquote>
 
 <div class="callout c-amber">
-  <span class="tag"><span class="en">correction — an earlier version of this note got this wrong</span><span class="ko">정정 — 이 노트의 이전 판이 틀렸다</span></span>
-  <span class="en">I first wrote that ATOMesh was "by far the largest single component AMD wrote from scratch". <b>It is not written from scratch at all</b> — it is SGLang's own model gateway, forked and extended. That single fact also dissolves the observation I had built on top of it: I counted 291 references to SGLang against 15 for ATOM in <code class="inl">src/</code> and read it as neglect of ATOM. The real explanation is <b>lineage</b>. Seven of its load-bearing crates are still SGLang-published registry dependencies rather than vendored code — <code class="inl">openai-protocol</code>, <code class="inl">llm-tokenizer</code>, <code class="inl">reasoning-parser</code>, <code class="inl">tool-parser</code>, <code class="inl">wfaas</code>, <code class="inl">data-connector</code>, and <code class="inl">smg-grpc-client</code> (literally "sgl-model-gateway grpc client"), all pinned <code class="inl">=1.0.0</code>. The OpenAI protocol types, the tokenizer, the chat-template renderer and the gRPC clients all live outside this repo, in SGLang's.<br><br>So ATOM's lineage runs through <b>two</b> forks, not one: nano-vLLM for the engine, sgl-model-gateway for the gateway.</span>
-  <span class="ko">처음엔 ATOMesh를 "AMD가 맨바닥에서 쓴 단일 컴포넌트 중 압도적으로 크다"고 썼다. <b>맨바닥에서 쓴 게 전혀 아니다</b> — SGLang의 model gateway를 포크해 확장한 것이다. 이 사실 하나가 그 위에 쌓았던 관찰도 무너뜨린다. <code class="inl">src/</code>에서 SGLang 참조 291회 대 ATOM 15회를 세고 ATOM 홀대의 근거로 읽었는데, 진짜 설명은 <b>계보</b>다. 핵심 크레이트 7개가 벤더링된 코드가 아니라 여전히 SGLang이 배포하는 레지스트리 의존성이다 — <code class="inl">openai-protocol</code>, <code class="inl">llm-tokenizer</code>, <code class="inl">reasoning-parser</code>, <code class="inl">tool-parser</code>, <code class="inl">wfaas</code>, <code class="inl">data-connector</code>, 그리고 <code class="inl">smg-grpc-client</code>(말 그대로 "sgl-model-gateway grpc client"). 전부 <code class="inl">=1.0.0</code> 고정. OpenAI 프로토콜 타입도, tokenizer도, 채팅 템플릿 렌더러도, gRPC 클라이언트도 전부 이 레포 바깥, SGLang 쪽에 있다.<br><br>그러니까 ATOM의 계보는 포크 <b>둘</b>을 지난다. 엔진은 nano-vLLM에서, 게이트웨이는 sgl-model-gateway에서.</span>
+  <span class="tag"><span class="en">correction — an earlier version of this note got this wrong</span><span class="ko">정정: 이 노트의 이전 판이 틀렸다</span></span>
+  <span class="en">I first called ATOMesh "by far the largest single component AMD wrote from scratch". <b>It is not from scratch</b>: it is SGLang's model gateway, forked and extended. That also explains the 291 SGLang references vs 15 for ATOM in <code class="inl">src/</code>, which I had read as neglect. The cause is <b>lineage</b>. Seven load-bearing crates are still SGLang-published registry dependencies, all pinned <code class="inl">=1.0.0</code>: <code class="inl">openai-protocol</code>, <code class="inl">llm-tokenizer</code>, <code class="inl">reasoning-parser</code>, <code class="inl">tool-parser</code>, <code class="inl">wfaas</code>, <code class="inl">data-connector</code>, <code class="inl">smg-grpc-client</code> ("sgl-model-gateway grpc client"). Protocol types, tokenizer, chat-template renderer and gRPC clients live in SGLang's repo.<br><br>ATOM's lineage runs through <b>two</b> forks: nano-vLLM for the engine, sgl-model-gateway for the gateway.</span>
+  <span class="ko">처음엔 ATOMesh를 "AMD가 맨바닥에서 쓴 단일 컴포넌트 중 압도적으로 크다"고 썼다. 실제로는 <b>맨바닥에서 쓴 게 아니라</b> SGLang model gateway를 포크해 확장한 것이다. <code class="inl">src/</code>에서 SGLang 참조가 291회, ATOM이 15회인 것도 ATOM 홀대가 아니라 <b>계보</b> 때문이다. 핵심 크레이트 7개가 지금도 SGLang이 배포하는 레지스트리 의존성이고 전부 <code class="inl">=1.0.0</code>으로 고정돼 있다. <code class="inl">openai-protocol</code>, <code class="inl">llm-tokenizer</code>, <code class="inl">reasoning-parser</code>, <code class="inl">tool-parser</code>, <code class="inl">wfaas</code>, <code class="inl">data-connector</code>, <code class="inl">smg-grpc-client</code>("sgl-model-gateway grpc client")다. 프로토콜 타입, tokenizer, 채팅 템플릿 렌더러, gRPC 클라이언트가 모두 SGLang 레포에 있다.<br><br>ATOM의 계보는 포크 <b>둘</b>을 거친다. 엔진은 nano-vLLM, 게이트웨이는 sgl-model-gateway다.</span>
 </div>
 
 <p>
-  <span class="en">Size: <code class="inl">src/</code> is <b>53,193 lines across 151 Rust files</b>, but roughly half of that is test code — 13,368 lines in dedicated test files plus a comparable volume in inline <code class="inl">#[cfg(test)]</code> blocks. Production Rust is closer to <b>26–27k lines</b>, with a further 14,812 lines of integration tests in <code class="inl">atom/mesh/tests/</code> and a 3,037-line mock-worker crate.</span>
-  <span class="ko">규모: <code class="inl">src/</code>는 <b>Rust 151파일 53,193줄</b>이지만 그중 절반가량이 테스트 코드다 — 전용 테스트 파일에 13,368줄, 인라인 <code class="inl">#[cfg(test)]</code> 블록에 비슷한 분량. 프로덕션 Rust는 <b>2만 6천~2만 7천 줄</b>에 가깝고, <code class="inl">atom/mesh/tests/</code>에 통합 테스트 14,812줄, mock worker 크레이트 3,037줄이 따로 있다.</span>
+  <span class="en"><code class="inl">src/</code> is <b>53,193 lines in 151 Rust files</b>, about half of it tests (13,368 lines in test files plus similar inline <code class="inl">#[cfg(test)]</code>). Production Rust is about <b>26–27k lines</b>, plus 14,812 lines of integration tests in <code class="inl">atom/mesh/tests/</code> and a 3,037-line mock-worker crate.</span>
+  <span class="ko"><code class="inl">src/</code>는 <b>Rust 151파일 53,193줄</b>인데 절반가량이 테스트다(테스트 파일 13,368줄, 인라인 <code class="inl">#[cfg(test)]</code>도 비슷한 양). 프로덕션 Rust는 <b>2만 6천~2만 7천 줄</b>이고, 별도로 <code class="inl">atom/mesh/tests/</code> 통합 테스트 14,812줄과 mock worker 크레이트 3,037줄이 있다.</span>
 </p>
 
 <table>
@@ -461,40 +490,72 @@ sampling_params  = [SamplingParams(temperature=0.6, ignore_eos=True,
   </tbody>
 </table>
 
-<p>
-  <span class="en">The routing policies are the interesting part — <b>six</b> strategies in <code class="inl">src/policies/</code>. The centrepiece is <code class="inl">cache_aware</code> (the CLI default), backed by <code class="inl">tree.rs</code>: a multi-tenant radix tree over raw request <i>text</i>, where "tenant" is a worker URL. Storing characters rather than token IDs is deliberate — it means the policy needs no tokenizer, which is exactly what lets it work on the HTTP path where the gateway is a pure JSON proxy. On each request it walks the tree, computes <code class="inl">matched_chars / input_chars</code>, and routes to the matching worker if that ratio clears a threshold — unless the fleet is load-imbalanced by both an absolute <i>and</i> a relative margin, in which case it falls back to shortest-queue and still inserts the text so cache state stays coherent. It even updates LRU timestamps <b>probabilistically</b>, 1 match in 8, to cut <code class="inl">DashMap</code> contention.</span>
-  <span class="ko">라우팅 정책이 흥미로운 부분이다 — <code class="inl">src/policies/</code>에 전략 <b>6종</b>. 핵심은 CLI 기본값인 <code class="inl">cache_aware</code>이고, <code class="inl">tree.rs</code>가 뒷받침한다. 요청 <i>텍스트</i> 원문 위에 세운 멀티테넌트 radix tree인데, 여기서 "테넌트"는 worker URL이다. 토큰 ID가 아니라 문자를 저장하는 건 의도적이다 — 게이트웨이에 tokenizer가 필요 없어지고, 그래서 게이트웨이가 순수 JSON 프록시인 HTTP 경로에서도 동작한다. 요청마다 트리를 훑어 <code class="inl">matched_chars / input_chars</code>를 계산하고, 그 비율이 임계값을 넘으면 매칭된 worker로 보낸다. 단 절대·상대 기준을 <i>둘 다</i> 넘는 부하 불균형이면 최단 큐로 대신 보내되, 캐시 상태 일관성을 위해 텍스트는 그대로 삽입한다. LRU 타임스탬프 갱신조차 <code class="inl">DashMap</code> 경합을 줄이려고 8회 중 1회만 <b>확률적으로</b> 한다.</span>
-</p>
+<div class="para">
+  <span class="en"><code class="inl">src/policies/</code> has <b>six</b> routing strategies. The default, <code class="inl">cache_aware</code>, uses <code class="inl">tree.rs</code>, a multi-tenant radix tree over raw request <i>text</i> (tenant = worker URL).</span>
+  <ul class="en">
+    <li>Characters, not token IDs: no tokenizer needed, so it works on the HTTP path where the gateway is a pure JSON proxy.</li>
+    <li>Per request it computes <code class="inl">matched_chars / input_chars</code> and routes to the matching worker above a threshold.</li>
+    <li>If load is imbalanced by both an absolute <i>and</i> a relative margin, it falls back to shortest-queue but still inserts the text.</li>
+    <li>LRU timestamps update <b>probabilistically</b>, 1 match in 8, to cut <code class="inl">DashMap</code> contention.</li>
+  </ul>
+  <span class="ko"><code class="inl">src/policies/</code>에는 라우팅 전략이 <b>6종</b> 있다. CLI 기본값 <code class="inl">cache_aware</code>는 <code class="inl">tree.rs</code>를 쓴다. 요청 <i>텍스트</i> 원문 위의 멀티테넌트 radix tree이고, 테넌트는 worker URL이다.</span>
+  <ul class="ko">
+    <li>토큰 ID 대신 문자를 저장한다. tokenizer가 필요 없어서 게이트웨이가 순수 JSON 프록시인 HTTP 경로에서도 동작한다.</li>
+    <li>요청마다 <code class="inl">matched_chars / input_chars</code>를 계산해 임계값을 넘으면 매칭된 worker로 보낸다.</li>
+    <li>절대·상대 기준을 <i>둘 다</i> 넘는 부하 불균형이면 최단 큐로 보내되, 캐시 상태를 맞추려고 텍스트는 삽입한다.</li>
+    <li><code class="inl">DashMap</code> 경합을 줄이려고 LRU 타임스탬프는 8회 중 1회만 <b>확률적으로</b> 갱신한다.</li>
+  </ul>
+</div>
 
 <div class="callout c-coral">
-  <span class="tag"><span class="en">correction — the docs route to SGLang; the CI routes to ATOM</span><span class="ko">정정 — 문서는 SGLang으로, CI는 ATOM으로 보낸다</span></span>
-  <span class="en">I first concluded that "AMD's flagship serving gateway is, by default and by weight of code, an SGLang router." That was too strong. The truth is a genuine split:<br><br><b>The default and the docs say SGLang.</b> <code class="inl">default_value_t = Backend::Sglang</code>, and the checked-in quickstart scripts (<code class="inl">scripts/start_prefill.sh</code>, <code class="inl">start_decode.sh</code>) launch <code class="inl">python3 -m sglang.launch_server</code> — though notably with <code class="inl">SGLANG_EXTERNAL_MODEL_PACKAGE=atom.plugin.sglang.models</code>, i.e. ATOM's optimized model code hosted inside SGLang's scheduler.<br><br><b>AMD's own nightly CI says ATOM.</b> <code class="inl">.github/benchmark/models_atomesh.yaml</code> declares exactly one backend block — <code class="inl">atom:</code> — across all five model families, and the harness launches <code class="inl">atom.entrypoints.openai_server</code> plus <code class="inl">atomesh launch … --backend atom</code>. The numbers AMD publishes come from the ATOM path.<br><br>And the ATOM adapter is not a stub: it has its own discovery (<code class="inl">fetch_atom_prefill_info</code>, which hard-fails unless the worker reports <code class="inl">kv_role == "kv_producer"</code>), its own DP-rank remapping policy, and a dedicated CLI flag. The three backends implement <b>three genuinely different P/D wire protocols</b> — SGLang dual-dispatch (P and D fired concurrently via <code class="inl">tokio::join!</code>), vLLM Mooncake fire-and-forget (P detached, D streamed), and ATOM sequential relay (P awaited to completion at <code class="inl">max_tokens:1</code>, its returned <code class="inl">kv_transfer_params</code> enriched and injected into D — so TTFT includes a serial prefill round-trip through the gateway).</span>
-  <span class="ko">처음엔 "AMD의 대표 서빙 게이트웨이가 기본값으로도 코드 무게로도 SGLang 라우터"라고 결론지었다. 과했다. 실상은 진짜로 갈라져 있다:<br><br><b>기본값과 문서는 SGLang을 가리킨다.</b> <code class="inl">default_value_t = Backend::Sglang</code>이고, 레포에 들어 있는 퀵스타트 스크립트(<code class="inl">scripts/start_prefill.sh</code>, <code class="inl">start_decode.sh</code>)는 <code class="inl">python3 -m sglang.launch_server</code>를 띄운다 — 다만 <code class="inl">SGLANG_EXTERNAL_MODEL_PACKAGE=atom.plugin.sglang.models</code>와 함께다. 즉 SGLang 스케줄러 안에 얹힌 ATOM 최적화 모델 코드다.<br><br><b>AMD 자체 nightly CI는 ATOM을 가리킨다.</b> <code class="inl">.github/benchmark/models_atomesh.yaml</code>은 모델 계열 다섯 전부에 대해 백엔드 블록을 정확히 하나 — <code class="inl">atom:</code> — 만 선언하고, 하네스는 <code class="inl">atom.entrypoints.openai_server</code>와 <code class="inl">atomesh launch … --backend atom</code>을 띄운다. AMD가 발표하는 수치는 ATOM 경로에서 나온다.<br><br>그리고 ATOM 어댑터는 껍데기가 아니다. 자체 discovery(<code class="inl">fetch_atom_prefill_info</code>. worker가 <code class="inl">kv_role == "kv_producer"</code>를 보고하지 않으면 즉시 실패), 자체 DP-rank 재매핑 정책, 전용 CLI 플래그를 갖는다. 세 백엔드는 <b>실제로 서로 다른 P/D 와이어 프로토콜 셋</b>을 구현한다 — SGLang 이중 디스패치(<code class="inl">tokio::join!</code>로 P·D 동시 발사), vLLM Mooncake fire-and-forget(P는 분리 실행, D는 스트리밍), ATOM 순차 릴레이(<code class="inl">max_tokens:1</code>로 P를 끝까지 기다린 뒤 반환된 <code class="inl">kv_transfer_params</code>를 보강해 D에 주입 — 그래서 TTFT에 게이트웨이를 경유하는 직렬 prefill 왕복이 포함된다).</span>
+  <span class="tag"><span class="en">correction — the docs route to SGLang; the CI routes to ATOM</span><span class="ko">정정: 문서는 SGLang으로, CI는 ATOM으로 보낸다</span></span>
+  <span class="en">I first concluded that "AMD's flagship serving gateway is, by default and by weight of code, an SGLang router." Too strong. It is a genuine split.</span>
+  <ol class="en">
+    <li><b>Default and docs say SGLang.</b> <code class="inl">default_value_t = Backend::Sglang</code>; quickstart scripts (<code class="inl">scripts/start_prefill.sh</code>, <code class="inl">start_decode.sh</code>) launch <code class="inl">python3 -m sglang.launch_server</code>, with <code class="inl">SGLANG_EXTERNAL_MODEL_PACKAGE=atom.plugin.sglang.models</code> (ATOM model code inside SGLang's scheduler).</li>
+    <li><b>AMD's nightly CI says ATOM.</b> <code class="inl">.github/benchmark/models_atomesh.yaml</code> declares one backend block, <code class="inl">atom:</code>, for all five model families, and launches <code class="inl">atom.entrypoints.openai_server</code> plus <code class="inl">atomesh launch … --backend atom</code>. Published numbers come from the ATOM path.</li>
+    <li><b>The ATOM adapter is real</b>: its own discovery (<code class="inl">fetch_atom_prefill_info</code>, hard-fails unless <code class="inl">kv_role == "kv_producer"</code>), DP-rank remapping, and a CLI flag.</li>
+    <li><b>Three different P/D wire protocols</b>: SGLang dual-dispatch (P and D concurrent via <code class="inl">tokio::join!</code>), vLLM Mooncake fire-and-forget (P detached, D streamed), ATOM sequential relay (P awaited at <code class="inl">max_tokens:1</code>, its <code class="inl">kv_transfer_params</code> injected into D, so TTFT includes a serial prefill round-trip).</li>
+  </ol>
+  <span class="ko">처음엔 "AMD의 대표 서빙 게이트웨이가 기본값으로도 코드 무게로도 SGLang 라우터"라고 결론지었다. 과한 말이었다. 실제로는 갈라져 있다.</span>
+  <ol class="ko">
+    <li><b>기본값과 문서는 SGLang이다.</b> <code class="inl">default_value_t = Backend::Sglang</code>이고, 퀵스타트 스크립트(<code class="inl">scripts/start_prefill.sh</code>, <code class="inl">start_decode.sh</code>)는 <code class="inl">python3 -m sglang.launch_server</code>를 띄운다. 단, <code class="inl">SGLANG_EXTERNAL_MODEL_PACKAGE=atom.plugin.sglang.models</code>로 ATOM 모델 코드를 얹는다.</li>
+    <li><b>AMD nightly CI는 ATOM이다.</b> <code class="inl">.github/benchmark/models_atomesh.yaml</code>은 모델 계열 다섯 개 모두에 백엔드 블록 <code class="inl">atom:</code> 하나만 두고, <code class="inl">atom.entrypoints.openai_server</code>와 <code class="inl">atomesh launch … --backend atom</code>을 띄운다. AMD가 발표하는 수치는 ATOM 경로에서 나온다.</li>
+    <li><b>ATOM 어댑터는 껍데기가 아니다.</b> 자체 discovery(<code class="inl">fetch_atom_prefill_info</code>. <code class="inl">kv_role == "kv_producer"</code>가 아니면 즉시 실패), DP-rank 재매핑 정책, 전용 CLI 플래그가 있다.</li>
+    <li><b>P/D 와이어 프로토콜이 셋 다 다르다.</b> SGLang은 <code class="inl">tokio::join!</code>로 P·D를 동시에 보내고, vLLM Mooncake는 P를 떼어 두고 D를 스트리밍한다. ATOM은 <code class="inl">max_tokens:1</code>로 P가 끝나길 기다린 뒤 <code class="inl">kv_transfer_params</code>를 D에 넣는다. 그래서 TTFT에 게이트웨이를 거치는 직렬 prefill 왕복이 들어간다.</li>
+  </ol>
 </div>
 
 <p>
-  <span class="en">The coupling even runs the direction you would not expect. ATOM's own FastAPI server carries an endpoint whose docstring reads, verbatim: <i>"Server metadata for the Atomesh router. The router's dp-aware discovery reads <code>dp_size</code> here to expand the per-DP-rank worker set and enable cache-aware routing to the rank that holds a request's prefix."</i> <b>ATOM's engine has been extended to serve ATOMesh</b>, while ATOMesh treats ATOM as one of three interchangeable backends.</span>
-  <span class="ko">결합 방향조차 예상과 반대다. ATOM 자체 FastAPI 서버에 docstring이 이렇게 적힌 엔드포인트가 있다 — <i>"Server metadata for the Atomesh router. The router's dp-aware discovery reads <code>dp_size</code> here to expand the per-DP-rank worker set and enable cache-aware routing to the rank that holds a request's prefix."</i> <b>ATOM 엔진이 ATOMesh를 위해 확장돼 있고</b>, ATOMesh는 ATOM을 교체 가능한 백엔드 셋 중 하나로 취급한다.</span>
+  <span class="en">The coupling also runs the other way. ATOM's FastAPI server has an endpoint whose docstring reads: <i>"Server metadata for the Atomesh router. The router's dp-aware discovery reads <code>dp_size</code> here to expand the per-DP-rank worker set and enable cache-aware routing to the rank that holds a request's prefix."</i> <b>ATOM's engine has been extended to serve ATOMesh</b>, while ATOMesh treats ATOM as one of three interchangeable backends.</span>
+  <span class="ko">결합은 반대 방향으로도 흐른다. ATOM FastAPI 서버에는 ATOMesh 라우터가 <code>dp_size</code>를 읽어 DP rank별 worker를 펼치고 prefix를 가진 rank로 보내도록 만든 엔드포인트가 있다. <b>ATOM 엔진은 ATOMesh에 맞춰 확장됐는데</b>, ATOMesh는 ATOM을 바꿔 끼울 수 있는 백엔드 셋 중 하나로 본다.</span>
 </p>
 
 <h4><span class="en">Maturity: a hardened inherited core with a thin, untested AMD layer</span><span class="ko">성숙도: 단단해진 상속 코어 + 얇고 미검증인 AMD 계층</span></h4>
 
 <p>
-  <span class="en">The split matters here too. The <b>inherited</b> routing core is genuinely mature: roughly 1,389 tests, byte-exact SSE golden fixtures, a dedicated mock-worker crate, circuit breakers with proper closed/open/half-open states, retry with jitter, and rate limiting whose token is held until the response body drains. Across 53k lines there are <b>zero</b> <code class="inl">todo!()</code>/<code class="inl">unimplemented!()</code> and only 4 <code class="inl">TODO</code> / 1 <code class="inl">FIXME</code>. The <b>AMD-specific additions</b> are the thin part: <b>zero</b> integration tests reference the ATOM backend adapter, and the standalone PyO3 router has no Rust tests at all — and those are precisely the paths AMD's own CI runs on hardware.</span>
-  <span class="ko">여기서도 갈라짐이 중요하다. <b>물려받은</b> 라우팅 코어는 진짜로 성숙했다. 테스트 약 1,389개, 바이트 단위로 일치하는 SSE 골든 픽스처, 전용 mock worker 크레이트, closed/open/half-open을 제대로 갖춘 circuit breaker, jitter 있는 재시도, 응답 본문이 다 빠질 때까지 토큰을 쥐고 있는 rate limiting. 5만 3천 줄에 <code class="inl">todo!()</code>·<code class="inl">unimplemented!()</code>가 <b>0개</b>이고 <code class="inl">TODO</code> 4개, <code class="inl">FIXME</code> 1개뿐이다. 얇은 쪽은 <b>AMD가 추가한 부분</b>이다. ATOM 백엔드 어댑터를 참조하는 통합 테스트가 <b>0개</b>이고, standalone PyO3 라우터에는 Rust 테스트가 아예 없다 — 그런데 그 경로들이 정확히 AMD 자체 CI가 하드웨어에서 돌리는 경로다.</span>
+  <span class="en">The <b>inherited</b> routing core is mature: ~1,389 tests, byte-exact SSE golden fixtures, a mock-worker crate, closed/open/half-open circuit breakers, retry with jitter, and rate limiting that holds its token until the body drains. Across 53k lines: <b>zero</b> <code class="inl">todo!()</code>/<code class="inl">unimplemented!()</code>, 4 <code class="inl">TODO</code>, 1 <code class="inl">FIXME</code>. The <b>AMD additions</b> are thin: <b>zero</b> integration tests touch the ATOM adapter, and the standalone PyO3 router has no Rust tests, yet these are exactly the paths AMD's CI runs.</span>
+  <span class="ko"><b>물려받은</b> 라우팅 코어는 성숙했다. 테스트 약 1,389개, 바이트 단위 SSE 골든 픽스처, mock worker 크레이트, closed/open/half-open circuit breaker, jitter 재시도, 응답 본문이 끝날 때까지 토큰을 쥐는 rate limiting이 있다. 5만 3천 줄에 <code class="inl">todo!()</code>·<code class="inl">unimplemented!()</code>는 <b>0개</b>, <code class="inl">TODO</code> 4개, <code class="inl">FIXME</code> 1개다. 얇은 쪽은 <b>AMD 추가분</b>이다. ATOM 어댑터를 다루는 통합 테스트가 <b>0개</b>이고 standalone PyO3 라우터엔 Rust 테스트가 없다. 그런데 AMD CI가 하드웨어에서 돌리는 경로가 바로 여기다.</span>
 </p>
 
 <div class="callout c-coral">
   <span class="tag"><span class="en">two code-level findings behind the "alpha" label</span><span class="ko">"alpha" 표시 뒤의 코드 레벨 근거 둘</span></span>
-  <span class="en"><b><code class="inl">--api-key</code> does not protect the router.</b> There is no inbound authentication middleware anywhere in ATOMesh — the flag is used <i>only</i> as the outbound bearer credential when calling workers. The five-test "security" suite confirms this rather than catching it: two of its tests assert HTTP 200 with the comment <i>"Without auth enforcement, request should succeed"</i>. The README's claim that clients send <code class="inl">Authorization: Bearer &lt;key&gt;</code> to protected router endpoints describes behaviour that does not exist.<br><br><b><code class="inl">--policy prefix_hash</code> fails every request on HTTP.</b> It hashes token IDs, but the HTTP router never tokenizes — <code class="inl">RequestDescriptor.tokens</code> is hardcoded <code class="inl">None</code> on that path — so the policy returns <code class="inl">None</code>, which the placement layer treats as a hard <code class="inl">PolicyReturnedNone</code> error. Nothing in the CLI, the validator or the README warns about this.<br><br>Neither is a subtle bug; both are the kind of thing that gets found the first week in production, which is a fair restatement of what "alpha" means here.</span>
-  <span class="ko"><b><code class="inl">--api-key</code>는 라우터를 보호하지 않는다.</b> ATOMesh 어디에도 인바운드 인증 미들웨어가 없다. 이 플래그는 worker를 호출할 때 쓰는 <i>아웃바운드</i> bearer 자격증명일 뿐이다. 5개짜리 "security" 테스트 스위트는 이걸 잡아내는 게 아니라 확인해 준다 — 그중 둘이 <i>"Without auth enforcement, request should succeed"</i>라는 주석과 함께 HTTP 200을 단언한다. 클라이언트가 보호된 라우터 엔드포인트에 <code class="inl">Authorization: Bearer &lt;key&gt;</code>를 보낸다는 README의 서술은 존재하지 않는 동작을 설명한다.<br><br><b><code class="inl">--policy prefix_hash</code>는 HTTP에서 모든 요청을 실패시킨다.</b> 토큰 ID를 해싱하는데 HTTP 라우터는 토큰화를 하지 않는다 — 그 경로에서 <code class="inl">RequestDescriptor.tokens</code>는 <code class="inl">None</code>으로 하드코딩돼 있다 — 그래서 정책이 <code class="inl">None</code>을 반환하고, placement 계층은 이를 <code class="inl">PolicyReturnedNone</code> 하드 에러로 처리한다. CLI에도, validator에도, README에도 경고가 없다.<br><br>둘 다 미묘한 버그가 아니다. 프로덕션 첫 주에 발견될 종류이고, 여기서 "alpha"가 뜻하는 바를 공정하게 바꿔 말한 것이다.</span>
+  <ol class="en">
+    <li><b><code class="inl">--api-key</code> does not protect the router.</b> There is no inbound auth middleware; the flag is <i>only</i> the outbound bearer credential for workers. Two of the five "security" tests assert HTTP 200 with the comment <i>"Without auth enforcement, request should succeed"</i>. The README's <code class="inl">Authorization: Bearer &lt;key&gt;</code> protection does not exist.</li>
+    <li><b><code class="inl">--policy prefix_hash</code> fails every request on HTTP.</b> It hashes token IDs, but <code class="inl">RequestDescriptor.tokens</code> is hardcoded <code class="inl">None</code> on that path, so the policy returns <code class="inl">None</code> and placement raises <code class="inl">PolicyReturnedNone</code>. No warning in the CLI, validator or README.</li>
+  </ol>
+  <span class="en">Both are first-week-in-production bugs, which is a fair reading of "alpha".</span>
+  <ol class="ko">
+    <li><b><code class="inl">--api-key</code>는 라우터를 보호하지 않는다.</b> 인바운드 인증 미들웨어가 없고, 이 플래그는 worker 호출용 <i>아웃바운드</i> bearer 자격증명일 뿐이다. "security" 테스트 5개 중 둘은 <i>"Without auth enforcement, request should succeed"</i> 주석과 함께 HTTP 200을 기대한다. README가 말하는 <code class="inl">Authorization: Bearer &lt;key&gt;</code> 보호는 존재하지 않는다.</li>
+    <li><b><code class="inl">--policy prefix_hash</code>는 HTTP에서 모든 요청을 실패시킨다.</b> 토큰 ID를 해싱하는데 그 경로의 <code class="inl">RequestDescriptor.tokens</code>가 <code class="inl">None</code>으로 하드코딩돼 있다. 정책은 <code class="inl">None</code>을 돌려주고 placement 계층은 <code class="inl">PolicyReturnedNone</code> 에러를 낸다. CLI·validator·README 어디에도 경고가 없다.</li>
+  </ol>
+  <span class="ko">둘 다 프로덕션 첫 주에 드러날 버그다. "alpha"라는 표시가 뜻하는 바가 이것이다.</span>
 </div>
 
-<h3><span class="en">The plugin bridges — and what they cost</span><span class="ko">플러그인 브리지 — 그리고 그 비용</span></h3>
+<h3><span class="en">The plugin bridges — and what they cost</span><span class="ko">플러그인 브리지와 그 비용</span></h3>
 
 <p>
-  <span class="en">Three bridges, and their relative sizes are the first surprise:</span>
-  <span class="ko">브리지 셋이 있고, 상대적 크기가 첫 번째 놀라움이다:</span>
+  <span class="en">Three bridges, and their sizes are the first surprise.</span>
+  <span class="ko">브리지는 셋이고, 크기부터 의외다.</span>
 </p>
 
 <table>
@@ -507,13 +568,13 @@ sampling_params  = [SamplingParams(temperature=0.6, ignore_eos=True,
 </table>
 
 <p>
-  <span class="en">The <b>SGLang bridge is 30% larger than the vLLM bridge</b>, despite vLLM getting the dedicated blog post, the RFC, and all the public attention. Combined with ATOMesh defaulting to SGLang, a consistent picture emerges: <b>SGLang is where AMD's ROCm integration is deepest, and vLLM is where its public messaging is.</b></span>
-  <span class="ko"><b>SGLang 브리지가 vLLM 브리지보다 30% 크다.</b> 전용 블로그 글도, RFC도, 대외 관심도 전부 vLLM 쪽인데도 그렇다. ATOMesh 기본값이 SGLang인 것과 겹쳐 보면 일관된 그림이 나온다 — <b>AMD의 ROCm 통합이 가장 깊은 곳은 SGLang이고, 대외 메시지가 있는 곳은 vLLM이다.</b></span>
+  <span class="en">The <b>SGLang bridge is 30% larger than the vLLM one</b>, though vLLM gets the blog post, the RFC and the attention. With ATOMesh defaulting to SGLang: <b>AMD's ROCm integration is deepest in SGLang; its public messaging is about vLLM.</b></span>
+  <span class="ko">블로그 글, RFC, 대외 관심은 모두 vLLM 쪽인데 <b>SGLang 브리지가 vLLM 브리지보다 30% 크다.</b> ATOMesh 기본값이 SGLang인 것까지 합치면, <b>AMD의 ROCm 통합은 SGLang에서 가장 깊고 대외 메시지는 vLLM을 향한다.</b></span>
 </p>
 
 <p>
-  <span class="en">Now the cost. "Just <code class="inl">pip install</code> it next to vLLM" is the pitch. What that installs is a bridge that pins an <b>exact vLLM commit</b>:</span>
-  <span class="ko">이제 비용. "vLLM 옆에 <code class="inl">pip install</code>만 하면 된다"가 세일즈 문구다. 그렇게 설치되는 것은 <b>정확한 vLLM 커밋</b>을 핀으로 박은 브리지다:</span>
+  <span class="en">The pitch is "just <code class="inl">pip install</code> it next to vLLM". What you get pins an <b>exact vLLM commit</b>:</span>
+  <span class="ko">홍보 문구는 "vLLM 옆에 <code class="inl">pip install</code>만 하면 된다"이다. 실제로 설치되는 브리지는 <b>vLLM 커밋 하나</b>에 고정돼 있다.</span>
 </p>
 
 <pre># atom/plugin/vllm/vllm-version.env
@@ -521,8 +582,8 @@ VLLM_COMMIT=6e448d0ea9bf3d88d898b65449ca6dc2aec170ac
 VLLM_VERSION=0.27.1</pre>
 
 <p>
-  <span class="en">…and which reaches into vLLM in <b>176 import statements</b>, including private symbols (<code class="inl">_custom_ops</code>, <code class="inl">_encode_layer_name</code>, <code class="inl">_init_kv_cache_quant</code>), and then <b>monkey-patches vLLM at import time</b> from nine <code class="inl">*_patch.py</code> modules. <code class="inl">spec_decode_patch.py</code> alone replaces six methods on one internal vLLM class plus three module-level functions:</span>
-  <span class="ko">…그리고 <b>import 문 176개</b>로 vLLM 내부에 손을 뻗는다. private 심볼(<code class="inl">_custom_ops</code>, <code class="inl">_encode_layer_name</code>, <code class="inl">_init_kv_cache_quant</code>)도 포함된다. 그다음 <code class="inl">*_patch.py</code> 모듈 9개에서 <b>import 시점에 vLLM을 monkey-patch</b>한다. <code class="inl">spec_decode_patch.py</code> 하나가 vLLM 내부 클래스 하나의 메서드 6개와 모듈 레벨 함수 3개를 갈아끼운다:</span>
+  <span class="en">It reaches into vLLM with <b>176 import statements</b>, including private symbols (<code class="inl">_custom_ops</code>, <code class="inl">_encode_layer_name</code>, <code class="inl">_init_kv_cache_quant</code>), then <b>monkey-patches vLLM at import time</b> from nine <code class="inl">*_patch.py</code> modules. <code class="inl">spec_decode_patch.py</code> alone replaces six methods on one internal class plus three module functions:</span>
+  <span class="ko">또 <b>import 문 176개</b>로 vLLM 내부를 끌어 쓰는데 private 심볼(<code class="inl">_custom_ops</code>, <code class="inl">_encode_layer_name</code>, <code class="inl">_init_kv_cache_quant</code>)도 있다. 이어서 <code class="inl">*_patch.py</code> 모듈 9개가 <b>import 시점에 vLLM을 monkey-patch</b>한다. <code class="inl">spec_decode_patch.py</code> 하나만 해도 내부 클래스의 메서드 6개와 모듈 함수 3개를 바꿔 끼운다.</span>
 </p>
 
 <pre>SpecDecodeBaseProposer.load_model                          = wrapped_load_model
@@ -534,42 +595,52 @@ DSparkSpeculator._sample_sequential                        = wrapped_sample_sequ
 vllm_kv_cache_utils.get_kv_cache_groups                    = patched_get_kv_cache_groups
 vllm_kv_cache_utils.get_kv_cache_config_from_groups        = ...
 vllm_kv_cache_utils._max_memory_usage_bytes_from_groups    = ...</pre>
-<p class="figcap"><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/plugin/vllm/spec_decode_patch.py">atom/plugin/vllm/spec_decode_patch.py</a> @ cd161f1<span class="en"> — the patches carry idempotency guards (<code>_atom_*_patched = True</code>), so this is careful monkey-patching, not careless. It is still monkey-patching.</span><span class="ko"> — 패치마다 멱등성 가드(<code>_atom_*_patched = True</code>)가 붙어 있다. 부주의한 게 아니라 조심스러운 monkey-patch다. 그래도 monkey-patch다.</span></p>
+<p class="figcap"><a class="src" href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/plugin/vllm/spec_decode_patch.py">atom/plugin/vllm/spec_decode_patch.py</a> @ cd161f1<span class="en"> · idempotency guards (<code>_atom_*_patched = True</code>): careful, but still monkey-patching.</span><span class="ko"> · 멱등성 가드(<code>_atom_*_patched = True</code>)가 있어 조심스럽지만, 그래도 monkey-patch다.</span></p>
 
 <p>
-  <span class="en">Two of the patch modules are especially telling, because of what they are overriding. <code class="inl">cudagraph_memory_profiler_patch.py</code>: "Skip vLLM's temporary CUDA graph capture <b>on ROCm</b>." <code class="inl">rocm_dcp_full_graph_patch.py</code>: "Remove vLLM's blanket DCP-to-PIECEWISE downgrade <b>on ROCm</b>." These are not ATOM adding features — they are ATOM <b>reversing decisions vLLM's own ROCm path made</b>. The two AMD-supported paths actively disagree about how to run on AMD hardware.</span>
-  <span class="ko">패치 모듈 둘은 특히 시사적이다. 무엇을 뒤집는지 때문이다. <code class="inl">cudagraph_memory_profiler_patch.py</code>: "Skip vLLM's temporary CUDA graph capture <b>on ROCm</b>." <code class="inl">rocm_dcp_full_graph_patch.py</code>: "Remove vLLM's blanket DCP-to-PIECEWISE downgrade <b>on ROCm</b>." 기능을 더하는 게 아니라 <b>vLLM 자체 ROCm 경로가 내린 결정을 되돌리는</b> 것이다. AMD가 지원하는 두 경로가 AMD 하드웨어에서 어떻게 돌릴지를 두고 서로 다투고 있다.</span>
+  <span class="en">Two patches stand out for what they override. <code class="inl">cudagraph_memory_profiler_patch.py</code>: "Skip vLLM's temporary CUDA graph capture <b>on ROCm</b>." <code class="inl">rocm_dcp_full_graph_patch.py</code>: "Remove vLLM's blanket DCP-to-PIECEWISE downgrade <b>on ROCm</b>." ATOM is <b>reversing decisions vLLM's own ROCm path made</b>: two AMD-supported paths disagree on how to run AMD hardware.</span>
+  <span class="ko">눈여겨볼 패치가 둘 있다. <code class="inl">cudagraph_memory_profiler_patch.py</code>는 <b>ROCm에서</b> vLLM의 임시 CUDA graph 캡처를 건너뛰고, <code class="inl">rocm_dcp_full_graph_patch.py</code>는 <b>ROCm에서</b> DCP를 PIECEWISE로 일괄 강등하는 동작을 없앤다. 기능 추가가 아니라 <b>vLLM 자체 ROCm 경로의 결정을 되돌린다</b>. AMD가 지원하는 두 경로가 AMD 하드웨어 운용 방식을 두고 엇갈린다.</span>
 </p>
 
-<h3><span class="en">diffusion — a second engine that shares nothing</span><span class="ko">diffusion — 아무것도 공유하지 않는 두 번째 엔진</span></h3>
+<h3><span class="en">diffusion — a second engine that shares nothing</span><span class="ko">diffusion: 아무것도 공유하지 않는 두 번째 엔진</span></h3>
 
 <p>
-  <span class="en">The least-discussed 7,395 lines. <code class="inl">atom/diffusion/</code> generates <b>video with audio</b> and is, per ATOM's own <code class="inl">CLAUDE.md</code>, "a sibling of <code>atom/model_engine/</code> rather than an extension of it — no KV cache, one fixed N-step denoise loop per job, four heterogeneous networks, and sequence parallelism across a <i>single</i> request". It mirrors the LLM stack's shape without reusing it:</span>
-  <span class="ko">가장 덜 언급되는 7,395줄. <code class="inl">atom/diffusion/</code>은 <b>오디오가 있는 비디오</b>를 생성하고, ATOM 자체 <code class="inl">CLAUDE.md</code>에 따르면 "<code>atom/model_engine/</code>의 확장이 아니라 형제 — KV cache 없음, job당 고정 N-스텝 denoise 루프 하나, 이종 네트워크 4개, 그리고 <i>단일</i> 요청에 걸친 sequence parallelism"이다. LLM 스택의 형태를 흉내내되 재사용하지는 않는다:</span>
+  <span class="en">7,395 lines. <code class="inl">atom/diffusion/</code> generates <b>video with audio</b>; ATOM's <code class="inl">CLAUDE.md</code> calls it "a sibling of <code>atom/model_engine/</code> rather than an extension of it — no KV cache, one fixed N-step denoise loop per job, four heterogeneous networks, and sequence parallelism across a <i>single</i> request". It mirrors the LLM stack's shape without reusing it:</span>
+  <span class="ko">7,395줄짜리 <code class="inl">atom/diffusion/</code>은 <b>오디오가 붙은 비디오</b>를 만든다. ATOM <code class="inl">CLAUDE.md</code>는 이를 <code>atom/model_engine/</code>의 확장이 아닌 형제로 설명한다. KV cache가 없고, job마다 고정 N-스텝 denoise 루프를 돌고, 이종 네트워크 4개를 쓰며, <i>단일</i> 요청을 sequence parallelism으로 나눈다. LLM 스택과 모양은 같지만 코드는 재사용하지 않는다.</span>
 </p>
 
 <pre>diffusion_server.py → DiffusionEngine → DiffusionCoreManager → DiffusionEngineCore → PipelineRunner
    (/v1/videos)        (JobScheduler)     (ZMQ, rank당 PUSH)     (GPU당 worker)      (ComposedPipeline)</pre>
 
-<p>
-  <span class="en">One model family (<code class="inl">models/minimax_h3/</code>), an async job API (<code class="inl">POST /v1/videos</code> → 202, then poll <code class="inl">/v1/videos/{id}</code>, fetch <code class="inl">/content</code>, <code class="inl">DELETE</code> to abort), and <b>Ulysses sequence parallelism</b> — trading sequence length for heads around attention (<code class="inl">[S/W, H, D] → [S, H/W, D]</code>) so one long video request can be split across GPUs. It is an optional extra (<code class="inl">pip install -e ".[diffusion]"</code>) and nothing in the LLM path imports it.</span>
-  <span class="ko">모델 계열 하나(<code class="inl">models/minimax_h3/</code>), 비동기 job API(<code class="inl">POST /v1/videos</code> → 202, 이후 <code class="inl">/v1/videos/{id}</code> 폴링, <code class="inl">/content</code>로 수신, <code class="inl">DELETE</code>로 중단), 그리고 <b>Ulysses sequence parallelism</b> — attention 앞뒤로 시퀀스와 head를 맞바꿔(<code class="inl">[S/W, H, D] → [S, H/W, D]</code>) 긴 비디오 요청 하나를 여러 GPU에 쪼갠다. optional extra이고(<code class="inl">pip install -e ".[diffusion]"</code>) LLM 경로에서 이걸 import하는 코드는 없다.</span>
-</p>
+<div class="para">
+  <ul class="en">
+    <li>One model family: <code class="inl">models/minimax_h3/</code>.</li>
+    <li>Async job API: <code class="inl">POST /v1/videos</code> → 202, poll <code class="inl">/v1/videos/{id}</code>, fetch <code class="inl">/content</code>, <code class="inl">DELETE</code> to abort.</li>
+    <li><b>Ulysses sequence parallelism</b>: swaps sequence for heads around attention (<code class="inl">[S/W, H, D] → [S, H/W, D]</code>) to split one long video across GPUs.</li>
+    <li>Optional extra (<code class="inl">pip install -e ".[diffusion]"</code>); nothing in the LLM path imports it.</li>
+  </ul>
+  <ul class="ko">
+    <li>모델 계열은 <code class="inl">models/minimax_h3/</code> 하나다.</li>
+    <li>비동기 job API: <code class="inl">POST /v1/videos</code> → 202, <code class="inl">/v1/videos/{id}</code> 폴링, <code class="inl">/content</code>로 수신, <code class="inl">DELETE</code>로 중단.</li>
+    <li><b>Ulysses sequence parallelism</b>: attention 앞뒤로 시퀀스와 head 축을 맞바꿔(<code class="inl">[S/W, H, D] → [S, H/W, D]</code>) 긴 비디오 요청 하나를 여러 GPU에 나눈다.</li>
+    <li>optional extra(<code class="inl">pip install -e ".[diffusion]"</code>)이고 LLM 경로에서는 import하지 않는다.</li>
+  </ul>
+</div>
 </section>
 
 <section id="s6">
 <h2><span class="num">6</span><span class="en">ATOM's weaknesses</span><span class="ko">ATOM의 약점</span></h2>
 
 <p>
-  <span class="en">Worth saying first: <b>the code quality is not the problem.</b> Reading through ATOM's core, the comment density, the recorded design rationale (kernels carry notes explaining <i>why</i> a Triton port exists, schedulers explain which invariant a guard protects), and the near-absence of unfinished markers across 53k lines of Rust all read above average. The weaknesses are structural, and they sort into three groups.</span>
-  <span class="ko">먼저 말해 둘 것 — <b>코드 품질은 문제가 아니다.</b> ATOM 코어를 읽어 보면 주석 밀도, 기록된 설계 근거(커널마다 왜 Triton 포팅이 존재하는지 적혀 있고, 스케줄러는 어떤 불변식을 지키는 가드인지 설명한다), Rust 5만 3천 줄에 미완성 표식이 거의 없다는 점 모두 평균 이상으로 읽힌다. 약점은 구조적이고, 세 갈래로 나뉜다.</span>
+  <span class="en"><b>Code quality is not the problem.</b> Comment density, recorded rationale (kernels explain <i>why</i> a Triton port exists, schedulers name the invariant a guard protects) and almost no unfinished markers in 53k lines of Rust are above average. The weaknesses are structural.</span>
+  <span class="ko"><b>코드 품질은 문제가 아니다.</b> 주석 밀도, 기록된 설계 근거(커널은 Triton 포팅을 <i>왜</i> 했는지, 스케줄러는 가드가 어떤 불변식을 지키는지 적어 둔다), Rust 5만 3천 줄에 미완성 표식이 거의 없다는 점 모두 평균 이상이다. 약점은 구조에 있다.</span>
 </p>
 
-<h3><span class="en">Group 1 — dependency: ATOM is only as good as AITER on the day</span><span class="ko">1군 — 의존성: ATOM은 그날의 AITER만큼만 좋다</span></h3>
+<h3><span class="en">Group 1 — dependency: ATOM is only as good as AITER on the day</span><span class="ko">1군. 의존성: ATOM은 그날의 AITER만큼만 좋다</span></h3>
 
 <p>
-  <span class="en">This is the most concrete weakness, and it has already bitten in public. ATOM's design thesis is that every compute-heavy op delegates to AITER. The corollary is that when an AITER kernel is broken on a given GPU generation, ATOM does not degrade gracefully — it falls back off its own value proposition. SemiAnalysis observed exactly this at DeepSeek-V4 Day 0:</span>
-  <span class="ko">가장 구체적인 약점이고 이미 공개적으로 물린 적이 있다. ATOM의 설계 논지는 무거운 연산을 전부 AITER에 위임한다는 것이다. 따름정리는, 특정 GPU 세대에서 AITER 커널이 깨지면 ATOM이 우아하게 저하되지 않고 자기 존재 이유 밖으로 떨어진다는 것이다. SemiAnalysis가 DeepSeek-V4 Day 0에 정확히 이 장면을 관찰했다:</span>
+  <span class="en">ATOM delegates every heavy op to AITER. When an AITER kernel breaks on a GPU generation, ATOM does not degrade gracefully; it loses its reason to exist. SemiAnalysis saw this at DeepSeek-V4 Day 0:</span>
+  <span class="ko">ATOM은 무거운 연산을 전부 AITER에 맡긴다. 어떤 GPU 세대에서 AITER 커널이 깨지면 ATOM은 존재 이유를 잃는다. SemiAnalysis가 DeepSeek-V4 Day 0에 이를 확인했다.</span>
 </p>
 
 <blockquote class="q">
@@ -578,51 +649,75 @@ vllm_kv_cache_utils._max_memory_usage_bytes_from_groups    = ...</pre>
 </blockquote>
 
 <p>
-  <span class="en">An engine on a fallback path with eager execution is, functionally, a slow reimplementation of vLLM. vLLM in the same situation swaps attention backends; ATOM has no second source by construction. The recovery was real — AITER fix #2916 restored the kernel and the frontier climbed — but the failure mode is permanent, not a one-off.</span>
-  <span class="ko">fallback 경로에서 eager로 도는 엔진은 기능적으로 느린 vLLM 재구현이다. 같은 상황에서 vLLM은 attention 백엔드를 갈아 끼우지만, ATOM은 구조상 2차 공급원이 없다. 회복은 실제로 있었다 — AITER fix #2916이 커널을 되살렸고 프론티어가 올라갔다 — 그러나 이 실패 양상은 일회성이 아니라 상시적이다.</span>
+  <span class="en">On fallbacks with eager execution, ATOM is a slow reimplementation of vLLM. vLLM can swap attention backends; ATOM has no second source. AITER fix #2916 restored the kernel, but the failure mode is permanent.</span>
+  <span class="ko">fallback과 eager로 도는 ATOM은 느린 vLLM 재구현일 뿐이다. vLLM은 attention 백엔드를 바꿔 끼우면 되지만 ATOM에는 대안이 없다. AITER fix #2916으로 커널은 회복됐어도 이런 실패는 언제든 다시 올 수 있다.</span>
 </p>
 
-<h3><span class="en">Group 2 — position: AMD has already ranked ATOM third</span><span class="ko">2군 — 포지션: AMD가 이미 ATOM을 3순위로 매겼다</span></h3>
+<h3><span class="en">Group 2 — position: AMD has already ranked ATOM third</span><span class="ko">2군. 포지션: AMD가 이미 ATOM을 3순위로 매겼다</span></h3>
 
 <div class="grid2">
-  <div class="mini"><h4><span class="en">AITER's own ecosystem table</span><span class="ko">AITER 자체 생태계 표</span></h4><p><span class="en">vLLM on ROCm: "Default attention backend · <b>Production</b>". SGLang on ROCm: "Default on ROCm Docker · <b>Production</b>". ATOM: "Built natively on AITER · <b>Active development</b>". AMD's own kernel library says which is production-ready.</span><span class="ko">ROCm의 vLLM: "Default attention backend · <b>Production</b>". ROCm의 SGLang: "Default on ROCm Docker · <b>Production</b>". ATOM: "Built natively on AITER · <b>Active development</b>". AMD 자체 커널 라이브러리가 무엇이 프로덕션 준비인지 말한다.</span></p></div>
-  <div class="mini"><h4><span class="en">SGLang is where the depth is</span><span class="ko">깊이가 있는 쪽은 SGLang</span></h4><p><span class="en">The gateway is a fork of SGLang's own <code>sgl-model-gateway</code> and still depends on seven SGLang-published crates. The SGLang plugin bridge (21,418 lines) is larger than the vLLM one (16,398) — and larger still once the ~1,030 lines of SGLang code inside the shared <code>register.py</code> are counted, where the vLLM equivalent is commented out.</span><span class="ko">게이트웨이는 SGLang 자체 <code>sgl-model-gateway</code>의 포크이고 지금도 SGLang이 배포하는 크레이트 7개에 의존한다. SGLang 플러그인 브리지(21,418줄)가 vLLM용(16,398줄)보다 크고, 공용 <code>register.py</code> 안의 SGLang 코드 ~1,030줄까지 세면 격차가 더 벌어진다. 같은 자리의 vLLM용 코드는 주석 처리돼 있다.</span></p></div>
-  <div class="mini"><h4><span class="en">the in-tree RFC was rejected</span><span class="ko">in-tree RFC는 거절당했다</span></h4><p><span class="en"><a class="src" href="https://github.com/vllm-project/vllm/issues/33478">vllm#33478</a> asked to put ATOM inside vLLM and was closed on governance grounds. The plugin is the settlement, not the plan.</span><span class="ko"><a class="src" href="https://github.com/vllm-project/vllm/issues/33478">vllm#33478</a>은 ATOM을 vLLM 안에 넣자고 했다가 거버넌스를 근거로 닫혔다. 플러그인은 계획이 아니라 합의의 결과다.</span></p></div>
-  <div class="mini"><h4><span class="en">adoption</span><span class="ko">채택</span></h4><p><span class="en">168 stars against nano-vLLM's 15,252. No community discussion found outside GitHub and SemiAnalysis, who assert "zero production customers" — their claim, unrebutted but unverified.</span><span class="ko">별 168개, nano-vLLM은 15,252개. GitHub과 SemiAnalysis 밖에서 커뮤니티 논의를 못 찾았고, SemiAnalysis는 "zero production customers"라 단언한다 — 반박은 없지만 검증되지도 않은 그들의 주장이다.</span></p></div>
+  <div class="mini"><h4><span class="en">AITER's own ecosystem table</span><span class="ko">AITER 자체 생태계 표</span></h4><p><span class="en">vLLM on ROCm: "Default attention backend · <b>Production</b>". SGLang on ROCm: "Default on ROCm Docker · <b>Production</b>". ATOM: "Built natively on AITER · <b>Active development</b>". AMD's own kernel library says which is production-ready.</span><span class="ko">ROCm의 vLLM: "Default attention backend · <b>Production</b>". ROCm의 SGLang: "Default on ROCm Docker · <b>Production</b>". ATOM: "Built natively on AITER · <b>Active development</b>". AMD 자체 커널 라이브러리가 프로덕션용을 따로 표시한다.</span></p></div>
+  <div class="mini"><h4><span class="en">SGLang is where the depth is</span><span class="ko">깊이가 있는 쪽은 SGLang</span></h4><p><span class="en">The gateway forks SGLang's <code>sgl-model-gateway</code> and depends on seven SGLang crates. The SGLang bridge (21,418 lines) beats vLLM's (16,398), more so with ~1,030 SGLang lines in shared <code>register.py</code>, where the vLLM part is commented out.</span><span class="ko">게이트웨이는 <code>sgl-model-gateway</code> 포크다. SGLang 브리지(21,418줄)가 vLLM용(16,398줄)보다 크고, 공용 <code>register.py</code>에서도 SGLang 코드 ~1,030줄은 살아 있고 vLLM 쪽은 주석 처리돼 있다.</span></p></div>
+  <div class="mini"><h4><span class="en">the in-tree RFC was rejected</span><span class="ko">in-tree RFC는 거절당했다</span></h4><p><span class="en"><a class="src" href="https://github.com/vllm-project/vllm/issues/33478">vllm#33478</a> asked to put ATOM inside vLLM and was closed on governance grounds. The plugin is the fallback, not the plan.</span><span class="ko"><a class="src" href="https://github.com/vllm-project/vllm/issues/33478">vllm#33478</a>은 ATOM을 vLLM 안에 넣자는 제안이었고 거버넌스 문제로 닫혔다. 플러그인은 원래 계획이 아니라 타협안이다.</span></p></div>
+  <div class="mini"><h4><span class="en">adoption</span><span class="ko">채택</span></h4><p><span class="en">168 stars vs nano-vLLM's 15,252. No discussion found outside GitHub and SemiAnalysis, who assert "zero production customers" (unrebutted, unverified).</span><span class="ko">별 168개로 nano-vLLM(15,252개)과 비교가 안 된다. GitHub과 SemiAnalysis 밖에선 논의를 찾지 못했다. SemiAnalysis는 "zero production customers"라고 단언하는데, 반박도 검증도 없는 주장이다.</span></p></div>
 </div>
 
-<h3><span class="en">Group 3 — the plugin path is not as cheap as advertised</span><span class="ko">3군 — 플러그인 경로는 광고만큼 싸지 않다</span></h3>
+<h3><span class="en">Group 3 — the plugin path is not as cheap as advertised</span><span class="ko">3군. 플러그인 경로는 광고만큼 싸지 않다</span></h3>
 
 <p>
-  <span class="en">This one falls out directly from §5 and it is, I think, underappreciated. The whole strategic argument for ATOM — "you don't have to leave vLLM, just install us alongside" — rests on the bridge being a thin, stable adapter. It is not:</span>
-  <span class="ko">이건 §5에서 곧바로 따라 나오고, 과소평가돼 있다고 본다. ATOM의 전략적 논지 전체 — "vLLM을 떠날 필요 없이 옆에 설치만 하면 된다" — 가 브리지는 얇고 안정적인 어댑터라는 전제 위에 서 있다. 아니다:</span>
+  <span class="en">Following from §5: the pitch "you don't have to leave vLLM, just install us alongside" assumes a thin, stable adapter. It is not.</span>
+  <span class="ko">§5에서 바로 나오는 결론이다. "vLLM을 떠날 필요 없이 옆에 설치만 하면 된다"는 논리는 브리지가 얇고 안정적이라는 전제에 기댄다. 실제로는 그렇지 않다.</span>
 </p>
 
 <ul>
-  <li><span class="en"><b>An exact commit pin.</b> <code class="inl">VLLM_COMMIT=6e448d0e…</code>, <code class="inl">VLLM_VERSION=0.27.1</code>. Not a range — one commit. (Note also that AMD's own vLLM-ATOM blog says "tested against vLLM v0.17.x", which no longer matches the code; the docs have drifted.)</span><span class="ko"><b>정확한 커밋 핀.</b> <code class="inl">VLLM_COMMIT=6e448d0e…</code>, <code class="inl">VLLM_VERSION=0.27.1</code>. 범위가 아니라 커밋 하나다. (덧붙여 AMD 자체 vLLM-ATOM 블로그는 "tested against vLLM v0.17.x"라고 하는데 코드와 더는 맞지 않는다. 문서가 벌어졌다.)</span></li>
-  <li><span class="en"><b>176 imports into vLLM</b>, including private symbols like <code class="inl">_max_memory_usage_bytes_from_groups</code>. Private names carry no compatibility promise across versions.</span><span class="ko"><b>vLLM으로의 import 176개</b>, <code class="inl">_max_memory_usage_bytes_from_groups</code> 같은 private 심볼 포함. private 이름에는 버전 간 호환 약속이 없다.</span></li>
-  <li><span class="en"><b>Nine monkey-patch modules</b> rewriting vLLM methods at import. Method-level patches break silently when the patched signature changes upstream — you get wrong behaviour, not an <code class="inl">ImportError</code>.</span><span class="ko"><b>monkey-patch 모듈 9개</b>가 import 시점에 vLLM 메서드를 다시 쓴다. 메서드 단위 패치는 상류에서 시그니처가 바뀌면 조용히 깨진다 — <code class="inl">ImportError</code>가 아니라 잘못된 동작이 나온다.</span></li>
-  <li><span class="en"><b>Two patches reverse vLLM's own ROCm decisions</b> ("Skip vLLM's temporary CUDA graph capture on ROCm", "Remove vLLM's blanket DCP-to-PIECEWISE downgrade on ROCm"). If the two AMD-supported ROCm paths disagree about correct behaviour, upstreaming is harder than the RFC implies.</span><span class="ko"><b>패치 둘은 vLLM 자체 ROCm 결정을 뒤집는다</b>("Skip vLLM's temporary CUDA graph capture on ROCm", "Remove vLLM's blanket DCP-to-PIECEWISE downgrade on ROCm"). AMD가 지원하는 두 ROCm 경로가 올바른 동작을 두고 다툰다면, upstream은 RFC가 시사하는 것보다 어렵다.</span></li>
-  <li><span class="en"><b>It fires automatically.</b> vLLM's two entry points activate on <i>any</i> <code class="inl">vllm serve</code> in the environment — installing <code class="inl">atom</code> beside <code class="inl">vllm</code> silently changes vLLM's behaviour, and <code class="inl">ATOM_DISABLE_VLLM_PLUGIN=1</code> is opt-<i>out</i>. The SGLang and RTP-LLM bridges are opt-in by contrast (an env var and a CLI flag respectively).</span><span class="ko"><b>자동으로 발동한다.</b> vLLM entry point 둘은 환경 안의 <i>모든</i> <code class="inl">vllm serve</code>에서 활성화된다 — <code class="inl">atom</code>을 <code class="inl">vllm</code> 옆에 설치하면 vLLM 동작이 조용히 바뀌고, <code class="inl">ATOM_DISABLE_VLLM_PLUGIN=1</code>은 opt-<i>out</i>이다. 반면 SGLang·RTP-LLM 브리지는 opt-in이다(각각 환경변수와 CLI 플래그).</span></li>
+  <li><span class="en"><b>An exact commit pin.</b> <code class="inl">VLLM_COMMIT=6e448d0e…</code>, <code class="inl">VLLM_VERSION=0.27.1</code>. Not a range. AMD's vLLM-ATOM blog still says "tested against vLLM v0.17.x".</span><span class="ko"><b>커밋 하나에 고정.</b> <code class="inl">VLLM_COMMIT=6e448d0e…</code>, <code class="inl">VLLM_VERSION=0.27.1</code>. 범위가 아니다. AMD vLLM-ATOM 블로그의 "tested against vLLM v0.17.x"는 이미 코드와 맞지 않는다.</span></li>
+  <li><span class="en"><b>176 imports into vLLM</b>, including private symbols like <code class="inl">_max_memory_usage_bytes_from_groups</code>. Private names carry no compatibility promise across versions.</span><span class="ko"><b>vLLM import 176개.</b> <code class="inl">_max_memory_usage_bytes_from_groups</code> 같은 private 심볼도 있는데, private 이름은 버전 간 호환을 보장하지 않는다.</span></li>
+  <li><span class="en"><b>Nine monkey-patch modules</b> rewriting vLLM methods at import. If an upstream signature changes, you get wrong behaviour, not an <code class="inl">ImportError</code>.</span><span class="ko"><b>monkey-patch 모듈 9개</b>가 import 시점에 vLLM 메서드를 덮어쓴다. 상류에서 시그니처가 바뀌면 <code class="inl">ImportError</code> 없이 조용히 잘못 동작한다.</span></li>
+  <li><span class="en"><b>Two patches reverse vLLM's own ROCm decisions</b> ("Skip vLLM's temporary CUDA graph capture on ROCm", "Remove vLLM's blanket DCP-to-PIECEWISE downgrade on ROCm"). If the two AMD-supported ROCm paths disagree about correct behaviour, upstreaming is harder than the RFC implies.</span><span class="ko"><b>패치 둘은 vLLM 자체 ROCm 결정을 뒤집는다</b>(§5). AMD가 지원하는 두 ROCm 경로가 서로 다른 답을 낸다면 upstream은 RFC가 말하는 것보다 어렵다.</span></li>
+  <li><span class="en"><b>It fires automatically.</b> vLLM's two entry points activate on <i>any</i> <code class="inl">vllm serve</code> in the environment: installing <code class="inl">atom</code> beside <code class="inl">vllm</code> silently changes vLLM's behaviour, and <code class="inl">ATOM_DISABLE_VLLM_PLUGIN=1</code> is opt-<i>out</i>. The SGLang and RTP-LLM bridges are opt-in by contrast (an env var and a CLI flag respectively).</span><span class="ko"><b>자동으로 켜진다.</b> vLLM entry point 둘이 환경 안의 <i>모든</i> <code class="inl">vllm serve</code>에서 활성화된다. <code class="inl">atom</code>을 <code class="inl">vllm</code> 옆에 설치만 해도 vLLM 동작이 바뀌고, 끄려면 <code class="inl">ATOM_DISABLE_VLLM_PLUGIN=1</code>(opt-<i>out</i>)을 줘야 한다. SGLang·RTP-LLM 브리지는 opt-in이다(각각 환경변수, CLI 플래그).</span></li>
 </ul>
 
-<h3><span class="en">Group 4 — things that fail silently or not at all</span><span class="ko">4군 — 조용히 실패하거나 아예 실패하지 않는 것들</span></h3>
+<h3><span class="en">Group 4 — things that fail silently or not at all</span><span class="ko">4군. 조용히 실패하거나 아예 실패하지 않는 것들</span></h3>
 
 <p>
-  <span class="en">Reading ATOMesh's source turned up two that belong in any evaluation, both covered in §5: <b><code class="inl">--api-key</code> does not authenticate anything inbound</b> — there is no auth middleware, the flag is the outbound worker credential, and the security test suite asserts 200 with the comment "Without auth enforcement, request should succeed" — and <b><code class="inl">--policy prefix_hash</code> fails 100% of requests over HTTP</b>, because it needs token IDs the HTTP router never produces. Add the operational traps from the ATOM engine itself (stale compile cache causing silent failures, <code class="inl">/health</code> returning OK with no model loaded) and a pattern emerges: <b>the failure modes are quiet ones.</b> That is the specific shape of risk to plan around here — not that things break loudly, but that they succeed while doing the wrong thing.</span>
-  <span class="ko">ATOMesh 소스를 읽다 나온 둘은 어떤 평가에도 들어가야 한다. 둘 다 §5에서 다뤘다 — <b><code class="inl">--api-key</code>는 인바운드로 아무것도 인증하지 않고</b>(인증 미들웨어가 없고, 이 플래그는 아웃바운드 worker 자격증명이며, 보안 테스트 스위트가 "Without auth enforcement, request should succeed"라는 주석과 함께 200을 단언한다), <b><code class="inl">--policy prefix_hash</code>는 HTTP에서 요청의 100%를 실패시킨다</b>(HTTP 라우터가 만들지 않는 토큰 ID를 필요로 하기 때문). 여기에 ATOM 엔진 자체의 운영 함정(낡은 컴파일 캐시로 인한 조용한 실패, 모델이 없어도 OK를 반환하는 <code class="inl">/health</code>)을 더하면 패턴이 보인다 — <b>실패 양상이 조용하다.</b> 여기서 대비해야 할 위험의 구체적 형태가 그것이다. 요란하게 깨지는 게 아니라, 잘못된 일을 하면서 성공한다.</span>
+  <span class="en">From §5: <b><code class="inl">--api-key</code> authenticates nothing inbound</b>, and <b><code class="inl">--policy prefix_hash</code> fails 100% of HTTP requests</b>. Add the engine's own traps (stale compile cache failing silently, <code class="inl">/health</code> returning OK with no model loaded) and the pattern is clear: <b>the failure modes are quiet.</b> Things succeed while doing the wrong thing.</span>
+  <span class="ko">§5에서 본 대로 <b><code class="inl">--api-key</code>는 인바운드를 전혀 인증하지 않고</b>, <b><code class="inl">--policy prefix_hash</code>는 HTTP 요청의 100%를 실패시킨다</b>. 엔진 자체의 운영 함정(낡은 컴파일 캐시의 조용한 실패, 모델이 없어도 OK를 주는 <code class="inl">/health</code>)까지 더하면 공통점이 보인다. <b>실패가 조용하다.</b> 요란하게 깨지지 않고, 잘못된 일을 하면서 성공으로 보고한다.</span>
 </p>
 
 <h3><span class="en">And the ones already covered</span><span class="ko">그리고 이미 다룬 것들</span></h3>
-<p>
-  <span class="en">The <a class="src" href="atom-rocm-inference-engine.html#s8">ATOM deep dive §8</a> covers the rest in detail: all performance numbers are vendor-reported with no baseline in the nightly dashboard; the only controlled A/B AMD published is <b>+2.8% to +6.9%</b>; a "2–3×" README claim was deleted ~12.5 h after a vLLM maintainer questioned it; AMD-only with no CUDA path; docs lag the code (8 architectures documented vs 26 registered); and operational traps that fail silently (stale compile cache, <code class="inl">/health</code> returning OK with no model loaded, <code class="inl">@support_torch_compile</code> files that cannot be instrumented).</span>
-  <span class="ko"><a class="src" href="atom-rocm-inference-engine.html#s8">ATOM 딥다이브 §8</a>이 나머지를 자세히 다룬다 — 성능 수치는 전부 벤더 자체 보고이고 nightly 대시보드엔 기준선이 없다는 점, AMD가 공개한 유일한 통제된 A/B가 <b>+2.8%~+6.9%</b>라는 점, "2~3배" README 주장이 vLLM 메인테이너 문제 제기 약 12.5시간 뒤 삭제된 일, CUDA 경로가 없는 AMD 전용이라는 점, 문서가 코드보다 뒤처진 점(문서 8개 대 레지스트리 26개), 그리고 조용히 실패하는 운영 함정들(낡은 컴파일 캐시, 모델이 없어도 OK를 반환하는 <code class="inl">/health</code>, 계측을 넣을 수 없는 <code class="inl">@support_torch_compile</code> 파일).</span>
-</p>
+<div class="para">
+  <span class="en">The rest is in the <a class="src" href="atom-rocm-inference-engine.html#s8">ATOM deep dive §8</a>.</span>
+  <ul class="en">
+    <li>All performance numbers are vendor-reported, with no baseline in the nightly dashboard.</li>
+    <li>The only controlled A/B AMD published is <b>+2.8% to +6.9%</b>.</li>
+    <li>A "2–3×" README claim was deleted ~12.5 h after a vLLM maintainer questioned it.</li>
+    <li>AMD-only, no CUDA path.</li>
+    <li>Docs lag the code (8 architectures documented vs 26 registered).</li>
+    <li>Silent operational traps: stale compile cache, <code class="inl">/health</code> OK with no model loaded, <code class="inl">@support_torch_compile</code> files that cannot be instrumented.</li>
+  </ul>
+  <span class="ko">나머지는 <a class="src" href="atom-rocm-inference-engine.html#s8">ATOM 딥다이브 §8</a>에 있다.</span>
+  <ul class="ko">
+    <li>성능 수치는 전부 벤더 자체 보고이고 nightly 대시보드에 기준선이 없다.</li>
+    <li>AMD가 공개한 유일한 통제 A/B는 <b>+2.8%~+6.9%</b>다.</li>
+    <li>README의 "2~3배" 주장은 vLLM 메인테이너가 문제를 제기하고 약 12.5시간 뒤 삭제됐다.</li>
+    <li>CUDA 경로가 없는 AMD 전용이다.</li>
+    <li>문서가 코드보다 뒤처졌다(문서화 8개, 등록 26개 아키텍처).</li>
+    <li>조용히 실패하는 운영 함정: 낡은 컴파일 캐시, 모델 없이 OK를 주는 <code class="inl">/health</code>, 계측할 수 없는 <code class="inl">@support_torch_compile</code> 파일.</li>
+  </ul>
+</div>
 
 <div class="callout c-purple">
-  <span class="tag"><span class="en">editor's note — my reading</span><span class="ko">편집자 주 — 내 해석</span></span>
-  <span class="en">Trace the arc and the shape of the problem changes. AMD chose nano-vLLM because it was small enough to move fast in — that is the stated motive, and it was a reasonable one. But moving fast required adding back everything nano-vLLM had removed, and ATOM is now 426k lines carrying 26 model architectures, a Rust gateway, three framework bridges and a diffusion engine, maintained by one vendor's team. <b>The minimalism that justified the choice is gone, and the maintenance surface that replaced it is the thing AMD least wanted to own.</b><br><br>Which is why the framing everyone converged on — reference implementation and upstreaming incubator, not production engine — looks less like a concession and more like the only stable resting place. The open question is unchanged and is worth checking in a year: <b>has anything actually been upstreamed?</b> Both RFCs promise it; I could find no list confirming it has happened. If that half arrives, ATOM is a well-run proving ground. If it does not, ATOM is a 426,000-line AMD-only fork of an engine layer that AMD's own tooling already ranks third.</span>
-  <span class="ko">궤적을 따라가 보면 문제의 형태가 바뀐다. AMD가 nano-vLLM을 고른 건 빠르게 움직일 만큼 작았기 때문이다 — 명시된 동기이고 합리적이었다. 그러나 빠르게 움직이려면 nano-vLLM이 걷어낸 것을 전부 되돌려야 했고, 지금 ATOM은 42만 6천 줄에 모델 아키텍처 26종, Rust 게이트웨이, 프레임워크 브리지 3개, diffusion 엔진을 단일 벤더 팀이 지고 있다. <b>선택을 정당화했던 최소주의는 사라졌고, 그 자리를 대신한 유지보수 표면적은 AMD가 가장 소유하고 싶지 않았던 바로 그것이다.</b><br><br>그래서 모두가 수렴한 규정 — 프로덕션 엔진이 아니라 레퍼런스 구현이자 upstream 인큐베이터 — 은 양보라기보다 유일하게 안정적인 착지점으로 보인다. 열린 질문은 그대로이고 1년쯤 뒤 확인할 만하다 — <b>실제로 upstream된 게 있는가?</b> 두 RFC 모두 약속하지만 그것이 일어났음을 확인해 주는 목록을 찾지 못했다. 그 절반이 도착하면 ATOM은 잘 운영된 실험장이다. 도착하지 않으면, AMD 자체 도구가 이미 3순위로 매긴 엔진 계층의 42만 6천 줄짜리 AMD 전용 포크다.</span>
+  <span class="tag"><span class="en">editor's note — my reading</span><span class="ko">편집자 주: 내 해석</span></span>
+  <ol class="en">
+    <li>AMD chose nano-vLLM because it was small enough to move fast in. Moving fast meant adding back everything it removed: ATOM is now 426k lines with 26 architectures, a Rust gateway, three framework bridges and a diffusion engine, maintained by one vendor. <b>The minimalism that justified the choice is gone, replaced by the maintenance surface AMD least wanted to own.</b></li>
+    <li>So the consensus framing (reference implementation and upstreaming incubator, not production engine) is less a concession than the only stable resting place.</li>
+    <li>The question to check in a year: <b>has anything actually been upstreamed?</b> Both RFCs promise it; I found no list confirming it. If yes, ATOM is a well-run proving ground. If not, it is a 426,000-line AMD-only fork of an engine layer AMD's own tooling ranks third.</li>
+  </ol>
+  <ol class="ko">
+    <li>AMD가 nano-vLLM을 고른 건 빠르게 움직일 만큼 작아서였다. 그런데 빠르게 가려면 걷어낸 것을 전부 되살려야 했고, 지금 ATOM은 42만 6천 줄에 아키텍처 26종, Rust 게이트웨이, 프레임워크 브리지 3개, diffusion 엔진을 벤더 팀 하나가 떠안고 있다. <b>선택의 근거였던 최소주의는 사라졌고, 그 자리를 AMD가 가장 피하고 싶던 유지보수 부담이 채웠다.</b></li>
+    <li>그래서 모두가 합의한 규정(프로덕션 엔진이 아닌 레퍼런스 구현이자 upstream 인큐베이터)은 양보라기보다 유일하게 안정적인 자리로 보인다.</li>
+    <li>1년 뒤 확인할 질문은 <b>실제로 upstream된 게 있는가</b>이다. 두 RFC 모두 약속했지만 이를 확인해 주는 목록은 찾지 못했다. 이뤄진다면 ATOM은 잘 운영된 실험장이고, 아니라면 AMD 자체 도구가 3순위로 매긴 엔진 계층의 42만 6천 줄짜리 AMD 전용 포크다.</li>
+  </ol>
 </div>
 </section>
 
@@ -632,7 +727,7 @@ vllm_kv_cache_utils._max_memory_usage_bytes_from_groups    = ...</pre>
 <h3><span class="en">Code read for this note</span><span class="ko">이 노트를 위해 읽은 코드</span></h3>
 <ul class="srcs">
   <li><a href="https://github.com/GeeeekExplorer/nano-vllm/tree/bb823b3e06983d71485a8e1f23715ebd87d98ef8">GeeeekExplorer/nano-vllm @ <code>bb823b3</code></a> — <span class="en">read in full (1,385 lines, 19 modules). MIT. 15,252 stars. Commit <code>bb823b3</code> is "Merge pull request #218 … chunked-prefill-refactor", 2026-04-26.</span><span class="ko">전부 읽음(1,385줄, 19개 모듈). MIT. 별 15,252개. <code>bb823b3</code>은 "Merge pull request #218 … chunked-prefill-refactor", 2026-04-26.</span></li>
-  <li><a href="https://github.com/ROCm/ATOM/tree/cd161f16bd041b63bc3bc4f234f3d1915a80200d">ROCm/ATOM @ <code>cd161f1</code></a> — <span class="en">core engine analysed in the <a href="atom-rocm-inference-engine.html">companion deep dive</a>; <code>atom/mesh/</code>, <code>atom/plugin/</code> and <code>atom/diffusion/</code> read for §5 of this note.</span><span class="ko">코어 엔진은 <a href="atom-rocm-inference-engine.html">짝 딥다이브</a>에서 분석. 이 노트 §5를 위해 <code>atom/mesh/</code>·<code>atom/plugin/</code>·<code>atom/diffusion/</code>를 읽음.</span></li>
+  <li><a href="https://github.com/ROCm/ATOM/tree/cd161f16bd041b63bc3bc4f234f3d1915a80200d">ROCm/ATOM @ <code>cd161f1</code></a> — <span class="en">core engine analysed in the <a href="atom-rocm-inference-engine.html">companion deep dive</a>; <code>atom/mesh/</code>, <code>atom/plugin/</code> and <code>atom/diffusion/</code> read for §5 of this note.</span><span class="ko">코어 엔진은 <a href="atom-rocm-inference-engine.html">짝 딥다이브</a>에서 분석했다. §5를 위해 <code>atom/mesh/</code>·<code>atom/plugin/</code>·<code>atom/diffusion/</code>를 읽었다.</span></li>
   <li><a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/mesh/README.md">atom/mesh/README.md</a> · <a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/plugin/vllm/spec_decode_patch.py">atom/plugin/vllm/spec_decode_patch.py</a> · <a href="https://github.com/ROCm/ATOM/blob/cd161f16bd041b63bc3bc4f234f3d1915a80200d/atom/diffusion/ulysses.py">atom/diffusion/ulysses.py</a></li>
 </ul>
 
