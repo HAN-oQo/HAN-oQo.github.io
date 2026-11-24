@@ -238,6 +238,7 @@ top-level 콘텐츠 섹션은 `study/`(추론 노트·논문 정리·모델 리�
 - **본문은 반복을 덜어 낸다**: 서론 1~2문장(목차를 다시 풀어 쓰지 않기), 요약 callout ≤ 4 bullet, 용어집 카드 1줄, 그림 캡션 한 줄(제목 + 출처). 긴 나열 문단은 목록·표로.
 - **KO 문체**: 평서체 "~다"의 완결된 문장. 엠대시(—)·세미콜론·명사 종결 메모체·번역투("~에 대해/~를 통해/~에 있어") 쓰지 않기. 논문·모델 이름은 영어 그대로.
 - 기준 예시: `study/vllm-kv-cache-block-management.html`.
+- 모닝 브리핑은 레포 스킬 `morning-briefing`(아침) → `hf-daily-papers`(2c 추가)로 쓴다.
 
 ## 새 페이지 체크리스트
 
@@ -283,6 +284,7 @@ Write 로 파일 전체를 뱉지 말고 **여러 조각으로 나눠 쓴다.** 
 | post-meta | 카드에 created `<time>` 필수, created ≤ updated, **페이지 hero 날짜 = 카드 날짜** |
 | post-meta-bump | (pre-push) 원격에 있던 콘텐츠 페이지를 고쳤으면 `.post-meta`(갱신일)도 바뀌어야 함 — 단 `[polish]` 커밋만 건드린 파일은 면제 |
 | card-blurb | 섹션 index 카드의 요약 `<p>` 는 한 줄 — KO ≤ 150자, EN ≤ 220자(태그 제거 후) |
+| ko-style | 콘텐츠 페이지 KO 본문 엠대시 ≤ 3(코드·SVG·제목 제외), hero `.lede` KO ≤ 250자(공백 제외) |
 | unencrypted | `*.unencrypted.html` 커밋/push 금지 |
 
 규칙을 바꾸고 싶다면: theme.css(값) 또는 check_theme.py(로직)를 고치고,

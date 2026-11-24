@@ -290,6 +290,42 @@ def check_card_blurbs(tree):
                 err(index, "card-blurb", f"카드 [{href}] 요약 {len(_plain(body))}자 > {CARD_EN_MAX}")
 
 
+# ---------------------------------------------------------------- KO style (polish level)
+
+KO_DASH_MAX, LEDE_KO_MAX = 3, 250
+STYLE_SECTIONS = ("study", "logs", "infra", "briefings", "post-training", "onboarding")
+
+
+def _ko_text(content):
+    import html as _h
+    s = re.sub(r"<(style|script|pre|svg|code|title)\b.*?</\1>", " ", content, flags=re.S)
+    if re.search(r'<html[^>]*lang="ko"', s[:400]) and 'class="ko"' not in s:
+        return _h.unescape(re.sub(r"<[^>]+>", " ", s))
+    parts = re.findall(r'<(span|div|ol|ul|p|li|h[1-6]|td|th)[^>]*class="[^"]*\bko\b[^"]*"[^>]*>(.*?)</\1>', s, re.S)
+    return " ".join(_h.unescape(re.sub(r"<[^>]+>", " ", p[1])) for p in parts)
+
+
+def check_ko_style(path, content):
+    """윤문 수준 강제 (CLAUDE.md '글은 짧고 읽기 쉽게'):
+      - KO 본문 엠대시(—) ≤ 3 (코드·SVG·<title> 제외) — 메모체/줄표 문체 차단
+      - hero .lede 의 KO ≤ 250자 — 서론이 목차를 다시 풀어 쓰지 않게"""
+    seg = path.split("/")
+    if len(seg) != 2 or seg[0] not in STYLE_SECTIONS or seg[1] == "index.html":
+        return
+    if path.endswith(".unencrypted.html") or is_staticrypt(content) or path in TEMPLATE_PAGES:
+        return
+    ko = _ko_text(content)
+    n = ko.count("—")
+    if n > KO_DASH_MAX:
+        err(path, "ko-style", f"KO 본문 엠대시 {n}개 > {KO_DASH_MAX} — 콜론·마침표·접속사로 바꾸기 (코드/SVG/제목 제외)")
+    m = re.search(r'class="lede"[^>]*>(.*?)</p>', content, re.S)
+    if m:
+        k = re.search(r'class="ko">(.*?)</span>', m.group(1), re.S)
+        txt = "".join(_plain(k.group(1) if k else m.group(1)).split())  # 공백 제외 글자 수
+        if len(txt) > LEDE_KO_MAX and (k or re.search(r'[가-힣]', txt)):
+            err(path, "ko-style", f"서론(.lede) KO {len(txt)}자(공백 제외) > {LEDE_KO_MAX} — 1~2문장으로 (목차 재진술 금지)")
+
+
 def polish_only(base, head, path):
     """base..head 에서 path 를 바꾼 커밋이 전부 메시지에 [polish] 를 담고 있으면 True.
     윤문(가독성만 개선, 내용 불변) 커밋은 갱신일 bump 를 면제한다 (CLAUDE.md)."""
@@ -392,6 +428,7 @@ def main():
         check_palette_drift(p, content, tokens)
         check_i18n(p, content)
         check_body_font(p, content)
+        check_ko_style(p, content)
 
     check_index_linkage(tree, paths)
     check_postmeta(tree, paths)
