@@ -37,6 +37,13 @@ description: Run a tutoring session for Inference Onboarding (learn/) — start 
   - num: `{"id","type":"num","topic","prompt","answer":<number>,"tol":0.05,"unit","explain","refs"}`
   - text: `{"id","type":"text","topic","prompt","rubric":[...],"model","refs"}`
   - refs 항목: `{"kind":"paper|code|doc|blog","label","url","note"?}`
+  - **계산 문항(num, 계산형 mcq)은 반드시** 아래 세 필드를 같이 넣는다:
+    - `"uses": ["<스펙 id>", …]` — `learn/data/specs.json` 의 모델·하드웨어·코덱 id.
+      페이지가 문항 아래에 아키텍처 요약과 config 표(layers, hidden, heads, KV heads, head_dim, vocab …)를 띄운다.
+      새 모델이 필요하면 specs.json 에 공식 config.json 값으로 항목을 추가하고 `src` 를 단다.
+    - `"hl": ["<config key>", …]` — 풀이에 쓰는 config 항목(표에서 노란 줄로 강조).
+    - `"steps": [{"t":"단계 이름","f":"공식","s":"숫자 대입","r":"결과"}, …]` — 사용자가
+      "답지·풀이 보기" 버튼으로 계산 과정을 단계별로 본다. 마지막 단계의 `r` 은 정답과 일치해야 한다.
   - id 규칙: `m<N>-c<k>` (진단은 `-d<k>`).
 - 계산 문항은 **파이썬으로 답을 검산**한 뒤 넣는다.
 - 생성 후 JSON 유효성 확인(`python3 -c "import json;json.load(open(...))"`).
