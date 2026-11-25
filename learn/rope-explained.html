@@ -39,6 +39,9 @@
   .eq{background:var(--gray-bg);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:14px 0;
     font-family:"SF Mono",Menlo,Consolas,monospace;font-size:14px;color:var(--ink);overflow-x:auto;text-align:center;line-height:1.9}
   .eq .hl{background:var(--amber-bg);padding:1px 5px;border-radius:4px;font-weight:700}
+  pre .pos{background:var(--amber-bg);color:var(--amber-ink);border-radius:3px;font-weight:600}
+  pre .gone{color:var(--faint);text-decoration:line-through}
+  pre .tag-lbl{display:block;font-family:-apple-system,sans-serif;font-size:11.5px;font-weight:700;color:var(--faint);margin-bottom:6px;letter-spacing:.3px}
   .eq .mat{display:inline-block;text-align:left;white-space:pre;line-height:1.5}
   .eq .lbl{color:var(--faint);font-size:12px}
   .step{border-left:3px solid var(--blue-bd);padding:2px 0 2px 16px;margin:16px 0}
@@ -101,7 +104,7 @@
     <time datetime="2026-08-24">2026-08-24</time>
     <span class="sep">·</span>
     <span class="updated-label en">updated</span><span class="updated-label ko">갱신</span>
-    <time datetime="2026-10-30">2026-10-30</time>
+    <time datetime="2026-11-25">2026-11-25</time>
   </p>
 </header>
 
@@ -239,6 +242,70 @@
   <p class="ko">작동은 한다. 하지만 7번 토큰이 3번 토큰을 얼마나 볼지 정할 때 head가 알고 싶은 건 보통 <b>"둘이 얼마나 떨어져 있나"</b>다. 절대 태그로는 모델이 거리를 거꾸로 추론해야 하고, 학습 때보다 긴 위치에서는 어떻게 동작할지 보장이 없다.</p>
   <p class="en">RoPE asks a sharper question: <b>can we inject absolute position into each vector separately so that only the relative position survives the inner product?</b></p>
   <p class="ko">그래서 RoPE는 이렇게 묻는다. <b>벡터마다 절대 위치를 따로 심되, 내적을 거치면 상대 위치만 남게 할 수 있을까?</b></p>
+
+  <h3><span class="en">1.2 — Same model, two codebases: where the position code lives</span>
+      <span class="ko">1.2 같은 모델, 두 가지 코드: 위치 코드는 어디에 들어가나</span></h3>
+  <p class="en">Before any math, here is what actually changes in the code. Below is a minimal decoder written twice: once with a learned absolute table (GPT-2 / <a href="https://github.com/karpathy/nanoGPT/blob/master/model.py">nanoGPT</a> style), once with RoPE (<a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py">Llama</a> style). <span style="background:var(--amber-bg);padding:0 4px;border-radius:3px">Highlighted</span> lines are the only position-related code.</p>
+  <p class="ko">수식에 들어가기 전에 코드에서 실제로 무엇이 바뀌는지 먼저 본다. 아래는 같은 최소 디코더를 두 번 쓴 것이다. 하나는 학습되는 절대 위치 테이블(GPT-2 / <a href="https://github.com/karpathy/nanoGPT/blob/master/model.py">nanoGPT</a> 방식)을 쓰고, 다른 하나는 RoPE(<a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py">Llama</a> 방식)를 쓴다. <span style="background:var(--amber-bg);padding:0 4px;border-radius:3px">강조된</span> 줄만 위치와 관련된 코드다.</p>
+
+  <pre><span class="tag-lbl">A · ABSOLUTE POSITION EMBEDDING (GPT-2)</span>class Model(nn.Module):
+    def __init__(self, cfg):
+        self.wte = nn.Embedding(cfg.vocab, cfg.d)            # token table
+<span class="pos">        self.wpe = nn.Embedding(cfg.max_pos, cfg.d)    # learned position table</span>
+        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
+
+    def forward(self, ids):                                   # ids: [B, T]
+<span class="pos">        pos = torch.arange(ids.size(1))                       # 0, 1, ..., T-1</span>
+<span class="pos">        h = self.wte(ids) + self.wpe(pos)               # ADD once, at input</span>
+        for blk in self.blocks:
+            h = blk(h)                                        # layers never see `pos` again
+        return self.lm_head(self.ln_f(h))
+
+class Attention(nn.Module):
+    def forward(self, h):
+        q, k, v = self.qkv(h).split(self.d, dim=-1)           # position already mixed into h
+        q, k, v = [t.view(B, T, n_head, dh).transpose(1, 2) for t in (q, k, v)]
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(dh)      # no position code here
+        att = att.masked_fill(causal_mask, -inf).softmax(-1)
+        return self.proj((att @ v).transpose(1, 2).reshape(B, T, self.d))</pre>
+
+  <pre><span class="tag-lbl">B · ROPE (LLAMA)</span>class Model(nn.Module):
+    def __init__(self, cfg):
+        self.embed = nn.Embedding(cfg.vocab, cfg.d)           # token table
+<span class="gone">        self.wpe = nn.Embedding(cfg.max_pos, cfg.d)</span>    # removed
+<span class="pos">        cos, sin = build_rope_cache(cfg.max_pos, dh, cfg.rope_theta)  # fixed</span>
+        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
+
+    def forward(self, ids):
+<span class="pos">        pos = torch.arange(ids.size(1))</span>
+        h = self.embed(ids)                                   # token only, NOTHING added
+        for blk in self.blocks:
+<span class="pos">            h = blk(h, pos)                               # pos into EVERY layer</span>
+        return self.lm_head(self.norm(h))
+
+class Attention(nn.Module):
+    def forward(self, h, pos):
+        q, k, v = self.qkv(h).split([...], dim=-1)
+        q, k, v = [t.view(B, T, -1, dh).transpose(1, 2) for t in (q, k, v)]
+<span class="pos">        q = q * cos[pos] + rotate_half(q) * sin[pos]           # ROTATE q</span>
+<span class="pos">        k = k * cos[pos] + rotate_half(k) * sin[pos]           # ROTATE k   (v untouched)</span>
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(dh)      # unchanged from here on
+        att = att.masked_fill(causal_mask, -inf).softmax(-1)
+        return self.o_proj((att @ v).transpose(1, 2).reshape(B, T, -1))</pre>
+  <p class="figcap"><span class="en">Simplified from nanoGPT <code class="inl">GPT.forward</code> and HF <code class="inl">LlamaAttention.forward</code> / <code class="inl">apply_rotary_pos_emb</code>. <code class="inl">build_rope_cache</code> and <code class="inl">rotate_half</code> are spelled out in §6.</span><span class="ko">nanoGPT의 <code class="inl">GPT.forward</code>와 HF의 <code class="inl">LlamaAttention.forward</code> / <code class="inl">apply_rotary_pos_emb</code>를 단순화했다. <code class="inl">build_rope_cache</code>와 <code class="inl">rotate_half</code>의 구현은 §6에 있다.</span></p>
+
+  <table>
+    <thead><tr><th></th><th><span class="en">A · absolute (add)</span><span class="ko">A · 절대 위치 (덧셈)</span></th><th><span class="en">B · RoPE (rotate)</span><span class="ko">B · RoPE (회전)</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="en">Where</span><span class="ko">위치</span></td><td><span class="en">Once, at the input embedding</span><span class="ko">입력 임베딩에서 한 번</span></td><td><span class="en">Inside every attention layer, after the QKV projection</span><span class="ko">모든 attention 레이어 안, QKV projection 직후</span></td></tr>
+      <tr><td><span class="en">What it touches</span><span class="ko">건드리는 대상</span></td><td><span class="en">The whole hidden state, so q, k <b>and v</b></span><span class="ko">hidden state 전체이므로 q, k, <b>v 모두</b></span></td><td><span class="en">Only q and k, v stays clean</span><span class="ko">q와 k만 회전하고 v는 그대로 둔다</span></td></tr>
+      <tr><td><span class="en">Operation</span><span class="ko">연산</span></td><td><code class="inl">x + p_m</code></td><td><code class="inl">R(mθ) · q</code>, <code class="inl">R(nθ) · k</code></td></tr>
+      <tr><td><span class="en">Parameters</span><span class="ko">파라미터</span></td><td><span class="en"><code class="inl">max_pos × d</code> learned (GPT-2: 1024 × 768)</span><span class="ko"><code class="inl">max_pos × d</code>개를 학습한다(GPT-2: 1024 × 768)</span></td><td><span class="en">None, the cos/sin table is computed from <code class="inl">rope_theta</code></span><span class="ko">없다. cos/sin 테이블은 <code class="inl">rope_theta</code>로 계산한다</span></td></tr>
+      <tr><td><span class="en">Past <code class="inl">max_pos</code></span><span class="ko"><code class="inl">max_pos</code> 너머</span></td><td><span class="en">Index error: row m was never trained</span><span class="ko">인덱스 에러가 난다. m번째 행이 학습된 적이 없다</span></td><td><span class="en">Computable for any m (quality is §5.2's problem)</span><span class="ko">어떤 m이든 계산은 된다(품질 문제는 §5.2에서 다룬다)</span></td></tr>
+    </tbody>
+  </table>
+  <p class="en">The original transformer's <b>sinusoidal</b> encoding sits in the same place as A: the table is fixed sin/cos instead of learned, but it is still <b>added at the input</b>. RoPE moves the position code from "one add at the bottom" to "one rotation in every layer", and the rest of this note explains why that move makes only <code class="inl">m − n</code> survive.</p>
+  <p class="ko">원래 트랜스포머의 <b>sinusoidal</b> 인코딩도 A와 같은 자리에 들어간다. 테이블이 학습값이 아닌 고정 sin/cos일 뿐 여전히 <b>입력에서 더한다.</b> RoPE는 위치 코드를 "맨 아래에서 한 번 더하기"에서 "모든 레이어에서 한 번씩 회전하기"로 옮긴 것이다. 이 노트의 나머지 부분은 그렇게 옮기면 왜 <code class="inl">m − n</code>만 남는지를 설명한다.</p>
 </section>
 
 <!-- ============ 2. THE DESIGN GOAL ============ -->
