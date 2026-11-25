@@ -63,6 +63,46 @@
   }
   function allQuestions(mod) { return [].concat(mod.diagnostic || [], mod.check || []); }
 
+  /* ---------- 모델·하드웨어 스펙 (data/specs.json) ---------- */
+  var SPECS = {};
+  var REVEALERS = []; /* 페이지의 모든 문항 답지 토글 함수 */
+  function fmtV(v) { return typeof v === "number" ? v.toLocaleString("en-US") : String(v); }
+  function specTable(sp, hl) {
+    hl = hl || [];
+    var kindName = { model: "모델", hw: "하드웨어", codec: "코덱" }[sp.kind] || sp.kind;
+    var h = '<div class="spec-name"><span class="pill ' + (sp.kind === "hw" ? "purple" : sp.kind === "codec" ? "warn" : "blue") + '">' + kindName + "</span><b>" + sp.name + "</b></div>";
+    if (sp.arch) h += '<div class="spec-arch">' + sp.arch + "</div>";
+    if (sp.config && sp.config.length) {
+      h += '<table class="spec-t"><tr><th>config 항목</th><th>기호</th><th>값</th><th>설명</th></tr>' + sp.config.map(function (c) {
+        return '<tr' + (hl.indexOf(c.k) >= 0 ? ' class="hl"' : "") + "><td><code>" + c.k + "</code></td><td>" + (c.sym || "") + "</td><td><b>" + fmtV(c.v) + "</b></td><td>" + (c.note || "") + "</td></tr>";
+      }).join("") + "</table>";
+    }
+    if (sp.derived && sp.derived.length) {
+      h += '<div class="spec-der">' + sp.derived.map(function (d) { return "<span><code>" + d.k + "</code> " + d.v + "</span>"; }).join("") + "</div>";
+    }
+    if (sp.src) h += '<div class="small">출처: <a href="' + sp.src.url + '" target="_blank" rel="noopener">' + sp.src.label + "</a></div>";
+    return h;
+  }
+  function specBlock(q) {
+    var ids = (q.uses || []).filter(function (id) { return SPECS[id]; });
+    if (!ids.length) return null;
+    var d = el("details", { class: "spec" });
+    if (q.type === "num") d.open = true;
+    d.innerHTML = "<summary>문제 조건 · 모델 아키텍처와 config: " + ids.map(function (id) { return SPECS[id].name; }).join(" · ") +
+      (q.hl && q.hl.length ? ' <span class="small">(노란 줄 = 풀이에 쓰는 값)</span>' : "") + "</summary>" +
+      ids.map(function (id) { return '<div class="spec-card">' + specTable(SPECS[id], q.hl) + "</div>"; }).join("");
+    return d;
+  }
+  function stepsHtml(q) {
+    if (!q.steps || !q.steps.length) return "";
+    return '<div class="exp-h">풀이 과정</div><ol class="steps">' + q.steps.map(function (s) {
+      return "<li><div class=\"st-t\">" + s.t + "</div>" +
+        (s.f ? '<div class="st-f">' + s.f + "</div>" : "") +
+        (s.s ? '<div class="st-s">= ' + s.s + "</div>" : "") +
+        (s.r ? '<div class="st-r">→ ' + s.r + "</div>" : "") + "</li>";
+    }).join("") + "</ol>";
+  }
+
   /* answered & correctness, including Claude-graded text answers */
   function qStatus(q) {
     var a = Store.state.answers[q.id];
@@ -107,14 +147,22 @@
     var stat = el("span"); head.appendChild(stat);
     box.appendChild(head);
     box.appendChild(el("div", { class: "prompt" }, q.prompt));
+    var sb = specBlock(q); if (sb) box.appendChild(sb);
     var exp = el("div", { class: "exp" }); exp.style.display = "none";
     var prev = Store.state.answers[q.id];
 
-    /* 제출 직후: 정오 판정 + 정답 + 해설을 한 패널에 */
+    /* 제출 직후 또는 '답지 보기': 정오 판정(답했을 때) + 정답 + 풀이 과정 + 해설을 한 패널에 */
     function fmtNum(v) { return typeof v === "number" ? v.toLocaleString("ko-KR", { maximumFractionDigits: 4 }) : String(v); }
+    var solBtn = null;
+    function hideExplain() { exp.style.display = "none"; if (solBtn) solBtn.textContent = "답지·풀이 보기"; }
     function showExplain() {
       var a = Store.state.answers[q.id];
       exp.innerHTML = "";
+      if (!a) {
+        var ans = el("div", { class: "call verdict" });
+        ans.innerHTML = "<b>답지</b> 정답은 <b>" + (q.type === "mcq" ? q.options[q.answer] : fmtNum(q.answer) + (q.unit ? " " + q.unit : "")) + "</b> 입니다.";
+        exp.appendChild(ans);
+      }
       if (a) {
         var verdict = el("div", { class: "call " + (a.ok ? "ok" : "bad") + " verdict" });
         if (q.type === "mcq") {
@@ -128,12 +176,19 @@
         }
         exp.appendChild(verdict);
       }
-      var html = "";
+      var html = stepsHtml(q);
       if (q.explain) html += '<div class="exp-h">해설</div><div>' + q.explain + "</div>";
       if (q.pitfall) html += '<div class="call warn"><b>이걸 틀리면 실무에서:</b> ' + q.pitfall + "</div>";
       if (q.refs) html += "<div class=\"small\"><b>다시 볼 자료</b></div>" + resList(q.refs);
       exp.insertAdjacentHTML("beforeend", html);
       exp.style.display = exp.childNodes.length ? "block" : "none";
+      if (solBtn) solBtn.textContent = "답지·풀이 접기";
+    }
+    function addSolBtn(parent) {
+      solBtn = el("button", { class: "b", type: "button" }, "답지·풀이 보기");
+      solBtn.onclick = function () { if (exp.style.display === "block") hideExplain(); else showExplain(); };
+      parent.appendChild(solBtn);
+      REVEALERS.push(function (on) { if (on) showExplain(); else hideExplain(); });
     }
     function paintStatus() {
       var s = qStatus(q);
@@ -150,7 +205,7 @@
         box.appendChild(lab); return lab;
       });
       var btn = el("button", { class: "b pri", type: "button" }, "제출");
-      box.appendChild(btn);
+      box.appendChild(btn); addSolBtn(box);
       var mark = function (choice) {
         labels.forEach(function (l, i) { l.classList.remove("right", "wrong"); if (i === q.answer) l.classList.add("right"); else if (i === choice) l.classList.add("wrong"); });
         showExplain();
@@ -166,7 +221,7 @@
       var row = el("div");
       var inp = el("input", { class: "num", type: "text", placeholder: "숫자" + (q.unit ? " (" + q.unit + ")" : "") });
       row.appendChild(inp); if (q.unit) row.appendChild(txt("span", { class: "small" }, " " + q.unit));
-      var btn2 = el("button", { class: "b pri", type: "button" }, "제출"); row.appendChild(btn2);
+      var btn2 = el("button", { class: "b pri", type: "button" }, "제출"); row.appendChild(btn2); addSolBtn(row);
       box.appendChild(row);
       var tol = q.tol == null ? 0.1 : q.tol;
       if (prev) { inp.value = prev.v; showExplain(); }
@@ -212,6 +267,7 @@
       var openModel = function () {
         var h = '<div class="call">서술형은 자동 채점되지 않습니다. 아래 모범 답안·채점 기준과 내 답을 대조해 보세요. 정식 채점은 <b>채점 프롬프트 복사</b> 후 Claude에게 맡기면 됩니다.</div>';
         if (q.model) h += '<div class="exp-h">모범 답안</div><div>' + q.model + "</div>";
+        h += stepsHtml(q);
         if (q.rubric) h += '<div class="exp-h">채점 기준 (좋은 답에 들어가야 할 것)</div><ul>' + q.rubric.map(function (r) { return "<li>" + r + "</li>"; }).join("") + "</ul>";
         if (q.explain) h += '<div class="exp-h">해설</div><div>' + q.explain + "</div>";
         if (q.pitfall) h += '<div class="call warn"><b>이걸 틀리면 실무에서:</b> ' + q.pitfall + "</div>";
@@ -219,10 +275,12 @@
         model.innerHTML = h; model.style.display = "block";
         showModel.textContent = "모범 답안·해설 접기";
       };
+      var closeModel = function () { model.style.display = "none"; showModel.textContent = "모범 답안·해설 보기"; };
       showModel.onclick = function () {
-        if (model.style.display === "block") { model.style.display = "none"; showModel.textContent = "모범 답안·해설 보기"; return; }
+        if (model.style.display === "block") { closeModel(); return; }
         openModel();
       };
+      REVEALERS.push(function (on) { if (on) openModel(); else closeModel(); });
       if (prev) openModel();
     }
     box.appendChild(exp);
@@ -255,6 +313,7 @@
   /* ---------- module page ---------- */
   function renderModule(root, mod, index) {
     root.innerHTML = "";
+    REVEALERS = [];
     var crumbs = el("p", { class: "crumb" }, '<a href="../">Home</a> · <a href="./">Inference Onboarding</a> · ' + mod.id.toUpperCase());
     root.appendChild(crumbs);
     root.appendChild(el("h1", null, mod.id.toUpperCase() + ". " + mod.title));
@@ -276,6 +335,26 @@
     if (mod.prereq && mod.prereq.length) root.appendChild(el("div", { class: "small" }, "선행: " + mod.prereq.join(", ")));
     if (mod.goals) root.appendChild(el("div", { class: "box" }, "<b>학습 목표</b><ul>" + mod.goals.map(function (g) { return "<li>" + g + "</li>"; }).join("") + "</ul>"));
     if (mod.intro) root.appendChild(el("div", null, mod.intro));
+
+    /* 이 모듈 계산 문항이 쓰는 모델·하드웨어 스펙 모음 */
+    var used = [];
+    allQuestions(mod).forEach(function (q) { (q.uses || []).forEach(function (id) { if (SPECS[id] && used.indexOf(id) < 0) used.push(id); }); });
+    if (used.length) {
+      var sbx = el("details", { class: "spec box" });
+      sbx.innerHTML = "<summary><b>이 모듈 계산에 쓰는 모델·하드웨어 스펙</b> <span class=\"small\">" + used.map(function (id) { return SPECS[id].name; }).join(" · ") + "</span></summary>" +
+        used.map(function (id) { return '<div class="spec-card">' + specTable(SPECS[id]) + "</div>"; }).join("");
+      root.appendChild(sbx);
+    }
+
+    /* 모든 문항의 답지·풀이 한 번에 펼치기 */
+    var revealAll = el("button", { class: "b", type: "button" }, "모든 답지·풀이 펼치기");
+    var revealed = false;
+    revealAll.onclick = function () {
+      revealed = !revealed;
+      REVEALERS.forEach(function (f) { f(revealed); });
+      revealAll.textContent = revealed ? "모든 답지·풀이 접기" : "모든 답지·풀이 펼치기";
+    };
+    nav.appendChild(revealAll);
 
     /* ① diagnostic */
     root.appendChild(el("h2", { id: "diag" }, "① 사전 진단"));
@@ -435,8 +514,8 @@
       var root = document.getElementById("app");
       var id = qs("m") || "m1";
       Store.init().then(function () {
-        return Promise.all([getJSON("data/modules.json"), getJSON("data/" + id + ".json")]);
-      }).then(function (r) { document.title = id.toUpperCase() + " · " + r[1].title; renderModule(root, r[1], r[0]); })
+        return Promise.all([getJSON("data/modules.json"), getJSON("data/" + id + ".json"), getJSON("data/specs.json").catch(function () { return {}; })]);
+      }).then(function (r) { SPECS = r[2] || {}; document.title = id.toUpperCase() + " · " + r[1].title; renderModule(root, r[1], r[0]); })
         .catch(function (e) { root.innerHTML = '<div class="call bad">불러오기 실패: ' + String(e) + "<br>file:// 로 열면 JSON 을 못 읽습니다. <code>python3 tools/study_server.py</code> 로 띄우세요.</div>"; });
     },
     bootDashboard: function () {

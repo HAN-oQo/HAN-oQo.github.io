@@ -45,6 +45,41 @@
      "url": "https://arxiv.org/abs/2305.13245",
      "note": null
     }
+   ],
+   "uses": [
+    "llama-3.1-8b"
+   ],
+   "hl": [
+    "num_hidden_layers",
+    "num_key_value_heads",
+    "head_dim",
+    "torch_dtype"
+   ],
+   "steps": [
+    {
+     "t": "토큰 1개가 레이어마다 남기는 것",
+     "f": "K 벡터와 V 벡터, 각각 KV head 수 × head_dim 원소",
+     "s": "K: 8 × 128 = 1,024 원소, V: 1,024 원소",
+     "r": "레이어당 2,048 원소"
+    },
+    {
+     "t": "전 레이어로 확장",
+     "f": "× L",
+     "s": "2,048 × 32",
+     "r": "65,536 원소"
+    },
+    {
+     "t": "바이트로 환산 (BF16 = 2 B)",
+     "f": "× 2 B",
+     "s": "65,536 × 2",
+     "r": "131,072 B"
+    },
+    {
+     "t": "KiB 로",
+     "f": "÷ 1,024",
+     "s": "131,072 / 1,024",
+     "r": "<b>128 KiB/token</b>"
+    }
    ]
   },
   {
@@ -62,6 +97,36 @@
      "label": "vLLM: Maximum concurrency 로그 (kv_cache_utils.py L1170)",
      "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/kv_cache_utils.py#L1170",
      "note": null
+    }
+   ],
+   "uses": [
+    "llama-3.1-8b",
+    "h100-sxm"
+   ],
+   "hl": [
+    "num_hidden_layers",
+    "num_key_value_heads",
+    "head_dim",
+    "hbm_capacity"
+   ],
+   "steps": [
+    {
+     "t": "KV 풀이 담을 수 있는 토큰 수",
+     "f": "풀 크기 ÷ 토큰당 KV",
+     "s": "52 GiB / 128 KiB = 52 × 2<sup>30</sup> / 2<sup>17</sup> = 52 × 8,192",
+     "r": "425,984 토큰"
+    },
+    {
+     "t": "요청 하나가 쓰는 토큰",
+     "f": "컨텍스트 꽉 참",
+     "s": "8,192 토큰/요청",
+     "r": ""
+    },
+    {
+     "t": "동시 요청 수",
+     "f": "총 토큰 ÷ 요청당 토큰",
+     "s": "425,984 / 8,192",
+     "r": "<b>52 요청</b>"
     }
    ]
   },
@@ -98,6 +163,40 @@
      "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/mla.py#L44",
      "note": null
     }
+   ],
+   "uses": [
+    "deepseek-v3"
+   ],
+   "hl": [
+    "kv_lora_rank",
+    "qk_rope_head_dim",
+    "num_hidden_layers"
+   ],
+   "steps": [
+    {
+     "t": "MLA 가 캐시하는 것",
+     "f": "압축 latent c<sup>KV</sup> + decoupled RoPE key k<sup>R</sup>",
+     "s": "head 별 K/V 는 latent 에서 up-projection 으로 복원하므로 캐시하지 않는다",
+     "r": ""
+    },
+    {
+     "t": "레이어당·토큰당 원소 수",
+     "f": "d_c + d_h^R",
+     "s": "512 + 64",
+     "r": "<b>576 원소</b> (보기 2)"
+    },
+    {
+     "t": "(참고) 토큰당 KV 바이트, BF16",
+     "f": "L × 576 × 2 B",
+     "s": "61 × 576 × 2",
+     "r": "70,272 B ≈ 68.6 KiB"
+    },
+    {
+     "t": "(비교) 같은 head 구성의 MHA 였다면",
+     "f": "2 × n_h × d_h",
+     "s": "2 × 128 × 128",
+     "r": "32,768 원소/레이어 → MLA 가 약 57배 작다"
+    }
    ]
   },
   {
@@ -132,6 +231,34 @@
      "label": "LLM Inference Unveiled (roofline survey) — 보조 — arXiv 2402.16363",
      "url": "https://arxiv.org/abs/2402.16363",
      "note": null
+    }
+   ],
+   "uses": [
+    "h100-sxm",
+    "llama-3.1-8b"
+   ],
+   "hl": [
+    "bf16_dense_tflops",
+    "hbm_bandwidth"
+   ],
+   "steps": [
+    {
+     "t": "배치 B 에서 가중치 원소 1개가 하는 일",
+     "f": "읽기 2 B (BF16) 한 번, 연산은 토큰마다 multiply-add 2 FLOP",
+     "s": "FLOP = 2B, 바이트 = 2",
+     "r": "arithmetic intensity ≈ B FLOP/byte"
+    },
+    {
+     "t": "GPU 의 ridge point",
+     "f": "F / B_mem",
+     "s": "989e12 / 3.35e12",
+     "r": "≈ 295 FLOP/byte"
+    },
+    {
+     "t": "compute-bound 전환점",
+     "f": "intensity = ridge",
+     "s": "B ≈ 295",
+     "r": "<b>배치 ~300</b> (보기 3)"
     }
    ]
   },
@@ -183,6 +310,34 @@
      "label": "vLLM Sampler (v1/worker/gpu/sample)",
      "url": "https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/worker/gpu/sample/sampler.py#L42",
      "note": null
+    }
+   ],
+   "uses": [
+    "llama-3.1-8b"
+   ],
+   "hl": [
+    "vocab_size",
+    "hidden_size",
+    "tie_word_embeddings"
+   ],
+   "steps": [
+    {
+     "t": "lm_head 파라미터",
+     "f": "V × d",
+     "s": "128,256 × 4,096",
+     "r": "525,336,576 ≈ 0.525 B"
+    },
+    {
+     "t": "decode step 에서 읽는 전체 가중치",
+     "f": "전 파라미터 (untied 라 lm_head 별도로 포함)",
+     "s": "≈ 8.03 B",
+     "r": ""
+    },
+    {
+     "t": "비중",
+     "f": "lm_head / 전체",
+     "s": "0.525 / 8.03",
+     "r": "<b>≈ 6.5 %</b>"
     }
    ]
   }
@@ -394,6 +549,34 @@
      "url": "https://www.nvidia.com/en-us/data-center/h100/",
      "note": "SXM: BF16 dense ≈989 TFLOPS(표의 sparse 수치의 절반), HBM3 3.35 TB/s"
     }
+   ],
+   "uses": [
+    "llama-3.1-8b",
+    "h100-sxm"
+   ],
+   "hl": [
+    "hbm_bandwidth",
+    "torch_dtype"
+   ],
+   "steps": [
+    {
+     "t": "배치 1 decode 에서 읽는 바이트",
+     "f": "가중치 전체 (KV 무시)",
+     "s": "8.03e9 × 2 B",
+     "r": "16.06 GB"
+    },
+    {
+     "t": "memory-bound 하한",
+     "f": "바이트 ÷ HBM 대역폭",
+     "s": "16.06e9 / 3.35e12 s",
+     "r": "<b>4.79 ms</b>"
+    },
+    {
+     "t": "(참고) 토큰 처리량 상한",
+     "f": "1 / step",
+     "s": "1 / 4.79 ms",
+     "r": "≈ 209 tok/s/request"
+    }
    ]
   },
   {
@@ -404,7 +587,43 @@
    "prompt": "같은 조건에서 <b>배치 64, 요청마다 컨텍스트 4,096 토큰</b>(128 KiB/token)이면 step 하한은?",
    "answer": 15.0,
    "explain": "KV = 64 × 4,096 × 131,072 B = 34.36 GB, + 가중치 16.06 GB = 50.4 GB → /3.35 TB/s = <b>15.0 ms</b>. KV 읽기가 가중치의 2배 → 이 구간에서는 KV 양자화/압축이 가중치 양자화보다 효과가 크다.",
-   "pitfall": "긴 컨텍스트·큰 배치에서도 가중치 양자화부터 손대는 판단 실수."
+   "pitfall": "긴 컨텍스트·큰 배치에서도 가중치 양자화부터 손대는 판단 실수.",
+   "uses": [
+    "llama-3.1-8b",
+    "h100-sxm"
+   ],
+   "hl": [
+    "num_hidden_layers",
+    "num_key_value_heads",
+    "head_dim",
+    "hbm_bandwidth"
+   ],
+   "steps": [
+    {
+     "t": "KV 읽기 바이트",
+     "f": "배치 × 컨텍스트 × KV/token",
+     "s": "64 × 4,096 × 131,072 B",
+     "r": "34.36 GB"
+    },
+    {
+     "t": "가중치 읽기 (배치와 무관, 한 번)",
+     "f": "",
+     "s": "16.06 GB",
+     "r": ""
+    },
+    {
+     "t": "step 당 총 바이트",
+     "f": "KV + 가중치",
+     "s": "34.36 + 16.06",
+     "r": "50.42 GB"
+    },
+    {
+     "t": "하한",
+     "f": "÷ 3.35 TB/s",
+     "s": "50.42e9 / 3.35e12",
+     "r": "<b>15.0 ms</b>"
+    }
+   ]
   },
   {
    "id": "m1-c3",
@@ -417,7 +636,34 @@
     "약 16배"
    ],
    "answer": 1,
-   "explain": "KV 풀 크기는 그대로이고 토큰당 KV가 1/4 → 동시 토큰 수 4배. 가중치는 attention 프로젝션 일부만 줄어 거의 고정."
+   "explain": "KV 풀 크기는 그대로이고 토큰당 KV가 1/4 → 동시 토큰 수 4배. 가중치는 attention 프로젝션 일부만 줄어 거의 고정.",
+   "uses": [
+    "llama-3.1-8b"
+   ],
+   "hl": [
+    "num_attention_heads",
+    "num_key_value_heads"
+   ],
+   "steps": [
+    {
+     "t": "MHA 의 토큰당 KV",
+     "f": "2 × L × 32 × 128 × 2 B",
+     "s": "",
+     "r": "512 KiB"
+    },
+    {
+     "t": "GQA 의 토큰당 KV",
+     "f": "2 × L × 8 × 128 × 2 B",
+     "s": "",
+     "r": "128 KiB (1/4)"
+    },
+    {
+     "t": "KV 풀 크기 고정이면",
+     "f": "동시 토큰 ∝ 1 / (KV/token)",
+     "s": "512 / 128",
+     "r": "<b>약 4배</b> (보기 2)"
+    }
+   ]
   },
   {
    "id": "m1-c4",
