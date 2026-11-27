@@ -1557,6 +1557,47 @@ dim i+64  :   x_i+64  · cos(mθ_i)  +  ( x_i   ) · sin(mθ_i)   =   x_i+64  co
   <p class="en">This matches §4's <code class="inl">R(mθ)·[a; b] = [a cos − b sin ; a sin + b cos]</code> with <code class="inl">a = x_i</code>, <code class="inl">b = x_{i+64}</code>. ✓ Not an approximation: the same operation, skipping the zeros.</p>
   <p class="ko">§4의 <code class="inl">R(mθ)·[a; b] = [a cos − b sin ; a sin + b cos]</code>에 <code class="inl">a = x_i</code>, <code class="inl">b = x_{i+64}</code>를 넣은 것과 같다. ✓ 근사가 아니라 <b>0을 건너뛴 같은 연산</b>이다.</p>
 
+  <h4><span class="en">rotate_half, slowly</span><span class="ko">rotate_half를 천천히</span></h4>
+  <div class="step">
+    <span class="n"><span class="en">idea 1 · each element needs its partner</span><span class="ko">핵심 1 · 원소마다 짝꿍 값이 필요하다</span></span>
+    <p class="en">Rotating a pair <code class="inl">(a, b)</code> gives <code class="inl">(a cos − b sin, b cos + a sin)</code>. Look at what each output needs: the new <code class="inl">a</code> needs <b>−b</b>, the new <code class="inl">b</code> needs <b>+a</b>. Every element needs its <b>partner's value, with a sign</b>. With half-split pairing, the partner of dim <code class="inl">i</code> is <code class="inl">i+64</code> and vice versa, so "everyone's partner" is just the vector with its halves swapped. One half also needs a minus sign. That vector is <code class="inl">rotate_half(x)</code>:</p>
+    <p class="ko">쌍 <code class="inl">(a, b)</code>를 돌리면 <code class="inl">(a cos − b sin, b cos + a sin)</code>이 된다. 출력마다 무엇이 필요한지 보자. 새 <code class="inl">a</code>에는 <b>−b</b>가, 새 <code class="inl">b</code>에는 <b>+a</b>가 필요하다. 원소마다 <b>자기 짝꿍의 값을 부호와 함께</b> 가져와야 한다. half-split에서 차원 <code class="inl">i</code>의 짝꿍은 <code class="inl">i+64</code>이고 그 반대도 마찬가지다. 그래서 "모든 원소의 짝꿍 값"은 벡터의 앞뒤 절반을 맞바꾸기만 하면 얻어진다. 여기에 한쪽 절반에만 마이너스 부호를 붙인다. 그 벡터가 <code class="inl">rotate_half(x)</code>다.</p>
+    <div class="eq">x = [ a₀ … a₆₃ | b₀ … b₆₃ ]   →   rotate_half(x) = [ −b₀ … −b₆₃ | a₀ … a₆₃ ]</div>
+    <p class="en">Now the formula is purely elementwise: <code class="inl">out = x ⊙ cos + rotate_half(x) ⊙ sin</code>. Position i of <code class="inl">x</code> holds <code class="inl">a</code>, the same position of <code class="inl">rotate_half(x)</code> holds <code class="inl">−b</code>, and they line up with no indexing tricks.</p>
+    <p class="ko">이제 공식이 순수한 원소별 연산이 된다: <code class="inl">out = x ⊙ cos + rotate_half(x) ⊙ sin</code>. <code class="inl">x</code>의 i번째 칸에는 <code class="inl">a</code>가, <code class="inl">rotate_half(x)</code>의 같은 칸에는 <code class="inl">−b</code>가 들어 있어서 복잡한 인덱싱 없이 자리가 맞는다.</p>
+  </div>
+
+  <div class="step">
+    <span class="n"><span class="en">idea 2 · rotate_half IS a 90° rotation</span><span class="ko">핵심 2 · rotate_half는 그 자체로 90° 회전이다</span></span>
+    <p class="en">Per pair, rotate_half maps <code class="inl">(a, b) → (−b, a)</code>. That is exactly <b>rotating the pair by 90°</b> (§1.3: multiplying by <code class="inl">i</code>). So the formula reads: <i>"rotated by φ = cos φ · (original) + sin φ · (original turned 90°)"</i>. Any rotation can be built from the arrow and its perpendicular, the same way a point on a circle is <code class="inl">cos φ · x̂ + sin φ · ŷ</code>.</p>
+    <p class="ko">쌍 단위로 보면 rotate_half는 <code class="inl">(a, b) → (−b, a)</code>다. 이것은 정확히 <b>쌍을 90° 돌린 것</b>이다(§1.3에서 <code class="inl">i</code>를 곱하는 것과 같다). 그래서 공식은 <i>"φ만큼 돌린 것 = cos φ · (원래 벡터) + sin φ · (90° 돌린 벡터)"</i>로 읽힌다. 원 위의 점이 <code class="inl">cos φ · x̂ + sin φ · ŷ</code>인 것처럼, 어떤 회전이든 원래 화살표와 그에 수직인 화살표를 섞어서 만들 수 있다.</p>
+    <div class="eq">x · e<sup>iφ</sup> = x · (cos φ + i sin φ) = cos φ · x  +  sin φ · <span class="hl">(i · x)</span><br><span class="lbl">i · x  ↔  rotate_half(x)</span></div>
+  </div>
+
+  <div class="step">
+    <span class="n"><span class="en">idea 3 · a 4-dim example by hand</span><span class="ko">핵심 3 · 4차원 예제를 손으로</span></span>
+    <p class="en">Take <code class="inl">d = 4</code>, <code class="inl">x = [1, 2, 3, 4]</code>. Half-split pairs are <code class="inl">(x₀, x₂) = (1, 3)</code> and <code class="inl">(x₁, x₃) = (2, 4)</code>. Give pair 0 an angle of 90° and pair 1 an angle of 0° to keep the numbers clean.</p>
+    <p class="ko"><code class="inl">d = 4</code>, <code class="inl">x = [1, 2, 3, 4]</code>로 두자. half-split 쌍은 <code class="inl">(x₀, x₂) = (1, 3)</code>과 <code class="inl">(x₁, x₃) = (2, 4)</code>다. 숫자를 깔끔하게 하려고 쌍 0의 각도는 90°, 쌍 1의 각도는 0°로 둔다.</p>
+    <table>
+      <thead><tr><th></th><th class="num">dim 0</th><th class="num">dim 1</th><th class="num">dim 2</th><th class="num">dim 3</th></tr></thead>
+      <tbody>
+        <tr><td><code class="inl">x</code></td><td class="num">1</td><td class="num">2</td><td class="num">3</td><td class="num">4</td></tr>
+        <tr><td><code class="inl">rotate_half(x)</code></td><td class="num">−3</td><td class="num">−4</td><td class="num">1</td><td class="num">2</td></tr>
+        <tr><td><code class="inl">cos</code> <span class="en">(dims belong to pairs 0, 1, 0, 1)</span><span class="ko">(각 차원이 속한 쌍: 0, 1, 0, 1)</span></td><td class="num">0</td><td class="num">1</td><td class="num">0</td><td class="num">1</td></tr>
+        <tr><td><code class="inl">sin</code></td><td class="num">1</td><td class="num">0</td><td class="num">1</td><td class="num">0</td></tr>
+        <tr><td><code class="inl">x⊙cos + rotate_half(x)⊙sin</code></td><td class="num"><b>−3</b></td><td class="num"><b>2</b></td><td class="num"><b>1</b></td><td class="num"><b>4</b></td></tr>
+      </tbody>
+    </table>
+    <p class="en">Read the result back as pairs: pair 0 went <code class="inl">(1, 3) → (−3, 1)</code>, a 90° turn ✓. Pair 1 stayed <code class="inl">(2, 4)</code>, a 0° turn ✓. Notice <code class="inl">cos</code>/<code class="inl">sin</code> repeat with period 2 here (period 64 in a real head): that is the "each θ twice" in the pseudo-code below.</p>
+    <p class="ko">결과를 다시 쌍으로 읽어 보자. 쌍 0은 <code class="inl">(1, 3) → (−3, 1)</code>로 90° 돌았다 ✓. 쌍 1은 <code class="inl">(2, 4)</code> 그대로이고 0° 회전이다 ✓. 여기서 <code class="inl">cos</code>/<code class="inl">sin</code>이 주기 2로 반복되는 데 주목하자(실제 head에서는 주기 64다). 아래 의사 코드에서 "θ를 두 번씩" 담는 이유가 이것이다.</p>
+  </div>
+
+  <div class="callout c-amber">
+    <span class="tag"><span class="en">interleaved models use a different "rotate_half"</span><span class="ko">interleaved 방식은 다른 "rotate_half"를 쓴다</span></span>
+    <span class="en">With interleaved pairing (§5.1 callout: pairs are <code class="inl">(x₀,x₁), (x₂,x₃), …</code>), the partner is the <b>neighbour</b>, so the helper swaps adjacent elements instead of halves: <code class="inl">[x₀,x₁,x₂,x₃] → [−x₁, x₀, −x₃, x₂]</code> (often called <code class="inl">rotate_every_two</code>; GPT-J style, <code class="inl">is_neox_style=False</code> in vLLM). Half-split spread through the GPT-NeoX and Llama implementations; in PyTorch it is just one slice and one concat. The math is the same either way.</span>
+    <span class="ko">interleaved 방식(§5.1 callout: 쌍이 <code class="inl">(x₀,x₁), (x₂,x₃), …</code>)에서는 짝꿍이 <b>바로 옆 원소</b>다. 그래서 헬퍼가 절반이 아니라 이웃끼리 맞바꾼다: <code class="inl">[x₀,x₁,x₂,x₃] → [−x₁, x₀, −x₃, x₂]</code>. 흔히 <code class="inl">rotate_every_two</code>라고 부르고, GPT-J 방식이며 vLLM에서는 <code class="inl">is_neox_style=False</code>에 해당한다. half-split은 GPT-NeoX와 Llama 구현을 통해 널리 퍼졌고, PyTorch에서는 슬라이스와 concat 한 번으로 끝난다. 어느 쪽이든 수학은 같다.</span>
+  </div>
+
 
   <svg class="fig" viewBox="0 0 880 372" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,sans-serif" role="img" aria-label="Left, the 128 by 128 rotation matrix drawn to scale, almost entirely empty with 64 tiny two by two blocks along the diagonal. Right, the equivalent elementwise computation, where the vector is split in half, the halves are swapped and one is negated, then combined with cosine and sine tables.">
     <text x="14" y="20" font-size="12" font-weight="700" fill="#3a3934">Nobody builds this matrix — 98.4% of it is zeros</text>
